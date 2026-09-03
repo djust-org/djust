@@ -139,6 +139,20 @@ class DjustConfig(AppConfig):
                 "[TemplateLibraries] installing the {%% load %%} loader in ready() failed"
             )
 
+        # The `_("…")` translator and the `{% language %}` / `{% timezone %}`
+        # scope hooks (#2558). Also installed by ``djust.template_tags`` on
+        # import; same asserted-here reasoning as the loader above.
+        try:
+            from djust.template_libraries import install_translator
+            from djust.render_env import install_scope_hooks
+
+            install_translator()
+            install_scope_hooks()
+        except Exception:  # noqa: BLE001 — startup must never break ready()
+            logging.getLogger("djust").exception(
+                "[TemplateLibraries] installing the #2558 i18n hooks in ready() failed"
+            )
+
     def _warm_filter_bridge(self) -> bool:
         """Eagerly run the Django→Rust filter bridge (off the request path).
 

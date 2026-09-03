@@ -4274,6 +4274,43 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         djust_templates::registry::register_library_loader,
         m
     )?)?;
+    // Raw-block handlers, the `_("…")` translator, and the scope hooks (#2558)
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_raw_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::unregister_raw_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::has_raw_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_raw_block_tag_handlers,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_translator,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_translator,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::arm_scope_tags,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_language_scope_hooks,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_timezone_scope_hooks,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::clear_library_loader,
         m

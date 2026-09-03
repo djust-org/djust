@@ -773,6 +773,11 @@ fn node_is_position_dependent(node: &Node) -> bool {
         // Opaque / Python-backed nodes — we cannot prove position-independence.
         Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. }
         | Node::AssignTag { .. }
         | Node::Include { .. }
         | Node::RustComponent { .. }
@@ -798,6 +803,7 @@ fn node_is_position_dependent(node: &Node) -> bool {
         Node::Block { nodes, .. } => body_is_position_dependent(nodes),
         Node::With { nodes, .. } => body_is_position_dependent(nodes),
         Node::Spaceless { nodes, .. } => body_is_position_dependent(nodes),
+
         // Leaf / position-independent nodes.
         Node::Text(_)
         | Node::Comment

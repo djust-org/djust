@@ -714,6 +714,23 @@ pub fn apply_filter_full_safe(
     arg_was_quoted: bool,
     input_safety: InputSafety,
 ) -> Result<(Value, bool)> {
+    // An `_()` filter argument is translated BEFORE anything touches it
+    // (#2558): `{{ absent|default:_("Password") }}` must see the msgid the
+    // active language renders, not the literal source. The `_(` shape
+    // cannot be a quoted arg (it does not start with a quote) nor a bare
+    // identifier (parentheses), so this cannot rewire any existing input.
+    // And because Django's `Variable` for `_("…")` carries `self.literal`
+    // — a LITERAL, never a context lookup (`base.py:838`) — the translation
+    // also forces the quoting hint TRUE, routing the translated text
+    // through the literal channel rather than the #2202 variable
+    // resolution, which would raise VariableDoesNotExist for a translated
+    // word no context key holds.
+    let translated = arg.and_then(crate::renderer::translate_underscore_arg);
+    let arg_was_quoted = arg_was_quoted || translated.is_some();
+    let arg: Option<&str> = match &translated {
+        Some(t) => Some(t.as_str()),
+        None => arg,
+    };
     // The ARGUMENT COUNT, before anything else touches the argument (#2400).
     //
     // FIRST, and that is Django's order rather than a convenience: `args_check`

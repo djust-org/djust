@@ -33,7 +33,7 @@ store; Django resolves the name from a thread-local it already maintains.
 
 import logging
 import threading
-from typing import Optional, Set
+from typing import Any, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +231,57 @@ def apply_render_env_once() -> None:
         return
     _PUSHED.done = True
     apply_render_env()
+
+
+def install_scope_hooks() -> bool:
+    """Install the ``{% language %}`` / ``{% timezone %}`` hook pairs (#2558).
+
+    The switch MUST happen in Python's thread-locals — a bridged
+    ``{% translate %}`` inside the block reads
+    ``translation.get_language()`` here, and ``get_current_timezone`` reads
+    ``timezone._active`` — so the Rust scope nodes cross INTO Python to
+    enter/exit rather than keeping a Rust-side copy (the #1646 parallel
+    path). Each half re-pushes the render env afterwards, so the Rust
+    locale/zone state follows the switch and is restored after — which is
+    what makes ``{{ n }}`` inside ``{% language "de" %}`` format as ``de``
+    while the outer render stays put.
+
+    Idempotent in effect (re-registering the same closures); ``False``
+    without the Rust extension.
+    """
+    try:
+        from djust._rust import (
+            register_language_scope_hooks,
+            register_timezone_scope_hooks,
+        )
+    except ImportError:  # pragma: no cover - Rust build predates #2558
+        return False
+    from django.utils import timezone as dj_timezone
+    from django.utils import translation
+
+    def language_enter(lang: str) -> Any:
+        override = translation.override(lang or None)
+        override.__enter__()
+        apply_render_env()
+        return override
+
+    def language_exit(token: Any) -> None:
+        token.__exit__(None, None, None)
+        apply_render_env()
+
+    def timezone_enter(name: str) -> Any:
+        override = dj_timezone.override(name or None)
+        override.__enter__()
+        apply_render_env()
+        return override
+
+    def timezone_exit(token: Any) -> None:
+        token.__exit__(None, None, None)
+        apply_render_env()
+
+    register_language_scope_hooks(language_enter, language_exit)
+    register_timezone_scope_hooks(timezone_enter, timezone_exit)
+    return True
 
 
 def apply_render_env() -> None:

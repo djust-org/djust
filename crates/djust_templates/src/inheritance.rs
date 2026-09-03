@@ -640,6 +640,45 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str(&format!("{{% end{name} %}}"));
             result
         }
+        Node::RawBlockCustomTag { name, args, body } => {
+            // Reconstruct raw-block tag (#2558): the body IS source, so it
+            // re-emits verbatim between the open and end tags.
+            let mut result = format!("{{% {name}");
+            for arg in args {
+                result.push(' ');
+                result.push_str(arg);
+            }
+            result.push_str(" %}");
+            result.push_str(body);
+            result.push_str(&format!("{{% end{name} %}}"));
+            result
+        }
+        Node::Language { expr, children } => {
+            let mut result = format!("{{% language {expr} %}}");
+            result.push_str(&nodes_to_template_string(children));
+            result.push_str("{% endlanguage %}");
+            result
+        }
+        Node::Timezone { expr, children } => {
+            let mut result = format!("{{% timezone {expr} %}}");
+            result.push_str(&nodes_to_template_string(children));
+            result.push_str("{% endtimezone %}");
+            result
+        }
+        Node::Localize { use_l10n, children } => {
+            let arg = if *use_l10n { "on" } else { "off" };
+            let mut result = format!("{{% localize {arg} %}}");
+            result.push_str(&nodes_to_template_string(children));
+            result.push_str("{% endlocalize %}");
+            result
+        }
+        Node::LocalTime { use_tz, children } => {
+            let arg = if *use_tz { "on" } else { "off" };
+            let mut result = format!("{{% localtime {arg} %}}");
+            result.push_str(&nodes_to_template_string(children));
+            result.push_str("{% endlocaltime %}");
+            result
+        }
         Node::AssignTag { name, args } => {
             // Reconstruct assign tag: {% tagname args %}
             let mut result = format!("{{% {name}");

@@ -1457,6 +1457,371 @@ pub fn call_assign_handler_with_py_sidecar(
     })
 }
 
+// ============================================================================
+// Raw-block handlers, the `_("…")` translator hook, and the scope hooks (#2558)
+// ============================================================================
+
+/// A registered RAW-BLOCK tag handler (#2558): its end tag and the handler.
+///
+/// The fourth registration kind beside inline / block / assign. Unlike
+/// [`BlockHandlerEntry`] the body is handed over UN-rendered — the template
+/// SOURCE between `{% tag args %}` and `{% endtag %}`, reconstructed from the
+/// token stream — because for `blocktranslate` the body is DATA (the msgid
+/// Django's catalog lookup keys on, with `{{ var }}` tokens becoming
+/// `%(var)s` placeholders and every `%` doubled), not a nodelist. There is
+/// deliberately no non-bindings variant: the raw-body kind exists FOR the
+/// Django bridge, whose handlers declare `RETURNS_BINDINGS` (#2547).
+struct RawBlockHandlerEntry {
+    end_tag: String,
+    handler: Py<PyAny>,
+    returns_bindings: bool,
+}
+
+/// Global registry for raw-block tag handlers (#2558). Same reader/writer
+/// shape as [`BLOCK_TAG_HANDLERS`].
+static RAW_BLOCK_HANDLERS: Lazy<RwLock<HashMap<String, RawBlockHandlerEntry>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Register a raw-block tag handler (#2558): the parser collects the body as
+/// SOURCE and the handler receives `render(args, body, context)` with the
+/// body an un-rendered `str`.
+#[pyfunction]
+pub fn register_raw_block_tag_handler(
+    py: Python<'_>,
+    name: String,
+    end_tag: String,
+    handler: Py<PyAny>,
+) -> PyResult<()> {
+    let handler_ref = handler.bind(py);
+    if !handler_ref.hasattr("render")? {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Raw-block tag handler must have a 'render' method",
+        ));
+    }
+    let returns_bindings = read_returns_bindings(handler_ref)?;
+
+    let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    registry.insert(
+        name,
+        RawBlockHandlerEntry {
+            end_tag,
+            handler,
+            returns_bindings,
+        },
+    );
+    Ok(())
+}
+
+/// Unregister a raw-block tag handler (#2558).
+#[pyfunction]
+pub fn unregister_raw_block_tag_handler(name: &str) -> PyResult<bool> {
+    let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    Ok(registry.remove(name).is_some())
+}
+
+/// Check if a raw-block tag handler is registered (#2558).
+#[pyfunction]
+pub fn has_raw_block_tag_handler(name: &str) -> PyResult<bool> {
+    let registry = RAW_BLOCK_HANDLERS.read().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    Ok(registry.contains_key(name))
+}
+
+/// Clear all raw-block handlers (primarily for testing).
+#[pyfunction]
+pub fn clear_raw_block_tag_handlers() -> PyResult<()> {
+    let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    registry.clear();
+    Ok(())
+}
+
+/// Internal Rust API — the end tag of the raw-block handler for `name`
+/// (#2558), or `None` when none is registered. The parser checks this FIRST
+/// in its fallthrough arm: the body must be collected as source before any
+/// other arm could render it.
+pub fn raw_block_handler_exists(name: &str) -> Option<String> {
+    RAW_BLOCK_HANDLERS
+        .read()
+        .map(|registry| registry.get(name).map(|entry| entry.end_tag.clone()))
+        .unwrap_or(None)
+}
+
+/// Internal Rust API — did the raw-block handler for `name` declare
+/// `RETURNS_BINDINGS` (#2547/#2558)?
+pub fn raw_block_handler_returns_bindings(name: &str) -> bool {
+    RAW_BLOCK_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
+        .unwrap_or(false)
+}
+
+/// Call a raw-block handler that declared `RETURNS_BINDINGS` (#2558).
+///
+/// The raw-block twin of [`call_block_handler_with_bindings`], with two
+/// deliberate differences: the BODY crosses as a PLAIN `str` — it is
+/// un-rendered template source, the msgid Django's lexer will tokenize, and
+/// marking it safe would lie about it the way `#2379`'s block body never
+/// could — and `safe_paths` re-minting still applies to the context dict,
+/// because Django's node resolves `{{ p }}` placeholders against it and must
+/// see the same `SafeString` the outer render would have passed.
+pub fn call_raw_block_handler_with_bindings(
+    name: &str,
+    args: &[TagArg],
+    body: &str,
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    safe_paths: &[String],
+) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
+    let handler = {
+        let registry = RAW_BLOCK_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!(
+                "No raw-block handler registered for tag: {name}"
+            ))
+        })?;
+        Python::attach(|py| entry.handler.clone_ref(py))
+    };
+    Python::attach(|py| {
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_body = pyo3::types::PyString::new(py, body);
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
+        remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let result = handler
+            .bind(py)
+            .call_method1("render", (py_args, py_body, py_context))
+            .map_err(DjangoRustError::PythonException)?;
+        split_bindings_result(&result, "Raw-block handler", name)
+            .map_err(DjangoRustError::TemplateError)
+    })
+}
+
+/// The `_("…")` translator hook (#2558): a Python callable the literal
+/// recogniser consults with the %-DOUBLED msgid.
+///
+/// Django's `Variable.resolve` (`base.py:852-868`) doubles `%` and returns
+/// `gettext_lazy(msgid)` — the lazy proxy resolves against the ACTIVE
+/// language at render time, on the render thread. One callable, no context
+/// dict, the GIL already held (~2 µs). `None` (the pure-Rust default) means
+/// "no translation installed" and the caller falls back to the msgid — the
+/// same answer `USE_I18N=False` produces on Django.
+static TRANSLATOR: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::new(None));
+
+/// Install the `_("…")` translator (#2558): `callable(%-doubled_msgid) -> str`.
+#[pyfunction]
+pub fn register_translator(callable: Py<PyAny>) -> PyResult<()> {
+    let mut slot = TRANSLATOR.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = Some(callable);
+    Ok(())
+}
+
+/// Drop the `_("…")` translator (#2558) — the `djust.test_isolation` reset.
+#[pyfunction]
+pub fn clear_translator() -> PyResult<()> {
+    let mut slot = TRANSLATOR.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = None;
+    Ok(())
+}
+
+/// Translate a %-doubled msgid through the installed translator (#2558).
+///
+/// `None` when no translator is installed, or when the call fails — both
+/// fall back to the msgid itself, which is Django's `USE_I18N=False`
+/// answer. A failing gettext should not take a page down.
+pub fn translate_msgid(msgid: &str) -> Option<String> {
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot.as_ref()?.clone_ref(py);
+        drop(slot);
+        callable
+            .bind(py)
+            .call1((msgid,))
+            .ok()
+            .and_then(|v| v.extract::<String>().ok())
+    })
+}
+
+/// Native scope tags ARMED by the library bridge (#2558).
+///
+/// `{% language %}` / `{% localize %}` / `{% localtime %}` / `{% timezone %}`
+/// are native Rust nodes whose arms live in the parser — but Django only
+/// knows them after `{% load i18n %}` / `l10n` / `tz`. The loader arms the
+/// names when it bridges the owning library, so an UNLOADED `{% language %}`
+/// still falls through to the `UnsupportedTag` arm exactly as before this
+/// row, and a loaded one parses natively.
+static ARMED_SCOPE_TAGS: Lazy<RwLock<std::collections::HashSet<String>>> =
+    Lazy::new(|| RwLock::new(std::collections::HashSet::new()));
+
+/// Arm the native scope tags named here (#2558). Called by the library
+/// loader when it bridges `i18n` / `l10n` / `tz`.
+#[pyfunction]
+pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
+    let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    set.extend(names);
+    Ok(())
+}
+
+/// Is the native scope node for `name` armed (#2558)?
+pub fn scope_tag_armed(name: &str) -> bool {
+    ARMED_SCOPE_TAGS
+        .read()
+        .map(|set| set.contains(name))
+        .unwrap_or(false)
+}
+
+/// A registered scope-hook pair (#2558): `(enter, exit)`.
+type ScopeHooks = Option<(Py<PyAny>, Py<PyAny>)>;
+
+/// The `{% language %}` enter/exit hook pair (#2558).
+///
+/// The switch MUST happen in Python's thread-local (`translation.override`)
+/// because a bridged `{% translate %}` inside the block reads
+/// `translation.get_language()` on the render thread — a Rust-side copy
+/// would be the #1646 parallel path. The exit half runs on the error path
+/// too (the renderer calls it before propagating a child's exception): a
+/// raising child must not leak `de` into the thread's next render.
+static LANGUAGE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new(None));
+
+/// Install the `{% language %}` hooks (#2558): `enter(lang) -> token`,
+/// `exit(token)`.
+#[pyfunction]
+pub fn register_language_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyResult<()> {
+    let mut slot = LANGUAGE_SCOPE_HOOKS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = Some((enter, exit));
+    Ok(())
+}
+
+/// Enter a `{% language %}` scope (#2558). Returns the exit token, `None`
+/// when no hooks are installed (pure-Rust embedding: children render
+/// untranslated, which is Django's `USE_I18N=False`).
+pub fn language_scope_enter(lang: &str) -> Result<Option<Py<PyAny>>, DjangoRustError> {
+    let hooks = Python::attach(|py| {
+        let slot = LANGUAGE_SCOPE_HOOKS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        Ok::<Option<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)>, DjangoRustError>(
+            slot.as_ref()
+                .map(|pair| (pair.0.clone_ref(py), pair.1.clone_ref(py))),
+        )
+    })?;
+    let Some((enter, _exit)) = hooks else {
+        return Ok(None);
+    };
+    Python::attach(|py| {
+        enter
+            .bind(py)
+            .call1((lang,))
+            .map(|t| Some(t.unbind()))
+            .map_err(DjangoRustError::PythonException)
+    })
+}
+
+/// Exit a `{% language %}` scope (#2558). MUST run on the error path.
+pub fn language_scope_exit(token: Option<&Py<PyAny>>) -> Result<(), DjangoRustError> {
+    let Some(token) = token else {
+        return Ok(());
+    };
+    let exit = Python::attach(|py| {
+        let slot = LANGUAGE_SCOPE_HOOKS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        Ok::<Option<pyo3::Py<pyo3::PyAny>>, DjangoRustError>(
+            slot.as_ref().map(|pair| pair.1.clone_ref(py)),
+        )
+    })?;
+    let Some(exit) = exit else {
+        return Ok(());
+    };
+    Python::attach(|py| {
+        exit.bind(py)
+            .call1((token,))
+            .map(|_| ())
+            .map_err(DjangoRustError::PythonException)
+    })
+}
+
+/// The `{% timezone %}` enter/exit hook pair (#2558) — the same shape as the
+/// language hooks: the override lives in Python's `timezone._active`, and
+/// the exit re-pushes the render env so the Rust zone follows.
+static TIMEZONE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new(None));
+
+/// Install the `{% timezone %}` hooks (#2558): `enter(zone_name) -> token`,
+/// `exit(token)`.
+#[pyfunction]
+pub fn register_timezone_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyResult<()> {
+    let mut slot = TIMEZONE_SCOPE_HOOKS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = Some((enter, exit));
+    Ok(())
+}
+
+/// Enter a `{% timezone %}` scope (#2558). Returns the exit token, `None`
+/// when no hooks are installed.
+pub fn timezone_scope_enter(zone: &str) -> Result<Option<Py<PyAny>>, DjangoRustError> {
+    let hooks = Python::attach(|py| {
+        let slot = TIMEZONE_SCOPE_HOOKS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        Ok::<Option<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)>, DjangoRustError>(
+            slot.as_ref()
+                .map(|pair| (pair.0.clone_ref(py), pair.1.clone_ref(py))),
+        )
+    })?;
+    let Some((enter, _exit)) = hooks else {
+        return Ok(None);
+    };
+    Python::attach(|py| {
+        enter
+            .bind(py)
+            .call1((zone,))
+            .map(|t| Some(t.unbind()))
+            .map_err(DjangoRustError::PythonException)
+    })
+}
+
+/// Exit a `{% timezone %}` scope (#2558). MUST run on the error path.
+pub fn timezone_scope_exit(token: Option<&Py<PyAny>>) -> Result<(), DjangoRustError> {
+    let Some(token) = token else {
+        return Ok(());
+    };
+    let exit = Python::attach(|py| {
+        let slot = TIMEZONE_SCOPE_HOOKS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        Ok::<Option<pyo3::Py<pyo3::PyAny>>, DjangoRustError>(
+            slot.as_ref().map(|pair| pair.1.clone_ref(py)),
+        )
+    })?;
+    let Some(exit) = exit else {
+        return Ok(());
+    };
+    Python::attach(|py| {
+        exit.bind(py)
+            .call1((token,))
+            .map(|_| ())
+            .map_err(DjangoRustError::PythonException)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1493,13 +1858,14 @@ mod tests {
             tests.contains("every_registry_builds_its_args_through_the_one_builder"),
             "the split landed in the wrong place"
         );
-        // Five call sites since #2547: tag, block, assign, and the two
+        // Six call sites since #2558: tag, block, assign, the two
         // bindings-returning variants (`call_handler_with_bindings`,
-        // `call_block_handler_with_bindings`).
+        // `call_block_handler_with_bindings`) and the raw-block registry
+        // (`call_raw_block_handler_with_bindings`).
         assert_eq!(
             src.matches("build_py_args(py, args)").count(),
-            5,
-            "the tag, block, assign and both bindings registries must all build args here"
+            6,
+            "the tag, block, assign, both bindings and the raw-block registries must all build args here"
         );
         assert!(
             !src.contains("PyList::new(py, args)"),
@@ -1515,7 +1881,7 @@ mod tests {
         assert_eq!(
             src.matches("build_py_context(py, context, raw_py_objects)")
                 .count(),
-            5,
+            6,
             "every registry call path builds its context dict through the one builder"
         );
         assert_eq!(
