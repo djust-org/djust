@@ -1,21 +1,21 @@
 {
   "django": "5.2.16",
   "tag": "5.2.16",
-  "ok": 787,
-  "fail": 138,
-  "error": 122,
+  "ok": 801,
+  "fail": 122,
+  "error": 124,
   "ran": 1047,
-  "percent": 75.17,
+  "percent": 76.5,
   "all": {
-    "ok": 1196,
-    "fail": 138,
-    "error": 122,
+    "ok": 1210,
+    "fail": 122,
+    "error": 124,
     "ran": 1456,
     "skipped": 14,
-    "percent": 82.14
+    "percent": 83.1
   },
   "untouched_failures": 0,
   "crashes": [],
-  "generated_at": "2026-09-03T17:50:27Z",
+  "generated_at": "2026-09-03T18:57:26Z",
   "generated_by": "scripts/run-django-template-suite.py --write-baseline"
 }
