@@ -287,7 +287,10 @@ class TestTheDivergenceThatWasNotClosedHere:
         with pytest.raises(TypeError, match="not iterable"):
             DjangoTemplate(tpl).render(DjangoContext({"p": value}))
         ctx = {"p": value}
-        with pytest.raises(RuntimeError, match="not iterable"):
+        # Django's own `TypeError`, not a `RuntimeError` carrying its text:
+        # since #2563 a tag handler's exception crosses the Rust boundary
+        # WHOLE, so the type matches Django's on both engines.
+        with pytest.raises(TypeError, match="not iterable"):
             _rust.render_template_with_dirs(tpl, ctx, [], None)
 
 

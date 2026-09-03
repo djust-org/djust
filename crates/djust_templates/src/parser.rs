@@ -117,10 +117,38 @@ pub enum Node {
     Spaceless {
         nodes: Vec<Node>,
     },
-    /// {% cycle val1 val2 ... %} - cycles through values in a for loop
+    /// `{% cycle v1 v2 … [as name [silent]] %}` and the reference form
+    /// `{% cycle name %}` (#2556).
+    ///
+    /// State is Django's: per NODE, per RENDER — `Context::cycle_advance`
+    /// keyed by `id`, which `resolve_cycle_nodes` assigns in document order
+    /// from the same per-template prefix as `{% if %}` marker ids. A
+    /// reference is resolved at parse time into a copy of its definition
+    /// (same `values`, `silent` and `id`, so it advances the SAME iterator —
+    /// Django returns the very same `CycleNode` object for `{% cycle name %}`)
+    /// with `reference: true`, which only the inheritance re-serializer reads.
     Cycle {
         values: Vec<String>,
         name: Option<String>,
+        silent: bool,
+        id: String,
+        reference: bool,
+    },
+    /// `{% resetcycle [name] %}` — `CycleNode.reset` on the named cycle, or
+    /// on the last DEFINED one (`parser._last_cycle_node`; a reference does
+    /// not update it). `id` is bound by `resolve_cycle_nodes`.
+    ResetCycle {
+        name: Option<String>,
+        id: String,
+    },
+    /// `{% filter f1|f2:arg %}…{% endfilter %}` (#2556): the body renders to
+    /// a string, is bound as the SAFE variable `var` — Django's
+    /// `NodeList.render` is a `SafeString` — and `{{ var|f1|f2:arg }}` is
+    /// rendered through the ONE `Node::Variable` sink, so the escaping
+    /// decision is never re-derived here.
+    Filter {
+        filters: Vec<(String, Option<String>)>,
+        nodes: Vec<Node>,
     },
     /// {% now "format" %} - outputs current date/time with given format
     Now(String),
@@ -370,6 +398,12 @@ fn parse_internal(tokens: &[Token], identity_hash: u64) -> Result<Vec<Node>> {
     let mut counter = 0usize;
     assign_if_marker_ids(&mut nodes, &prefix, &mut counter);
 
+    // Bind `{% cycle name %}` / `{% resetcycle %}` to their definitions and
+    // give every cycle node its per-template state id (#2556). Same
+    // document-order walk and the same prefix, for the same reason.
+    let mut cycles = CycleResolution::default();
+    resolve_cycle_nodes(&mut nodes, &prefix, &mut cycles)?;
+
     Ok(nodes)
 }
 
@@ -478,6 +512,9 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             Node::Spaceless { nodes: body, .. } => {
                 assign_if_marker_ids(body, prefix, counter);
             }
+            Node::Filter { nodes: body, .. } => {
+                assign_if_marker_ids(body, prefix, counter);
+            }
             Node::BlockCustomTag { children, .. } => {
                 assign_if_marker_ids(children, prefix, counter);
             }
@@ -496,6 +533,118 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             _ => {}
         }
     }
+}
+
+/// Parse-time bookkeeping for `resolve_cycle_nodes`: Django's
+/// `parser._named_cycle_nodes` and `parser._last_cycle_node`.
+#[derive(Default)]
+struct CycleResolution {
+    /// `name -> (values, silent, id)` of every `{% cycle … as name %}` seen
+    /// so far in document order.
+    named: HashMap<String, (Vec<String>, bool, String)>,
+    /// The id of the last DEFINITION (`{% cycle name %}` does not update it,
+    /// exactly as Django's `cycle()` returns before `_last_cycle_node = node`).
+    last: Option<String>,
+    /// Ids are `<prefix>-cycle-<n>`, document order.
+    counter: usize,
+}
+
+/// Bind cycle references and `{% resetcycle %}` targets, and assign ids (#2556).
+///
+/// Walks every child-bearing variant in document order — the SAME set
+/// `assign_if_marker_ids` walks, because a `{% cycle %}` can sit anywhere a
+/// `{% if %}` can. Django resolves all of this at parse time and raises
+/// `TemplateSyntaxError` with these exact messages; djust surfaces them at
+/// render until #2549 types the parse-time channel.
+fn resolve_cycle_nodes(
+    nodes: &mut [Node],
+    prefix: &str,
+    state: &mut CycleResolution,
+) -> Result<()> {
+    for node in nodes.iter_mut() {
+        match node {
+            Node::Cycle {
+                values,
+                name,
+                silent,
+                id,
+                reference,
+            } => {
+                if *reference {
+                    let Some(name) = name.as_deref() else {
+                        unreachable!("a cycle reference always carries its name")
+                    };
+                    if state.named.is_empty() {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "No named cycles in template. '{name}' is not defined"
+                        )));
+                    }
+                    let Some((def_values, def_silent, def_id)) = state.named.get(name) else {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "Named cycle '{name}' does not exist"
+                        )));
+                    };
+                    *values = def_values.clone();
+                    *silent = *def_silent;
+                    *id = def_id.clone();
+                } else {
+                    *id = format!("{prefix}-cycle-{}", state.counter);
+                    state.counter += 1;
+                    if let Some(name) = name {
+                        state
+                            .named
+                            .insert(name.clone(), (values.clone(), *silent, id.clone()));
+                    }
+                    state.last = Some(id.clone());
+                }
+            }
+            Node::ResetCycle { name, id } => match name {
+                Some(name) => {
+                    let Some((_, _, def_id)) = state.named.get(name) else {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "Named cycle '{name}' does not exist."
+                        )));
+                    };
+                    *id = def_id.clone();
+                }
+                None => {
+                    let Some(last) = state.last.as_ref() else {
+                        return Err(DjangoRustError::TemplateError(
+                            "No cycles in template.".to_string(),
+                        ));
+                    };
+                    *id = last.clone();
+                }
+            },
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => {
+                resolve_cycle_nodes(true_nodes, prefix, state)?;
+                resolve_cycle_nodes(false_nodes, prefix, state)?;
+            }
+            Node::For {
+                nodes: body,
+                empty_nodes,
+                ..
+            } => {
+                resolve_cycle_nodes(body, prefix, state)?;
+                resolve_cycle_nodes(empty_nodes, prefix, state)?;
+            }
+            Node::Block { nodes: body, .. }
+            | Node::With { nodes: body, .. }
+            | Node::Spaceless { nodes: body, .. }
+            | Node::Filter { nodes: body, .. } => {
+                resolve_cycle_nodes(body, prefix, state)?;
+            }
+            Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
+                resolve_cycle_nodes(children, prefix, state)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
@@ -957,20 +1106,84 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(None)
                 }
 
+                "filter" => {
+                    // {% filter f1|f2:arg %}...{% endfilter %} (#2556).
+                    // Django: `parser.compile_filter("var|%s" % rest)` — so
+                    // the chain goes through the SAME lexer the `{{ }}`
+                    // branch uses (`split_pipes` + `parse_filter_specs`),
+                    // not a second copy (#1646, the #2409 lesson).
+                    let rest = args.join(" ");
+                    let token = format!("var|{rest}");
+                    let parts: Vec<String> = crate::filter_lexer::split_pipes(&token)
+                        .into_iter()
+                        .map(|s| s.trim().to_string())
+                        .collect();
+                    let filters = parse_filter_specs(&parts[1..], &token)?;
+                    // `"filter escape"` / `"filter safe"` are refused with
+                    // Django's message (two spaces after the period, sic).
+                    for (name, _) in &filters {
+                        if name == "escape" || name == "safe" {
+                            return Err(DjangoRustError::TemplateError(format!(
+                                "\"filter {name}\" is not permitted.  Use the \"autoescape\" tag instead."
+                            )));
+                        }
+                    }
+                    let (nodes, end_pos) = parse_block_custom_tag(tokens, *i + 1, "endfilter")?;
+                    *i = end_pos;
+                    Ok(Some(Node::Filter { filters, nodes }))
+                }
+
+                "endfilter" => {
+                    // Handled by filter tag
+                    Ok(None)
+                }
+
                 "cycle" => {
-                    // {% cycle val1 val2 ... %} or {% cycle val1 val2 as cyclename %}
+                    // Django's `cycle()` grammar, `defaulttags.py` (#2556).
+                    // `args` excludes the tag name, so Django's `len(args)`
+                    // is `args.len() + 1` throughout.
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "cycle tag requires at least one argument".to_string(),
+                            "'cycle' tag requires at least two arguments".to_string(),
                         ));
                     }
-                    // Check for "as name" at the end
-                    let (values, name) = if args.len() >= 3 && args[args.len() - 2] == "as" {
-                        let name = args.last().unwrap().clone();
-                        let values = args[..args.len() - 2].to_vec();
-                        (values, Some(name))
+                    if args.len() == 1 {
+                        // `{% cycle name %}` — a REFERENCE, bound to its
+                        // definition by `resolve_cycle_nodes`.
+                        return Ok(Some(Node::Cycle {
+                            values: Vec::new(),
+                            name: Some(args[0].clone()),
+                            silent: false,
+                            id: String::new(),
+                            reference: true,
+                        }));
+                    }
+                    let mut args = args.clone();
+                    let mut as_form = false;
+                    let mut silent = false;
+                    // Django: `if len(args) > 4` — so `{% cycle a as b %}`
+                    // is NOT the `as` form; it cycles `a`, `as`, `b`
+                    // (`cycle25` renders exactly that). Mirrored, not fixed.
+                    if args.len() > 3 {
+                        if args[args.len() - 3] == "as" {
+                            let last = &args[args.len() - 1];
+                            if last != "silent" {
+                                return Err(DjangoRustError::TemplateError(format!(
+                                    "Only 'silent' flag is allowed after cycle's name, not '{last}'."
+                                )));
+                            }
+                            as_form = true;
+                            silent = true;
+                            args.pop();
+                        } else if args[args.len() - 2] == "as" {
+                            as_form = true;
+                        }
+                    }
+                    let (values, name) = if as_form {
+                        let name = args[args.len() - 1].clone();
+                        (args[..args.len() - 2].to_vec(), Some(name))
                     } else {
-                        (args.clone(), None)
+                        (args, None)
                     };
                     // `do_cycle` compiles every value (#2418). `name` is the
                     // `as` BINDING and is excluded, like `widthratio`'s and
@@ -979,7 +1192,27 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     for value in &values {
                         validate_tag_operand(value)?;
                     }
-                    Ok(Some(Node::Cycle { values, name }))
+                    Ok(Some(Node::Cycle {
+                        values,
+                        name,
+                        silent,
+                        id: String::new(),
+                        reference: false,
+                    }))
+                }
+
+                "resetcycle" => {
+                    // {% resetcycle [name] %} (#2556); bound by
+                    // `resolve_cycle_nodes`.
+                    if args.len() > 1 {
+                        return Err(DjangoRustError::TemplateError(
+                            "'resetcycle' tag accepts at most one argument.".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::ResetCycle {
+                        name: args.first().cloned(),
+                        id: String::new(),
+                    }))
                 }
 
                 "now" => {
@@ -1588,7 +1821,8 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             }
             Node::Block { nodes: body, .. }
             | Node::With { nodes: body, .. }
-            | Node::Spaceless { nodes: body, .. } => {
+            | Node::Spaceless { nodes: body, .. }
+            | Node::Filter { nodes: body, .. } => {
                 collect_dj_model_fields_depth(body, loader, fields, depth);
             }
             Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
@@ -2005,7 +2239,28 @@ fn extract_from_nodes(
             Node::Spaceless { nodes } => {
                 extract_from_nodes(nodes, variables);
             }
-            Node::Cycle { values, .. } => {
+            Node::Filter { filters, nodes } => {
+                // `{% filter cut:remove %}` reads `remove` from the context
+                // (`filter04`); a quoted arg is a literal.
+                for (_, arg) in filters {
+                    if let Some(arg) = arg {
+                        if !((arg.starts_with('"') && arg.ends_with('"'))
+                            || (arg.starts_with('\'') && arg.ends_with('\'')))
+                        {
+                            extract_from_variable(arg, variables);
+                        }
+                    }
+                }
+                extract_from_nodes(nodes, variables);
+            }
+            // `{% resetcycle %}` reads nothing from the context.
+            Node::ResetCycle { .. } => {}
+            Node::Cycle { values, name, .. } => {
+                // The `as name` form binds `name` for later siblings, the same
+                // wildcard `{% firstof … as v %}` needs (#2355).
+                if name.is_some() {
+                    variables.entry("*".to_string()).or_default();
+                }
                 for val in values {
                     if !((val.starts_with('"') && val.ends_with('"'))
                         || (val.starts_with('\'') && val.ends_with('\'')))
@@ -3947,6 +4202,7 @@ mod dep_tests {
         "Extends",
         "Load",
         "UnsupportedTag",
+        "ResetCycle",
     ];
 
     /// Compile-time exhaustiveness anchor: every `Node` variant must have
@@ -3980,6 +4236,8 @@ mod dep_tests {
             Node::TemplateTag(_) => "TemplateTag",
             Node::Spaceless { .. } => "Spaceless",
             Node::Cycle { .. } => "Cycle",
+            Node::ResetCycle { .. } => "ResetCycle",
+            Node::Filter { .. } => "Filter",
             Node::Now(_) => "Now",
             Node::UnsupportedTag { .. } => "UnsupportedTag",
             Node::InlineIf { .. } => "InlineIf",
@@ -4083,6 +4341,17 @@ mod dep_tests {
             Node::Cycle {
                 values: vec!["a".into(), "b".into()],
                 name: None,
+                silent: false,
+                id: "t-cycle-0".into(),
+                reference: false,
+            },
+            Node::ResetCycle {
+                name: None,
+                id: "t-cycle-0".into(),
+            },
+            Node::Filter {
+                filters: vec![("upper".into(), None)],
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::Now("Y-m-d".into()),
             Node::UnsupportedTag {

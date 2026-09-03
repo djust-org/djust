@@ -19,6 +19,16 @@
 # reporting notes below). Both times it was confident.
 set -uo pipefail
 
+# Git exports its execution variables to hooks. Any test whose fixture shells
+# out to `git` inherits them, so a `git init` in a temp directory silently
+# re-initialises THIS repository (rewriting the shared config — the stray
+# `core.bare = true` came from here) and the fixture's `git add`/`commit` write
+# into the real index. Strip them before anything below runs (#2608); the
+# fixtures strip them too (tests/git_env.py) — this is defence in depth.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR \
+      GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX \
+      GIT_INDEX_VERSION GIT_NAMESPACE
+
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 PATHS=(tests/ python/tests/ python/djust/tests/)

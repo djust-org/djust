@@ -19,8 +19,19 @@ A templates-only project pays only for the template engine. Since #2559 the
 `DjustTemplateBackend` imports about 25 `djust` modules and none of the LiveView
 stack (`channels`, the WebSocket consumer, presence) — those load the first time
 something imports `djust.LiveView`. `channels` and `msgpack` are still installed
-by `pip install djust` (the extras decision is #2560); they are simply not
-imported.
+by `pip install djust`; they are simply not imported.
+
+**Extras decision (#2560, 1.2.0).** There is no `djust[templates]` extra and no
+change to what `pip install djust` pulls in 1.x. An extra can only *add*
+dependencies, so a "templates-only" extra would be a lie, and moving `channels`
+and `msgpack` behind `djust[live]` would make a bare install lose the WebSocket
+stack — a breaking change that belongs at a 2.0 boundary with a deprecation
+cycle. What 1.2.0 ships instead is the additive half: importing the backend no
+longer imports the LiveView stack (#2559), and the `C016` check tells you when
+your `TEMPLATES` shape needs a `DjangoTemplates` fallback (#2562). The 2.0
+migration path, when it comes: `djust[live]` carries `channels[daphne]`,
+`msgpack`, and the presence backends; 1.x emits a deprecation warning when the
+WebSocket consumer is imported without the extra declared.
 
 ### 1. Configure Django Settings
 
@@ -192,7 +203,13 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and the `cache` library are not implemented; the generated lists below are the authority
 - Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library — see "Internationalization" below for what that covers and the residues it does not. The three `tz` *filters* (`localtime`, `timezone`, `utc`) are the exception — they need a datetime object the Rust engine cannot carry (#2216) and are refused loudly at load rather than rendering blank (#2541)
+- `{% debug %}` renders `""` unless `settings.DEBUG` (Django's own gate), and what it dumps has already been through djust's serialization floor and sidecar proxies — protected model fields never reach it. On the plain backend a model shows as its serialized dict rather than its repr (#2590)
+- `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` is refused until #2591
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
+- `{% url %}` raises `NoReverseMatch` on a failed reverse, as Django does, and `{% url … as var %}` stores `''` in the variable instead of raising (#2563). Both hold on the plain backend and on the LiveView path, for a quoted name and for a variable name, and the message is Django's (`Reverse for 'x' with no arguments not found. 1 pattern(s) tried: […]`). There is no fail-soft switch: a blank `href` is exactly the broken link the exception exists to surface, and `as var` is the escape hatch. Three differences remain:
+  - a `{% url 'quoted-name' … %}` is resolved by a pre-pass BEFORE the template is parsed, so one inside a never-taken `{% if %}` branch or a `{% comment %}` block still raises;
+  - the traceback has fewer Python frames than Django's — the handler's frames (`UrlTagHandler.render` → `reverse` → `_reverse_with_prefix`) survive the Rust boundary, but the Rust engine contributes no `Template.render` / `NodeList.render` / `URLNode.render` frames, so Django's `test_url_reverse_view_name` (which asserts a traceback depth > 5 as its proxy for "the original stack trace was kept") fails on shape alone;
+  - `{% url name_var arg %}` where the resolved name is ALSO a context key re-resolves it (#2037 name-position double resolution; Django's `test_url19`): the reverse fails honestly now instead of rendering `''`.
 
 ### Loading a project's template libraries
 
@@ -277,11 +294,11 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in filters — unsupported (0):** none
 
-**Built-in tags — 18 of 25 supported:**
-- native Rust (16): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `firstof`, `for`, `if`, `include`, `load`, `now`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
-- via Python handler (2): `regroup`, `url`
+**Built-in tags — 23 of 25 supported:**
+- native Rust (18): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `filter`, `firstof`, `for`, `if`, `include`, `load`, `now`, `resetcycle`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
+- via Python handler (5): `debug`, `lorem`, `querystring`, `regroup`, `url`
 
-**Built-in tags — unsupported (7):** `autoescape`, `debug`, `filter`, `ifchanged`, `lorem`, `querystring`, `resetcycle`
+**Built-in tags — unsupported (2):** `autoescape`, `ifchanged`
 
 **Library tags (`{% load … %}`) — supported (15):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `static`
 

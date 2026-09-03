@@ -320,11 +320,13 @@ class TestRegroupByOperand:
 
 
 class TestTheUnsupportedTwo:
-    """`ifchanged` and `filter` refuse, which is fail-closed and measured.
+    """`ifchanged` refuses, which is fail-closed and measured.
 
-    The corpus builds their cells anyway: "no cell exists" and "every cell is
+    The corpus builds its cells anyway: "no cell exists" and "every cell is
     the same refusal" are different states, and only the second goes red the
-    day someone implements the tag and gets its escaping wrong.
+    day someone implements the tag and gets its escaping wrong. `filter` was
+    the second row here until #2556 implemented it; its escaping is now
+    measured against Django in `test_remaining_builtin_tags_2556.py`.
     """
 
     @pytest.mark.parametrize(
@@ -332,7 +334,6 @@ class TestTheUnsupportedTwo:
         [
             "{% ifchanged p %}[{{ p }}]{% endifchanged %}",
             "{% ifchanged p|upper %}[{{ p }}]{% endifchanged %}",
-            "{% filter upper %}{{ p }}{% endfilter %}",
         ],
     )
     def test_the_rust_engine_refuses_rather_than_rendering_something_wrong(self, src) -> None:

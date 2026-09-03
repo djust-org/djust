@@ -60,16 +60,27 @@ impl ViewActor {
     /// handle.update_state(updates).await?;
     /// ```
     pub fn new(view_path: String) -> (Self, ViewActorHandle) {
+        // LIMITATION: Backend created with empty template
+        // This renders an empty document. Templates should be:
+        // - Passed in constructor (`with_template`), OR
+        // - Loaded via separate set_template() method
+        // The session actor's mount path still uses this constructor, so a
+        // `use_actors=True` view's actor render is an empty document today
+        // (the state it holds is real, the HTML is not).
+        Self::with_template(view_path, String::new())
+    }
+
+    /// Create a new ViewActor whose backend renders `template_source`.
+    ///
+    /// The template-carrying constructor the LIMITATION note on `new` asks
+    /// for; the mount path does not use it yet, so it is what the #2592 tests
+    /// use to make the actor's state OBSERVABLE through a real render.
+    pub fn with_template(view_path: String, template_source: String) -> (Self, ViewActorHandle) {
         let (tx, rx) = mpsc::channel(50); // Bounded channel for backpressure
 
         info!(view_path = %view_path, "Creating ViewActor");
 
-        // LIMITATION: Backend created with empty template
-        // This will fail on first render attempt. Templates should be:
-        // - Passed in constructor, OR
-        // - Loaded via separate set_template() method
-        // Current design assumes template will be set before rendering (not enforced)
-        let backend = RustLiveViewBackend::new_rust(String::new());
+        let backend = RustLiveViewBackend::new_rust(template_source);
 
         let actor = ViewActor {
             view_path: view_path.clone(),
@@ -104,6 +115,15 @@ impl ViewActor {
                         "UpdateState"
                     );
                     self.handle_update_state(updates, reply);
+                }
+
+                ViewMsg::RetainStateKeys { keys, reply } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        num_keys = keys.len(),
+                        "RetainStateKeys"
+                    );
+                    self.handle_retain_state_keys(keys, reply);
                 }
 
                 ViewMsg::Render { reply } => {
@@ -234,7 +254,15 @@ impl ViewActor {
         info!(view_path = %self.view_path, "ViewActor stopped");
     }
 
-    /// Handle UpdateState message
+    /// Handle UpdateState message.
+    ///
+    /// A MERGE, deliberately — this is the delta entry, the actor-side
+    /// `RustLiveView.update_state`. Its only production caller is the session
+    /// actor's mount (`session.rs` `handle_mount`), which sends the initial
+    /// context into a FRESH backend, so there is nothing to retain there. A
+    /// caller that keeps an actor across syncs pairs it with
+    /// `handle_retain_state_keys` (#2592), the way the bridge pairs
+    /// `update_state` with `retain_state_keys` (#2564).
     fn handle_update_state(
         &mut self,
         updates: HashMap<String, Value>,
@@ -242,6 +270,17 @@ impl ViewActor {
     ) {
         self.backend.update_state_rust(updates);
         let _ = reply.send(Ok(()));
+    }
+
+    /// Handle RetainStateKeys message (#2592): drop every state key absent
+    /// from `keys` and reply with the removed keys.
+    fn handle_retain_state_keys(
+        &mut self,
+        keys: Vec<String>,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<String>, ActorError>>,
+    ) {
+        let removed = self.backend.retain_state_keys_rust(keys);
+        let _ = reply.send(Ok(removed));
     }
 
     /// Handle Render message
@@ -444,6 +483,29 @@ impl ViewActor {
                 state.insert(key_str, rust_value);
             }
 
+            // Full-context truth (#2592, the actor twin of #2564). `state` IS
+            // the whole `get_context_data()`, so every backend key it lacks is
+            // a key the view stopped carrying — and `update_state_rust`
+            // merges, so it cannot see an absence: `del self.secret` (or the
+            // `if self.show: ctx["secret"] = …` gate flipping closed) kept
+            // the last value in the actor's state. Retain BEFORE the merge,
+            // exactly as the bridge does (`rust_bridge.py`). The removed keys
+            // also join any pending changed set inside `retain_state_keys_rust`.
+            //
+            // No `static_assigns` exemption here, unlike the bridge: the flag
+            // that makes `get_context_data` skip them (`_static_assigns_sent`)
+            // is set only by `_sync_state_to_rust`, which the actor path never
+            // runs, so this context always carries them.
+            let removed = self
+                .backend
+                .retain_state_keys_rust(state.keys().cloned().collect());
+            if !removed.is_empty() {
+                debug!(
+                    view_path = %self.view_path,
+                    removed = ?removed,
+                    "Dropped state keys absent from the context"
+                );
+            }
             self.backend.update_state_rust(state);
             Ok::<_, ActorError>(())
         })
@@ -691,6 +753,27 @@ impl ViewActorHandle {
 
         self.sender
             .send(ViewMsg::UpdateState { updates, reply: tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Drop every state key absent from `keys`, returning the removed keys
+    /// (#2592).
+    ///
+    /// The truth half of [`update_state`](Self::update_state), which merges
+    /// and so keeps a key the caller stopped sending. Call it with the FULL
+    /// key set before each `update_state` on an actor that outlives one sync.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ActorError::Shutdown` if the actor has been shutdown.
+    pub async fn retain_state_keys(&self, keys: Vec<String>) -> Result<Vec<String>, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::RetainStateKeys { keys, reply: tx })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 
@@ -1071,5 +1154,190 @@ mod tests {
         updates.insert("count".to_string(), Value::Integer(1));
         let result = handle.update_state(updates).await;
         assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // #2592: a key deleted from the Python context stops rendering — the
+    // actor twin of #2564, against the REAL `sync_state_from_python` path
+    // (a real Python object under an embedded interpreter, driven through
+    // `Event`), on an actor whose backend carries a template so the state is
+    // observable through a render. `with_template` exists for that: the
+    // mount path's `new` renders an empty document (see the LIMITATION note).
+    // ------------------------------------------------------------------
+
+    const SECRET: &str = "SECRET-A";
+
+    /// Compile a Python class from `body` and return one instance.
+    fn python_instance(class_body: &str) -> Py<PyAny> {
+        Python::initialize();
+        Python::attach(|py| {
+            let code = std::ffi::CString::new(class_body).unwrap();
+            let module = pyo3::types::PyModule::from_code(py, &code, c"v2592.py", c"v2592")
+                .expect("fixture compiles");
+            module
+                .getattr("V")
+                .unwrap()
+                .call0()
+                .expect("fixture instantiates")
+                .unbind()
+        })
+    }
+
+    /// The #2564 delete-then-render shape: `k` is in the context only while
+    /// the attribute exists. `touch` is a no-op handler so the first render
+    /// goes through the same `Event → sync_state_from_python` path as the
+    /// deletion does.
+    fn delete_view(make_value: &str) -> Py<PyAny> {
+        python_instance(&format!(
+            "class V:\n\
+             \x20   def __init__(self):\n\
+             \x20       self.k = {make_value}\n\
+             \x20   def get_context_data(self):\n\
+             \x20       return {{'k': self.k}} if hasattr(self, 'k') else {{}}\n\
+             \x20   def touch(self):\n\
+             \x20       pass\n\
+             \x20   def forget(self):\n\
+             \x20       del self.k\n\
+             \x20   def restore(self):\n\
+             \x20       self.k = 'SECRET-B'\n"
+        ))
+    }
+
+    async fn actor_with(template: &str, view: Py<PyAny>) -> ViewActorHandle {
+        let (actor, handle) = ViewActor::with_template("t2592.V".to_string(), template.to_string());
+        tokio::spawn(actor.run());
+        handle.set_python_view(view).await.unwrap();
+        handle
+    }
+
+    async fn event_html(handle: &ViewActorHandle, name: &str) -> String {
+        handle
+            .event(name.to_string(), HashMap::new())
+            .await
+            .expect("the handler exists and the render succeeds")
+            .html
+    }
+
+    #[tokio::test]
+    async fn a_key_deleted_from_the_python_context_stops_rendering_2592() {
+        for (make_value, template) in [
+            (format!("'{SECRET}'"), "{{ k }}"),
+            (format!("{{'secret': '{SECRET}'}}"), "{{ k.secret }}"),
+        ] {
+            let handle = actor_with(template, delete_view(&make_value)).await;
+            let html = event_html(&handle, "touch").await;
+            assert!(
+                html.contains(SECRET),
+                "premise: renders while present: {html:?}"
+            );
+
+            let html = event_html(&handle, "forget").await;
+            assert!(
+                !html.contains(SECRET),
+                "[{template}] a deleted key kept rendering its last value: {html:?}"
+            );
+            // The plain render agrees with the diff render.
+            assert_eq!(handle.render().await.unwrap(), "");
+            handle.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_key_that_comes_back_renders_again_2592() {
+        let handle = actor_with("{{ k }}", delete_view(&format!("'{SECRET}'"))).await;
+        event_html(&handle, "touch").await;
+        event_html(&handle, "forget").await;
+        assert_eq!(handle.render().await.unwrap(), "");
+        let html = event_html(&handle, "restore").await;
+        assert!(
+            html.contains("SECRET-B"),
+            "removal is not a tombstone: {html:?}"
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_if_gated_region_is_empty_after_the_gate_flips_2592() {
+        let view = python_instance(&format!(
+            "class V:\n\
+             \x20   def __init__(self):\n\
+             \x20       self.show = True\n\
+             \x20   def get_context_data(self):\n\
+             \x20       ctx = {{'n': 0}}\n\
+             \x20       if self.show:\n\
+             \x20           ctx['secret'] = '{SECRET}'\n\
+             \x20       return ctx\n\
+             \x20   def touch(self):\n\
+             \x20       pass\n\
+             \x20   def hide(self):\n\
+             \x20       self.show = False\n"
+        ));
+        let handle = actor_with(
+            "{{ n }}{% if secret %}<span>{{ secret }}</span>{% endif %}",
+            view,
+        )
+        .await;
+        let html = event_html(&handle, "touch").await;
+        assert!(
+            html.contains("<span"),
+            "premise: gated content renders while open"
+        );
+
+        let html = event_html(&handle, "hide").await;
+        assert!(
+            !html.contains(SECRET),
+            "the gate flipped and the content survived: {html:?}"
+        );
+        assert!(!html.contains("<span"), "{html:?}");
+        assert!(
+            html.contains('0'),
+            "the surviving key still renders: {html:?}"
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn retain_state_keys_message_returns_the_removed_keys_2592() {
+        let (actor, handle) =
+            ViewActor::with_template("t2592.V".to_string(), "{{ a }}|{{ b }}".to_string());
+        tokio::spawn(actor.run());
+        let mut updates = HashMap::new();
+        updates.insert("a".to_string(), Value::Integer(1));
+        updates.insert("b".to_string(), Value::Integer(2));
+        handle.update_state(updates).await.unwrap();
+        assert_eq!(handle.render().await.unwrap(), "1|2");
+
+        let removed = handle
+            .retain_state_keys(vec!["b".to_string(), "never-present".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(removed, vec!["a".to_string()]);
+        assert_eq!(handle.render().await.unwrap(), "|2");
+        assert!(
+            handle
+                .retain_state_keys(vec!["b".to_string()])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a second call has nothing left to drop"
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn update_state_stays_a_merge_2592() {
+        // The delta entry keeps its contract; the truth half is a separate
+        // message. A caller that wants replace semantics sends both.
+        let (actor, handle) =
+            ViewActor::with_template("t2592.V".to_string(), "{{ a }}|{{ b }}".to_string());
+        tokio::spawn(actor.run());
+        let mut first = HashMap::new();
+        first.insert("a".to_string(), Value::Integer(1));
+        handle.update_state(first).await.unwrap();
+        let mut second = HashMap::new();
+        second.insert("b".to_string(), Value::Integer(2));
+        handle.update_state(second).await.unwrap();
+        assert_eq!(handle.render().await.unwrap(), "1|2");
+        handle.shutdown().await;
     }
 }

@@ -323,7 +323,7 @@ class TestAllThreeSeedSitesAndTheLoopAlias:
             # Site 3 — `get_value_safe`, via the `{% firstof %}` / `{% cycle %}`
             # emit path.
             '{% firstof p|join:", " %}',
-            '{% cycle p|join:", " %}',
+            '{% cycle p|join:", " p|join:", " %}',
         ],
     )
     def test_every_seed_site_honours_context_item_safety(self, source: str) -> None:
@@ -341,7 +341,7 @@ class TestAllThreeSeedSitesAndTheLoopAlias:
             "{{ p if flag else q|unordered_list }}",
             "{{ q if nope else p|unordered_list }}",
             '{% firstof p|join:", " %}',
-            '{% cycle p|join:", " %}',
+            '{% cycle p|join:", " p|join:", " %}',
         ],
     )
     def test_every_seed_site_still_escapes_unmarked_items(self, source: str) -> None:
@@ -1105,7 +1105,9 @@ class TestEverySeedSiteReachesTheExtractorArm:
             # conditional and `p` must be reached through BOTH branches.
             "{{ q if nope else p|first }}",
             "{{ q if nope else p|last }}",
-            "{% cycle p|first %}",
+            # Two operands: one operand is the `{% cycle name %}` REFERENCE
+            # form on Django, which #2556 mirrors.
+            "{% cycle p|first p|first %}",
         ],
     )
     def test_the_djust_only_sites(self, source: str) -> None:

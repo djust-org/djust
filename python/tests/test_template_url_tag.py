@@ -147,9 +147,9 @@ class TestUrlTagWithArgs:
         request = RequestFactory().get("/")
         result = template.render({"post_slug": "hello-world"}, request)
 
-        assert (
-            result.strip() == "/post/hello-world/"
-        ), f"Expected /post/hello-world/ but got: {result}"
+        assert result.strip() == "/post/hello-world/", (
+            f"Expected /post/hello-world/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_nested_context_variable(self):
@@ -169,9 +169,9 @@ class TestUrlTagWithArgs:
         request = RequestFactory().get("/")
         result = template.render({"post": {"slug": "nested-post"}}, request)
 
-        assert (
-            result.strip() == "/post/nested-post/"
-        ), f"Expected /post/nested-post/ but got: {result}"
+        assert result.strip() == "/post/nested-post/", (
+            f"Expected /post/nested-post/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_integer_arg(self):
@@ -235,9 +235,9 @@ class TestUrlTagWithKwargs:
         request = RequestFactory().get("/")
         result = template.render({"post_slug": "kwarg-post"}, request)
 
-        assert (
-            result.strip() == "/post/kwarg-post/"
-        ), f"Expected /post/kwarg-post/ but got: {result}"
+        assert result.strip() == "/post/kwarg-post/", (
+            f"Expected /post/kwarg-post/ but got: {result}"
+        )
 
 
 class TestUrlTagAsVariable:
@@ -487,9 +487,10 @@ class TestUrlTagErrorHandling:
         template = backend.from_string("{% url 'nonexistent_url' %}")
         request = RequestFactory().get("/")
 
-        # Should either raise an error or return empty string
-        # We prefer raising an error to match Django's behavior
-        with pytest.raises(Exception):
+        # Django's behaviour, matched since #2563: NoReverseMatch, by type
+        from django.urls import NoReverseMatch
+
+        with pytest.raises(NoReverseMatch):
             template.render({}, request)
 
     @override_settings(ROOT_URLCONF=__name__)
@@ -509,8 +510,10 @@ class TestUrlTagErrorHandling:
         template = backend.from_string("{% url 'post_detail' %}")  # Missing slug
         request = RequestFactory().get("/")
 
-        # Should raise an error for missing required argument
-        with pytest.raises(Exception):
+        # Should raise Django's error for the missing required argument
+        from django.urls import NoReverseMatch
+
+        with pytest.raises(NoReverseMatch):
             template.render({}, request)
 
 
@@ -579,9 +582,9 @@ class TestUrlTagEdgeCases:
         request = RequestFactory().get("/")
         result = template.render({}, request)
 
-        assert (
-            result.strip() == "/post/42/comment/7/"
-        ), f"Expected /post/42/comment/7/ but got: {result}"
+        assert result.strip() == "/post/42/comment/7/", (
+            f"Expected /post/42/comment/7/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_multiple_positional_args(self):
@@ -602,9 +605,9 @@ class TestUrlTagEdgeCases:
         request = RequestFactory().get("/")
         result = template.render({}, request)
 
-        assert (
-            result.strip() == "/post/42/comment/7/"
-        ), f"Expected /post/42/comment/7/ but got: {result}"
+        assert result.strip() == "/post/42/comment/7/", (
+            f"Expected /post/42/comment/7/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_string_containing_spaces_in_context(self):
@@ -625,9 +628,9 @@ class TestUrlTagEdgeCases:
         # Note: Django URL patterns with str type will accept spaces
         result = template.render({"cat": "books", "q": "python"}, request)
 
-        assert (
-            "/search/books/python/" in result
-        ), f"Expected /search/books/python/ but got: {result}"
+        assert "/search/books/python/" in result, (
+            f"Expected /search/books/python/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_quoted_string_literal(self):
@@ -647,9 +650,9 @@ class TestUrlTagEdgeCases:
         request = RequestFactory().get("/")
         result = template.render({}, request)
 
-        assert (
-            "/post/my-awesome-post/" in result
-        ), f"Expected /post/my-awesome-post/ but got: {result}"
+        assert "/post/my-awesome-post/" in result, (
+            f"Expected /post/my-awesome-post/ but got: {result}"
+        )
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_preserves_surrounding_whitespace(self):
