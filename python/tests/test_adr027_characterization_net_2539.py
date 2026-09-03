@@ -962,12 +962,22 @@ class TestThePlainEntriesAgree:
     def test_a_raw_entry_answers_the_backends_bytes(self, row: Row, entry) -> None:
         """The #1646 twin check, run in the AMBIENT state on purpose.
 
-        The backend pushes the ADR-027 flag per render; the two raw entries do
-        NOT — they inherit the thread-local, whose value on a thread that never
-        pushed is the Rust-side default. So this is the one test that fails if
-        `config.py`'s default and `RESOLVE_LAZY`'s default disagree: the
-        backend would resolve one way and the raw entries the other. Movement 3
-        flipped both together, which is why the first assertion still holds.
+        What this does NOT pin, despite an earlier draft of this docstring
+        claiming it: the agreement between `config.py`'s default and the Rust
+        `RESOLVE_LAZY` default. The two raw entries do not push the flag — but
+        they run on the pytest thread, which the backend pushed on one line
+        earlier, so they inherit the PUSHED value and never read the Rust
+        default at all. Gating that default off and rebuilding leaves this test
+        green; the two tests that go red are
+        `TestTheFlagReachesEveryRenderEntry2539::
+        test_the_rust_default_tracks_the_python_default` and
+        `TestTheSwitch2539::test_a_thread_that_never_pushed_reads_the_default`,
+        both of which construct a FRESH thread — the only place the Rust
+        default is observable.
+
+        What it does pin is still worth having: the two raw entries and the
+        backend agree on every non-crash row in whatever state the thread is
+        in, which is the #1646 twin check the class was written for.
         """
         via_backend = observe(plain_render, row.source, row.make_ctx())
         via_entry = observe(entry, row.source, row.make_ctx())

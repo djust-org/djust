@@ -2651,9 +2651,20 @@ thread_local! {
     /// would mean a fresh thread silently resolves by the OLD mechanism while
     /// every framework entry resolves by the new one — two defaults seeded
     /// from one intent, which is the #1646 shape. So the two literals move
-    /// together, and `TestThePlainEntriesAgree` in
-    /// `python/tests/test_adr027_characterization_net_2539.py` is what goes
-    /// red if they ever drift apart again.
+    /// together, pinned by two tests that construct a FRESH `threading.Thread`
+    /// — the only place this value is observable:
+    /// `TestTheFlagReachesEveryRenderEntry2539::
+    /// test_the_rust_default_tracks_the_python_default` and
+    /// `TestTheSwitch2539::test_a_thread_that_never_pushed_reads_the_default`.
+    /// Empirically confirmed: flipping this literal to `false` and rebuilding
+    /// reddens exactly those two.
+    ///
+    /// NOT `TestThePlainEntriesAgree`, which an earlier draft of this comment
+    /// named. That test compares the backend against the raw entries
+    /// IN-PROCESS, on a pytest thread the backend has already pushed on — so
+    /// the raw entry inherits the pushed value and never reads this default.
+    /// It stayed green against the mutant. A pin you have not watched fail is
+    /// a pin whose failure mode is unknown (#1859).
     ///
     /// Fail-direction: `true` is also the *closed* direction for the
     /// serialization floor. The old sidecar walk this replaces keeps
