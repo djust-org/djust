@@ -131,8 +131,9 @@ pub fn has_unquoted_pipe(token: &str) -> bool {
 /// These three alternatives are also Django's `filter_re` HEAD alternatives
 /// (`^constant | ^var | ^num`), so `argument_end(head) == Some(head.len())` is
 /// exactly the "the head atom tiles the whole token" test `FilterExpression`
-/// applies before it reports a remainder — which is why `parser::url` reuses
-/// this rather than restating the constant/var/num grammar (#1646, #2577).
+/// applies before it reports a remainder — which is why `parser::url` and
+/// `parser::validate_tag_operand` (#2580) both reuse this rather than
+/// restating the constant/var/num grammar (#1646, #2577).
 pub(crate) fn argument_end(arg: &str) -> Option<usize> {
     let bytes = arg.as_bytes();
     if bytes.is_empty() {

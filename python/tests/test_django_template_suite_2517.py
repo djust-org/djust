@@ -443,13 +443,21 @@ CANARY_MODULE = textwrap.dedent(
             out = Engine().from_string("{{ x }}").render(Context({"x": "hi"}))
             self.assertEqual(out, "hi")
 
-        def test_2_with_missing_args_must_raise_at_parse(self):
-            # Django raises TemplateSyntaxError while parsing; djust renders "x".
+        def test_2_block_super_outside_a_child_must_raise(self):
+            # Django raises TemplateSyntaxError at RENDER time — `block`
+            # resolves to the raw `BlockNode`, which has no `.context`
+            # attribute outside an active `{% extends %}` chain, and
+            # `.super`'s property getter raises on that; djust renders "".
             # (`{% if foo == %}` was the canary until #2576 ported smartif's
-            # operator grammar; `{% with %}` with no assignment is the next
-            # still-open block-tag grammar gap.)
+            # operator grammar; `{% with %}` with no assignment was the
+            # canary until #2580's grammar-gaps drain; `{{ block.super }}`
+            # used outside a child template is the next still-open gap —
+            # it needs real render-time `block.super` support, tracked on
+            # #2531/#2580.)
             with self.assertRaises(TemplateSyntaxError):
-                Engine().from_string("{% with %}x{% endwith %}").render(Context({}))
+                Engine().from_string(
+                    "{% block first %}{{ block.super }}{% endblock %}"
+                ).render(Context({}))
 
         def test_3_ifchanged(self):
             # Django renders "ab"; djust raises on the unsupported tag
@@ -511,8 +519,10 @@ class TestEmpiricalCanary:
         text, _ = djust_run
         lines = parsed_lines(text)
         assert lines["canary_tests.Canary.test_1_variable_renders_the_same"].startswith("OK    ")
-        assert lines["canary_tests.Canary.test_2_with_missing_args_must_raise_at_parse"].startswith(
-            "FAIL  canary_tests.Canary.test_2_with_missing_args_must_raise_at_parse | AssertionError: "
+        assert lines[
+            "canary_tests.Canary.test_2_block_super_outside_a_child_must_raise"
+        ].startswith(
+            "FAIL  canary_tests.Canary.test_2_block_super_outside_a_child_must_raise | AssertionError: "
             "TemplateSyntaxError not raised"
         )
         assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
