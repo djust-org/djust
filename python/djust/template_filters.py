@@ -197,19 +197,33 @@ def bootstrap_django_filters() -> int:
     """
     count = 0
     for library in _iter_django_libraries():
-        filters_dict = getattr(library, "filters", None)
-        if not filters_dict:
-            continue
-        for filter_name, filter_callable in filters_dict.items():
-            try:
-                if register_django_filter(filter_name, filter_callable):
-                    count += 1
-            except Exception:  # pragma: no cover — defensive
-                logger.exception(
-                    "Failed to bridge custom filter '%s' to Rust registry; "
-                    "the filter will still work in Python-rendered paths",
-                    filter_name,
-                )
+        count += bridge_library_filters(library)
     if count:
         logger.debug("Bridged %d custom Django filters to Rust template engine", count)
+    return count
+
+
+def bridge_library_filters(library: Any) -> int:
+    """Forward every filter of ONE ``template.Library`` to Rust.
+
+    The loop body ``bootstrap_django_filters`` always had, lifted out so the
+    ``{% load app_tags %}`` loader (#2547, ``djust.template_libraries``)
+    bridges a library's filters through the SAME rule — ``is_safe`` /
+    ``needs_autoescape`` read off the callable, built-ins skipped — rather
+    than a hand-copied twin (#1646). Returns the number forwarded.
+    """
+    count = 0
+    filters_dict = getattr(library, "filters", None)
+    if not filters_dict:
+        return 0
+    for filter_name, filter_callable in filters_dict.items():
+        try:
+            if register_django_filter(filter_name, filter_callable):
+                count += 1
+        except Exception:  # pragma: no cover — defensive
+            logger.exception(
+                "Failed to bridge custom filter '%s' to Rust registry; "
+                "the filter will still work in Python-rendered paths",
+                filter_name,
+            )
     return count

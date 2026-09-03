@@ -127,6 +127,18 @@ class DjustConfig(AppConfig):
             # unaffected. Opt out via ``LIVEVIEW_CONFIG['filter_bridge_warm'] = False``.
             self._warm_filter_bridge()
 
+        # The `{% load app_tags %}` library loader (#2547). Also installed by
+        # ``djust.template_tags`` on import; asserted here so a project that
+        # never imports that module directly still gets it at startup.
+        try:
+            from djust.template_libraries import install_loader
+
+            install_loader()
+        except Exception:  # noqa: BLE001 — startup must never break ready()
+            logging.getLogger("djust").exception(
+                "[TemplateLibraries] installing the {%% load %%} loader in ready() failed"
+            )
+
     def _warm_filter_bridge(self) -> bool:
         """Eagerly run the Django→Rust filter bridge (off the request path).
 
