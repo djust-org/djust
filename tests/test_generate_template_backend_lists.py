@@ -280,8 +280,9 @@ class TestExtractionMatchesTheRegistries:
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
         """Gate-off for the arm regex: a new arm in a copy of parser.rs is extracted.
 
-        `autoescape` has an arm since #2556 (v1.2.0-3), so it is asserted
-        PRESENT — and `filter`, which has none yet, absent.
+        `autoescape` has an arm since #2556 (v1.2.0-3) and `filter` since
+        #2596, so both are asserted PRESENT — and `ifchanged`, the one Django
+        built-in the parser still has no arm for, absent.
         """
         src = _PARSER_RS.read_text(encoding="utf-8")
         anchor = '                "if" => {'
@@ -293,9 +294,11 @@ class TestExtractionMatchesTheRegistries:
         assert "zzz_probe" in names
         assert "if" in names
         assert "autoescape" in names
-        assert "filter" not in names
+        assert "filter" in names
+        assert "ifchanged" not in names
         assert "endif" not in names, "closers must be dropped"
         assert "endautoescape" not in names, "closers must be dropped"
+        assert "endfilter" not in names, "closers must be dropped"
 
     def test_hidden_arity_row_turns_the_check_red(self, tmp_path):
         """Coverage (1) gate-off: remove one filter from the ARITY input -> red.
@@ -349,14 +352,17 @@ class TestCheckMode:
         text = _DOC.read_text(encoding="utf-8")
         # Mutate the unsupported-tags line itself — pick its first entry
         # rather than hard-coding a tag name, so the test keeps targeting
-        # that line as tags graduate out of it (#2556 moved three).
-        m = re.search(r"^\*\*Built-in tags — unsupported \(\d+\):\*\* `(\w+)`, ", text, re.M)
+        # that line as tags graduate out of it (#2556 moved four, #2596 five,
+        # leaving one). Two shapes the assertion must not assume, both of
+        # which the one-entry list produced: there is no comma after the last
+        # entry, and the tag name is NOT unique in the file (`ifchanged` is
+        # also named in the ERROR-classes prose below). So the mutation is
+        # applied to the matched SPAN, by offset, not to a bare needle.
+        m = re.search(r"^(\*\*Built-in tags — unsupported \(\d+\):\*\* )`(\w+)`(, )?", text, re.M)
         assert m, "the unsupported line is the mutation target"
-        first_tag = m.group(1)
-        needle = f"`{first_tag}`, "
-        assert text.count(needle) == 1, needle
+        first_tag = m.group(2)
         edited = tmp_path / "TEMPLATE_BACKEND.md"
-        edited.write_text(text.replace(needle, "", 1), encoding="utf-8")
+        edited.write_text(text[: m.start()] + m.group(1) + text[m.end() :], encoding="utf-8")
         code, out = _run("--doc", str(edited))
         assert code == 1, out
         assert first_tag in out
@@ -536,12 +542,16 @@ class TestCrossCheckDetectsDisagreement:
     def test_synthetic_scoreboard_naming_a_supported_tag_is_a_finding(self, gen, report, tmp_path):
         board = tmp_path / "last-run.txt"
         board.write_text(
+            # `for` is supported and so IS a finding; `ifchanged` is the one
+            # Django built-in the engine still refuses, so naming it is not
+            # (`filter` played that control role until #2596 implemented it);
+            # `badtag` is no Django tag at all, so it is bucketed away.
             "ERROR template_tests.x.y | Unsupported template tag '{% for x in y %}'. Register\n"
-            "ERROR template_tests.x.z | Unsupported template tag '{% filter upper %}'. Register\n"
+            "ERROR template_tests.x.z | Unsupported template tag '{% ifchanged %}'. Register\n"
             "ERROR template_tests.x.w | Unsupported template tag '{% badtag %}'. Register\n",
             encoding="utf-8",
         )
-        assert gen.scoreboard_unsupported_tags(board) == {"for", "filter", "badtag"}
+        assert gen.scoreboard_unsupported_tags(board) == {"for", "ifchanged", "badtag"}
         problems = gen.cross_check(report, board)
         assert len(problems) == 1
         assert "['for']" in problems[0]
