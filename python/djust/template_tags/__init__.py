@@ -415,6 +415,20 @@ def _register_builtins() -> None:
         from . import regroup  # noqa: F401  # Django {% regroup %} parity
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
+    # The `{% load app_tags %}` library loader (#2547) — installed alongside
+    # the built-ins so a bare ``import djust.template_tags`` arms it.
+    _install_library_loader()
+
+
+def _install_library_loader() -> None:
+    """Install ``djust.template_libraries.load_libraries`` as the parser's
+    ``{% load %}`` hook (#2547). No-op without the Rust extension."""
+    try:
+        from ..template_libraries import install_loader
+    except ImportError as e:  # pragma: no cover — defensive
+        logger.debug("Could not import the library loader: %s", e)
+        return
+    install_loader()
 
 
 def reregister_builtins() -> None:
@@ -467,6 +481,10 @@ def reregister_builtins() -> None:
                 unregister_assign_tag_handler(name)
         except Exception as e:  # noqa: BLE001 — restore must never break a test
             logger.debug("Could not re-register built-in tag handler '%s': %s", name, e)
+    # A test that cleared the registries also cleared every bridged library
+    # tag; the loader re-bridges on the next `{% load %}` (#2547). Re-arm the
+    # hook itself in case ``clear_library_loader()`` ran too.
+    _install_library_loader()
 
 
 # Register on module load

@@ -848,6 +848,18 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "load" => {
                     // {% load static %} — preserve library names so inheritance
                     // reconstruction can re-emit the tag for Django rendering.
+                    //
+                    // And the sink for `{% load app_tags %}` (#2547): the
+                    // Python-side loader, when installed, imports the Django
+                    // library named here and registers its tags and filters
+                    // BEFORE this parse reaches them — every parse goes
+                    // through `parse_token`, so an `{% include %}`d file or a
+                    // `{% load %}` inside a `{% block %}` fires it too. An
+                    // unknown library is Django's own `TemplateSyntaxError`,
+                    // crossing whole. The arguments go across exactly as
+                    // written (`{% load x from lib %}` included) so the
+                    // Python side reproduces Django's `load` byte for byte.
+                    crate::registry::call_library_loader(args)?;
                     Ok(Some(Node::Load(args.clone())))
                 }
 
@@ -1005,6 +1017,14 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             args: args.clone(),
                             children,
                         }))
+                    } else if let Some(message) =
+                        crate::registry::tag_handler_parse_refusal(tag_name)
+                    {
+                        // A `{% load %}`-bridged raw tag that consumes a body
+                        // (#2547): refused at PARSE time, per TAG, with
+                        // Django's own `TemplateSyntaxError` — the rest of
+                        // its library keeps working.
+                        Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {

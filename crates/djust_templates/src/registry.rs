@@ -29,6 +29,8 @@ use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
+use djust_core::DjangoRustError;
+
 /// A tag handler's return, escaped unless it is already HTML (#2379).
 ///
 /// # The defect this closes
@@ -184,8 +186,20 @@ fn build_py_args<'py>(
 static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-/// Block handler entry: (end_tag_name, Python handler object).
-type BlockHandlerEntry = (String, Py<PyAny>);
+/// A registered block-tag handler: its end tag, the handler, and the two
+/// opt-in policies the inline registry already carried (#2547).
+///
+/// Was a bare `(end_tag, handler)` tuple until #2547, which is why the block
+/// registry alone ignored `RESOLVE_ARG_POSITIONS` — the #1646 drift the
+/// #2547 plan measured (`{% div id=name %}` handed Django's parser the
+/// resolved VALUE of `name`). Same readers, same fields, same semantics as
+/// [`TagHandlerEntry`] now.
+struct BlockHandlerEntry {
+    end_tag: String,
+    handler: Py<PyAny>,
+    resolve_positions: Option<HashSet<usize>>,
+    returns_bindings: bool,
+}
 
 /// Global registry for block tag handlers (tags with children).
 ///
@@ -219,6 +233,27 @@ fn read_resolve_positions(handler: &Bound<'_, PyAny>) -> PyResult<Option<HashSet
     Ok(Some(attr.extract::<HashSet<usize>>()?))
 }
 
+/// The handler's opt-in "I return `(output, bindings)`" declaration (#2547).
+///
+/// A bridged Django library tag (`{% load app_tags %}`) is rendered by
+/// Django's OWN node, and a Django node may do two things a djust handler's
+/// bare-string contract cannot express: write the context (`{% one_param 37
+/// as out %}`, every `get_* … as x` tag) and raise a Python exception that
+/// Django's callers dispatch on by TYPE (`TemplateSyntaxError` from
+/// `parse_bits`, a library's own `RuntimeError`). A handler that sets
+/// `RETURNS_BINDINGS = True` gets both: its `render` returns a 2-tuple
+/// `(output, {name: value})` and its exceptions cross as
+/// `DjangoRustError::PythonException` instead of being flattened to a string.
+///
+/// Absent or falsy = the historical contract, untouched for every existing
+/// handler. ONE reader for both registries, like [`read_resolve_positions`].
+fn read_returns_bindings(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("RETURNS_BINDINGS")? {
+        return Ok(false);
+    }
+    handler.getattr("RETURNS_BINDINGS")?.is_truthy()
+}
+
 /// A registered inline-tag handler plus its arg-resolution policy (#2423).
 ///
 /// Same shape as [`AssignHandlerEntry`], and for the same reason one registry
@@ -230,6 +265,27 @@ fn read_resolve_positions(handler: &Bound<'_, PyAny>) -> PyResult<Option<HashSet
 struct TagHandlerEntry {
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
+    /// See [`read_returns_bindings`] (#2547).
+    returns_bindings: bool,
+    /// `Some(message)` when the parser must REFUSE this tag with Django's
+    /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
+    /// `@register.tag` that consumes a body cannot be bridged, and the
+    /// refusal is per TAG so the rest of its library still works. Read off
+    /// the handler's `REFUSE_AT_PARSE` attribute at registration.
+    parse_refusal: Option<String>,
+}
+
+/// The handler's opt-in parse-time refusal message (#2547); `None` when the
+/// attribute is absent or `None`.
+fn read_parse_refusal(handler: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    if !handler.hasattr("REFUSE_AT_PARSE")? {
+        return Ok(None);
+    }
+    let attr = handler.getattr("REFUSE_AT_PARSE")?;
+    if attr.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(attr.extract::<String>()?))
 }
 
 /// A registered assign-tag handler plus its arg-resolution policy.
@@ -294,6 +350,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     // The opt-in arg-resolution policy, same reader as the assign registry
     // (#2041, extended to inline tags in #2423).
     let resolve_positions = read_resolve_positions(handler_ref)?;
+    let returns_bindings = read_returns_bindings(handler_ref)?;
+    let parse_refusal = read_parse_refusal(handler_ref)?;
 
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -304,6 +362,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         TagHandlerEntry {
             handler,
             resolve_positions,
+            returns_bindings,
+            parse_refusal,
         },
     );
     Ok(())
@@ -404,11 +464,25 @@ pub fn register_block_tag_handler(
         ));
     }
 
+    // The SAME two readers the inline registry uses (#2547): the block
+    // registry ignoring `RESOLVE_ARG_POSITIONS` was the #1646 drift the
+    // #2547 plan measured.
+    let resolve_positions = read_resolve_positions(handler_ref)?;
+    let returns_bindings = read_returns_bindings(handler_ref)?;
+
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(name, (end_tag, handler));
+    registry.insert(
+        name,
+        BlockHandlerEntry {
+            end_tag,
+            handler,
+            resolve_positions,
+            returns_bindings,
+        },
+    );
     Ok(())
 }
 
@@ -453,7 +527,7 @@ pub fn clear_block_tag_handlers() -> PyResult<()> {
 pub fn block_handler_exists(name: &str) -> Option<String> {
     BLOCK_TAG_HANDLERS
         .read()
-        .map(|registry| registry.get(name).map(|(end_tag, _)| end_tag.clone()))
+        .map(|registry| registry.get(name).map(|entry| entry.end_tag.clone()))
         .unwrap_or(None)
 }
 
@@ -498,16 +572,14 @@ pub fn call_block_handler_with_py_sidecar(
             .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
 
-        let (_, handler_ref) = registry
+        let entry = registry
             .get(name)
             .ok_or_else(|| format!("No block handler registered for tag: {name}"))?;
 
-        Python::attach(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| entry.handler.clone_ref(py))
     };
 
     Python::attach(|py| {
-        use pyo3::IntoPyObject;
-
         let py_args = build_py_args(py, args)?;
 
         // The block body reaches Python as a `SafeString`, not a bare `str`
@@ -530,28 +602,9 @@ pub fn call_block_handler_with_py_sidecar(
         let py_content =
             mark_safe_str(py, content).map_err(|e| format!("Failed to convert content: {e}"))?;
 
-        let py_context = pyo3::types::PyDict::new(py);
-        for (key, value) in context {
-            let py_value = value
-                .clone()
-                .into_pyobject(py)
-                .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
-            py_context
-                .set_item(key, py_value)
-                .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
-        }
-
-        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
-        // so block handlers needing full Python context can reach them.
-        // Overwrites same-named JSON entries — the Python object is the
-        // source of truth.
-        if let Some(raw) = raw_py_objects {
-            for (key, obj) in raw {
-                py_context
-                    .set_item(key, obj.bind(py))
-                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
-            }
-        }
+        // Context dict with the raw-Python sidecar (``request``, ``view``)
+        // on top, through the one builder every registry shares.
+        let py_context = build_py_context(py, context, raw_py_objects)?;
 
         let handler_ref = handler.bind(py);
         let result = handler_ref
@@ -645,35 +698,12 @@ pub fn call_handler_with_py_sidecar(
 
     // Acquire GIL and call Python handler
     Python::attach(|py| {
-        use pyo3::IntoPyObject;
-
         // Convert args to Python list
         let py_args = build_py_args(py, args)?;
 
-        // Convert context to Python dict
-        let py_context = pyo3::types::PyDict::new(py);
-        for (key, value) in context {
-            let py_value = value
-                .clone()
-                .into_pyobject(py)
-                .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
-            py_context
-                .set_item(key, py_value)
-                .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
-        }
-
-        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
-        // so handlers that need full Python context (notably the
-        // ``live_render`` lazy=True path) can reach them. Overwrites
-        // same-named JSON entries — the Python object is the source of
-        // truth for downstream handlers.
-        if let Some(raw) = raw_py_objects {
-            for (key, obj) in raw {
-                py_context
-                    .set_item(key, obj.bind(py))
-                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
-            }
-        }
+        // Convert context to Python dict, raw-Python sidecar (``request``,
+        // ``view`` — notably the ``live_render`` lazy=True path) on top.
+        let py_context = build_py_context(py, context, raw_py_objects)?;
 
         // Call handler.render(args, context)
         let handler_ref = handler.bind(py);
@@ -805,6 +835,398 @@ pub fn tag_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
     })
 }
 
+/// Internal Rust API — the arg positions the renderer should resolve for this
+/// BLOCK tag (#2547).
+///
+/// The block-registry twin of [`tag_handler_resolve_positions`], same
+/// contract. Every block handler djust ships (`call`, `component`, `slot`, …)
+/// declares nothing → `None` → resolve every arg, bytes unchanged.
+pub fn block_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
+    BLOCK_TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.resolve_positions.clone())
+    })
+}
+
+/// Internal Rust API — the parse-time refusal message the inline handler for
+/// `name` declared (#2547), `None` for a bridgeable or unregistered tag.
+pub fn tag_handler_parse_refusal(name: &str) -> Option<String> {
+    TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.parse_refusal.clone())
+    })
+}
+
+/// Django's own `TemplateSyntaxError(message)`, stamped as library-raised so
+/// `DjustTemplate.render` passes it through WHOLE (#2547). Falls back to a
+/// `TemplateError` string when Django is not importable (pure-Rust use).
+pub fn library_syntax_error(message: &str) -> DjangoRustError {
+    Python::attach(|py| {
+        let Ok(module) = py.import("django.template") else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let Ok(cls) = module.getattr("TemplateSyntaxError") else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let Ok(exc) = cls.call1((message,)) else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let _ = exc.setattr("_djust_raised_by_library", true);
+        DjangoRustError::PythonException(PyErr::from_value(exc))
+    })
+}
+
+/// Internal Rust API — did the inline handler for `name` declare
+/// `RETURNS_BINDINGS` (#2547)? `false` for an unregistered name.
+pub fn tag_handler_returns_bindings(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the block handler for `name` declare
+/// `RETURNS_BINDINGS` (#2547)? `false` for an unregistered name.
+pub fn block_handler_returns_bindings(name: &str) -> bool {
+    BLOCK_TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
+        .unwrap_or(false)
+}
+
+// ============================================================================
+// Bindings-returning handlers and the `{% load %}` library loader (#2547)
+// ============================================================================
+
+/// One context write a bindings-returning handler made (#2547).
+///
+/// `safe` is the `SafeData` bit of the Python object the handler bound —
+/// Django stores a `simple_tag`'s `as var` result RAW (`context[target_var] =
+/// output`, no `conditional_escape`), so a `format_html` return is a
+/// `SafeString` and `{{ var }}` must not re-escape it, while a plain-`str`
+/// return is escaped by `{{ var }}` exactly as Django does.
+#[derive(Debug)]
+pub struct HandlerBinding {
+    pub name: String,
+    pub value: djust_core::Value,
+    pub safe: bool,
+}
+
+/// The `context` dict a handler receives: every JSON-friendly value, then the
+/// raw-Python sidecar on top (#1167) so a live object wins over its snapshot.
+///
+/// ONE builder for every registry (#1646) — this was spelled inline, three
+/// times, before #2547 added a fourth and fifth caller.
+fn build_py_context<'py>(
+    py: Python<'py>,
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
+    use pyo3::IntoPyObject;
+
+    let py_context = pyo3::types::PyDict::new(py);
+    for (key, value) in context {
+        let py_value = value
+            .clone()
+            .into_pyobject(py)
+            .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+        py_context
+            .set_item(key, py_value)
+            .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+    }
+    if let Some(raw) = raw_py_objects {
+        for (key, obj) in raw {
+            py_context
+                .set_item(key, obj.bind(py))
+                .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+        }
+    }
+    Ok(py_context)
+}
+
+/// Re-mint the `SafeData` bit on the context values the renderer had marked
+/// safe (#2547).
+///
+/// A bridged library tag lets Django's OWN node resolve its operands against
+/// the context dict, so the safety `{{ p }}` would have honoured has to
+/// travel on the dict's values: `{% echo_arg p %}` over a `mark_safe`d `p`
+/// renders raw on Django (`conditional_escape` sees a `SafeString`) and must
+/// here. Each marked path is walked through dicts and lists; a `str` at the
+/// end is replaced by `mark_safe(str)`. Only the STRING at the end of a
+/// marked path is re-minted — the grant is the renderer's own, keyed by the
+/// same name it would use for `{{ p }}`, so nothing data-derived acquires a
+/// grant it did not already have. Fails SOFT without Django importable.
+fn remint_safe_context(
+    py: Python<'_>,
+    dict: &Bound<'_, pyo3::types::PyDict>,
+    safe_paths: &[String],
+) -> Result<(), String> {
+    for path in safe_paths {
+        let mut segments = path.split('.').peekable();
+        let Some(first) = segments.next() else {
+            continue;
+        };
+        let Ok(Some(mut current)) = dict.get_item(first) else {
+            continue;
+        };
+        let mut parent: Bound<'_, PyAny> = dict.clone().into_any();
+        let mut key: String = first.to_string();
+        let mut reachable = true;
+        for segment in segments {
+            let next = if let Ok(d) = current.cast::<pyo3::types::PyDict>() {
+                d.get_item(segment).ok().flatten()
+            } else if let Ok(l) = current.cast::<pyo3::types::PyList>() {
+                segment
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| l.get_item(i).ok())
+            } else {
+                None
+            };
+            match next {
+                Some(value) => {
+                    parent = current;
+                    key = segment.to_string();
+                    current = value;
+                }
+                None => {
+                    reachable = false;
+                    break;
+                }
+            }
+        }
+        if !reachable {
+            continue;
+        }
+        let Ok(text) = current.cast::<pyo3::types::PyString>() else {
+            continue;
+        };
+        let marked = mark_safe_str(py, &text.to_string_lossy())
+            .map_err(|e| format!("Failed to mark context value '{path}' safe: {e}"))?;
+        if let Ok(d) = parent.cast::<pyo3::types::PyDict>() {
+            d.set_item(&key, marked)
+                .map_err(|e| format!("Failed to set context key '{path}': {e}"))?;
+        } else if let Ok(l) = parent.cast::<pyo3::types::PyList>() {
+            if let Ok(i) = key.parse::<usize>() {
+                l.set_item(i, marked)
+                    .map_err(|e| format!("Failed to set context item '{path}': {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Split a bindings-returning handler's `(output, {name: value})` result.
+///
+/// The output goes through the SAME `escape_handler_return` as every other
+/// handler (#2379) — a bridged Django node hands back `mark_safe`d output
+/// because Django never re-escapes a node's return, and the escape is a
+/// no-op on it; a handler that returns a plain `str` is escaped like any
+/// other. The bindings are snapshotted into an owned `Vec` before conversion
+/// (#2510) and carry their `SafeData` bit.
+fn split_bindings_result(
+    result: &Bound<'_, PyAny>,
+    what: &str,
+    name: &str,
+    autoescape: bool,
+) -> Result<(String, Vec<HandlerBinding>), String> {
+    let tuple = result.cast::<pyo3::types::PyTuple>().map_err(|_| {
+        format!("{what} '{name}' declared RETURNS_BINDINGS but did not return a (str, dict) tuple")
+    })?;
+    if tuple.len() != 2 {
+        return Err(format!(
+            "{what} '{name}' declared RETURNS_BINDINGS but returned a {}-tuple, not (str, dict)",
+            tuple.len()
+        ));
+    }
+    let output = tuple
+        .get_item(0)
+        .map_err(|e| format!("{what} '{name}': {e}"))?;
+    let html = escape_handler_return(&output, what, name, autoescape)?;
+    let dict_obj = tuple
+        .get_item(1)
+        .map_err(|e| format!("{what} '{name}': {e}"))?;
+    let mut bindings = Vec::new();
+    if !dict_obj.is_none() {
+        let dict = dict_obj
+            .cast::<pyo3::types::PyDict>()
+            .map_err(|_| format!("{what} '{name}' bindings must be a dict"))?;
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        for (key, value) in pairs {
+            let key_str: String = key
+                .extract()
+                .map_err(|e| format!("{what} '{name}' bound a non-string name: {e}"))?;
+            let safe = crate::filter_registry::py_value_is_safe_string(&value);
+            let converted = value.extract::<djust_core::Value>().map_err(|e| {
+                format!("{what} '{name}' bound '{key_str}' to an unconvertible value: {e}")
+            })?;
+            bindings.push(HandlerBinding {
+                name: key_str,
+                value: converted,
+                safe,
+            });
+        }
+    }
+    Ok((html, bindings))
+}
+
+/// Call an inline handler that declared `RETURNS_BINDINGS` (#2547).
+///
+/// Differs from [`call_handler_with_py_sidecar`] in exactly the two ways
+/// [`read_returns_bindings`] documents: the return is `(output, bindings)`,
+/// and a Python exception crosses WHOLE as
+/// `DjangoRustError::PythonException` — Django's `TemplateSyntaxError` from
+/// `parse_bits`, a library's own `RuntimeError` — so the caller can dispatch
+/// on its type as Django's callers do.
+pub fn call_handler_with_bindings(
+    name: &str,
+    args: &[TagArg],
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    safe_paths: &[String],
+    autoescape: bool,
+) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
+    let handler = {
+        let registry = TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
+        })?;
+        Python::attach(|py| entry.handler.clone_ref(py))
+    };
+    Python::attach(|py| {
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
+        remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let result = handler
+            .bind(py)
+            .call_method1("render", (py_args, py_context))
+            .map_err(DjangoRustError::PythonException)?;
+        split_bindings_result(&result, "Handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
+    })
+}
+
+/// Call a block handler that declared `RETURNS_BINDINGS` (#2547).
+///
+/// The block twin of [`call_handler_with_bindings`]; the body crosses as a
+/// `SafeString` exactly as in [`call_block_handler_with_py_sidecar`] (#2379).
+pub fn call_block_handler_with_bindings(
+    name: &str,
+    args: &[TagArg],
+    content: &str,
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    safe_paths: &[String],
+    autoescape: bool,
+) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
+    let handler = {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+        })?;
+        Python::attach(|py| entry.handler.clone_ref(py))
+    };
+    Python::attach(|py| {
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_content = mark_safe_str(py, content).map_err(|e| {
+            DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+        })?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
+        remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let result = handler
+            .bind(py)
+            .call_method1("render", (py_args, py_content, py_context))
+            .map_err(DjangoRustError::PythonException)?;
+        split_bindings_result(&result, "Block handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
+    })
+}
+
+/// The `{% load %}` hook: a Python callable the parser invokes with the tag's
+/// arguments (#2547).
+///
+/// `None` (the pure-Rust default, and what every parser test sees) keeps
+/// `{% load %}` a no-op that records its names for inheritance re-emit. When
+/// djust's Python side installs a loader, the parser calls it at THE sink —
+/// every `{% load %}` in every parse, primary or `{% include %}`d or inside a
+/// `{% block %}` — and the loader imports the Django library and registers
+/// its tags and filters before the parser reaches them.
+static LIBRARY_LOADER: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::new(None));
+
+/// Install the `{% load %}` library loader (#2547).
+///
+/// `callable(args: list[str]) -> None` receives the tag's arguments exactly as
+/// written — `["static"]`, `["a", "b"]`, `["echo", "from", "testtags"]` — and
+/// raises Django's own `TemplateSyntaxError` for an unknown library, which
+/// crosses the parse WHOLE.
+#[pyfunction]
+pub fn register_library_loader(callable: Py<PyAny>) -> PyResult<()> {
+    let mut slot = LIBRARY_LOADER.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = Some(callable);
+    Ok(())
+}
+
+/// Remove the `{% load %}` library loader; `{% load %}` is a no-op again.
+#[pyfunction]
+pub fn clear_library_loader() -> PyResult<()> {
+    let mut slot = LIBRARY_LOADER.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    *slot = None;
+    Ok(())
+}
+
+/// Is a `{% load %}` library loader installed?
+#[pyfunction]
+pub fn has_library_loader() -> PyResult<bool> {
+    let slot = LIBRARY_LOADER.read().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    Ok(slot.is_some())
+}
+
+/// Internal Rust API — the parser's `{% load %}` arm calls this with the tag's
+/// arguments (#2547).
+///
+/// `Ok(())` when no loader is installed. A Python exception from the loader
+/// (Django's `TemplateSyntaxError` for an unknown library, the loud refusal
+/// of a raw block-consuming tag) crosses WHOLE as
+/// `DjangoRustError::PythonException`. No registry lock is held while the
+/// loader runs, so its own `register_*` write-locks cannot deadlock against
+/// the parser's read-locks.
+pub fn call_library_loader(args: &[String]) -> Result<(), DjangoRustError> {
+    let loader = {
+        let slot = LIBRARY_LOADER
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        match slot.as_ref() {
+            None => return Ok(()),
+            Some(callable) => Python::attach(|py| callable.clone_ref(py)),
+        }
+    };
+    Python::attach(|py| {
+        let py_args = pyo3::types::PyList::new(py, args.iter().map(|s| s.as_str()))
+            .map_err(DjangoRustError::PythonException)?;
+        loader
+            .bind(py)
+            .call1((py_args,))
+            .map_err(DjangoRustError::PythonException)?;
+        Ok(())
+    })
+}
+
 /// Internal Rust API — the arg positions the renderer should resolve for
 /// this assign tag (#2041).
 ///
@@ -866,31 +1288,11 @@ pub fn call_assign_handler_with_py_sidecar(
     };
 
     Python::attach(|py| {
-        use pyo3::IntoPyObject;
-
         let py_args = build_py_args(py, args)?;
 
-        let py_context = pyo3::types::PyDict::new(py);
-        for (key, value) in context {
-            let py_value = value
-                .clone()
-                .into_pyobject(py)
-                .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
-            py_context
-                .set_item(key, py_value)
-                .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
-        }
-
-        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
-        // so assign handlers needing full Python context can reach them.
-        // Overwrites same-named JSON entries.
-        if let Some(raw) = raw_py_objects {
-            for (key, obj) in raw {
-                py_context
-                    .set_item(key, obj.bind(py))
-                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
-            }
-        }
+        // Context dict with the raw-Python sidecar (``request``, ``view``)
+        // on top, through the one builder every registry shares.
+        let py_context = build_py_context(py, context, raw_py_objects)?;
 
         let handler_ref = handler.bind(py);
         let result = handler_ref
@@ -999,19 +1401,36 @@ mod tests {
             tests.contains("every_registry_builds_its_args_through_the_one_builder"),
             "the split landed in the wrong place"
         );
+        // Five call sites since #2547: tag, block, assign, and the two
+        // bindings-returning variants (`call_handler_with_bindings`,
+        // `call_block_handler_with_bindings`).
         assert_eq!(
             src.matches("build_py_args(py, args)").count(),
-            3,
-            "the tag, block and assign registries must all build args here"
+            5,
+            "the tag, block, assign and both bindings registries must all build args here"
         );
         assert!(
             !src.contains("PyList::new(py, args)"),
             "a registry is building its args list without the marker again"
         );
         // And the builder is the only place `mark_safe_str` reaches an
-        // ARGUMENT: the block body's own call (#2379) is the other one, and
-        // there must be exactly those two.
-        assert_eq!(src.matches("mark_safe_str(py, ").count(), 2);
+        // ARGUMENT: the block body's own call (#2379), its bindings twin and
+        // the marked-context re-mint (#2547) are the other three, and there
+        // must be exactly those four.
+        assert_eq!(src.matches("mark_safe_str(py, ").count(), 4);
+        // The context dict is built in ONE place for every registry (#2547):
+        // the five call paths above plus no inline copy.
+        assert_eq!(
+            src.matches("build_py_context(py, context, raw_py_objects)")
+                .count(),
+            5,
+            "every registry call path builds its context dict through the one builder"
+        );
+        assert_eq!(
+            src.matches("for (key, value) in context {").count(),
+            1,
+            "the context-dict loop lives only inside `build_py_context`"
+        );
     }
 
     #[test]
