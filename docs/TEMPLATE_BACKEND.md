@@ -19,8 +19,19 @@ A templates-only project pays only for the template engine. Since #2559 the
 `DjustTemplateBackend` imports about 25 `djust` modules and none of the LiveView
 stack (`channels`, the WebSocket consumer, presence) — those load the first time
 something imports `djust.LiveView`. `channels` and `msgpack` are still installed
-by `pip install djust` (the extras decision is #2560); they are simply not
-imported.
+by `pip install djust`; they are simply not imported.
+
+**Extras decision (#2560, 1.2.0).** There is no `djust[templates]` extra and no
+change to what `pip install djust` pulls in 1.x. An extra can only *add*
+dependencies, so a "templates-only" extra would be a lie, and moving `channels`
+and `msgpack` behind `djust[live]` would make a bare install lose the WebSocket
+stack — a breaking change that belongs at a 2.0 boundary with a deprecation
+cycle. What 1.2.0 ships instead is the additive half: importing the backend no
+longer imports the LiveView stack (#2559), and the `C016` check tells you when
+your `TEMPLATES` shape needs a `DjangoTemplates` fallback (#2562). The 2.0
+migration path, when it comes: `djust[live]` carries `channels[daphne]`,
+`msgpack`, and the presence backends; 1.x emits a deprecation warning when the
+WebSocket consumer is imported without the extra declared.
 
 ### 1. Configure Django Settings
 
