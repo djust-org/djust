@@ -1,29 +1,21 @@
 {
   "django": "5.2.16",
   "tag": "5.2.16",
-  "ok": 658,
-  "fail": 212,
-  "error": 177,
+  "ok": 664,
+  "fail": 205,
+  "error": 178,
   "ran": 1047,
-  "percent": 62.85,
+  "percent": 63.42,
   "all": {
-    "ok": 1067,
-    "fail": 212,
-    "error": 177,
+    "ok": 1073,
+    "fail": 205,
+    "error": 178,
     "ran": 1456,
     "skipped": 14,
-    "percent": 73.28
+    "percent": 73.7
   },
   "untouched_failures": 0,
-  "crashes": [
-    "template_tests.syntax_tests.test_basic.BasicSyntaxTests.test_subscriptable_class",
-    "template_tests.syntax_tests.test_extends.InheritanceTests.test_inheritance24",
-    "template_tests.syntax_tests.test_extends.InheritanceTests.test_inheritance25",
-    "template_tests.syntax_tests.test_include.IncludeTests.test_include_recursive",
-    "template_tests.syntax_tests.test_include.IncludeTests.test_include_template_argument",
-    "template_tests.tests.DebugTemplateTests.test_extends_generic_template",
-    "template_tests.tests.TemplateTests.test_extends_generic_template"
-  ],
-  "generated_at": "2026-09-03T06:12:56Z",
+  "crashes": [],
+  "generated_at": "2026-09-03T09:32:14Z",
   "generated_by": "scripts/run-django-template-suite.py --write-baseline"
 }

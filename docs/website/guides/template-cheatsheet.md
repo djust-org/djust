@@ -564,6 +564,53 @@ template auto-calls an ORM method). Kill-switch:
 `LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
 no-call behavior.
 
+### Objects resolve like Django (ADR-027)
+
+Since djust 1.2.0 a dotted lookup on an ordinary Python object resolves
+against the **live object**, one segment at a time, exactly as Django's
+`Variable._resolve_lookup` does. Before that, djust converted the whole
+object up front and walked the conversion, which is where a family of
+divergences lived.
+
+Four things follow, all of them Django's answers:
+
+```django
+{{ presenter }}          {# str(presenter), not a dict of its attributes #}
+{{ SomeClass }}          {# the class is INSTANTIATED, as Django does #}
+{{ obj.method }}         {# called; do_not_call_in_templates / alters_data honoured #}
+{% for r in rows|slice:":3" %}{{ r.label }}{% endfor %}   {# reaches attributes #}
+```
+
+The third one is the same rule the section above describes — the
+difference is only that it is now applied by the segment walk rather
+than by a conversion that ran before it, so it holds at every segment
+and for values bound by `{% for %}` and `{% with %}`.
+
+**What to check when upgrading.** The `{{ obj }}` bare spelling is the
+one to grep for: a template that relied on an object rendering its
+attribute mapping will now show its `__str__`. Give such a class a
+`__str__`, or spell the attribute you meant. `{{ obj|json_script }}`
+changes for the same reason and in the same direction — it now emits
+`str(obj)` rather than a JSON object built from every public instance
+attribute.
+
+**Kill-switch:** `LIVEVIEW_CONFIG["template_resolve_lazy"] = False`
+restores the pre-1.2.0 behaviour exactly. It is a rollback, not a
+supported mode — the machinery it keeps alive is removed in 1.3.0, so
+treat it as time to fix templates rather than a setting to leave in
+place.
+
+Two details worth knowing if you hit them:
+
+- **The setting is read per render, per thread, and applied by djust's
+  own render entries.** Code that calls `djust._rust.render_template`
+  directly does not push it and inherits whatever that thread last
+  rendered with; on a thread that never rendered, that is the shipped
+  default.
+- **A standalone component rendered outside any djust render caches the
+  setting for its thread**, so changing the flag at runtime does not
+  reach it. Restart to apply.
+
 ### Comparison operators inside `{% if %}`
 
 The Rust template engine accepts the full set of Python comparison
