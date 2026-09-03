@@ -412,6 +412,53 @@ impl RustLiveViewBackend {
         Ok(())
     }
 
+    /// Drop every state key absent from `keys`, returning the removed keys
+    /// (#2564).
+    ///
+    /// `update_state` MERGES — it is the delta entry for change-detection and
+    /// for the actor crate's partial updates, and must stay that way. But a
+    /// merge has no removal path: a key the Python context stopped carrying
+    /// kept its last `Value`, so `{{ secret }}` kept answering after
+    /// `del self.secret` — the `if self.show: ctx["secret"] = …` content gate
+    /// failed OPEN. With ADR-027's lazy flag ON the class widens from strings
+    /// and dicts to every plain object, because the object then lives IN the
+    /// merged state with a handle instead of only in the per-render sidecar.
+    ///
+    /// This is the truth half: the bridge calls it with the FULL context's
+    /// keys on every sync, before `update_state`. Full-context truth rather
+    /// than tombstones from the Python fingerprint, because that fingerprint
+    /// is emptied by `_force_full_html` on every restore — a key that
+    /// vanished across a restore would never be tombstoned, while the clone
+    /// still carries it.
+    ///
+    /// Removal REVOKES the removed keys' safe grants and their `key.`
+    /// descendants, exactly as `apply_state_update` does for a replaced value
+    /// (#2300): a grant cannot outlive the value it was granted for, and
+    /// `set_state` re-inserts without revoking.
+    ///
+    /// Returns the removed keys so the caller can add them to
+    /// `set_changed_keys` — a removed key is not in the changed context, so
+    /// a partial render would otherwise serve its region from the node cache
+    /// and the OLD text would survive.
+    fn retain_state_keys(&mut self, keys: Vec<String>) -> Vec<String> {
+        let keep: HashSet<String> = keys.into_iter().collect();
+        let removed: Vec<String> = self
+            .state
+            .keys()
+            .filter(|k| !keep.contains(*k))
+            .cloned()
+            .collect();
+        for key in &removed {
+            self.state.remove(key);
+            if !self.safe_keys.is_empty() {
+                self.safe_keys.remove(key);
+                let prefix = format!("{key}.");
+                self.safe_keys.retain(|k| !k.starts_with(&prefix));
+            }
+        }
+        removed
+    }
+
     /// Set the context keys that are safe (skip auto-escaping) for THIS
     /// render, replacing whatever the previous render set.
     ///
