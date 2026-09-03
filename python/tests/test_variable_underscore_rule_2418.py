@@ -481,7 +481,7 @@ class TestTheCallerSetIsPinned:
                 "validate_tag_operand(&iterable)?",  # the `"for"` arm
                 "validate_tag_operand(&expression)?",  # the `"with"` arm
                 "validate_tag_operand(arg)?",  # validate_if_operands' delegation
-                "validate_tag_operand(parts[1])?",  # `{% include … with k=v %}`
+                "validate_tag_operand(value)?",  # `{% include … with k=v %}` (#2579)
                 "validate_tag_operand(operand)?",  # `{% widthratio %}`
                 "validate_tag_operand(operand)?",  # `{% firstof %}`
                 "validate_tag_operand(value)?",  # `{% cycle %}`
