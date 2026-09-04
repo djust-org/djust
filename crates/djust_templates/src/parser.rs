@@ -1956,6 +1956,7 @@ fn parse_token_inner(
                             &end_tag,
                         )?;
                         *i = end_pos;
+                        crate::registry::validate_block_after_body(tag_name, args)?;
                         Ok(Some(Node::BlockCustomTag {
                             name: tag_name.clone(),
                             args: args.clone(),

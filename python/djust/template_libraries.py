@@ -983,6 +983,25 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         self.end_name = _end_name(compile_func, name)
 
     def validate_at_parse(self, args: List[str]) -> None:
+        # Let Django validate the signature, but stop exactly where it asks
+        # for the body. Argument errors must not hide errors inside that body.
+        class BodyReached(Exception):
+            pass
+
+        def stop_at_body(*args: Any, **kwargs: Any) -> Any:
+            raise BodyReached
+
+        parser = _parser([])
+        parser.parse = stop_at_body  # type: ignore[method-assign]
+        try:
+            self.compile_func(parser, _token(self.name, args))
+        except BodyReached:
+            pass
+        except BaseException as exc:
+            _stamp(exc)
+            raise
+
+    def validate_after_body(self, args: List[str]) -> None:
         from django.template.base import Token, TokenType
 
         try:

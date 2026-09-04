@@ -256,6 +256,7 @@ static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
 /// [`TagHandlerEntry`] now.
 struct BlockHandlerEntry {
     validator: Option<Py<PyAny>>,
+    body_validator: Option<Py<PyAny>>,
     end_tag: String,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
@@ -404,11 +405,18 @@ struct TagHandlerEntry {
 /// Optional compilation hook. Cache the bound method at registration so
 /// handlers without validation don't incur Python attribute lookups per tag.
 fn read_parse_validator(handler: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
-    match handler.getattr("validate_at_parse") {
+    read_named_parse_validator(handler, "validate_at_parse")
+}
+
+fn read_named_parse_validator(
+    handler: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<Py<PyAny>>> {
+    match handler.getattr(name) {
         Ok(method) if method.is_callable() => Ok(Some(method.unbind())),
-        Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(
-            "validate_at_parse must be callable",
-        )),
+        Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{name} must be callable"
+        ))),
         Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(handler.py()) => {
             Ok(None)
         }
@@ -434,6 +442,24 @@ pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust
         registry
             .get(name)
             .and_then(|entry| entry.validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    };
+    if let Some(validator) = validator {
+        Python::attach(|py| validator.call1(py, (args.to_vec(),)))
+            .map_err(DjangoRustError::PythonException)?;
+    }
+    Ok(())
+}
+
+/// Run the optional second stage only after the block body parsed successfully.
+pub fn validate_block_after_body(name: &str, args: &[String]) -> djust_core::Result<()> {
+    let validator = {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.body_validator.as_ref())
             .map(|method| Python::attach(|py| method.clone_ref(py)))
     };
     if let Some(validator) = validator {
@@ -654,6 +680,8 @@ pub fn register_block_tag_handler(
 
     let validator = read_parse_validator(handler_ref)?;
 
+    let body_validator = read_named_parse_validator(handler_ref, "validate_after_body")?;
+
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -663,6 +691,7 @@ pub fn register_block_tag_handler(
         BlockHandlerEntry {
             end_tag,
             validator,
+            body_validator,
             handler,
             resolve_positions,
             returns_bindings,

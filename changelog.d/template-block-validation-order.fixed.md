@@ -1,0 +1,1 @@
+- **Custom block tag errors**: Match Django validation order for simple block tags: check the function signature, then parse the body, then validate arguments. Missing arguments no longer hide unclosed tags or invalid body syntax.
