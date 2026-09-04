@@ -1,0 +1,1 @@
+- **URL argument compatibility:** Use Django's shared tag bridge for URL compilation and rendering, preserving argument types, resolving expressions once, honoring the current request namespace, and rejecting missing URL names at compile time. Python tag contexts now respect local bindings instead of restoring shadowed values from the original LiveView context.

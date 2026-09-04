@@ -353,11 +353,11 @@ class TestUrlTagHandlerContract:
         handler = UrlTagHandler()
         assert handler.RETURNS_BINDINGS is True
         assert handler.ACCEPTS_AS_VAR is True
-        assert handler.render(["index"], {}) == ("/", {})
-        assert handler.render(["index", "as", AsVarName("v")], {}) == ("", {"v": "/"})
-        assert handler.render(["nope", "as", AsVarName("v")], {}) == ("", {"v": ""})
+        assert handler.render(["'index'"], {}) == ("/", {})
+        assert handler.render(["'index'", "as", AsVarName("v")], {}) == ("", {"v": "/"})
+        assert handler.render(["'nope'", "as", AsVarName("v")], {}) == ("", {"v": ""})
         with pytest.raises(NoReverseMatch):
-            handler.render(["nope"], {})
+            handler.render(["'nope'"], {})
 
     def test_accepts_as_var_requires_returns_bindings(self):
         """The Rust registry refuses the half-declaration: an `as var` tail
@@ -495,9 +495,11 @@ class TestStructuralPins:
                         f"{node.lineno} — the engine already decided; read AsVarName"
                     )
 
-        # And the handler consumes the marker.
-        url_src = (REPO / "python/djust/template_tags/url.py").read_text()
-        assert "isinstance(args[-1], AsVarName)" in url_src
+        # URL delegates the original tokens to Django instead of resolving
+        # them a second time; the generic marker channel remains available.
+        from djust.template_tags.url import UrlTagHandler
+
+        assert UrlTagHandler.RESOLVE_ARG_POSITIONS == set()
 
     def test_as_var_name_is_a_plain_str_subclass(self):
         """The marker must not change what a handler that ignores it sees."""

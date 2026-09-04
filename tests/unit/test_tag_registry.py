@@ -207,7 +207,9 @@ class TestUrlTagHandler:
         with patch("django.urls.reverse", return_value="/posts/42/") as mock_reverse:
             result = handler.render(["'post_detail'", "42"], {})
             assert result == ("/posts/42/", {})
-            mock_reverse.assert_called_once_with("post_detail", args=[42])
+            mock_reverse.assert_called_once_with(
+                "post_detail", args=[42], kwargs={}, current_app=None
+            )
 
     def test_url_handler_with_kwarg(self):
         """{% url 'user_profile' username='alice' %} resolves with kwargs."""
@@ -218,7 +220,9 @@ class TestUrlTagHandler:
         with patch("django.urls.reverse", return_value="/users/alice/") as mock_reverse:
             result = handler.render(["'user_profile'", "username='alice'"], {})
             assert result == ("/users/alice/", {})
-            mock_reverse.assert_called_once_with("user_profile", kwargs={"username": "alice"})
+            mock_reverse.assert_called_once_with(
+                "user_profile", args=[], kwargs={"username": "alice"}, current_app=None
+            )
 
     def test_url_handler_as_var(self):
         """{% url 'home' as home_url %} binds the name and emits nothing."""
@@ -276,7 +280,7 @@ class TestStaticTagHandler:
 
         with patch("django.templatetags.static.static", return_value="/static/css/style.css"):
             result = handler.render(["'css/style.css'"], {})
-            assert result == "/static/css/style.css"
+            assert result == ("/static/css/style.css", {})
 
     def test_static_handler_with_variable(self):
         """{% static image_path %} resolves with variable."""
@@ -286,8 +290,8 @@ class TestStaticTagHandler:
 
         # Rust already resolves image_path to the actual value
         with patch("django.templatetags.static.static", return_value="/static/images/logo.png"):
-            result = handler.render(["images/logo.png"], {})
-            assert result == "/static/images/logo.png"
+            result = handler.render(["image_path"], {"image_path": "images/logo.png"})
+            assert result == ("/static/images/logo.png", {})
 
     @pytest.mark.skip(reason="Fallback behavior requires module reload - tested manually")
     def test_static_handler_fallback_to_settings(self):
@@ -296,12 +300,12 @@ class TestStaticTagHandler:
         # sys.modules, which is complex. The fallback behavior is tested manually.
 
     def test_static_handler_empty_args(self):
-        """Empty args returns empty string."""
+        """Missing paths raise Django's syntax error."""
+        from django.template import TemplateSyntaxError
         from djust.template_tags.static import StaticTagHandler
 
-        handler = StaticTagHandler()
-        result = handler.render([], {})
-        assert result == ""
+        with pytest.raises(TemplateSyntaxError):
+            StaticTagHandler().render([], {})
 
 
 class TestRegistryIntegration:

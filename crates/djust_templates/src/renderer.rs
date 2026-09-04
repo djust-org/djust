@@ -664,12 +664,12 @@ fn sibling_updates<L: TemplateLoader>(
             // Forward the raw-Python sidecar so assign handlers can reach
             // Python-only context (request, view) the same way
             // `Node::CustomTag` handlers do (#1167).
-            let raw_py = context.raw_py_objects();
+            let raw_py = context.render_raw_py_objects();
             let updates = crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,
                 &context_map,
-                raw_py,
+                raw_py.as_deref(),
             )
             .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(Some(SiblingEffect::silent(
@@ -986,13 +986,13 @@ fn call_custom_tag(
     // The optional raw-Python sidecar (``request``, ``view``, …) so handlers
     // like ``live_render`` (#1145) can reach Python objects from the parent's
     // render context. Existing handlers ignore extra keys.
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     if crate::registry::tag_handler_returns_bindings(name) {
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
             &resolved_args,
             &context_map,
-            raw_py,
+            raw_py.as_deref(),
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
@@ -1002,7 +1002,7 @@ fn call_custom_tag(
         name,
         &resolved_args,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Custom tag", name, e))?;
@@ -1072,14 +1072,14 @@ fn call_block_custom_tag<L: TemplateLoader>(
     // Forward raw-Python sidecar so block handlers can reach Python-only
     // context (request, view) the same way ``Node::CustomTag`` handlers do
     // (#1167).
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     if crate::registry::block_handler_returns_bindings(name) {
         let (html, bindings) = crate::registry::call_block_handler_with_bindings(
             name,
             &resolved_args,
             &content,
             &context_map,
-            raw_py,
+            raw_py.as_deref(),
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
@@ -1090,7 +1090,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
         &resolved_args,
         &content,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
@@ -1111,13 +1111,13 @@ fn call_raw_block_tag(
 ) -> Result<(String, Vec<SiblingBinding>)> {
     let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
     let context_map = context.to_hashmap();
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     let (html, bindings) = crate::registry::call_raw_block_handler_with_bindings(
         name,
         &plain,
         body,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         &context.safe_key_paths(),
         context.autoescape(),
     )?;
@@ -3718,12 +3718,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
             let context_map = context.to_hashmap();
             // Forward raw-Python sidecar (#1167).
-            let raw_py = context.raw_py_objects();
+            let raw_py = context.render_raw_py_objects();
             crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,
                 &context_map,
-                raw_py,
+                raw_py.as_deref(),
             )
             .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(String::new())

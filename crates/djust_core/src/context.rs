@@ -196,6 +196,8 @@ pub struct Context {
     /// Wrapping in `Arc` lets `Context::clone` stay GIL-free — the
     /// sidecar is logically immutable after construction.
     raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
+    /// Sidecar names replaced by local values, parallel to the value stack.
+    render_bindings: Vec<AHashSet<String>>,
     /// Django-parity auto-call of callables during sidecar `getattr`
     /// resolution (ADR-024). Default `true`; the Python side wires
     /// `LIVEVIEW_CONFIG["template_auto_call"]` through
@@ -296,6 +298,7 @@ impl Clone for Context {
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
+            render_bindings: self.render_bindings.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
             autoescape: self.autoescape,
@@ -367,6 +370,7 @@ impl Context {
             safe_keys: AHashSet::new(),
             aliases: AHashMap::new(),
             raw_py_objects: None,
+            render_bindings: vec![AHashSet::new()],
             auto_call: true,
             emit_dj_if_markers: true,
             autoescape: true,
@@ -392,6 +396,7 @@ impl Context {
             safe_keys: AHashSet::new(),
             aliases: AHashMap::new(),
             raw_py_objects: None,
+            render_bindings: vec![AHashSet::new()],
             auto_call: true,
             emit_dj_if_markers: true,
             autoescape: true,
@@ -538,6 +543,9 @@ impl Context {
     /// building the context from JSON-compatible state. Safe to
     /// call with an empty map (no-op on lookup).
     pub fn set_raw_py_objects(&mut self, objects: HashMap<String, Py<PyAny>>) {
+        self.render_bindings
+            .iter_mut()
+            .for_each(|frame| frame.clear());
         if objects.is_empty() {
             self.raw_py_objects = None;
         } else {
@@ -560,6 +568,25 @@ impl Context {
     /// ``RustLiveView``).
     pub fn raw_py_objects(&self) -> Option<&HashMap<String, Py<PyAny>>> {
         self.raw_py_objects.as_deref()
+    }
+
+    /// Sidecar values visible to a Python tag, excluding names rebound by
+    /// template scopes. Keep the original sidecar for lazy lookup and aliases;
+    /// a tag's flattened context must instead honor its current local values.
+    pub fn render_raw_py_objects(&self) -> Option<std::sync::Arc<HashMap<String, Py<PyAny>>>> {
+        let raw = self.raw_py_objects.as_ref()?;
+        let shadowed = |key: &String| self.render_bindings.iter().any(|frame| frame.contains(key));
+        if !raw.keys().any(shadowed) {
+            return Some(std::sync::Arc::clone(raw));
+        }
+        Some(Python::attach(|py| {
+            std::sync::Arc::new(
+                raw.iter()
+                    .filter(|(key, _)| !shadowed(key))
+                    .map(|(key, value)| (key.clone(), value.clone_ref(py)))
+                    .collect(),
+            )
+        }))
     }
 
     /// Mark a variable name as safe (skip auto-escaping on render).
@@ -970,6 +997,15 @@ impl Context {
     }
 
     pub fn set(&mut self, key: String, value: Value) {
+        if self
+            .raw_py_objects
+            .as_ref()
+            .is_some_and(|raw| raw.contains_key(&key))
+        {
+            if let Some(bindings) = self.render_bindings.last_mut() {
+                bindings.insert(key.clone());
+            }
+        }
         if let Some(frame) = self.stack.last_mut() {
             frame.insert(key, value);
         }
@@ -977,11 +1013,13 @@ impl Context {
 
     pub fn push(&mut self) {
         self.stack.push(AHashMap::new());
+        self.render_bindings.push(AHashSet::new());
     }
 
     pub fn pop(&mut self) {
         if self.stack.len() > 1 {
             self.stack.pop();
+            self.render_bindings.pop();
         }
     }
 

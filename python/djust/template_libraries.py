@@ -839,6 +839,8 @@ def _render_node(
     # dict lets a node's `context[var] =` write through to it; the copy keeps
     # the node's writes inside the returned `bindings` diff, where they belong.
     ctx = Context(dict(context), autoescape=autoescape)
+    if "request" in context:
+        ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
     output = node.render(ctx)
     after = ctx.dicts[-1]
