@@ -8,7 +8,7 @@
 //! - Rendering final templates with block overrides
 
 use crate::parser::Node;
-use djust_core::{DjangoRustError, Result};
+use djust_core::{Context, DjangoRustError, Result};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -69,6 +69,16 @@ impl InheritanceChain {
     }
 
     /// Merge blocks from all layers (child overrides parent)
+    ///
+    /// A body that references `{{ block.super }}` is wrapped in a
+    /// [`Node::BlockSuperScope`] carrying the version it overrides, so the
+    /// reference resolves at render time (#2517). Wrapping happens as the
+    /// chain is walked root -> child, which makes the nesting fall out for a
+    /// chain of any depth: layer 3's scope holds layer 2's scope, which holds
+    /// layer 1's plain body.
+    ///
+    /// `parent_blocks` keeps the immediate-parent map it always did; it is the
+    /// flat view, and nothing reads it for `block.super` any more.
     pub fn merge_blocks(&mut self) {
         let mut merged: HashMap<String, Vec<Node>> = HashMap::new();
         let mut parents: HashMap<String, Vec<Node>> = HashMap::new();
@@ -81,8 +91,19 @@ impl InheritanceChain {
                 if let Some(existing) = merged.get(name) {
                     parents.insert(name.clone(), existing.clone());
                 }
-                // Insert new content (child overrides parent)
-                merged.insert(name.clone(), nodes.clone());
+                let content = match merged.get(name) {
+                    // Only a body that actually references `block.super` gets
+                    // the wrapper: Django resolves it lazily, so an unwrapped
+                    // body must not render its parent at all.
+                    Some(previous) if nodes_reference_block_super(nodes) => {
+                        vec![Node::BlockSuperScope {
+                            super_nodes: previous.clone(),
+                            nodes: nodes.clone(),
+                        }]
+                    }
+                    _ => nodes.clone(),
+                };
+                merged.insert(name.clone(), content);
             }
         }
 
@@ -168,6 +189,148 @@ impl InheritanceChain {
     }
 }
 
+/// Does this node tree reference `{{ block.super }}`?
+///
+/// The reference is an ordinary dotted lookup — `Node::Variable("block.super")`
+/// — so this is a plain walk rather than anything tag-aware. Used to decide
+/// whether a block body needs its parent rendered at all (#2517).
+fn nodes_reference_block_super(nodes: &[Node]) -> bool {
+    nodes.iter().any(node_references_block_super)
+}
+
+fn node_references_block_super(node: &Node) -> bool {
+    /// Does any of these expression strings mention it?
+    fn any_expr<'a>(exprs: impl IntoIterator<Item = &'a str>) -> bool {
+        exprs.into_iter().any(|e| e.contains("block.super"))
+    }
+
+    match node {
+        // ---- expression-bearing leaves ------------------------------------
+        Node::Variable(name, filters, _) => {
+            name.trim() == "block.super"
+                || any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
+        }
+        Node::InlineIf {
+            true_expr,
+            condition,
+            false_expr,
+            filters,
+        } => {
+            any_expr([true_expr.as_str(), condition.as_str(), false_expr.as_str()])
+                || any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
+        }
+        Node::FirstOf { args, .. }
+        | Node::CustomTag { args, .. }
+        | Node::AssignTag { args, .. }
+        | Node::UnsupportedTag { args, .. } => any_expr(args.iter().map(String::as_str)),
+        Node::Cycle { values, .. } => any_expr(values.iter().map(String::as_str)),
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+            ..
+        } => any_expr([value.as_str(), max_value.as_str(), max_width.as_str()]),
+        Node::Include {
+            template,
+            with_vars,
+            ..
+        } => any_expr([template.as_str()]) || any_expr(with_vars.iter().map(|(_, v)| v.as_str())),
+
+        // ---- containers, with their own expression fields ------------------
+        Node::If {
+            condition,
+            true_nodes,
+            false_nodes,
+            ..
+        } => {
+            any_expr([condition.as_str()])
+                || nodes_reference_block_super(true_nodes)
+                || nodes_reference_block_super(false_nodes)
+        }
+        Node::For {
+            iterable,
+            nodes,
+            empty_nodes,
+            ..
+        } => {
+            any_expr([iterable.as_str()])
+                || nodes_reference_block_super(nodes)
+                || nodes_reference_block_super(empty_nodes)
+        }
+        Node::With { assignments, nodes } => {
+            any_expr(assignments.iter().map(|(_, v)| v.as_str()))
+                || nodes_reference_block_super(nodes)
+        }
+        Node::Filter { filters, nodes } => {
+            any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
+                || nodes_reference_block_super(nodes)
+        }
+        Node::Block { nodes, .. }
+        | Node::Spaceless { nodes, .. }
+        | Node::AutoEscape { nodes, .. } => nodes_reference_block_super(nodes),
+        Node::IfChanged {
+            vars,
+            nodes,
+            else_nodes,
+            ..
+        } => {
+            any_expr(vars.iter().map(String::as_str))
+                || nodes_reference_block_super(nodes)
+                || nodes_reference_block_super(else_nodes)
+        }
+        Node::BlockSuperScope { super_nodes, nodes } => {
+            nodes_reference_block_super(super_nodes) || nodes_reference_block_super(nodes)
+        }
+        Node::Localize { children, .. } | Node::LocalTime { children, .. } => {
+            nodes_reference_block_super(children)
+        }
+        Node::BlockCustomTag { args, children, .. } => {
+            any_expr(args.iter().map(String::as_str)) || nodes_reference_block_super(children)
+        }
+        Node::ReactComponent {
+            props, children, ..
+        } => {
+            any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
+        }
+        Node::RustComponent { props, .. } => any_expr(props.iter().map(|(_, v)| v.as_str())),
+        // `{% blocktranslate with s=block.super %}` — the operands are in
+        // `args`, and the BODY is raw source that can name it in a placeholder.
+        Node::RawBlockCustomTag { args, body, .. } => {
+            any_expr(args.iter().map(String::as_str)) || any_expr([body.as_str()])
+        }
+        // `{% language block.super %}` / `{% timezone block.super %}` — the
+        // scope OPERAND, which the container arm only recursed past.
+        Node::Language { expr, children } | Node::Timezone { expr, children } => {
+            any_expr([expr.as_str()]) || nodes_reference_block_super(children)
+        }
+
+        // ---- variants that carry no expression at all ---------------------
+        //
+        // Listed EXPLICITLY, with no `_` arm, so the compiler refuses to build
+        // when a variant is added without deciding this question. The previous
+        // version ended in `_ => false` under a comment claiming the list was
+        // "exhaustive by construction" — it was not, and three variants fell
+        // through it: `{% blocktranslate with s=block.super %}` rendered EMPTY,
+        // `{% language block.super %}` silently no-opped, and
+        // `{% timezone block.super %}` raised. A claim a comment makes and the
+        // compiler does not is the failure mode this arm removes.
+        //
+        // The default direction stays "do not render the parent": an earlier
+        // `_ => true` traded a silent under-render for an EAGER parent render,
+        // which advances a `{% cycle %}` in the parent block and can raise
+        // `TemplateDoesNotExist` on a template that worked.
+        Node::Text(_)
+        | Node::Comment
+        | Node::Load(_)
+        | Node::TemplateTag(_)
+        | Node::CsrfToken
+        | Node::Static(_)
+        | Node::Now(_)
+        | Node::Extends(_)
+        | Node::ResetCycle { .. } => false,
+    }
+}
+
 /// Extract all {% block %} tags from nodes and map them by name
 fn extract_blocks(nodes: &[Node]) -> HashMap<String, Vec<Node>> {
     let mut blocks = HashMap::new();
@@ -245,21 +408,137 @@ pub trait TemplateLoader {
     }
 }
 
+/// Django's `loader_tags.construct_relative_path` (#2517).
+///
+/// `{% extends "./two.html" %}` in `dir1/one.html` means `dir1/two.html`, and
+/// `../one.html` means `one.html`. A name that does not start with `./` or
+/// `../` is returned unchanged, so this is a no-op for every absolute name.
+///
+/// Django raises rather than escaping the template root, and refuses a
+/// relative path that resolves to the template ITSELF (that is a guaranteed
+/// infinite `{% extends %}` loop, and the message names it as such). Both
+/// refusals are Django's, message for message.
+pub fn construct_relative_path(
+    current_template_name: Option<&str>,
+    relative_name: &str,
+) -> Result<String> {
+    let new_name = relative_name.trim_matches(|c| c == '"' || c == '\'');
+    if !(new_name.starts_with("./") || new_name.starts_with("../")) {
+        return Ok(relative_name.to_string());
+    }
+    // Without a name for the CURRENT template there is nothing to be relative
+    // to; Django is in the same position for a string-built template and
+    // leaves the name alone.
+    let Some(current) = current_template_name else {
+        return Ok(relative_name.to_string());
+    };
+
+    let current = current.trim_start_matches('/');
+    let dir = match current.rsplit_once('/') {
+        Some((head, _)) => head,
+        None => "",
+    };
+
+    // `posixpath.normpath(posixpath.join(dir, new_name))`, spelled out: `/`
+    // is the separator on every template name regardless of host platform,
+    // so this must NOT go through `std::path`.
+    let joined = if dir.is_empty() {
+        new_name.to_string()
+    } else {
+        format!("{dir}/{new_name}")
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in joined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if matches!(parts.last(), Some(&last) if last != "..") {
+                    parts.pop();
+                } else {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let normalized = parts.join("/");
+
+    if normalized.starts_with("../") || normalized == ".." {
+        return Err(DjangoRustError::TemplateError(format!(
+            "The relative path '{relative_name}' points outside the file hierarchy that template '{current}' is in."
+        )));
+    }
+    if normalized == current {
+        return Err(DjangoRustError::TemplateError(format!(
+            "The relative path '{relative_name}' was translated to template name '{normalized}', the same template in which the tag appears."
+        )));
+    }
+    Ok(normalized)
+}
+
 /// Build complete inheritance chain by recursively loading parents
 pub fn build_inheritance_chain<L: TemplateLoader>(
     nodes: Vec<Node>,
     loader: &L,
     max_depth: usize,
 ) -> Result<InheritanceChain> {
+    build_inheritance_chain_from(nodes, loader, max_depth, None, None)
+}
+
+/// Resolve an `{% extends %}` operand to a template NAME (#2517).
+///
+/// Django compiles the operand as a `FilterExpression`, so a quoted token is
+/// a literal and anything else is a context lookup. Without a context (the
+/// `resolve_inheritance` pre-pass, which runs before any render) an unquoted
+/// token is returned as-is — the same string the pre-#2517 code used, so that
+/// path is unchanged.
+fn resolve_extends_target(token: &str, context: Option<&Context>) -> String {
+    let trimmed = token.trim();
+    let bytes = trimmed.as_bytes();
+    let quoted = bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
+    if quoted {
+        return trimmed[1..trimmed.len() - 1].to_string();
+    }
+    let Some(context) = context else {
+        return trimmed.to_string();
+    };
+    match crate::renderer::resolve_extends_operand(trimmed, context) {
+        Some(name) if !name.is_empty() => name,
+        // A miss falls back to the token so the "not found" error still names
+        // what the author wrote.
+        _ => trimmed.to_string(),
+    }
+}
+
+/// [`build_inheritance_chain`] that knows the name of the template it starts
+/// from, so `{% extends "./parent.html" %}` can resolve (#2517).
+///
+/// The name is threaded DOWN the chain: each layer's relative reference
+/// resolves against the name of the template that declared it, which is what
+/// makes `dir1/one.html` -> `./dir2/one.html` -> `../three.html` land on
+/// `dir1/three.html` rather than on the root's directory.
+pub fn build_inheritance_chain_from<L: TemplateLoader>(
+    nodes: Vec<Node>,
+    loader: &L,
+    max_depth: usize,
+    template_name: Option<&str>,
+    context: Option<&Context>,
+) -> Result<InheritanceChain> {
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
+    let mut current_name: Option<String> = template_name.map(str::to_string);
 
     // Follow extends chain up to max_depth
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
             let parent_name = parent_name.to_string(); // Clone to avoid borrow issues
+            let parent_name = resolve_extends_target(&parent_name, context);
+            let parent_name = construct_relative_path(current_name.as_deref(), &parent_name)?;
             let parent_nodes = loader.load_template(&parent_name)?;
             chain.add_parent(parent_nodes);
+            current_name = Some(parent_name);
             depth += 1;
         } else {
             // No more parents
@@ -687,6 +966,34 @@ fn node_to_template_string(node: &Node) -> String {
             let mut result = "{% spaceless %}".to_string();
             result.push_str(&nodes_to_template_string(nodes));
             result.push_str("{% endspaceless %}");
+            result
+        }
+        Node::BlockSuperScope { nodes, .. } => {
+            // Round-tripping to SOURCE cannot express the paired parent body;
+            // the scope is a merge-time construct and a reparse rebuilds it
+            // from the chain. Emitting the child body alone is what the
+            // pre-#2517 flattening emitted for the same input.
+            nodes_to_template_string(nodes)
+        }
+        Node::IfChanged {
+            vars,
+            nodes,
+            else_nodes,
+            ..
+        } => {
+            // The id is NOT re-emitted: `resolve_cycle_nodes` assigns it on
+            // the reparse, exactly as it does for `{% cycle %}` above.
+            let mut result = if vars.is_empty() {
+                "{% ifchanged %}".to_string()
+            } else {
+                format!("{{% ifchanged {} %}}", vars.join(" "))
+            };
+            result.push_str(&nodes_to_template_string(nodes));
+            if !else_nodes.is_empty() {
+                result.push_str("{% else %}");
+                result.push_str(&nodes_to_template_string(else_nodes));
+            }
+            result.push_str("{% endifchanged %}");
             result
         }
         Node::AutoEscape { on, nodes } => {

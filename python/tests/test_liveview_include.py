@@ -222,10 +222,10 @@ class TestUnsupportedTagWarning:
         class MyView(LiveView):
             template = """
             <div dj-root>
-                {% ifchanged %}content{% endifchanged %}
+                {% zzz_not_a_tag %}content
             </div>
             """
 
         view = MyView()
-        with pytest.raises(RuntimeError, match="Unsupported template tag.*ifchanged"):
+        with pytest.raises(RuntimeError, match="Unsupported template tag.*zzz_not_a_tag"):
             view.render()

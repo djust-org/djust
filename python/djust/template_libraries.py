@@ -81,8 +81,10 @@ and filter registries are process-global (ADR-001), so once any parse loads
 a library every later parse sees its tags, ``{% load %}`` or not — the same
 divergence ``{% url %}`` and every ``register_tag_handler`` user already
 has. A MISSING library is still refused at parse time with Django's exact
-message. Django's own libraries (``i18n``, ``l10n``, ``tz``, ``cache``,
-``static``) resolve but are not bridged here — they are separate rows.
+message. Django's own ``i18n`` / ``l10n`` / ``tz`` / ``static`` libraries ARE bridged
+here, and ``cache`` is bridged through a hand-written handler (its compile
+function consumes a body, which the generic bridge cannot serve). No Django
+template library is unbridged today.
 
 Engine paths (#1051)
 --------------------
@@ -115,14 +117,16 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
-#: Django's own libraries this row bridges (#2558). Every OTHER
-#: ``django.templatetags.*`` (``static``, ``cache``, …) still resolves and
-#: parses exactly as #2547 left it — those rows have not shipped.
+#: Django's own libraries this row bridges (#2558, extended for ``static``
+#: and ``cache`` in #2517). ``cache`` reaches a bespoke handler rather than the
+#: generic tag bridge — see :data:`_BESPOKE_BLOCK_TAGS`.
 _DJANGO_LIBRARIES_BRIDGED = frozenset(
     {
         "django.templatetags.i18n",
         "django.templatetags.l10n",
         "django.templatetags.tz",
+        "django.templatetags.static",
+        "django.templatetags.cache",
     }
 )
 
@@ -136,6 +140,26 @@ _NATIVE_SCOPE_TAGS = {
     "django.templatetags.l10n": ("localize",),
     "django.templatetags.tz": ("localtime", "timezone"),
 }
+
+#: Tags of a bridged Django library that already have a NATIVE Rust
+#: implementation in the parser. Unlike :data:`_NATIVE_SCOPE_TAGS` these are
+#: NOT armed — the parser arm exists unconditionally — they are merely skipped
+#: at bridge time so ``{% load static %}`` cannot install a Python handler over
+#: the native ``{% static %}``. ``_may_override`` cannot catch this on its own:
+#: it consults the HANDLER REGISTRIES, and a native parser tag is in none of
+#: them, so without this set the bridge would silently displace it.
+_NATIVE_TAG_SKIPS = {
+    "django.templatetags.static": ("static",),
+}
+
+#: Django library block tags djust implements ITSELF rather than bridging
+#: (#2517). ``{% cache %}`` consumes its body with ``parser.parse(("endcache",))``,
+#: so it is the refused class for the generic bridge — the synthetic parser has
+#: no token stream to hand it — and unlike ``blocktranslate`` its body is not
+#: DATA either: ``CacheNode`` renders a nodelist. What it actually needs is the
+#: body RENDERED, which is exactly what djust's block-handler protocol delivers,
+#: so the tag is a hand-written handler over Django's own cache framework.
+_BESPOKE_BLOCK_TAGS = {"cache": "endcache"}
 
 #: The raw block-consuming tags (#2558, §2 of the plan): the body is DATA —
 #: the msgid Django's ``render_token_list`` builds from the SOURCE tokens —
@@ -444,10 +468,12 @@ def _bridge_library(label: str, library: Any) -> None:
 
     _arm_scope_tags(module)
     bridge_library_filters(library, refuse=refused_filters(module))
-    native = _NATIVE_SCOPE_TAGS.get(module, ())
+    native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
     for name, compile_func in library.tags.items():
         if name in _RAW_BLOCK_TAGS:
             _bridge_raw_block_tag(label, name, compile_func)
+        elif name in _BESPOKE_BLOCK_TAGS:
+            _bridge_bespoke_block_tag(label, name)
         elif name in native:
             continue
         else:
@@ -938,6 +964,174 @@ def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
     template = _StubTemplate()
     template.engine = engine
     return template
+
+
+class CacheTagHandler:
+    """``{% cache expiry fragment [vary…] [using="alias"] %}…{% endcache %}``.
+
+    Django's ``CacheNode`` renders its nodelist and stores the result; djust's
+    block-handler protocol hands the body over ALREADY rendered, so this
+    handler is the store/lookup half only. The observable difference is that a
+    cache HIT still paid to render the body — the OUTPUT is the cached one
+    either way, which is what the tag's semantics are about, but the
+    performance win is not there yet (tracked with the row).
+
+    Argument handling is Django's, token for token (``defaulttags`` has no say
+    here; this is ``django/templatetags/cache.py``):
+
+    * ``args[0]`` — the expiry (Django's ``tokens[1]``; ``args`` excludes the
+      tag name) — is a FilterExpression, so it may be a
+      variable, and ``None`` means "cache forever".
+    * ``args[1]`` — the fragment name (Django's ``tokens[2]``) — is used RAW. Django's own comment is
+      "fragment_name can't be a variable", so it is not resolved here either.
+    * the rest vary the key, and each IS resolved.
+    * ``using="alias"`` selects the cache; an unknown alias is a
+      ``TemplateSyntaxError``, not a fallback.
+    """
+
+    #: Raw tokens: this handler resolves what Django resolves and leaves the
+    #: fragment name alone, which no positional policy can express.
+    RESOLVE_ARG_POSITIONS: frozenset = frozenset()
+
+    def render(self, args: List[str], content: str, context: Dict[str, Any]) -> str:
+        from django.core.cache import InvalidCacheBackendError, caches
+        from django.core.cache.utils import make_template_fragment_key
+        from django.template import TemplateSyntaxError
+
+        tokens = list(args)
+        if len(tokens) < 2:
+            raise TemplateSyntaxError("'cache' tag requires at least 2 arguments.")
+
+        cache_name = None
+        # Django's guard is `len(tokens) > 2`, NOT "is there a last token":
+        # `{% cache 10 using="default" %}` has only two operands, so the
+        # trailing token is the FRAGMENT NAME (literally `using="default"`),
+        # not a cache selector. Popping it there left one operand and raised
+        # `IndexError` — an unhandled crash on input Django renders.
+        if len(tokens) > 2 and tokens[-1].startswith("using="):
+            cache_name = _literal_or_resolve(tokens.pop()[len("using=") :], context)
+
+        expire_token, fragment_name, vary_tokens = tokens[0], tokens[1], tokens[2:]
+
+        if cache_name is not None:
+            try:
+                cache_backend = caches[cache_name]
+            except InvalidCacheBackendError as exc:
+                raise TemplateSyntaxError(
+                    f"Invalid cache name specified for cache tag: {cache_name}"
+                ) from exc
+        else:
+            # Django's `CacheNode.render`: a cache named `template_fragments`
+            # is preferred over `default` when one exists.
+            try:
+                cache_backend = caches["template_fragments"]
+            except InvalidCacheBackendError:
+                cache_backend = caches["default"]
+
+        expire_time = _literal_or_resolve(expire_token, context)
+        if expire_time is _MISSING:
+            # Django resolves the expiry WITHOUT `ignore_failures`, so an
+            # unresolvable operand is an error rather than "cache forever" —
+            # `{% cache foo bar %}` with no `foo` raises. The literal `None`
+            # is a different thing and does mean forever.
+            raise TemplateSyntaxError(f"'cache' tag got an unknown variable: {expire_token!r}")
+        if expire_time is not None:
+            try:
+                expire_time = int(expire_time)
+            except (ValueError, TypeError) as exc:
+                raise TemplateSyntaxError(
+                    f"'cache' tag got a non-integer timeout value: {expire_time!r}"
+                ) from exc
+
+        # The vary operands ARE `ignore_failures`, so a miss is `None` there.
+        vary_on = [
+            None if (v := _literal_or_resolve(token, context)) is _MISSING else v
+            for token in vary_tokens
+        ]
+        key = make_template_fragment_key(fragment_name, vary_on)
+
+        cached = cache_backend.get(key)
+        if cached is not None:
+            return cached
+        cache_backend.set(key, content, expire_time)
+        return content
+
+
+#: "no such variable" — distinct from the literal ``None`` a `{% cache %}`
+#: expiry may legitimately carry.
+_MISSING = object()
+
+
+def _literal_or_resolve(token: str, context: Dict[str, Any]) -> Any:
+    """A ``{% cache %}`` operand: a literal if it looks like one, else a lookup.
+
+    Deliberately small — it covers what the tag's operands actually are
+    (a number, a quoted string, ``None``, or a dotted context path) rather
+    than re-implementing ``FilterExpression``. A miss returns
+    :data:`_MISSING`, which the caller maps: `None` for the vary operands
+    (Django's ``ignore_failures``) and an error for the expiry (Django
+    resolves that one without it). The literal ``None`` is distinct from a
+    miss and means "cache forever".
+    """
+    from django.template import Context as DjangoContext
+    from django.template.base import VariableDoesNotExist
+
+    token = token.strip()
+    # Django's OWN `FilterExpression`, through the same synthetic parser the
+    # rest of this module uses — so a literal, a dotted lookup, and a FILTER
+    # chain (`{% cache 2|noop:"x y" k %}`) all resolve the way Django resolves
+    # them, with its libraries in scope. Re-implementing this was wrong twice
+    # over: it missed filters, and it had its own opinion about literals.
+    try:
+        expression = _parser([]).compile_filter(token)
+    except Exception:
+        return _MISSING
+    try:
+        resolved = expression.resolve(DjangoContext(dict(context)), ignore_failures=True)
+    except VariableDoesNotExist:
+        return _MISSING
+    # `ignore_failures=True` answers `None` for BOTH "no such variable" and "the
+    # variable is None". Collapsing them made `{% cache t "f" %}` with `t=None`
+    # raise where Django caches forever, so the two are separated structurally:
+    # a name that does not resolve is a miss, a name that resolves to None is
+    # the value None.
+    if resolved is not None:
+        return resolved
+    if token == "None":
+        return None
+    try:
+        # Django's own miss signal, without the ignore_failures collapse.
+        expression.resolve(DjangoContext(dict(context)))
+    except VariableDoesNotExist:
+        return _MISSING
+    except Exception:
+        return _MISSING
+    return None
+
+
+def _bridge_bespoke_block_tag(label: str, name: str) -> None:
+    """Register one of :data:`_BESPOKE_BLOCK_TAGS` (#2517).
+
+    Same collision policy as every other bridge path: a name djust itself owns
+    is never displaced.
+    """
+    if not _may_override(name):
+        logger.warning(
+            "Template library '%s' registers tag '%s', which djust already provides; "
+            "the library's version is not bridged (the built-in wins process-wide).",
+            label,
+            name,
+        )
+        return
+    try:
+        from djust._rust import register_block_tag_handler, unregister_tag_handler
+    except ImportError:  # pragma: no cover — the extension is a hard dependency
+        logger.warning("djust._rust extension not available; '%s' not bridged", name)
+        return
+    handler = CacheTagHandler()
+    register_block_tag_handler(name, _BESPOKE_BLOCK_TAGS[name], handler)
+    unregister_tag_handler(name)
+    _owned_tags[name] = (label, handler)
 
 
 class LibraryRawBlockTagHandler:

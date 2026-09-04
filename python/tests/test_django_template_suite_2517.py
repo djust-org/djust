@@ -434,6 +434,8 @@ CANARY_MODULE = textwrap.dedent(
     '''
     """Three templates: one both engines agree on, one djust gets wrong, one djust cannot parse."""
 
+    import datetime
+
     from django.template import Context, Engine, TemplateSyntaxError
     from django.test import SimpleTestCase
 
@@ -459,12 +461,26 @@ CANARY_MODULE = textwrap.dedent(
                     "{% block first %}{{ block.super }}{% endblock %}"
                 ).render(Context({}))
 
-        def test_3_ifchanged(self):
-            # Django renders "ab"; djust raises on the unsupported tag
-            # (`autoescape` was the canary until #2556 implemented it).
-            src = "{% for x in xs %}{% ifchanged %}{{ x }}{% endifchanged %}{% endfor %}"
-            out = Engine().from_string(src).render(Context({"xs": ["a", "a", "b"]}))
-            self.assertEqual(out, "ab")
+        def test_3_refused_tz_filter(self):
+            # Django renders `Jan. 1, 2020, noon`; djust REFUSES.
+            #
+            # The canary needs a case where DJANGO SUCCEEDS and djust does
+            # not, and it rotates as gaps close: `autoescape` until #2556,
+            # `ifchanged` until #2517, `{% cache %}` until #2517's library
+            # row. No Django TAG is refused any more, so the canary moved to
+            # the refusal that remains — the three `tz` FILTERS, which need a
+            # datetime object on the wire the Rust `Value` cannot carry
+            # (#2216), and so are registered as filters that raise rather than
+            # answering the silent `""` a non-datetime would otherwise get.
+            src = "{% load tz %}{{ d|utc }}"
+            engine = Engine(libraries={"tz": "django.templatetags.tz"})
+            # The PROPERTY is "Django renders this and djust does not"; the
+            # exact bytes depend on the runner's TIME_ZONE / USE_TZ, which the
+            # gate-off subprocess does not fix, so they are not asserted.
+            out = engine.from_string(src).render(
+                Context({"d": datetime.datetime(2020, 1, 1, 12, 0)})
+            )
+            self.assertIn("2020", out)
     '''
 )
 
@@ -525,11 +541,11 @@ class TestEmpiricalCanary:
             "FAIL  canary_tests.Canary.test_2_block_super_outside_a_child_must_raise | AssertionError: "
             "TemplateSyntaxError not raised"
         )
-        assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
-            "ERROR canary_tests.Canary.test_3_ifchanged | DjustTemplateSyntaxError: "
+        assert lines["canary_tests.Canary.test_3_refused_tz_filter"].startswith(
+            "ERROR canary_tests.Canary.test_3_refused_tz_filter | Exception: "
         )
 
-        assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_ifchanged"]
+        assert "utc" in lines["canary_tests.Canary.test_3_refused_tz_filter"]
 
     def test_engine_percent_and_touched(self, djust_run: tuple[str, dict]) -> None:
         text, data = djust_run

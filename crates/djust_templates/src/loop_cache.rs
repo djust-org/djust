@@ -770,6 +770,13 @@ fn node_is_position_dependent(node: &Node) -> bool {
         // Direct position-dependent constructs.
         Node::If { .. } => true,
         Node::Cycle { .. } | Node::ResetCycle { .. } => true,
+        // `{% ifchanged %}` carries state ACROSS iterations of the loop it
+        // sits in — the same reason `{% cycle %}` is listed. Caching a body
+        // that contains one and replaying it would freeze the comparison.
+        Node::IfChanged { .. } => true,
+        // The parent body it carries can hold anything, including a
+        // `{% cycle %}`; treat it as opaque rather than proving otherwise.
+        Node::BlockSuperScope { .. } => true,
         Node::For { .. } => true, // nested loop composes the if-loop-path
         // Opaque / Python-backed nodes — we cannot prove position-independence.
         Node::CustomTag { .. }

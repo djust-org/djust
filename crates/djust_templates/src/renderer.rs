@@ -6,6 +6,7 @@ use crate::parser::Node;
 use crate::registry::TagArg;
 #[cfg(feature = "liveview")]
 use djust_components::Component;
+use djust_core::decimal::python_float_repr;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
 use pyo3::{Py, PyAny};
@@ -514,6 +515,12 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::Spaceless { nodes, .. } => nodes_contain_elements(nodes),
         Node::AutoEscape { nodes, .. } => nodes_contain_elements(nodes),
         Node::Filter { nodes, .. } => nodes_contain_elements(nodes),
+        Node::IfChanged {
+            nodes, else_nodes, ..
+        } => nodes_contain_elements(nodes) || nodes_contain_elements(else_nodes),
+        Node::BlockSuperScope { super_nodes, nodes } => {
+            nodes_contain_elements(super_nodes) || nodes_contain_elements(nodes)
+        }
         // Conservative: tags that may or do produce HTML are treated
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
@@ -759,6 +766,127 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     }
     let idx = context.cycle_advance(id) % values.len();
     get_value_safe_ignoring_failures(values[idx].trim(), context)
+}
+
+/// Resolve an unquoted `{% extends %}` operand against the render context.
+///
+/// Lives here rather than in `inheritance` because the resolver and its
+/// `ignore_failures` policy belong to the renderer; `inheritance` has no other
+/// reason to reach into context resolution.
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Option<String> {
+    let (value, _) = get_value_safe_ignoring_failures(token, context).ok()?;
+    match value {
+        Value::Missing | Value::None => None,
+        other => Some(other.to_string()),
+    }
+}
+
+/// Is this template-name token a QUOTED literal rather than a variable?
+///
+/// Django decides this in `Variable.__init__` at compile time; here it is the
+/// same one-line rule — matching quotes on both ends, and at least two
+/// characters so a lone `"` is not read as an empty literal.
+fn is_quoted_literal(token: &str) -> bool {
+    let t = token.trim();
+    let bytes = t.as_bytes();
+    bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+}
+
+/// A comparison key for one `{% ifchanged %}` operand, under PYTHON's
+/// equality rather than Rust's.
+///
+/// Django compares the resolved objects with `!=`, so the key has to agree
+/// with Python on the cross-type cases, and Python's numeric tower is the one
+/// that bites: `0 == False` and `1 == True` and `1 == 1.0` are all true, while
+/// `1 == "1"` and `0 == ""` and `None == False` are all false. A plain `{:?}`
+/// of the `Value` gets the string cases right and every numeric case wrong —
+/// the randomized differential in `python/tests/test_ifchanged_2517.py` found
+/// exactly that within sixty seeds.
+///
+/// So: bools fold into the number bucket, integers and floats share one
+/// numeric spelling, and strings / none / containers each get a bucket no
+/// number can land in.
+fn ifchanged_key(value: &Value) -> String {
+    match value {
+        // `Missing` is a `VariableDoesNotExist` under `ignore_failures`,
+        // which Django compares as `None`.
+        Value::Missing | Value::None => "n".to_string(),
+        // One numeric spelling for all three, through the APPROVED float
+        // repr — Rust's `{}` is the #2258/#2270 defect (the float-sink guard
+        // in `filters.rs` fails the build on a new `RUST_DISPLAY` sink, and
+        // it caught this line's first version). It matters here and not only
+        // as hygiene: two Python-equal floats must produce one key.
+        // Bools and integers are EXACT: `0 == False` and `1 == True` in
+        // Python, but `i64 as f64` silently loses precision past 2^53, which
+        // made two distinct snowflake-style ids compare equal. Integers keep
+        // their exact decimal spelling and bools map onto 0/1.
+        Value::Bool(b) => format!("#{}", if *b { 1 } else { 0 }),
+        Value::Integer(i) => format!("#{i}"),
+        Value::Float(f) => numeric_key(*f),
+        // A DECIMAL (and every other `numbers.Number` the sidecar encodes)
+        // arrives here as `Encoded` carrying its `EqClass`. Keying it by that
+        // real component is what makes `Decimal("1")`, `1` and `Decimal("1.0")`
+        // ONE value, as Python's `==` does — without it a `{% ifchanged
+        // item.price %}` over a `DecimalField`, the archetypal use of the tag,
+        // reported every row as changed. A COMPLEX number (non-zero `imag`)
+        // is not equal to any real, so it keeps its own key.
+        Value::Encoded(e) => match e.eq_class {
+            Some(EqClass::Number { real, imag: 0.0 }) => numeric_key(real),
+            Some(EqClass::Number { real, imag }) => {
+                format!("#c{}:{}", python_float_repr(real), python_float_repr(imag))
+            }
+            _ => format!("o{value:?}"),
+        },
+        // A `Decimal` is a `numbers.Number`, so Python compares it BY VALUE
+        // against ints and floats: `Decimal("1") == 1 == Decimal("1.0")` and
+        // `Decimal("2.50") == 2.5` are all true. Keying it by its decimal TEXT
+        // made each spelling its own value, so `{% ifchanged item.price %}`
+        // over a `DecimalField` — the archetypal use of the tag — reported
+        // every row as changed. Parsed to the shared numeric key; an
+        // unparseable spelling (`NaN`, `Infinity`) falls back to the text.
+        Value::Decimal(text) => match text.parse::<f64>() {
+            Ok(f) => numeric_key(f),
+            Err(_) => format!("d{text}"),
+        },
+        Value::String(s) => format!("s{s}"),
+        other => format!("o{other:?}"),
+    }
+}
+
+/// The numeric half of [`ifchanged_key`]: one spelling per Python numeric
+/// value, or `None` for NaN.
+///
+/// An integral float shares the integer spelling because `1 == 1.0`, and
+/// `-0.0` normalises onto `0` because `-0.0 == 0`. Integers keep their EXACT
+/// decimal spelling rather than going through `f64` — past 2^53 that cast
+/// silently collapses distinct ids onto one key, which reported two different
+/// snowflake ids as unchanged.
+///
+/// NaN returns `None`: it is the one value Python says is never equal to
+/// itself, so no key can represent it and the caller treats it as always
+/// changed.
+fn numeric_key(f: f64) -> String {
+    // NaN gets ONE key, so two NaNs compare equal here.
+    //
+    // That looks wrong against `nan != nan` and it is what Django does: the
+    // operand form compares a LIST of resolved values, and Python's list
+    // comparison short-circuits on identity before calling `==`, so a repeated
+    // NaN reads as unchanged. Measured against Django across `[nan, nan]`,
+    // `[5, nan, 5]` and `[nan, nan, 1]` — all three agree with this key and
+    // disagreed with a "never equal" NaN, which skipped the state store and
+    // left a stale key alive past the NaN.
+    if f.is_nan() {
+        return "#nan".to_string();
+    }
+    if f == 0.0 {
+        return "#0".to_string();
+    }
+    if f.fract() == 0.0 && f.abs() < 9.007_199_254_740_992e15 {
+        return format!("#{}", f as i64);
+    }
+    format!("#{}", python_float_repr(f))
 }
 
 /// The parsed filter specs of a `{% filter %}` block, back as the `f1|f2:arg`
@@ -1960,10 +2088,34 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
             let literal = django_literal(var_name);
             let literal_safe = literal.as_ref().is_some_and(|(_, safe)| *safe);
+            // Captured BEFORE the move below: a literal is never a failed
+            // lookup, so `string_if_invalid` must not fire for one.
+            let was_literal = literal.is_some();
             let mut value = match literal {
                 Some((value, _)) => value,
                 None => context.resolve(var_name)?.unwrap_or(Value::Missing),
             };
+
+            // Django's `string_if_invalid` (#2517). A NON-empty setting is
+            // returned for a failed lookup and RETURNS — the filter chain
+            // never runs, which is why `{{ missing|default:"Foo" }}` renders
+            // the invalid marker rather than `Foo`. A literal is never a
+            // failed lookup, so it is excluded.
+            if matches!(value, Value::Missing) && !was_literal {
+                if let Some(marker) = context.string_if_invalid_for(var_name) {
+                    // Emitted through the same escape decision the arm's tail
+                    // makes: Django puts the marker through
+                    // `render_value_in_context`, which applies
+                    // `conditional_escape` like any other value.
+                    return Ok(if !context.autoescape() {
+                        marker
+                    } else if *in_attr {
+                        filters::html_escape_attr(&marker)
+                    } else {
+                        filters::html_escape(&marker)
+                    });
+                }
+            }
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -2425,6 +2577,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
                     let mut output = String::new();
                     let mut ctx = context.clone();
+                    // ONE fresh `{% ifchanged %}` frame per EXECUTION of this
+                    // loop, hoisted out of the iteration exactly as Django
+                    // binds one `forloop` dict before iterating. Inside the
+                    // iteration it would reset every item and the tag would
+                    // report "changed" forever; outside the loop entirely, an
+                    // inner loop re-entered by an outer one would wrongly keep
+                    // the previous pass's comparison.
+                    ctx.begin_loop_scope();
 
                     // The SUBTREE half of `Context::bind`, hoisted out of the
                     // iteration (#2361/#2363). Every iteration binds the same
@@ -2978,8 +3138,31 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         } => {
             // Load and render the included template
             if let Some(loader) = loader {
-                // Remove quotes from template name if present
-                let name = template.trim_matches(|c| c == '"' || c == '\'');
+                // Django's `{% include %}` operand is a FilterExpression, so
+                // an unquoted token is a context lookup, not a filename
+                // (#2517): `{% include template_name %}` renders the template
+                // NAMED BY `template_name`. Treating it literally is why that
+                // form reported `Template not found: template_name` — the
+                // variable's own spelling, which is the tell.
+                //
+                // A missing/blank resolution falls back to the raw token so
+                // the error still names what the author wrote rather than an
+                // empty string.
+                let resolved;
+                let name = if is_quoted_literal(template) {
+                    template.trim_matches(|c| c == '"' || c == '\'')
+                } else {
+                    let (value, _) = get_value_safe_ignoring_failures(template.trim(), context)?;
+                    resolved = match value {
+                        Value::Missing | Value::None => String::new(),
+                        other => other.to_string(),
+                    };
+                    if resolved.is_empty() {
+                        template.trim_matches(|c| c == '"' || c == '\'')
+                    } else {
+                        resolved.as_str()
+                    }
+                };
                 // Use the CACHED loader method (#2074) so the parsed body's
                 // allocation is STABLE across renders — the `{% for %}`
                 // loop-render cache (#2067) keys each For-node's body by
@@ -2990,6 +3173,33 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // owned, mutable `Vec<Node>` for block-merging and has no
                 // per-render identity requirement.
                 let nodes = loader.load_template_cached(name)?;
+
+                // An included template may itself `{% extends %}` — Django
+                // renders it as a template in its own right, so its inheritance
+                // chain resolves before its body does. Rendering the raw nodes
+                // instead reached the `Node::Extends` arm, whose whole job is to
+                // say "this should have been handled at template level", so
+                // `{% include %}` of an extending template RAISED (#2531).
+                //
+                // Resolved here rather than in the loader: the chain needs the
+                // render context (a variable parent name) and the loader is
+                // also the parse cache, which is shared across renders.
+                let resolved_nodes;
+                let nodes: std::sync::Arc<[Node]> =
+                    if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
+                        let chain = crate::inheritance::build_inheritance_chain_from(
+                            nodes.to_vec(),
+                            loader,
+                            10,
+                            Some(name),
+                            Some(context),
+                        )?;
+                        let root = chain.get_root_nodes().to_vec();
+                        resolved_nodes = chain.apply_block_overrides(&root);
+                        std::sync::Arc::from(resolved_nodes.as_slice())
+                    } else {
+                        nodes
+                    };
 
                 // Create context for included template
                 let mut include_context = if *only {
@@ -3010,6 +3220,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // `render_context`, so a `{% cycle %}` in an `only`
                     // include advances the parent render's iterator (#2556).
                     fresh.share_cycle_state_from(context);
+                    // `{% ifchanged %}` state is deliberately NOT shared here.
+                    // A first pass shared it "for symmetry with `{% cycle %}`";
+                    // measured against Django, an `{% ifchanged %}` in an
+                    // `only` include starts CLEAN each render (`CCC`, where a
+                    // shared frame gives `Css`) because `Template.render`
+                    // pushes a fresh `render_context` state for the included
+                    // template. The fresh `Context` built here already has an
+                    // empty store, so the parity is the absence of a call.
+                    // (A PLAIN include shares, via the `context.clone()` in the
+                    // other branch — and Django agrees there. Both measured.)
                     fresh
                 } else {
                     // Start with parent context
@@ -3374,6 +3594,71 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // {% resetcycle [name] %} → `CycleNode.reset(context)`, "" (#2556).
             context.cycle_reset(id);
             Ok(String::new())
+        }
+
+        Node::BlockSuperScope { super_nodes, nodes } => {
+            // `{{ block.super }}` — Django's `BlockNode.super()` (#2517).
+            //
+            // The parent body renders FIRST, into a string bound as
+            // `block.super` for the child body. Django returns that string
+            // `mark_safe`'d (it is rendered template output, already escaped
+            // by whatever produced it), so the binding is marked safe here;
+            // escaping it again would double-escape every parent block.
+            let parent_html = render_nodes_with_loader(super_nodes, context, loader)?;
+            let mut scoped = context.clone();
+            let mut block_obj = indexmap::IndexMap::new();
+            block_obj.insert(
+                djust_core::ObjectKey::from("super"),
+                Value::String(parent_html),
+            );
+            scoped.set("block".to_string(), Value::Object(block_obj));
+            scoped.mark_safe("block.super".to_string());
+            render_nodes_with_loader(nodes, &scoped, loader)
+        }
+
+        Node::IfChanged {
+            vars,
+            id,
+            nodes,
+            else_nodes,
+        } => {
+            // `IfChangedNode.render` (#2517). Two forms, and the difference
+            // is not cosmetic:
+            //
+            //   {% ifchanged %}      compares the RENDERED body
+            //   {% ifchanged a b %}  compares the RESOLVED operands
+            //
+            // The no-operand form must therefore render the body to decide,
+            // and Django then REUSES that string rather than rendering a
+            // second time (`return nodelist_true_output or …`) — a body with
+            // a side effect (`{% cycle %}`, a custom tag) would otherwise
+            // fire twice per iteration.
+            let (compare_to, rendered) = if vars.is_empty() {
+                let body = render_nodes_with_loader(nodes, context, loader)?;
+                (body.clone(), Some(body))
+            } else {
+                // Django resolves with `ignore_failures=True`, so a missing
+                // operand compares as `None` — NOT as `string_if_invalid`,
+                // and not an error. A type tag keeps `1` and `"1"` distinct,
+                // which bare formatting would collapse.
+                let mut parts = Vec::with_capacity(vars.len());
+                for var in vars {
+                    let (value, _) = get_value_safe_ignoring_failures(var.trim(), context)?;
+                    parts.push(ifchanged_key(&value));
+                }
+                (parts.join("\u{1f}"), None)
+            };
+
+            if context.ifchanged_step(id, &compare_to) {
+                match rendered {
+                    Some(body) => Ok(body),
+                    None => render_nodes_with_loader(nodes, context, loader),
+                }
+            } else if else_nodes.is_empty() {
+                Ok(String::new())
+            } else {
+                render_nodes_with_loader(else_nodes, context, loader)
+            }
         }
 
         Node::Now(format) => {

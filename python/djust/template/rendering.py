@@ -85,6 +85,23 @@ class _TemplateSourceWrapper:
 #: it is silent at the lookup layer (rendered empty long before it reaches here),
 #: so listing it only cost the hint. `ImproperlyConfigured` is absent for the
 #: same reason — a setup failure, where the hint is genuinely useful.
+_MISSING_TEMPLATE_RE = re.compile(r"Template not found: (?P<name>[^\n]+)")
+
+
+def _missing_template_name(message: str) -> str | None:
+    """The template name from the engine's "Template not found" error, or None.
+
+    Matched on the message because that is the only channel the Rust error
+    carries today; the engine has ONE producer for this text
+    (`inheritance.rs`), so the coupling is to a single site rather than to a
+    format that varies.
+    """
+    match = _MISSING_TEMPLATE_RE.search(message)
+    if match is None:
+        return None
+    return match.group("name").strip()
+
+
 def _is_user_raised(exc: BaseException) -> bool:
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
@@ -816,13 +833,23 @@ class DjustTemplate:
         Returns:
             Rendered HTML as SafeString
         """
-        # Resolve template inheritance ({% extends %})
-        # This is a temporary workaround until Rust engine supports template loaders
-        try:
-            resolved_template = self._resolve_template_inheritance()
-        except Exception as e:
-            logger.warning("Template inheritance resolution failed: %s", e)
-            resolved_template = self.template_string
+        # `{% extends %}` is resolved by the RUST engine, through the loader
+        # passed below (#2517).
+        #
+        # It used to be flattened here first, by `_resolve_template_inheritance`
+        # — a regex/string-level merge written, in its own words, "until Rust
+        # template engine supports template loaders". That premise is long
+        # obsolete, and running both left two parallel implementations of one
+        # invariant (CLAUDE.md #1646): the string merge strips block wrappers,
+        # so `{{ block.super }}` resolved to nothing and a relative
+        # `{% extends "./x" %}` never reached the code that understands it.
+        # Measured: routing inheritance through the one Rust path moved
+        # Django's own suite by +12 cells and regressed none.
+        #
+        # `_resolve_template_inheritance` is retained and still directly
+        # tested (`python/djust/tests/test_template_inheritance_resolution.py`)
+        # — it is simply no longer on the render path.
+        resolved_template = self.template_string
 
         # Convert context to dict
         if context is None:
@@ -977,6 +1004,11 @@ class DjustTemplate:
                     template_dirs,
                     safe_keys or None,
                     auto_call,
+                    getattr(self.backend, "string_if_invalid", "") or None,
+                    # This template's own name, for relative `{% extends %}`
+                    # (#2517). `Origin.template_name` is what Django's
+                    # `construct_relative_path` reads.
+                    getattr(self.origin, "template_name", None) if self.origin else None,
                 )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.
@@ -1002,6 +1034,20 @@ class DjustTemplate:
             # hint, which is what it was written for.
             if _is_user_raised(e):
                 raise
+
+            # A missing `{% extends %}` / `{% include %}` target is Django's
+            # `TemplateDoesNotExist`, not a bare `Exception` (#2517). Callers
+            # dispatch on the TYPE — Django's own `{% include %}` tests assert
+            # `assertRaises(TemplateDoesNotExist)`, and the loader chain
+            # catches it to try the next loader — so re-wrapping it lost both
+            # behaviours. The engine reports the name it could not resolve;
+            # that name is what Django puts on the exception.
+            missing = _missing_template_name(str(e))
+            if missing is not None:
+                from django.template import TemplateDoesNotExist
+
+                raise TemplateDoesNotExist(missing) from e
+
             # Provide helpful error message with template location
             origin_info = f" (from {self.origin.name})" if self.origin else ""
 

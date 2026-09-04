@@ -2088,11 +2088,12 @@ fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (template_source, context, auto_call=None))]
+#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None))]
 fn render_template(
     template_source: String,
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
+    string_if_invalid: Option<String>,
 ) -> PyResult<String> {
     guard_panic("render_template", move || {
         // Inside the closure, not before it (PR #2514 review, finding 4):
@@ -2118,6 +2119,11 @@ fn render_template(
         // function directly should get; `DjustTemplate.render` passes the
         // project's `LIVEVIEW_CONFIG['template_auto_call']`.
         ctx.set_auto_call(auto_call.unwrap_or(true));
+        // Django's `Engine.string_if_invalid` (#2517). `None`/absent keeps the
+        // default empty string, which renders nothing for a missing variable.
+        if let Some(marker) = string_if_invalid.as_deref() {
+            ctx.set_string_if_invalid(marker);
+        }
         // Plain entry, no VDOM: the `<!--dj-if-->` placeholder (#295) and the
         // boundary pair (#1358) are framework-internal metadata for LiveView
         // diffing, not user-visible HTML. Switch them off at render time
@@ -2212,13 +2218,15 @@ fn template_cache_contains(template_source: &str) -> bool {
 /// # Returns
 /// The rendered HTML string
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
     template_dirs: Vec<String>,
     safe_keys: Option<Vec<String>>,
     auto_call: Option<bool>,
+    string_if_invalid: Option<String>,
+    template_name: Option<String>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2241,6 +2249,11 @@ fn render_template_with_dirs(
         let mut ctx = Context::from_dict(state);
         // See `render_template` for why `None` means ON.
         ctx.set_auto_call(auto_call.unwrap_or(true));
+        // Django's `Engine.string_if_invalid` (#2517). `None`/absent keeps the
+        // default empty string, which renders nothing for a missing variable.
+        if let Some(marker) = string_if_invalid.as_deref() {
+            ctx.set_string_if_invalid(marker);
+        }
         // Plain entry (the `DjustTemplateBackend` and `SimpleLiveView` path):
         // no `<!--dj-if-->` markers — see `render_template` (#2519).
         ctx.set_emit_dj_if_markers(false);
@@ -2258,7 +2271,9 @@ fn render_template_with_dirs(
         let loader = FilesystemTemplateLoader::new(dirs);
 
         // Render with the loader to support {% include %} tags
-        Ok(template_arc.render_with_loader(&ctx, &loader)?)
+        // The template's own name is what a relative `{% extends "./x" %}`
+        // resolves against (#2517); `None` leaves such a name unchanged.
+        Ok(template_arc.render_with_loader_named(&ctx, &loader, template_name.as_deref())?)
     })
 }
 

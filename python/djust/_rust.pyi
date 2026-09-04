@@ -18,6 +18,7 @@ def render_template(
     template_source: str,
     context: Dict[str, Any],
     auto_call: Optional[bool] = None,
+    string_if_invalid: Optional[str] = None,
 ) -> str:
     """
     Render a template string with the given context.
@@ -36,6 +37,10 @@ def render_template(
             sidecar (ADR-024). ``None`` means ON, which is Django's behaviour;
             ``DjustTemplate.render`` passes the project's
             ``LIVEVIEW_CONFIG['template_auto_call']``.
+        string_if_invalid: Django's ``Engine.string_if_invalid`` — what a
+            MISSING variable renders. ``None``/absent means the empty string
+            (render nothing). A non-empty value also SKIPS the filter chain,
+            which is Django's own control flow.
 
     Returns:
         The rendered HTML string
@@ -75,6 +80,8 @@ def render_template_with_dirs(
     template_dirs: List[str],
     safe_keys: Optional[List[str]] = None,
     auto_call: Optional[bool] = None,
+    string_if_invalid: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
@@ -88,6 +95,11 @@ def render_template_with_dirs(
         template_dirs: List of directories to search for included templates
         safe_keys: Optional list of context keys to mark as safe (skip auto-escaping)
         auto_call: see ``render_template``. ``None`` means ON.
+        string_if_invalid: see ``render_template``.
+        template_name: this template's own name, which a relative
+            ``{% extends "./parent.html" %}`` resolves against (Django's
+            ``construct_relative_path``). ``None`` leaves such a target
+            unchanged.
 
     Returns:
         The rendered HTML string

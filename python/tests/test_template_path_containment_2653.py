@@ -4,7 +4,11 @@
 containment check. Django's loaders get that check from `safe_join`, which
 raises `SuspiciousFileOperation` and makes the loader skip the directory.
 
-On this branch the operand is a LITERAL — `{% include %}` and `{% extends %}`
+The literal operand is one reachability path; the other is DATA — see
+`test_a_context_supplied_name_cannot_escape` at the bottom, added with the
+feature that made it reachable.
+
+On main when this guard landed the operand was a LITERAL — `{% include %}` and `{% extends %}`
 use the token as written — so the sink is reached by a template AUTHOR, not by
 request data. That still matters wherever template authorship is not fully
 trusted (a CMS with user-editable templates, multi-tenant hosting): the engine
@@ -116,3 +120,42 @@ def test_a_directory_is_not_a_template(tree: pathlib.Path) -> None:
     (tree / "adir.html").mkdir()
     with pytest.raises(Exception, match="not found|Template"):
         _render(tree, "adir.html")
+
+
+# ---------------------------------------------------------------------------
+# The DATA-reachable path (#2517): `{% include %}` / `{% extends %}` resolve an
+# unquoted operand against the render context, which is what turns the loader's
+# containment from a template-author concern into a request-data one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", _ESCAPES)
+def test_a_context_supplied_name_cannot_escape(tree: pathlib.Path, name: str) -> None:
+    """The reason the guard had to land before the dynamic-name feature.
+
+    Measured before it: `{% include t %}` with `t = "../../SECRET.txt"`
+    rendered the file's contents. Django answers `TemplateDoesNotExist` for the
+    same input.
+    """
+    try:
+        out = _rust.render_template_with_dirs("{% include t %}", {"t": name}, [str(tree)])
+    except Exception as exc:  # noqa: BLE001 — any refusal is acceptable
+        assert "TOP-SECRET" not in str(exc), f"{name} leaked through the error"
+        return
+    assert "TOP-SECRET" not in out, f"{name} leaked the file contents"
+
+
+@pytest.mark.parametrize("name", _ESCAPES)
+def test_a_context_supplied_extends_target_cannot_escape(tree: pathlib.Path, name: str) -> None:
+    try:
+        out = _rust.render_template_with_dirs("{% extends t %}", {"t": name}, [str(tree)])
+    except Exception as exc:  # noqa: BLE001
+        assert "TOP-SECRET" not in str(exc), f"{name} leaked through the error"
+        return
+    assert "TOP-SECRET" not in out, f"{name} leaked the file contents"
+
+
+def test_a_context_supplied_name_still_resolves_inside(tree: pathlib.Path) -> None:
+    """Non-vacuity for the two tests above: the dynamic path DOES work."""
+    out = _rust.render_template_with_dirs("{% include t %}", {"t": "sub/ok.html"}, [str(tree)])
+    assert out.strip() == "SUB-OK"

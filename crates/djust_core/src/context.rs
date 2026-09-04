@@ -237,6 +237,48 @@ pub struct Context {
     /// so two `{% include %}`s of one template share a node's state exactly
     /// as Django's cached `Template` shares its `CycleNode` objects.
     cycle_state: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    /// Per-RENDER state for `{% ifchanged %}`: `"<loop scope>|<node id>" ->
+    /// the last compared value`. Django keeps this in the frame returned by
+    /// `IfChangedNode._get_context_stack_frame` — `context["forloop"]` when
+    /// inside a loop, else `context.render_context` — keyed by the node.
+    ///
+    /// The loop term is what makes the state RESET when an enclosing loop
+    /// continues: Django's `ForNode.render` binds ONE fresh `forloop` dict
+    /// per execution of the loop, so an inner `{% ifchanged %}` starts clean
+    /// each time the outer loop re-enters it, while iterations of the SAME
+    /// loop share it. `loop_scope` is that dict's identity, minted per loop
+    /// execution from `loop_scope_counter`.
+    ///
+    /// Shared through the same `Arc` as `cycle_state` and for the same
+    /// reason (`Context.__copy__` shallow-copies `render_context`).
+    ifchanged_state: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Identity of the innermost `{% for %}` execution, or `0` outside any
+    /// loop (Django's `render_context` frame). Cloned BY VALUE — a derived
+    /// context inherits the loop it sits in — and replaced only by
+    /// `begin_loop_scope`.
+    loop_scope: u64,
+    /// Mints `loop_scope` values. Shared like `cycle_state` so two sibling
+    /// loops in one render can never collide on an id.
+    loop_scope_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Django's `Engine.string_if_invalid` — what `{{ missing }}` renders.
+    ///
+    /// Empty (the default, and Django's) means "render nothing". A NON-empty
+    /// value is returned for a failed lookup and the filter chain is SKIPPED,
+    /// which is Django's own control flow in `FilterExpression.resolve`
+    /// (fenced as `text`: an indented block in a doc comment is compiled as a
+    /// Rust doctest, and this is Python):
+    ///
+    /// ```text
+    /// if string_if_invalid:
+    ///     if "%s" in string_if_invalid:
+    ///         return string_if_invalid % self.var
+    ///     return string_if_invalid          # <- returns; no filters
+    /// ```
+    ///
+    /// That is why `{{ missing|default:"Foo" }}` renders `INVALID` and not
+    /// `Foo` under a configured `string_if_invalid`. Carried on the render
+    /// (not the parsed template) for the same reason as `autoescape`.
+    string_if_invalid: String,
 }
 
 impl Default for Context {
@@ -261,6 +303,14 @@ impl Clone for Context {
             // `render_context`, so a `{% for %}` / `{% with %}` clone
             // advances the same `{% cycle %}` iterators as its parent.
             cycle_state: std::sync::Arc::clone(&self.cycle_state),
+            // SHARED / inherited for the same reason as `cycle_state`: a
+            // `{% for %}` or `{% with %}` clone must see the same
+            // `{% ifchanged %}` frame its parent does. `loop_scope` copies by
+            // value so the clone stays in the loop it was made in.
+            ifchanged_state: std::sync::Arc::clone(&self.ifchanged_state),
+            loop_scope: self.loop_scope,
+            loop_scope_counter: std::sync::Arc::clone(&self.loop_scope_counter),
+            string_if_invalid: self.string_if_invalid.clone(),
         }
     }
 }
@@ -321,6 +371,10 @@ impl Context {
             emit_dj_if_markers: true,
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
+            ifchanged_state: std::sync::Arc::default(),
+            loop_scope: 0,
+            loop_scope_counter: std::sync::Arc::default(),
+            string_if_invalid: String::new(),
         }
     }
 
@@ -342,6 +396,10 @@ impl Context {
             emit_dj_if_markers: true,
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
+            ifchanged_state: std::sync::Arc::default(),
+            loop_scope: 0,
+            loop_scope_counter: std::sync::Arc::default(),
+            string_if_invalid: String::new(),
         }
     }
 
@@ -411,6 +469,64 @@ impl Context {
     /// `render_context` is still the same object there (`cycle24`).
     pub fn share_cycle_state_from(&mut self, other: &Context) {
         self.cycle_state = std::sync::Arc::clone(&other.cycle_state);
+    }
+
+    /// Enter a new `{% for %}` execution: mint a fresh `{% ifchanged %}`
+    /// frame identity for the loop body. Django gets this for free by
+    /// binding a new `forloop` dict per `ForNode.render`; this is that dict's
+    /// identity. Call ONCE per loop execution, on the context the body
+    /// renders through — not per iteration, which would reset the state the
+    /// tag exists to carry across iterations.
+    pub fn begin_loop_scope(&mut self) {
+        self.loop_scope = self
+            .loop_scope_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+    }
+
+    /// Set Django's `string_if_invalid` for this render.
+    pub fn set_string_if_invalid(&mut self, value: impl Into<String>) {
+        self.string_if_invalid = value.into();
+    }
+
+    /// `string_if_invalid` with Django's `%s` substitution already applied for
+    /// `var_name`, or `None` when it is empty (render nothing, the default).
+    pub fn string_if_invalid_for(&self, var_name: &str) -> Option<String> {
+        if self.string_if_invalid.is_empty() {
+            return None;
+        }
+        Some(if self.string_if_invalid.contains("%s") {
+            self.string_if_invalid.replace("%s", var_name)
+        } else {
+            self.string_if_invalid.clone()
+        })
+    }
+
+    /// The innermost loop-execution identity (`0` outside any loop).
+    pub fn loop_scope(&self) -> u64 {
+        self.loop_scope
+    }
+
+    /// `IfChangedNode.render`'s state check: has `value` changed since this
+    /// node last ran in the current frame?
+    ///
+    /// Returns `true` — render the true branch — when the node has not run
+    /// in this frame yet (Django's `setdefault(self)` leaves `None`, which no
+    /// resolved value equals) or when `value` differs from the stored one,
+    /// and stores `value` in that case. Returns `false` when unchanged.
+    pub fn ifchanged_step(&self, id: &str, value: &str) -> bool {
+        let key = format!("{}|{}", self.loop_scope, id);
+        let mut state = self
+            .ifchanged_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match state.get(&key) {
+            Some(previous) if previous == value => false,
+            _ => {
+                state.insert(key, value.to_string());
+                true
+            }
+        }
     }
 
     /// Attach a map of raw Python objects for `getattr`-fallback

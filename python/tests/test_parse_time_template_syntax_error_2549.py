@@ -143,9 +143,14 @@ class TestConstructionTimeRefusal:
     def test_message_is_the_engine_text_unchanged(self, backend):
         """Published contract: the same bytes the render path raised with."""
         with pytest.raises(DjustTemplateSyntaxError) as info:
-            backend.from_string("{% ifchanged %}x{% endifchanged %}")
+            # An unregistered tag. This used to be a REAL Django tag djust
+            # did not implement — `ifchanged` until #2517, `cache` until its
+            # library row — but no Django tag is refused any more, so what is
+            # pinned here is the message for a tag nothing registers, which is
+            # the same published text.
+            backend.from_string("{% zzz_not_a_tag %}")
         assert str(info.value) == (
-            "Template error: Unsupported template tag '{% ifchanged %}'. "
+            "Template error: Unsupported template tag '{% zzz_not_a_tag %}'. "
             "Register a handler via djust._rust.register_tag_handler(), "
             "or use Django's template engine instead."
         )

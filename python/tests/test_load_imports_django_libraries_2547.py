@@ -454,11 +454,34 @@ def test_a_library_with_one_raw_block_tag_still_bridges_its_other_entries(path):
         RENDER[path]("{% load lib2547_rawblock %}{% wrapblock2547 %}y{% endwrapblock2547 %}", CTX)
 
 
-def test_djangos_own_libraries_resolve_but_are_not_bridged():
-    """`{% load static %}` keeps parsing (separate rows own its tags) and
-    registers nothing here."""
-    assert plain_render("{% load static %}x-2547", {}) == "x-2547"
-    assert not any(label == "static" for label in template_libraries.owned_tags().values())
+def test_djangos_own_libraries_are_all_bridged_now():
+    """Every Django template library is bridged as of #2517.
+
+    ``static`` and ``cache`` were the last two this test asserted UNBRIDGED —
+    ``static`` for the prefix tags, ``cache`` for the tag itself — so the
+    assertion is inverted and kept: the day a Django library stops being
+    bridged, the check below fails and names it.
+    """
+    assert plain_render("{% load cache %}x-2547", {}) == "x-2547"
+    owned = template_libraries.owned_tags()
+    assert owned.get("cache") == "cache", "the cache library must be bridged"
+
+
+def test_static_library_is_bridged_but_the_native_static_tag_survives():
+    """#2517: bridging ``static`` must add the prefix tags WITHOUT letting the
+    library's own ``{% static %}`` displace the native Rust one.
+
+    The collision policy in ``_may_override`` cannot catch that on its own —
+    it consults the handler REGISTRIES, and a native parser tag is in none of
+    them — so the skip is explicit. Gate it off and ``static`` appears in
+    ``owned_tags()``.
+    """
+    # Bridging happens at PARSE time, when `{% load %}` runs — ask only after.
+    assert plain_render("{% load static %}{% get_static_prefix %}", {}) is not None
+    owned = template_libraries.owned_tags()
+    assert owned.get("get_static_prefix") == "static"
+    assert owned.get("get_media_prefix") == "static"
+    assert "static" not in owned
 
 
 # ---------------------------------------------------------------------------
