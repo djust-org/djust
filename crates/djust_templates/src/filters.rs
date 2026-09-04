@@ -1646,8 +1646,17 @@ fn apply_builtin_filter(
                 .to_string()
             });
             let format_str = resolved_format.as_str();
+            if matches!(value, Value::Encoded(encoded) if encoded.type_name == "datetime.date") {
+                if let Some(code) = first_time_code(format_str) {
+                    return Some(Err(DjangoRustError::PythonException(
+                        pyo3::exceptions::PyTypeError::new_err(format!(
+                            "The format for date objects may not contain time-related format specifiers (found '{code}')."
+                        )),
+                    )));
+                }
+            }
             let datetime_str = value.to_string();
-            match format_date(&datetime_str, format_str) {
+            match format_date(&datetime_str, format_str, value) {
                 Ok(formatted) => Ok(Value::String(formatted)),
                 Err(e) => {
                     // #1090: surface silent parse failures so template authors
@@ -1668,9 +1677,8 @@ fn apply_builtin_filter(
                     // int, a list or a dict. Django's answer is usually `""`
                     // and is not ALWAYS: see `django_literal_only_format`.
                     // The djust EXTENSION is untouched — a value that parses
-                    // still formats, which is not optional, because a Python
-                    // `date` reaches this renderer as its ISO string
-                    // (`Value` has no date variant).
+                    // still formats. Encoded Python temporal values additionally
+                    // retain their type and timezone metadata.
                     Ok(Value::String(django_literal_only_format(value, format_str)))
                 }
             }
@@ -1704,7 +1712,7 @@ fn apply_builtin_filter(
             });
             let format_str = resolved_format.as_str();
             let datetime_str = value.to_string();
-            match format_time(&datetime_str, format_str) {
+            match format_time(&datetime_str, format_str, value) {
                 Ok(formatted) => Ok(Value::String(formatted)),
                 Err(e) => {
                     // #1090: see |date filter — same parse-failure surface,
@@ -3028,6 +3036,10 @@ fn parse_serialized_datetime(
         ));
     }
     if allow_time_only {
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("1970-01-01T{}", datetime_str.trim()))
+        {
+            return Some((dt, true, true));
+        }
         // Time-only (#2216). Anchored on an arbitrary epoch date so the
         // `Timelike` accessors work unchanged; `time_only` is what stops that
         // borrowed date from ever being rendered -- and why the duration
@@ -3707,15 +3719,26 @@ fn apply_active_timezone(
 ) -> Stamped {
     use chrono::TimeZone;
 
+    // A time has no date on which to determine timezone offsets or DST.
+    // Django leaves its wall clock unchanged and its zone fields empty.
+    if time_only {
+        return Stamped {
+            dt,
+            abbrev: None,
+            aware: false,
+            timestamp: dt.timestamp(),
+            time_only,
+        };
+    }
+
     let Some(tz) = crate::timezone::active_timezone() else {
         // No active zone: `USE_TZ = False`, `{% localtime off %}` (#2558), or
         // this crate embedded without Django settings. The wall clock is
         // formatted as it arrived (pre-#2209 behaviour). An AWARE value still
         // names its own zone for `T`/`e`, as Django's `tzname()` does when no
-        // conversion happens: the wire carries only the offset (#2216), so
-        // the name is the one `datetime.timezone` gives that offset — `UTC`,
-        // or `UTC+02:00` — and a `ZoneInfo` value's `CEST` is the documented
-        // residue. A naive value keeps reporting nothing, as before.
+        // conversion happens. Serialized strings use the fixed-offset name;
+        // format_date restores an encoded Python object's original tzname.
+        // A naive value keeps reporting nothing, as before.
         return Stamped {
             dt,
             abbrev: if aware {
@@ -3971,6 +3994,16 @@ fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     out
 }
 
+fn first_time_code(format_str: &str) -> Option<char> {
+    const TIME_CODES: &str = "aAefgGhHiOPsTuZ";
+    let mut previous = None;
+    format_str.chars().find(|&ch| {
+        let is_code = previous != Some('\\') && TIME_CODES.contains(ch);
+        previous = Some(ch);
+        is_code
+    })
+}
+
 fn format_has_date_code(format_str: &str) -> bool {
     const DATE_ONLY: &[char] = &[
         'b', 'd', 'D', 'E', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W',
@@ -3989,7 +4022,14 @@ fn format_has_date_code(format_str: &str) -> bool {
     false
 }
 
-fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
+fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result<String> {
+    // Date objects have no time fields. Keep support for serialized date
+    // strings, but retain Python's refusal for a real datetime.date value.
+    if matches!(original, Value::Encoded(encoded) if encoded.type_name == "datetime.date")
+        && first_time_code(format_str).is_some()
+    {
+        return Ok(String::new());
+    }
     // Tracks whether the input carried a UTC offset. Set by the naive branches
     // below; the RFC3339 branch leaves it true. The distinction survives all
     // the way to `apply_active_timezone` because Django applies `localtime` to
@@ -4005,7 +4045,18 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
 
     // #2209: everything above produced a wall clock in whatever offset arrived.
     // Django would have run `timezone.localtime()` by now.
-    let stamped = apply_active_timezone(dt, aware, time_only);
+    let mut stamped = apply_active_timezone(dt, aware, time_only);
+    // No conversion occurred: use the object's real name instead of
+    // inventing datetime.timezone's default name from its numeric offset.
+    if aware && !time_only && crate::timezone::active_timezone().is_none() {
+        if let Value::Encoded(encoded) = original {
+            if let Some(Value::String(name)) =
+                encoded.attrs.get(&djust_core::ObjectKey::from("tzname"))
+            {
+                stamped.abbrev = Some(name.clone());
+            }
+        }
+    }
     let dt = stamped.dt;
 
     // #2216: a bare time has no date, so Django's `TimeFormat` has no attribute
@@ -4236,9 +4287,8 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     Ok(result)
 }
 
-fn format_time(datetime_str: &str, format_str: &str) -> Result<String> {
-    // Reuse format_date but focused on time formatting
-    format_date(datetime_str, format_str)
+fn format_time(datetime_str: &str, format_str: &str, original: &Value) -> Result<String> {
+    format_date(datetime_str, format_str, original)
 }
 
 fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {

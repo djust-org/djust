@@ -181,7 +181,17 @@ class TestTheTwoPathsAgree:
     ) -> None:
         value = FAMILY[value_name]
         source = TEMPLATES[tpl_name]
-        assert _raw_render(source, value) == _liveview_render(source, value), (
+        try:
+            raw = _raw_render(source, value)
+        except TypeError as error:
+            # Both paths must preserve Django's refusal of time codes on dates.
+            with pytest.raises(TypeError) as django_error:
+                DjangoTemplate(source).render(DjangoContext({"p": value}))
+            with pytest.raises(TypeError) as liveview_error:
+                _liveview_render(source, value)
+            assert str(error) == str(django_error.value) == str(liveview_error.value)
+            return
+        assert raw == _liveview_render(source, value), (
             f"the two djust paths disagree for {value_name} through {tpl_name!r} — "
             "which is #2467 reopening"
         )

@@ -1,0 +1,1 @@
+- **Date/time filters preserve Python temporal metadata.** Preserve original timezone names when date/time filters render without conversion, accept timezone-aware time values without exposing timezone fields, and retain Django's date-object restrictions (including TypeError from the date filter). Django 5.2.16 template conformance rises from 975 to 979 of 1047 exercised tests.

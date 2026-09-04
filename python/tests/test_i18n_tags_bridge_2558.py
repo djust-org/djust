@@ -866,9 +866,7 @@ def test_localtime_on_under_use_tz_false_is_a_named_divergence():
 
 def test_localtime_off_names_the_values_own_zone():
     """Plan §4.3: inside ``localtime off`` an aware value is NOT converted and
-    ``T`` names its own zone — ``UTC`` / ``UTC+02:00`` for a fixed offset
-    (Python's ``datetime.timezone``); a ``ZoneInfo`` value's ``CEST`` is the
-    #2216 wire residue and is declared, not silent."""
+    ``T`` names its own zone, including names preserved from ZoneInfo."""
     fixed = datetime.datetime(
         2011, 9, 1, 13, 20, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
     )
@@ -877,7 +875,8 @@ def test_localtime_off_names_the_values_own_zone():
         assert plain_render(source, {"d": d}) == django_render(source, {"d": d})
     zone = datetime.datetime(2011, 9, 1, 13, 20, tzinfo=zoneinfo.ZoneInfo("Europe/Paris"))
     assert django_render(source, {"d": zone}) == "13:20 CEST CEST +0200"
-    assert plain_render(source, {"d": zone}) == "13:20 UTC+02:00 UTC+02:00 +0200"
+    assert plain_render(source, {"d": zone}) == django_render(source, {"d": zone})
+    assert liveview_render(source, {"d": zone}) == django_render(source, {"d": zone})
 
 
 def test_localize_off_under_de_with_thousand_separator():
