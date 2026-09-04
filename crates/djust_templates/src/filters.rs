@@ -66,6 +66,8 @@ macro_rules! int_arg {
 /// have taken `apply_builtin_filter` past clippy's argument limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArgType {
+    /// Whether the argument is a quoted literal or a context-marked safe value.
+    pub is_safe: bool,
     /// `int(arg)` would be a **TypeError** rather than a ValueError (#2366).
     /// See [`int_arg_is_type_error`] for how the line is drawn and for the half
     /// the PyO3 extraction boundary has already erased.
@@ -839,6 +841,8 @@ pub fn apply_filter_full_safe(
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
     let arg_type = ArgType {
+        is_safe: arg_was_quoted
+            || context.is_some_and(|ctx| arg.is_some_and(|name| ctx.is_safe(name))),
         int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
         is_none: arg_is_python_none(resolved_type.as_ref()),
         // `arg`, not `builtin_arg`: on the resolved channel the `Value` above
@@ -1260,11 +1264,12 @@ fn apply_builtin_filter(
         // escape here to land on the same bytes (#2274).
         "join" => {
             let raw_sep = arg.unwrap_or(", ");
-            // `conditional_escape(arg)`: a template LITERAL is already safe.
+            // `conditional_escape(arg)`: literals and marked context values
+            // both retain the separator's own safety.
             // Under `{% autoescape off %}` Django takes the other branch —
             // `arg.join(value)` — and neither the items nor the separator
             // are escaped (#2556, `test_join_autoescape_off`).
-            let separator = if arg_was_quoted || !autoescape {
+            let separator = if arg_type.is_safe || !autoescape {
                 raw_sep.to_string()
             } else {
                 html_escape(raw_sep)

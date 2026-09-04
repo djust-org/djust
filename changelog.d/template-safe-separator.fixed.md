@@ -1,0 +1,1 @@
+- **The join filter preserves a marked-safe separator.** Literal, aliased, loop-bound, and dotted separators retain their own safety while ordinary separators and list items still escape. Django 5.2.16 conformance improves to 982 of 1047 exercised tests.
