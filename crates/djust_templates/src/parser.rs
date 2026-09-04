@@ -1262,6 +1262,16 @@ fn parse_token_inner(
                 }
 
                 "static" => {
+                    // Python-backed renders use Django's own compiler and
+                    // node, including expression and as-variable semantics.
+                    // Retain the native node for standalone Rust callers.
+                    if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        return Ok(Some(Node::CustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }));
+                    }
                     // {% static 'path/to/file' %} - generates static file URL.
                     // Django's `defaulttags.static`: "'static' takes at
                     // least one argument (path to file)" (#2581). Note
@@ -1659,6 +1669,16 @@ fn parse_token_inner(
                 }
 
                 "now" => {
+                    // Python-backed renders use Django's own compiler and
+                    // node, including expression and as-variable semantics.
+                    // Retain the native node for standalone Rust callers.
+                    if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        return Ok(Some(Node::CustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }));
+                    }
                     // {% now "format_string" %}. Django's `now` also
                     // accepts `{% now "fmt" as var %}` (`defaulttags.py`)
                     // and requires len(bits) == 2 after stripping that

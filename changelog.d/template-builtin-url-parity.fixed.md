@@ -1,0 +1,2 @@
+- **Django built-in tags and errors:** Render `static` and `now` through Django's registered tag implementations, including storage URLs, escaping, localization, assignments, and compile-time validation. Preserve Django's exception types for loop unpacking and invalid `widthratio` arguments.
+- **URL filter quoting:** Match Django URL component and query quoting in `urlize` and `urlizetrunc`, including HTML entities, Unicode, and encoded separators. Django conformance improves from 927 to 945 of 1,047 engine tests without status regressions.

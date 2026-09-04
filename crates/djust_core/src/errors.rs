@@ -109,8 +109,8 @@ impl DjangoRustError {
         }
     }
 
-    /// Attach `span` to a plain [`Self::TemplateError`], leaving every other
-    /// variant — an already-located error included — untouched (#2557).
+    /// Locate a template error or a carried Python exception, preserving
+    /// an existing location and leaving unrelated error variants untouched.
     ///
     /// The "already-located wins" rule is what makes the INNERMOST enclosing
     /// token the one reported: the deepest `parse_token` frame attaches first

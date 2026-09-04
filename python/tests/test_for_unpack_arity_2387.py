@@ -29,13 +29,10 @@ djust bound the whole item to the first name and ``Missing`` to the rest, so
 the dict case rendered the dict's own repr into ``{{ a }}``. The arity check
 alone would have left both wrong, because both PASS it.
 
-What is deliberately not closed
--------------------------------
-The exception TYPE. Django raises ``ValueError``; every djust render error
-crosses the PyO3 boundary as ``RuntimeError`` (see ``DjangoRustError``'s
-own docstring, which says so for the ``VariableDoesNotExist`` variant). The
-MESSAGE is Django's verbatim, trailing space and all, and both engines refuse
-the render — which is the property the issue is about.
+Exception parity
+----------------
+Both engines raise ValueError with Django's message, including its trailing
+space. The backend preserves the exception class across the Rust boundary.
 
 Provenance
 ----------
@@ -121,9 +118,8 @@ class TestBothEnginesRefuseAnArityMismatch:
             "the expectation itself is what needs updating"
         )
 
-        # djust refuses too. `RuntimeError`, not `ValueError`: every djust
-        # render error crosses the boundary as one. The message is Django's.
-        with pytest.raises(RuntimeError) as djust_exc:
+        # djust refuses with the same class and message as Django.
+        with pytest.raises(ValueError) as djust_exc:
             djust(tpl, ctx)
         assert str(djust_exc.value).endswith(expected), djust_exc.value
 
@@ -134,7 +130,7 @@ class TestBothEnginesRefuseAnArityMismatch:
         ctx = {"p": [[1, 2], [3, 4], [5]]}
         with pytest.raises(ValueError, match="got 1"):
             django(UNPACK, ctx)
-        with pytest.raises(RuntimeError, match="got 1"):
+        with pytest.raises(ValueError, match="got 1"):
             djust(UNPACK, ctx)
 
 
@@ -164,7 +160,7 @@ class TestAMatchingArityUnpacksByIteration:
         assert assert_agrees(UNPACK, {"p": ["中é"]}) == "[中=é]"
         with pytest.raises(ValueError, match="got 3"):
             django(UNPACK, {"p": ["中éx"]})
-        with pytest.raises(RuntimeError, match="got 3"):
+        with pytest.raises(ValueError, match="got 3"):
             djust(UNPACK, {"p": ["中éx"]})
 
 
@@ -216,7 +212,7 @@ class TestTheLengthRuleIsStatedOnce:
     def test_the_for_unpacks_fallback_is_one(self) -> None:
         """The SAME value counts as 1 in the arity check, not 0 — which is
         why the message reads `got 1`."""
-        with pytest.raises(RuntimeError, match=r"got 1\. "):
+        with pytest.raises(ValueError, match=r"got 1\. "):
             djust(UNPACK, {"p": [5]})
         with pytest.raises(ValueError, match=r"got 1\. "):
             django(UNPACK, {"p": [5]})

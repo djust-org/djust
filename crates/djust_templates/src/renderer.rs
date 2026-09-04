@@ -2818,17 +2818,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             // the region rendered, with the variables empty.
                             let len_item = filters::python_len(&item).unwrap_or(1);
                             if len_item != var_names.len() {
-                                // Django's message verbatim, trailing space and
-                                // all. It crosses to Python as a `RuntimeError`
-                                // rather than Django's `ValueError`, as EVERY
-                                // djust render error does (see
-                                // `DjangoRustError`); what matters is that the
-                                // render is refused rather than silently padded.
-                                return Err(DjangoRustError::TemplateError(format!(
-                                    "Need {} values to unpack in for loop; got {}. ",
-                                    var_names.len(),
-                                    len_item
-                                )));
+                                // Preserve Django's exception class as well
+                                // as its message at the Python boundary.
+                                return Err(DjangoRustError::PythonException(
+                                    pyo3::exceptions::PyValueError::new_err(format!(
+                                        "Need {} values to unpack in for loop; got {}. ",
+                                        var_names.len(),
+                                        len_item
+                                    )),
+                                ));
                             }
                             match &item {
                                 Value::List(tuple_items) | Value::Tuple(tuple_items) => {
@@ -5733,7 +5731,7 @@ fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
 ///   `round(nan)` raises `ValueError`, and Django catches both.
 fn width_ratio(value: &str, max_value: &str, max_width: &str, context: &Context) -> Result<String> {
     let max_w = py_int(&get_value(max_width, context)?).ok_or_else(|| {
-        DjangoRustError::TemplateError("widthratio final argument must be a number".to_string())
+        crate::registry::library_syntax_error("widthratio final argument must be a number")
     })?;
     let (Some(val), Some(max_val)) = (
         get_value(value, context)?.to_f64(),

@@ -6671,6 +6671,24 @@ fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
 
         let matched = m.as_str();
 
+        // Django's simple_url_re requires a word character after the scheme
+        // and optional '['. In particular, http://[::1] remains plain text.
+        if let Some(host) = matched
+            .strip_prefix("http://")
+            .or_else(|| matched.strip_prefix("https://"))
+        {
+            let host = host.strip_prefix('[').unwrap_or(host);
+            if !host
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                result.push_str(&maybe_escape(matched));
+                last_end = m.end();
+                continue;
+            }
+        }
+
         // Determine if this is an email or a URL
         if matched.contains('@') && !matched.starts_with("http") {
             // Email — the href is ALWAYS escaped (attribute context); the
@@ -6688,7 +6706,9 @@ fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
             // Strip trailing punctuation from href/display that's not part of URL
             let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
             // ALWAYS escaped — attribute context, as Django does.
-            let safe_href = html_escape(&href_clean);
+            let decoded_href = crate::htmlparser::unescape(&href_clean);
+            let quoted_href = crate::urlquote::smart_urlquote(&decoded_href);
+            let safe_href = html_escape(&quoted_href);
             let display = maybe_escape(&truncate_url_display(&display_raw, trunc_limit));
             let safe_trailing = maybe_escape(&trailing);
             result.push_str(&format!(
@@ -6713,6 +6733,17 @@ fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, S
     let mut trailing = String::new();
 
     loop {
+        // A semicolon that terminates an HTML entity belongs to the URL.
+        // Strip extra punctuation first, then stop at the entity boundary.
+        if href_s.ends_with(';') {
+            if let Some(amp) = href_s.rfind('&') {
+                let candidate = &href_s[amp..];
+                let decoded = crate::htmlparser::unescape(candidate);
+                if decoded != candidate && !decoded.ends_with(';') {
+                    break;
+                }
+            }
+        }
         if href_s.ends_with(trailing_chars) {
             let c = href_s.pop().unwrap();
             display_s.pop();

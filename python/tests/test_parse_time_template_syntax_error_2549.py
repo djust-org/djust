@@ -158,13 +158,15 @@ class TestConstructionTimeRefusal:
     def test_render_time_failure_is_unchanged(self, backend):
         """``widthratio``'s non-numeric final argument is a RENDER-time error on
         Django (``WidthRatioNode.render``) and stays one here: construction
-        succeeds, render raises the wrapper's bare ``Exception`` as before."""
+        succeeds, render raises Django's ``TemplateSyntaxError``."""
         source = "{% widthratio a b c %}"
         Engine().from_string(source)  # Django constructs it fine
         t = backend.from_string(source)
-        with pytest.raises(Exception, match=r"^Error rendering template: .*widthratio") as info:
+        with pytest.raises(
+            TemplateSyntaxError, match="widthratio final argument must be a number"
+        ) as info:
             t.render({"a": 1, "b": 2, "c": "notanumber"})
-        assert type(info.value) is Exception
+        assert type(info.value) is TemplateSyntaxError
 
 
 class TestPromotedToParseTime:
