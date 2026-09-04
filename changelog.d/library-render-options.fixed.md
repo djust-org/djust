@@ -1,0 +1,1 @@
+- **Template library context:** Honor the active backend's `string_if_invalid` and debug settings when rendering inline Django tags, including `static`. Cached nodes use the current render's settings without leaking them between nested backends.

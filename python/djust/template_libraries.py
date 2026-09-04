@@ -749,9 +749,6 @@ class _StubTemplate:
     origin = None
 
 
-_STUB_TEMPLATE = _StubTemplate()
-
-
 class _LoaderBackend:
     """Django's ``template.loader`` as a backend-shaped object."""
 
@@ -823,7 +820,7 @@ def _render_node(
     # dict lets a node's `context[var] =` write through to it; the copy keeps
     # the node's writes inside the returned `bindings` diff, where they belong.
     ctx = Context(dict(context), autoescape=autoescape)
-    ctx.template = _STUB_TEMPLATE
+    ctx.template = _stub_template_with(*_render_engine_options())
     output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
@@ -965,17 +962,16 @@ class LibraryBlockTagHandler(LibraryTagHandler):
             raise
 
 
-def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
-    """A ``_StubTemplate`` whose engine carries the CURRENT render's
-    ``string_if_invalid`` (#2558).
+def _render_engine_options() -> Tuple[str, bool]:
+    backend = _current_backend.get()
+    return (
+        str(getattr(backend, "string_if_invalid", "") or ""),
+        bool(getattr(backend, "debug", False)),
+    )
 
-    ``BlockTranslateNode.render`` resolves a MISSING placeholder variable to
-    ``context.template.engine.string_if_invalid`` — that is how the suite's
-    i18n34 / invalidstr07 cells render ``INVALID`` under the scoreboard's
-    second engine. The scoreboard's ``DjustEngine`` IS a real Django
-    ``Engine``, so its attribute is read directly; the plain
-    ``DjustTemplateBackend`` does not carry one and contributes ``""``.
-    """
+
+def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
+    """Carry the active backend's variable-resolution and debug settings."""
     engine = _StubEngine()
     engine.string_if_invalid = string_if_invalid
     engine.debug = debug
@@ -1203,13 +1199,7 @@ class LibraryRawBlockTagHandler:
         return node
 
     def _string_if_invalid(self) -> Tuple[str, bool]:
-        backend = _current_backend.get()
-        if backend is None:
-            return "", False
-        return (
-            str(getattr(backend, "string_if_invalid", "") or ""),
-            bool(getattr(backend, "debug", False)),
-        )
+        return _render_engine_options()
 
     #: The same opt-in the inline bridge declares (#2556). `{% blocktranslate %}`
     #: resolves its `%(var)s` placeholders INSIDE `BlockTranslateNode`, against
