@@ -441,14 +441,14 @@ class TestCustomFiltersAreNotArityChecked:
         """
         refused, out = _djust_refused("{{ p|no_such_filter_anywhere }}", {"p": "a"})
         assert refused
-        assert "Unknown filter" in out
+        assert "Invalid filter" in out
         # …and an UNRENDERED one is refused as well, which is what "parse-time"
         # means. Django raises `TemplateSyntaxError: Invalid filter` here.
         refused, out = _djust_refused(
             "{% if False %}{{ p|no_such_filter_anywhere }}{% endif %}", {"p": "a"}
         )
         assert refused, "the #2419 parse-time lookup regressed"
-        assert "Unknown filter" in out
+        assert "Invalid filter" in out
 
 
 class TestTheCorpusGapThatHidThisFromTheDifferential:

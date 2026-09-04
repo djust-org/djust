@@ -343,7 +343,7 @@ class TestTheTwoRulesThisDoesNotClose:
             assert not django_renders(source), f"premise: {source}"
             rendered, out = djust_renders(source)
             assert not rendered, f"the #2419 parse-time lookup regressed on {source}"
-            assert "Unknown filter" in out, out
+            assert "Invalid filter" in out, out
 
     @pytest.mark.parametrize(
         "source",

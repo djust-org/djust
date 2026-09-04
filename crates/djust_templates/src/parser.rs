@@ -3356,89 +3356,39 @@ fn find_if_keyword(expr: &str) -> Option<usize> {
 /// `python/tests/test_filter_arity_2400.py` names the test that goes red when
 /// only one of them is removed.
 fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Option<String>)>> {
-    // Django's LEXER rule, one layer above the arity check (#2409):
-    // `filter_raw_string` allows at most ONE argument and requires the matches
-    // to tile the token, so a second `:arg` is `Could not parse the
-    // remainder`. `str::find(':')` took the first colon and kept the rest as
-    // one argument, so `{{ p|cut:"a":"b" }}` rendered rather than being
-    // refused. See [`crate::filter_lexer`], which both this site and
-    // `renderer::get_value_safe` call rather than carrying a copy each.
-    //
-    // NOTE: surrounding quotes on literal args (e.g. `"none"` in
-    // `default:"none"`) are preserved here so the dep-tracking extractor
-    // (issue #787) can tell a literal apart from a bare-identifier variable
-    // reference. The quote-strip happens at render time inside
-    // `strip_filter_arg_quotes`.
-    let mut specs: Vec<(String, Option<String>)> = Vec::with_capacity(parts.len());
+    let mut specs = Vec::with_capacity(parts.len());
     for filter_spec in parts {
-        let (name, arg) = crate::filter_lexer::split_filter_spec(filter_spec, token)?;
-        specs.push((name.to_string(), arg.map(str::to_string)));
-    }
-    for (name, arg) in &specs {
-        // Django builds the argument's `Variable` BEFORE `args_check` runs for
-        // that same filter, and both run before the NEXT filter is looked at
-        // (`FilterExpression.__init__`). So `{{ p|upper:_x }}` reports the
-        // underscore and `{{ p|upper:"a"|cut:_y }}` reports `upper`'s arity —
-        // which is why these two checks are interleaved per spec rather than
-        // run as two passes (#2418).
+        let spec = filter_spec.trim();
+        let (name, arg, consumed) = crate::filter_lexer::scan_filter_spec(spec);
+        let name_end = name.len();
+        // Django validates each regex match before inspecting its remainder:
+        // argument Variable, filter lookup, then argument count.
         if let Some(arg) = arg {
             validate_variable_name(arg)?;
         }
-        if let Some(message) =
-            crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
-        {
-            // Django's `TemplateSyntaxError` text verbatim. It crosses to
-            // Python as a `RuntimeError` rather than Django's class, as every
-            // djust template error does; the property both engines share is
-            // that the template does not compile.
-            return Err(DjangoRustError::TemplateError(message));
+        if name_end != 0 {
+            if !crate::filters::is_known_filter(name) {
+                return Err(DjangoRustError::TemplateError(format!(
+                    "Invalid filter: '{name}'"
+                )));
+            }
+            if let Some(message) =
+                crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
+            {
+                return Err(DjangoRustError::TemplateError(message));
+            }
         }
-        // `Invalid filter` — the name LOOKUP, at Django's time (#2419).
-        //
-        // Django resolves the name in `FilterExpression.__init__`
-        // (`filter_func = parser.find_filter(filter_name)`), so a name nothing
-        // implements refuses the template whether or not the node ever
-        // renders. djust looked it up in `filters::apply_filter_full_safe`, on
-        // the value — so `{% if 0 %}{{ p|nosuchfilter }}{% endif %}` and
-        // `{% if 0 and p|nosuchfilter %}` compiled here and refused there.
-        //
-        // Its position among the three refusals is NOT a behavioural choice,
-        // and saying so is the point (#2233). Django's own order inside
-        // `FilterExpression.__init__` is argument-`Variable` → `find_filter`
-        // → `args_check`, and this sits third — but the arity check and this
-        // one are MUTUALLY EXCLUSIVE by construction: `parse_time_arity_error`
-        // answers `None` for every name outside the built-in table, which is
-        // exactly the set this refuses. No template can reach both, so no
-        // test could tell the two orderings apart, and reordering to "match
-        // Django" would be a mechanism that changes nothing.
-        //
-        // The one place djust's order IS visible is against the LEXER bound
-        // above: `{{ p|nosuchfilter:"a":"b" }}` is `Invalid filter` on Django
-        // and `Could not parse the remainder` here, because `split_filter_spec`
-        // is what produces the name at all and so has to run first. Both
-        // engines refuse the template, which is the property this closes;
-        // only the wording differs. `TestDjangosOrderAmongTheRefusals`
-        // measures all of this against live Django rather than asserting the
-        // comment.
-        //
-        // ONE site closes both shapes, which is the condition #2411 attached
-        // to moving this at all: `{{ … }}` reaches here through
-        // `parse_token`, and every tag operand reaches here through
-        // `validate_tag_operand`. A check written for one of them would have
-        // been a second parallel path (#1646).
-        //
-        // The message keeps djust's existing `Unknown filter: <name>` wording
-        // rather than Django's `Invalid filter: '<name>'`. Both engines refuse,
-        // which is the property that matters; the wording is a published
-        // contract here — `template/rendering.py` keys its "not supported by
-        // the Rust engine" hint off this substring, and
-        // `tests/unit/test_rust_custom_filters_1121.py` pins it — so a second
-        // spelling for the same condition would be a drift of its own.
-        if !crate::filters::is_known_filter(name) {
+        if name_end == 0 || consumed != spec.len() {
+            let remainder = if name_end == 0 {
+                filter_spec.as_str()
+            } else {
+                &spec[consumed..]
+            };
             return Err(DjangoRustError::TemplateError(format!(
-                "Unknown filter: {name}"
+                "Could not parse the remainder: '{remainder}' from '{token}'"
             )));
         }
+        specs.push((name.to_string(), arg.map(str::to_string)));
     }
     Ok(specs)
 }

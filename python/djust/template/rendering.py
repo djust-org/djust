@@ -881,7 +881,11 @@ class DjustTemplate:
 
             # Check if error might be due to unsupported template tag/filter
             error_msg = str(e)
-            if "Unsupported tag" in error_msg or "Unknown filter" in error_msg:
+            if (
+                "Unsupported tag" in error_msg
+                or "Unknown filter" in error_msg
+                or "Invalid filter:" in error_msg
+            ):
                 suggestion = (
                     "\n\nHint: This template uses features not yet supported by djust's Rust engine. "
                     "Consider using workarounds (see docs/TEMPLATE_BACKEND.md) or use Django's "

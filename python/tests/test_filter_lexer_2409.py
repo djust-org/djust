@@ -226,7 +226,11 @@ class TestBothSitesRefuse:
         crates = pathlib.Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src"
         for module in ("parser.rs", "renderer.rs"):
             source = (crates / module).read_text()
-            assert "filter_lexer::split_filter_spec" in source, module
+            assert (
+                "filter_lexer::scan_filter_spec"
+                if module == "parser.rs"
+                else "filter_lexer::split_filter_spec"
+            ) in source, module
             assert "filter_lexer::split_pipes" in source, module
         # And neither site kept a private copy of the split it replaced.
         assert "split('|')" not in (crates / "renderer.rs").read_text()

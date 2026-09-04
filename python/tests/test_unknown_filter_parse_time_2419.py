@@ -132,7 +132,7 @@ class TestAnUnknownNameRefusesWhereverItAppears:
         assert django_refuses(source), f"premise: Django compiles {source!r}"
         refused, out = djust_refuses(source)
         assert refused, f"djust rendered {out!r} for a template Django refuses"
-        assert "Unknown filter" in out, out
+        assert "Invalid filter" in out, out
 
     @pytest.mark.parametrize("source", NOT_COMPILED_SHAPES)
     def test_a_body_django_never_compiles_is_not_refused_here_either(self, source: str) -> None:
@@ -148,7 +148,7 @@ class TestAnUnknownNameRefusesWhereverItAppears:
         """The half that never diverged, kept so a fix that moved the refusal
         cannot quietly delete it."""
         refused, out = djust_refuses("{{ p|nosuchfilter }}")
-        assert refused and "Unknown filter" in out, out
+        assert refused and "Invalid filter" in out, out
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ class TestARegisteredCustomFilterStillCompiles:
         ``test_a_registered_filter_compiles…`` would pass just as well against
         an engine that never checks anything."""
         refused, out = djust_refuses("{% if 0 %}{{ p|cf_2419_probe_NEVER_REGISTERED }}{% endif %}")
-        assert refused and "Unknown filter" in out, out
+        assert refused and "Invalid filter" in out, out
 
 
 class TestTheRegistryIsPopulatedBeforeAnythingCanBeParsed:
@@ -442,18 +442,15 @@ class TestDjangosOrderAmongTheRefusals:
         for names it does not describe. A reordering would change nothing,
         and a mechanism that changes nothing is decorative (#2233)."""
         refused, out = djust_refuses('{{ p|nosuchfilter:"x" }}')
-        assert refused and "Unknown filter" in out, out
+        assert refused and "Invalid filter" in out, out
         refused, out = djust_refuses('{{ p|upper:"x" }}')
         assert refused and "requires 1 arguments" in out, out
 
-    def test_the_lexer_bound_runs_first_here_and_second_on_django(self) -> None:
-        """The one ordering djust does NOT reproduce, recorded rather than
-        hidden. ``split_filter_spec`` is what produces the name at all, so it
-        cannot run after the lookup. Both engines refuse the template; only
-        the wording differs, which is the property this change is about."""
+    def test_the_name_lookup_precedes_the_remainder_on_both_engines(self) -> None:
+        """A matched unknown name fails before its trailing second argument."""
         source = '{{ p|nosuchfilter:"a":"b" }}'
         with pytest.raises(Exception, match="Invalid filter"):
             DjangoTemplate(source)
         refused, out = djust_refuses(source)
         assert refused, out
-        assert "Could not parse the remainder" in out, out
+        assert "Invalid filter" in out, out

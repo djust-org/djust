@@ -77,7 +77,7 @@ PARSE_TIME_CLASSES = [
     # instead of djust's prior "Unclosed if tag".
     ("{% for x in %}", "at least four words"),
     ("{% if x %}", "Unclosed tag on line"),
-    ("{{ x|nosuchfilter }}", "Unknown filter: nosuchfilter"),
+    ("{{ x|nosuchfilter }}", "Invalid filter: 'nosuchfilter'"),
     ("{{ x|upper:1 }}", "upper"),
     ("{% unknowntag a b %}", "Invalid block tag on line 1: 'unknowntag'"),
     ("{% templatetag bogus %}", "Unknown templatetag argument: 'bogus'"),
@@ -120,7 +120,7 @@ class TestConstructionTimeRefusal:
     def test_untaken_branch_unknown_filter_is_refused_like_django(self, backend):
         source = "{% if False %}{{ x|nosuchfilter }}{% endif %}"
         django_refuses_at_construction(source)
-        with pytest.raises(TemplateSyntaxError, match="Unknown filter: nosuchfilter"):
+        with pytest.raises(TemplateSyntaxError, match="Invalid filter: 'nosuchfilter'"):
             backend.from_string(source)
 
     def test_direct_construction_is_the_one_site(self):
