@@ -1,0 +1,1 @@
+- **Library binding materialization preserves named tuples.** Lazy values inside collections.namedtuple, typing.NamedTuple, and Django GroupedResult bindings no longer trigger a constructor TypeError; tuple types and named fields are preserved at the Python bridge boundary.

@@ -824,7 +824,11 @@ def _materialize_lazy(value: Any) -> Any:
         return {k: _materialize_lazy(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         materialized = [_materialize_lazy(v) for v in value]
-        return type(value)(materialized) if isinstance(value, tuple) else materialized
+        if isinstance(value, tuple):
+            if isinstance(getattr(type(value), "_fields", None), tuple):
+                return type(value)(*materialized)
+            return type(value)(materialized)
+        return materialized
     return value
 
 
