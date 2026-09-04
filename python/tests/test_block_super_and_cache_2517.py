@@ -15,6 +15,7 @@ pins for what that path must do, differentially against Django.
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 
 import pytest
@@ -157,7 +158,8 @@ def test_block_super_resolves_in_every_expression_position(engines, body: str) -
 #: advances and the page changes; and a parent block containing an
 #: `{% include %}` the child's context cannot resolve turns a working template
 #: into `TemplateDoesNotExist`. Each body below is a node kind that had no
-#: explicit arm.
+#: explicit arm AT THE TIME — all five have one now, which is the point: the
+#: arms are what keep these rows green.
 _NO_SUPER_BODIES = {
     "text": "only",
     "include": "{% include 'leaf.html' %}",
@@ -172,8 +174,15 @@ def test_a_child_without_block_super_never_renders_the_parent_block(engines, bod
     """The parent's `{% cycle %}` position is the observable.
 
     If the parent block rendered, its cycle would advance and the sibling after
-    the block would emit the SECOND value. Gate-off: set the walker's
-    fallthrough to `_ => true` and every row but `text` fails.
+    the block would emit the SECOND value.
+
+    Gate-off: flip ANY of the arms these bodies hit — `Include`, `Cycle`,
+    `WidthRatio`, `FirstOf`, or the no-expression `Text` arm — to `true` and
+    that row fails. An earlier docstring here claimed the gate was the walker's
+    `_` fallthrough; that was wrong twice, because every body listed has an
+    EXPLICIT arm that matches first, and because the match no longer has a
+    fallthrough at all. `test_a_missing_arm_would_be_a_compile_error` is what
+    now guards the direction the fallthrough used to.
     """
     django_engine, djust_engine = engines
     src = "{% extends 'cycle_parent.html' %}{% block c %}" + body + "{% endblock %}"
@@ -182,6 +191,52 @@ def test_a_child_without_block_super_never_renders_the_parent_block(engines, bod
     assert djust_out == django_out
     # `|a` — not `|b` — is what proves the parent's cycle never advanced.
     assert djust_out.endswith("|a")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{% load i18n %}{% blocktranslate with s=block.super %}[{{ s }}]{% endblocktranslate %}",
+        "{% load i18n %}{% language block.super %}x{% endlanguage %}",
+    ],
+    ids=["blocktranslate", "language"],
+)
+def test_block_super_in_the_variants_the_enumeration_missed(engines, body: str) -> None:
+    """`RawBlockCustomTag`, `Language` and `Timezone` carry an expression field
+    that the container arms only recursed PAST.
+
+    They fell through a `_ => false` catch-all, so
+    `{% blocktranslate with s=block.super %}` rendered EMPTY and
+    `{% language block.super %}` silently no-opped. The match is exhaustive
+    now — see `test_a_missing_arm_would_be_a_compile_error`.
+    """
+    django_engine, djust_engine = engines
+    src = "{% extends 'three.html' %}{% block c %}" + body + "{% endblock %}"
+    assert str(djust_engine.from_string(src).render({})) == str(
+        django_engine.from_string(src).render({})
+    )
+
+
+def test_a_missing_arm_would_be_a_compile_error() -> None:
+    """The structural guard, pinned as a source fact.
+
+    `node_references_block_super` decides, per node kind, whether a body might
+    name `block.super`. A wrong answer is SILENT — the content just disappears
+    — so the match must not have a catch-all: a variant added later has to be
+    decided explicitly, and the compiler is what asks. Three variants slipped
+    through the `_ => false` this replaces.
+    """
+    source = pathlib.Path("crates/djust_templates/src/inheritance.rs").read_text(encoding="utf-8")
+    start = source.index("fn node_references_block_super(")
+    body = source[start : source.index("\nfn ", start + 1)]
+    # Comment lines are stripped first: the arm's own rationale QUOTES the
+    # `_ => false` it replaced, and a naive substring check matches that prose.
+    code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("//"))
+    arms = [line.strip() for line in code.splitlines() if line.strip().startswith("_ =>")]
+    assert not arms, (
+        "node_references_block_super grew a catch-all arm — a new Node variant "
+        "will now silently answer 'no reference' and delete block.super content"
+    )
 
 
 def test_extends_accepts_a_context_variable(engines) -> None:

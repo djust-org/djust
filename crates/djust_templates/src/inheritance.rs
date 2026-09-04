@@ -281,10 +281,9 @@ fn node_references_block_super(node: &Node) -> bool {
         Node::BlockSuperScope { super_nodes, nodes } => {
             nodes_reference_block_super(super_nodes) || nodes_reference_block_super(nodes)
         }
-        Node::Language { children, .. }
-        | Node::Timezone { children, .. }
-        | Node::Localize { children, .. }
-        | Node::LocalTime { children, .. } => nodes_reference_block_super(children),
+        Node::Localize { children, .. } | Node::LocalTime { children, .. } => {
+            nodes_reference_block_super(children)
+        }
         Node::BlockCustomTag { args, children, .. } => {
             any_expr(args.iter().map(String::as_str)) || nodes_reference_block_super(children)
         }
@@ -294,24 +293,41 @@ fn node_references_block_super(node: &Node) -> bool {
             any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
         }
         Node::RustComponent { props, .. } => any_expr(props.iter().map(|(_, v)| v.as_str())),
+        // `{% blocktranslate with s=block.super %}` — the operands are in
+        // `args`, and the BODY is raw source that can name it in a placeholder.
+        Node::RawBlockCustomTag { args, body, .. } => {
+            any_expr(args.iter().map(String::as_str)) || any_expr([body.as_str()])
+        }
+        // `{% language block.super %}` / `{% timezone block.super %}` — the
+        // scope OPERAND, which the container arm only recursed past.
+        Node::Language { expr, children } | Node::Timezone { expr, children } => {
+            any_expr([expr.as_str()]) || nodes_reference_block_super(children)
+        }
 
-        // ---- everything else carries no expression ------------------------
+        // ---- variants that carry no expression at all ---------------------
         //
-        // The default is `false`, NOT `true`. A first pass inverted it on the
-        // reasoning that "a false positive costs one wasted parent render" —
-        // that is wrong twice over, measured: the parent block renders into
-        // the SHARED render context, so a `{% cycle %}` in it advances and the
-        // page changes (`I|a` became `I|b`); and if the parent block contains
-        // an `{% include %}` of a name only the parent's context resolves, the
-        // eager render RAISES `TemplateDoesNotExist` on a template that worked.
-        // A child block containing an `{% include %}` is an everyday layout.
+        // Listed EXPLICITLY, with no `_` arm, so the compiler refuses to build
+        // when a variant is added without deciding this question. The previous
+        // version ended in `_ => false` under a comment claiming the list was
+        // "exhaustive by construction" — it was not, and three variants fell
+        // through it: `{% blocktranslate with s=block.super %}` rendered EMPTY,
+        // `{% language block.super %}` silently no-opped, and
+        // `{% timezone block.super %}` raised. A claim a comment makes and the
+        // compiler does not is the failure mode this arm removes.
         //
-        // So the arms above enumerate every expression-bearing variant
-        // explicitly. A variant added later without an arm here degrades to a
-        // silently-empty `{{ block.super }}` in that position — the same class
-        // this list exists to close, and the reason the list is exhaustive by
-        // construction rather than by a catch-all.
-        _ => false,
+        // The default direction stays "do not render the parent": an earlier
+        // `_ => true` traded a silent under-render for an EAGER parent render,
+        // which advances a `{% cycle %}` in the parent block and can raise
+        // `TemplateDoesNotExist` on a template that worked.
+        Node::Text(_)
+        | Node::Comment
+        | Node::Load(_)
+        | Node::TemplateTag(_)
+        | Node::CsrfToken
+        | Node::Static(_)
+        | Node::Now(_)
+        | Node::Extends(_)
+        | Node::ResetCycle { .. } => false,
     }
 }
 
