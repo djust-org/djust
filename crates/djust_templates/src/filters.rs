@@ -5682,6 +5682,13 @@ mod float_sink_set {
             ),
             ("djust_templates/src/floatformat.rs", "python_float_repr"),
             ("djust_templates/src/pprint.rs", "python_float_repr"),
+            // `{% ifchanged %}`'s comparison key (#2517). It is not a RENDER
+            // sink — the string is never emitted — but a float still has to
+            // be SPELLED to be compared, and it must be spelled the way
+            // Python spells it so two Python-equal floats produce one key.
+            // Registered here deliberately: the guard caught this arm's first
+            // version, which used Rust's `{}`.
+            ("djust_templates/src/renderer.rs", "python_float_repr"),
             // `%d` / `%i` / `%u`'s argument rule (#2358): CPython truncates a
             // finite float toward zero and raises for a non-finite, which is
             // exactly `python_float_trunc_digits`. The `%e`/`%f`/`%g` arm in

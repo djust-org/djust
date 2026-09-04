@@ -455,10 +455,31 @@ def test_a_library_with_one_raw_block_tag_still_bridges_its_other_entries(path):
 
 
 def test_djangos_own_libraries_resolve_but_are_not_bridged():
-    """`{% load static %}` keeps parsing (separate rows own its tags) and
-    registers nothing here."""
-    assert plain_render("{% load static %}x-2547", {}) == "x-2547"
-    assert not any(label == "static" for label in template_libraries.owned_tags().values())
+    """An UNBRIDGED Django library keeps parsing and registers nothing here.
+
+    ``static`` was this test's subject until #2517 bridged it (for
+    ``{% get_static_prefix %}`` / ``{% get_media_prefix %}``); ``cache`` is
+    the remaining Django library whose row has not shipped.
+    """
+    assert plain_render("{% load cache %}x-2547", {}) == "x-2547"
+    assert not any(label == "cache" for label in template_libraries.owned_tags().values())
+
+
+def test_static_library_is_bridged_but_the_native_static_tag_survives():
+    """#2517: bridging ``static`` must add the prefix tags WITHOUT letting the
+    library's own ``{% static %}`` displace the native Rust one.
+
+    The collision policy in ``_may_override`` cannot catch that on its own —
+    it consults the handler REGISTRIES, and a native parser tag is in none of
+    them — so the skip is explicit. Gate it off and ``static`` appears in
+    ``owned_tags()``.
+    """
+    # Bridging happens at PARSE time, when `{% load %}` runs — ask only after.
+    assert plain_render("{% load static %}{% get_static_prefix %}", {}) is not None
+    owned = template_libraries.owned_tags()
+    assert owned.get("get_static_prefix") == "static"
+    assert owned.get("get_media_prefix") == "static"
+    assert "static" not in owned
 
 
 # ---------------------------------------------------------------------------

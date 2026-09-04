@@ -81,8 +81,9 @@ and filter registries are process-global (ADR-001), so once any parse loads
 a library every later parse sees its tags, ``{% load %}`` or not — the same
 divergence ``{% url %}`` and every ``register_tag_handler`` user already
 has. A MISSING library is still refused at parse time with Django's exact
-message. Django's own libraries (``i18n``, ``l10n``, ``tz``, ``cache``,
-``static``) resolve but are not bridged here — they are separate rows.
+message. Django's own ``i18n`` / ``l10n`` / ``tz`` / ``static`` libraries ARE bridged
+here; every other ``django.templatetags.*`` (``cache``, …) still resolves and
+parses as #2547 left it — those rows have not shipped.
 
 Engine paths (#1051)
 --------------------
@@ -115,14 +116,15 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
-#: Django's own libraries this row bridges (#2558). Every OTHER
-#: ``django.templatetags.*`` (``static``, ``cache``, …) still resolves and
+#: Django's own libraries this row bridges (#2558, extended for ``static``).
+#: Every OTHER ``django.templatetags.*`` (``cache``, …) still resolves and
 #: parses exactly as #2547 left it — those rows have not shipped.
 _DJANGO_LIBRARIES_BRIDGED = frozenset(
     {
         "django.templatetags.i18n",
         "django.templatetags.l10n",
         "django.templatetags.tz",
+        "django.templatetags.static",
     }
 )
 
@@ -135,6 +137,17 @@ _NATIVE_SCOPE_TAGS = {
     "django.templatetags.i18n": ("language",),
     "django.templatetags.l10n": ("localize",),
     "django.templatetags.tz": ("localtime", "timezone"),
+}
+
+#: Tags of a bridged Django library that already have a NATIVE Rust
+#: implementation in the parser. Unlike :data:`_NATIVE_SCOPE_TAGS` these are
+#: NOT armed — the parser arm exists unconditionally — they are merely skipped
+#: at bridge time so ``{% load static %}`` cannot install a Python handler over
+#: the native ``{% static %}``. ``_may_override`` cannot catch this on its own:
+#: it consults the HANDLER REGISTRIES, and a native parser tag is in none of
+#: them, so without this set the bridge would silently displace it.
+_NATIVE_TAG_SKIPS = {
+    "django.templatetags.static": ("static",),
 }
 
 #: The raw block-consuming tags (#2558, §2 of the plan): the body is DATA —
@@ -444,7 +457,7 @@ def _bridge_library(label: str, library: Any) -> None:
 
     _arm_scope_tags(module)
     bridge_library_filters(library, refuse=refused_filters(module))
-    native = _NATIVE_SCOPE_TAGS.get(module, ())
+    native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
     for name, compile_func in library.tags.items():
         if name in _RAW_BLOCK_TAGS:
             _bridge_raw_block_tag(label, name, compile_func)

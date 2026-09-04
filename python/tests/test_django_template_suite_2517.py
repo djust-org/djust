@@ -459,11 +459,18 @@ CANARY_MODULE = textwrap.dedent(
                     "{% block first %}{{ block.super }}{% endblock %}"
                 ).render(Context({}))
 
-        def test_3_ifchanged(self):
-            # Django renders "ab"; djust raises on the unsupported tag
-            # (`autoescape` was the canary until #2556 implemented it).
-            src = "{% for x in xs %}{% ifchanged %}{{ x }}{% endifchanged %}{% endfor %}"
-            out = Engine().from_string(src).render(Context({"xs": ["a", "a", "b"]}))
+        def test_3_cache(self):
+            # Django renders the body; djust raises on the unsupported tag.
+            # The canary is deliberately a REAL Django tag djust lacks, so it
+            # rotates as gaps close: `autoescape` until #2556, `ifchanged`
+            # until #2517 implemented it, now `{% cache %}` (its row has not
+            # shipped — the tag needs Django's cache framework).
+            src = "{% load cache %}{% cache 600 canary2517 %}ab{% endcache %}"
+            # `libraries=` explicitly: a bare `Engine()` only knows the
+            # libraries INSTALLED_APPS provides, and this canary must resolve
+            # `cache` under whatever settings the harness subprocess runs.
+            engine = Engine(libraries={"cache": "django.templatetags.cache"})
+            out = engine.from_string(src).render(Context({}))
             self.assertEqual(out, "ab")
     '''
 )
@@ -525,11 +532,11 @@ class TestEmpiricalCanary:
             "FAIL  canary_tests.Canary.test_2_block_super_outside_a_child_must_raise | AssertionError: "
             "TemplateSyntaxError not raised"
         )
-        assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
-            "ERROR canary_tests.Canary.test_3_ifchanged | DjustTemplateSyntaxError: "
+        assert lines["canary_tests.Canary.test_3_cache"].startswith(
+            "ERROR canary_tests.Canary.test_3_cache | DjustTemplateSyntaxError: "
         )
 
-        assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_ifchanged"]
+        assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_cache"]
 
     def test_engine_percent_and_touched(self, djust_run: tuple[str, dict]) -> None:
         text, data = djust_run

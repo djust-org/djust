@@ -148,6 +148,21 @@ pub enum Node {
         name: Option<String>,
         id: String,
     },
+    /// `{% ifchanged [var …] %}…[{% else %}…]{% endifchanged %}` —
+    /// Django's `IfChangedNode`.
+    ///
+    /// With operands the tag compares the RESOLVED values (an OR over all of
+    /// them, as one tuple); with none it compares the RENDERED body, which is
+    /// why the no-operand form must render the body BEFORE it can decide, and
+    /// must not render it twice. `id` is bound by `resolve_cycle_nodes`
+    /// alongside the cycle ids — the per-render state it keys lives on the
+    /// `Context`, exactly as `{% cycle %}`'s does.
+    IfChanged {
+        vars: Vec<String>,
+        id: String,
+        nodes: Vec<Node>,
+        else_nodes: Vec<Node>,
+    },
     /// `{% filter f1|f2:arg %}…{% endfilter %}` (#2556): the body renders to
     /// a string, is bound as the SAFE variable `var` — Django's
     /// `NodeList.render` is a `SafeString` — and `{{ var|f1|f2:arg }}` is
@@ -571,6 +586,14 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             Node::Filter { nodes: body, .. } => {
                 assign_if_marker_ids(body, prefix, counter);
             }
+            Node::IfChanged {
+                nodes: body,
+                else_nodes,
+                ..
+            } => {
+                assign_if_marker_ids(body, prefix, counter);
+                assign_if_marker_ids(else_nodes, prefix, counter);
+            }
             Node::BlockCustomTag { children, .. } => {
                 assign_if_marker_ids(children, prefix, counter);
             }
@@ -603,6 +626,10 @@ struct CycleResolution {
     last: Option<String>,
     /// Ids are `<prefix>-cycle-<n>`, document order.
     counter: usize,
+    /// `{% ifchanged %}` ids are `<prefix>-ifchanged-<n>`, document order.
+    /// Minted in this walk because it is the one pass that already visits
+    /// every container in order and carries the template prefix.
+    ifchanged_counter: usize,
 }
 
 /// Bind cycle references and `{% resetcycle %}` targets, and assign ids (#2556).
@@ -709,6 +736,20 @@ fn resolve_cycle_nodes(
             }
             Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
+            }
+            // `{% ifchanged %}` is BOTH an id consumer and a container, so it
+            // is bound here rather than in a pass of its own — and it must
+            // descend for the reason the comment above gives.
+            Node::IfChanged {
+                id,
+                nodes: body,
+                else_nodes,
+                ..
+            } => {
+                *id = format!("{prefix}-ifchanged-{}", state.ifchanged_counter);
+                state.ifchanged_counter += 1;
+                resolve_cycle_nodes(body, prefix, state)?;
+                resolve_cycle_nodes(else_nodes, prefix, state)?;
             }
             _ => {}
         }
@@ -1452,6 +1493,41 @@ fn parse_token_inner(
 
                 "endfilter" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
+                "ifchanged" => {
+                    // {% ifchanged [var …] %}…[{% else %}…]{% endifchanged %}
+                    // — Django's `do_ifchanged`. It takes any number of
+                    // operands (zero is the compare-the-output form) and so
+                    // has no arity error of its own.
+                    let (nodes, end_pos, hit) = parse_block_until_any(
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        &["else", "endifchanged"],
+                    )?;
+                    let (else_nodes, end_pos) = if hit == "else" {
+                        let (else_nodes, end_pos) = parse_block_custom_tag(
+                            tokens,
+                            spans,
+                            source,
+                            end_pos + 1,
+                            "endifchanged",
+                        )?;
+                        (else_nodes, end_pos)
+                    } else {
+                        (Vec::new(), end_pos)
+                    };
+                    *i = end_pos;
+                    Ok(Some(Node::IfChanged {
+                        vars: args.clone(),
+                        id: String::new(),
+                        nodes,
+                        else_nodes,
+                    }))
+                }
+
+                "endifchanged" => Err(stray_closer_error(spans, source, *i, tag_name)),
+
                 "cycle" => {
                     // Django's `cycle()` grammar, `defaulttags.py` (#2556).
                     // `args` excludes the tag name, so Django's `len(args)`
@@ -2118,6 +2194,41 @@ fn collect_raw_source(
 ///
 /// Used by `parse_token` when a registered block tag handler is found.
 /// Scans forward collecting child nodes until `end_tag` is encountered.
+/// [`parse_block_custom_tag`] with more than one terminator.
+///
+/// Returns the nodes, the index of the terminator, and WHICH terminator was
+/// hit, so a caller with an optional `{% else %}` arm can tell the two apart.
+/// The single-terminator helper stays the common path; this one exists for
+/// `{% ifchanged %}`, whose body splits on `{% else %}`.
+fn parse_block_until_any(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    start: usize,
+    end_tags: &[&str],
+) -> Result<(Vec<Node>, usize, String)> {
+    let mut nodes = Vec::new();
+    let mut i = start;
+
+    while i < tokens.len() {
+        if let Token::Tag(name, _) = &tokens[i] {
+            if end_tags.iter().any(|t| t == name) {
+                return Ok((nodes, i, name.clone()));
+            }
+        }
+
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+            nodes.push(node);
+        }
+        i += 1;
+    }
+
+    Err(DjangoRustError::TemplateError(format!(
+        "Unclosed block tag, expected {{% {} %}}",
+        end_tags[end_tags.len() - 1]
+    )))
+}
+
 fn parse_block_custom_tag(
     tokens: &[Token],
     spans: &[Span],
@@ -2721,6 +2832,23 @@ fn extract_from_nodes(
                 if asvar.is_some() {
                     variables.entry("*".to_string()).or_default();
                 }
+            }
+            // Deps inside an `{% ifchanged %}` body are real deps — the
+            // `_ => {}` default would report NONE for them, which is the
+            // exact failure the tests below this file's dep-extractor pin.
+            Node::IfChanged {
+                vars,
+                nodes,
+                else_nodes,
+                ..
+            } => {
+                // The operands are resolved every iteration, so they are
+                // dependencies exactly as an `{% if %}` condition is.
+                for var in vars {
+                    extract_from_variable(var, variables);
+                }
+                extract_from_nodes(nodes, variables);
+                extract_from_nodes(else_nodes, variables);
             }
             Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => {
                 extract_from_nodes(nodes, variables);
@@ -5409,6 +5537,7 @@ mod dep_tests {
             Node::UnsupportedTag { .. } => "UnsupportedTag",
             Node::InlineIf { .. } => "InlineIf",
             Node::AssignTag { .. } => "AssignTag",
+            Node::IfChanged { .. } => "IfChanged",
         }
     }
 
@@ -5523,6 +5652,12 @@ mod dep_tests {
             Node::Filter {
                 filters: vec![("upper".into(), None)],
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
+            },
+            Node::IfChanged {
+                vars: vec!["a".into()],
+                id: String::new(),
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
+                else_nodes: vec![],
             },
             Node::Now("Y-m-d".into()),
             Node::UnsupportedTag {

@@ -6,6 +6,7 @@ use crate::parser::Node;
 use crate::registry::TagArg;
 #[cfg(feature = "liveview")]
 use djust_components::Component;
+use djust_core::decimal::python_float_repr;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
 use pyo3::{Py, PyAny};
@@ -514,6 +515,9 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::Spaceless { nodes, .. } => nodes_contain_elements(nodes),
         Node::AutoEscape { nodes, .. } => nodes_contain_elements(nodes),
         Node::Filter { nodes, .. } => nodes_contain_elements(nodes),
+        Node::IfChanged {
+            nodes, else_nodes, ..
+        } => nodes_contain_elements(nodes) || nodes_contain_elements(else_nodes),
         // Conservative: tags that may or do produce HTML are treated
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
@@ -759,6 +763,38 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     }
     let idx = context.cycle_advance(id) % values.len();
     get_value_safe_ignoring_failures(values[idx].trim(), context)
+}
+
+/// A comparison key for one `{% ifchanged %}` operand, under PYTHON's
+/// equality rather than Rust's.
+///
+/// Django compares the resolved objects with `!=`, so the key has to agree
+/// with Python on the cross-type cases, and Python's numeric tower is the one
+/// that bites: `0 == False` and `1 == True` and `1 == 1.0` are all true, while
+/// `1 == "1"` and `0 == ""` and `None == False` are all false. A plain `{:?}`
+/// of the `Value` gets the string cases right and every numeric case wrong —
+/// the randomized differential in `python/tests/test_ifchanged_2517.py` found
+/// exactly that within sixty seeds.
+///
+/// So: bools fold into the number bucket, integers and floats share one
+/// numeric spelling, and strings / none / containers each get a bucket no
+/// number can land in.
+fn ifchanged_key(value: &Value) -> String {
+    match value {
+        // `Missing` is a `VariableDoesNotExist` under `ignore_failures`,
+        // which Django compares as `None`.
+        Value::Missing | Value::None => "n".to_string(),
+        // One numeric spelling for all three, through the APPROVED float
+        // repr — Rust's `{}` is the #2258/#2270 defect (the float-sink guard
+        // in `filters.rs` fails the build on a new `RUST_DISPLAY` sink, and
+        // it caught this line's first version). It matters here and not only
+        // as hygiene: two Python-equal floats must produce one key.
+        Value::Bool(b) => format!("#{}", python_float_repr(if *b { 1.0 } else { 0.0 })),
+        Value::Integer(i) => format!("#{}", python_float_repr(*i as f64)),
+        Value::Float(f) => format!("#{}", python_float_repr(*f)),
+        Value::String(s) => format!("s{s}"),
+        other => format!("o{other:?}"),
+    }
 }
 
 /// The parsed filter specs of a `{% filter %}` block, back as the `f1|f2:arg`
@@ -2425,6 +2461,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
                     let mut output = String::new();
                     let mut ctx = context.clone();
+                    // ONE fresh `{% ifchanged %}` frame per EXECUTION of this
+                    // loop, hoisted out of the iteration exactly as Django
+                    // binds one `forloop` dict before iterating. Inside the
+                    // iteration it would reset every item and the tag would
+                    // report "changed" forever; outside the loop entirely, an
+                    // inner loop re-entered by an outer one would wrongly keep
+                    // the previous pass's comparison.
+                    ctx.begin_loop_scope();
 
                     // The SUBTREE half of `Context::bind`, hoisted out of the
                     // iteration (#2361/#2363). Every iteration binds the same
@@ -3374,6 +3418,51 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // {% resetcycle [name] %} → `CycleNode.reset(context)`, "" (#2556).
             context.cycle_reset(id);
             Ok(String::new())
+        }
+
+        Node::IfChanged {
+            vars,
+            id,
+            nodes,
+            else_nodes,
+        } => {
+            // `IfChangedNode.render` (#2517). Two forms, and the difference
+            // is not cosmetic:
+            //
+            //   {% ifchanged %}      compares the RENDERED body
+            //   {% ifchanged a b %}  compares the RESOLVED operands
+            //
+            // The no-operand form must therefore render the body to decide,
+            // and Django then REUSES that string rather than rendering a
+            // second time (`return nodelist_true_output or …`) — a body with
+            // a side effect (`{% cycle %}`, a custom tag) would otherwise
+            // fire twice per iteration.
+            let (compare_to, rendered) = if vars.is_empty() {
+                let body = render_nodes_with_loader(nodes, context, loader)?;
+                (body.clone(), Some(body))
+            } else {
+                // Django resolves with `ignore_failures=True`, so a missing
+                // operand compares as `None` — NOT as `string_if_invalid`,
+                // and not an error. A type tag keeps `1` and `"1"` distinct,
+                // which bare formatting would collapse.
+                let mut parts = Vec::with_capacity(vars.len());
+                for var in vars {
+                    let (value, _) = get_value_safe_ignoring_failures(var.trim(), context)?;
+                    parts.push(ifchanged_key(&value));
+                }
+                (parts.join("\u{1f}"), None)
+            };
+
+            if context.ifchanged_step(id, &compare_to) {
+                match rendered {
+                    Some(body) => Ok(body),
+                    None => render_nodes_with_loader(nodes, context, loader),
+                }
+            } else if else_nodes.is_empty() {
+                Ok(String::new())
+            } else {
+                render_nodes_with_loader(else_nodes, context, loader)
+            }
         }
 
         Node::Now(format) => {

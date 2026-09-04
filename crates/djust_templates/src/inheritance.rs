@@ -627,6 +627,27 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("{% endspaceless %}");
             result
         }
+        Node::IfChanged {
+            vars,
+            nodes,
+            else_nodes,
+            ..
+        } => {
+            // The id is NOT re-emitted: `resolve_cycle_nodes` assigns it on
+            // the reparse, exactly as it does for `{% cycle %}` above.
+            let mut result = if vars.is_empty() {
+                "{% ifchanged %}".to_string()
+            } else {
+                format!("{{% ifchanged {} %}}", vars.join(" "))
+            };
+            result.push_str(&nodes_to_template_string(nodes));
+            if !else_nodes.is_empty() {
+                result.push_str("{% else %}");
+                result.push_str(&nodes_to_template_string(else_nodes));
+            }
+            result.push_str("{% endifchanged %}");
+            result
+        }
         Node::AutoEscape { on, nodes } => {
             let mut result = format!("{{% autoescape {} %}}", if *on { "on" } else { "off" });
             result.push_str(&nodes_to_template_string(nodes));

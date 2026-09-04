@@ -294,15 +294,15 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in filters — unsupported (0):** none
 
-**Built-in tags — 24 of 25 supported:**
-- native Rust (19): `autoescape`, `block`, `comment`, `csrf_token`, `cycle`, `extends`, `filter`, `firstof`, `for`, `if`, `include`, `load`, `now`, `resetcycle`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
+**Built-in tags — 25 of 25 supported:**
+- native Rust (20): `autoescape`, `block`, `comment`, `csrf_token`, `cycle`, `extends`, `filter`, `firstof`, `for`, `if`, `ifchanged`, `include`, `load`, `now`, `resetcycle`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
 - via Python handler (5): `debug`, `lorem`, `querystring`, `regroup`, `url`
 
-**Built-in tags — unsupported (1):** `ifchanged`
+**Built-in tags — unsupported (0):** none
 
-**Library tags (`{% load … %}`) — supported (15):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `static`
+**Library tags (`{% load … %}`) — supported (17):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `get_media_prefix`, `get_static_prefix`, `static`
 
-**Library tags — unsupported (3):** static `get_media_prefix`, `get_static_prefix`; cache `cache`
+**Library tags — unsupported (1):** cache `cache`
 
 A supported library tag is either a native Rust node or bridged on `{% load %}` (#2547 / #2558): the load imports Django's library and registers its tags with the Rust engine, so the tag is rendered by Django's own compile function and node — `{% blocktranslate %}` crosses its body as raw source; `{% language %}`, `{% localize %}`, `{% localtime %}` and `{% timezone %}` are native scope nodes the load arms.
 
@@ -323,8 +323,8 @@ Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each n
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **77.17%** of the Django template tests that reach the engine pass (808 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 83.59% (1217 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
+- **79.66%** of the Django template tests that reach the engine pass (834 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 85.37% (1243 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
 
 Two result kinds are counted separately because they are different work:
 
