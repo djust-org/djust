@@ -26,6 +26,8 @@ In `get_context_data()`, assign the private variable to a **public instance vari
 ## Implementation Pattern
 
 ```python
+from djust.decorators import event_handler, debounce
+from djust.decorators import event_handler, debounce
 from djust_shared.views import BaseViewWithNavbar
 
 class MyListView(BaseViewWithNavbar):
@@ -122,10 +124,11 @@ class PropertyListView(BaseViewWithNavbar):
         # Store in private variable
         self._properties = properties
 
+    @event_handler()
     @debounce(wait=0.5)
-    def search(self, query: str = "", **kwargs):
-        """Event handler for search"""
-        self.search_query = query
+    def search(self, value: str = "", **kwargs):
+        """Event handler for search (input events deliver the typed text as `value`)"""
+        self.search_query = value
         self._refresh_properties()
 
     def get_context_data(self, **kwargs):
@@ -347,9 +350,13 @@ Using the JIT pattern provides:
 - **Smaller payloads** - Efficient serialization format
 - **Auto-generated counts** - Avoids redundant COUNT(*) queries
 
-### Benchmark Example
+### Benchmark Example (illustrative, not measured)
 
-For a list of 100 maintenance requests with related properties and tenants:
+The figures below are an illustrative shape of the improvement (fewer queries,
+no Python-side serialization pass), not measured numbers — the JIT speedup
+itself is unmeasured (see the disclaimer above). Run your own workload before
+quoting figures. For a list of 100 maintenance requests with related
+properties and tenants:
 
 | Approach | Serialization Time | Queries |
 |----------|-------------------|---------|

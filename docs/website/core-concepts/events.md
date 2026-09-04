@@ -339,21 +339,14 @@ HTML attributes and Python decorators can be combined: the HTML attribute contro
 
 ## Loading States
 
-Show feedback while a handler is running:
-
-```python
-from djust.decorators import event_handler, loading
-
-@event_handler()
-@loading("is_saving")
-def save(self, **form_data):
-    """self.is_saving=True while this runs, False after."""
-    expensive_operation()
-```
+Show feedback while a handler is running — use the `dj-loading.*` attributes
+(there is no `loading` decorator in `djust.decorators`; the client manages the
+pending state automatically while the event is in flight):
 
 ```html
-<button dj-click="save" {% if is_saving %}disabled{% endif %}>
-    {% if is_saving %}Saving...{% else %}Save{% endif %}
+<button dj-click="save" dj-loading.disable>
+    <span dj-loading.hide dj-loading.for="save">Save</span>
+    <span dj-loading.show dj-loading.for="save" style="display:none">Saving…</span>
 </button>
 ```
 

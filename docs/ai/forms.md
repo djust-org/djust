@@ -5,7 +5,6 @@
 ```python
 from djust import LiveView
 from djust.forms import FormMixin
-from django.urls import reverse
 
 class EditView(FormMixin, LiveView):
     template_name = 'myapp/form.html'
@@ -20,7 +19,6 @@ class EditView(FormMixin, LiveView):
     def form_valid(self, form):
         obj = form.save()
         self.success_message = "Saved!"
-        self.redirect_url = reverse('detail', kwargs={'pk': obj.pk})
 
     def form_invalid(self, form):
         self.error_message = "Please fix errors below"

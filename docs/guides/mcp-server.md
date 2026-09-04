@@ -76,7 +76,7 @@ Use full mode when working inside a Django project. Use framework-only mode when
 
 ## Tools Reference
 
-The server exposes 14 tools organized into four categories.
+The server exposes 24 tools organized into four categories (the reference below covers the original 14; the newer additions — `seed_fixtures`, `find_handlers_for_template`, `get_view_assigns`, `eval_handler`, `reset_view_state`, `get_handler_timings`, `get_sql_queries_since`, `tail_server_log`, `get_last_traceback`, `detect_common_issues` — are discoverable via your MCP client's tool list).
 
 ### Framework Schema (no Django required)
 

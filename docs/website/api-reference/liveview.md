@@ -70,7 +70,7 @@ def mount(self, request, **kwargs):
 
 Called before every render — both the initial HTTP render and every WebSocket update. Return the template context.
 
-Always call `super().get_context_data(**kwargs)` to include djust's required context variables (`dj_view_id`, etc.):
+Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs:
 
 ```python
 def get_context_data(self, **kwargs):

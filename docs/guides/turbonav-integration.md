@@ -66,7 +66,7 @@ Your LiveView templates render inside `{% block content %}`, so they naturally l
 
 ```html
 {% block content %}
-<div dj-view="{{ view_id }}">
+<div dj-view="myapp.views.CounterView">
     <!-- LiveView content -->
 </div>
 {% endblock %}

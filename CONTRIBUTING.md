@@ -19,7 +19,7 @@ Thank you for your interest in contributing! We welcome contributions from every
 
 - Python 3.10+
 - Rust 1.70+
-- Django 3.2+
+- Django 4.2+ (see `pyproject.toml` for the exact pin)
 
 ### Environment Setup
 
@@ -252,7 +252,6 @@ python benchmark.py
 - Add tests for new features
 - Update documentation as needed
 - Ensure all tests pass
-- Add yourself to CONTRIBUTORS.md
 
 ## Changelog fragments
 
@@ -410,55 +409,23 @@ struct RustLiveView {
 }
 ```
 
-**Pattern 3: JavaScript Dual Implementation (Embedded + ES Module)**
+**Pattern 3: Client JavaScript — single ES-module source, bundled at build time**
 
-For client-side JavaScript that needs both runtime execution AND testing:
+Client-side JavaScript lives in ONE place: the ES modules under
+`python/djust/static/djust/src/` (e.g. debounce/throttle logic in
+`src/09-event-binding.js`). `scripts/build-client.sh` concatenates
+`src/[0-9]*.js` (in filename order) into `static/djust/client.js` and the
+minified+gzipped `client.min.js(.gz)` that actually ships. There is no second
+embedded copy to keep in sync — do not hand-edit `client.js` /
+`client.min.js`; they are build artifacts.
 
-```javascript
-// File 1: decorators.js (ES Module for testing)
-/**
- * IMPORTANT: This module is used for testing and documentation.
- * The actual implementation runs as embedded JavaScript in live_view.py.
- * When making changes, update BOTH files to keep them in sync.
- */
-export const debounceTimers = new Map();
-
-export function debounce(eventName, eventData, config, sendEvent) {
-    // Implementation here
-}
-
-// File 2: live_view.py (embedded for runtime)
-def _get_decorator_js(self) -> str:
-    return '''
-    // Same implementation as decorators.js but without exports
-    const debounceTimers = new Map();
-
-    function debounce(eventName, eventData, config, sendEvent) {
-        // Identical implementation
-    }
-    '''
-```
-
-**Why this pattern?**
-- **Runtime**: JavaScript must be embedded in HTML (no module imports in inline scripts)
-- **Testing**: ES modules required for Jest/Vitest to import and test functions
-- **Challenge**: Must maintain two identical copies manually
-
-**Synchronization checklist:**
-- [ ] Update logic in `decorators.js` (ES module)
-- [ ] Copy identical changes to `live_view.py` embedded string
-- [ ] Remove `export` keywords when copying to embedded version
+**Workflow:**
+- [ ] Update the logic in the relevant `src/<NN>-*.js` module
+- [ ] Add/adjust tests in `tests/js/` (every `src/` feature file needs one)
 - [ ] Run JavaScript tests: `npm test`
-- [ ] Run integration tests to verify runtime behavior
-- [ ] Update JSDoc comments in both locations
-
-**Files using this pattern:**
-- `python/djust/static/djust/decorators.js` - ES module for testing
-- `python/djust/live_view.py` - Embedded version in `_get_decorator_js()`
-
-**Common mistakes:**
-- Forgetting to update embedded version after changing ES module
-- Leaving `export` keywords in embedded code
+- [ ] Rebuild the bundle (`make build-client` / `scripts/build-client.sh`) if
+      you need to exercise the runtime locally
+- [ ] Mind the client size budget (see `CLAUDE.md` → JavaScript)
 - Version drift between the two implementations
 
 ### Testing Strategy

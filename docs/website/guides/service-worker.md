@@ -174,7 +174,7 @@ adoption is always safe.
 
 ### VDOM patch cache
 
-When the user clicks `<a dj-link>` or hits the back button, the SW
+When the user clicks a `dj-navigate` link or hits the back button, the SW
 serves a cached HTML snapshot of the destination URL **immediately**,
 then the live WebSocket mount reply reconciles any drift via the
 normal VDOM patch path. The user sees content the instant the route

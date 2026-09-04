@@ -207,13 +207,15 @@ from djust.components import AlertComponent
 
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        # Component IDs are automatically set from attribute names
+        # LiveComponent ids are auto-assigned as "<classname>_<uuid8>"
         self.alert_success = AlertComponent(
             message="Success!",
             type="success",
             dismissible=True
         )
-        # component_id is now "alert_success" automatically!
+        # component_id is now e.g. "AlertComponent_1a2b3c4d" (auto-generated).
+        # The attribute-name-derived id is the separate `.id` property
+        # (class-prefixed, e.g. "alert-alert_success").
 
     @event_handler()
     def dismiss(self, component_id: str = None, **kwargs):
