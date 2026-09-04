@@ -43,11 +43,7 @@ from djust.pwa.mixins import OfflineMixin
 
 class MyView(OfflineMixin, LiveView):
     def mount(self, request):
-        self.items = self.storage  # NOTE: a per-instance SERVER-SIDE dict (pwa/storage.py) — it is
-              # empty on every fresh request, so a `mount()` read returns the
-              # default. `is_online()` also returns True unconditionally on the
-              # server (pwa/utils.py), so an `else:` branch on it is unreachable.
-              # self.storage.get("items", [])  # offline-capable KV store
+        self.items = self.storage.get("items", [])  # offline-capable KV store
 
     def add_item(self, name):
         # Optimistic offline create: queued for sync automatically
@@ -55,6 +51,16 @@ class MyView(OfflineMixin, LiveView):
         self.items.append(created)
         self.storage.set("items", self.items)
 ```
+
+> **`self.storage` is server-side.** It is an `OfflineStorage` instance
+> (`IndexedDBStorage` by default) whose backing store is a per-instance dict,
+> so it is EMPTY on every fresh request — a `mount()` read returns the default,
+> not what a previous request wrote. The durable copy lives in the browser;
+> the server object is the API surface, not the store.
+>
+> `is_online()` also returns `True` unconditionally on the server
+> (`pwa/utils.py`), so an `else:` branch on it never runs in a view.
+
 
 ### 3. Generate service worker
 
@@ -104,7 +110,10 @@ Synchronization of offline data (combine **after** `OfflineMixin`:
   string falls back to `client_wins` **silently**, so a typo here loses data
   rather than raising), `sync_batch_size`,
   `sync_timeout`
-- Hook: `sync_create_item(action_data)` (and siblings) for custom sync logic
+- Hook: `sync_create_<Model>(action_data)` for custom sync logic. The name is
+  built as `f"sync_create_{action.model}"` (`pwa/mixins.py`), so it is
+  **case-sensitive**: `create_offline("Item", ...)` looks for `sync_create_Item`,
+  not `sync_create_item`. A mismatch silently falls through to the default sync.
 - The queue is NOT processed automatically — nothing dispatches it. `_process_sync_queue()` runs only from `sync_when_online()`, which you call, or `handle_connection_change()`, which has no callers in `python/`. Call one; there is no `queue_sync()` /
   `process_sync_queue()` public API
 

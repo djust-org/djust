@@ -1,5 +1,12 @@
 # State Management Architecture
 
+> **`@debounce`, `@throttle` and `@optimistic` are INERT.** They record
+> handler metadata but have no client-side implementation — the counterpart
+> state in `static/djust/src/` is declared and never populated, so applying
+> them changes nothing at runtime. Examples below that use them still work,
+> but without the timing or optimistic-update behaviour they describe. Tracked in issue #2656.
+
+
 **Status**: Specification
 **Target**: djust 0.4.0
 **Implementation Timeline**: 10-12 weeks

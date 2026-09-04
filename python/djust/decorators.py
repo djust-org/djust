@@ -796,7 +796,7 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
 
        **Server-side marker only — the client half is not implemented.**
        The decorator stamps metadata on the handler, and nothing in the
-       shipped client reads it: ````debounceTimers```` is declared in
+       shipped client reads it: ``debounceTimers`` is declared in
        ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
        and ``window.handlerMetadata`` has no readers. So the handler runs on
        every event exactly as an undecorated one would.
@@ -841,7 +841,7 @@ def throttle(
 
        **Server-side marker only — the client half is not implemented.**
        The decorator stamps metadata on the handler, and nothing in the
-       shipped client reads it: ````throttleState```` is declared in
+       shipped client reads it: ``throttleState`` is declared in
        ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
        and ``window.handlerMetadata`` has no readers. So the handler runs on
        every event exactly as an undecorated one would.
@@ -881,15 +881,15 @@ def throttle(
 
 def optimistic(func: F) -> F:
     """
-    Apply optimistic updates before server validation.
+    Mark a handler as intended for optimistic client updates (INERT).
 
-    NOT IMPLEMENTED client-side: `window.djust.optimistic` is read once in
-    `09-event-binding.js` and never assigned, so no optimistic update is
-    ever applied and there is no revert path. The metadata is the
-    declaration a future client would consume.
-    (Was documented as: the client will update the UI instantly based on the event data,
-    then apply server corrections if needed. This provides instant
-    feedback for user interactions.
+    .. warning::
+       **Not implemented client-side.** ``window.djust.optimistic`` is read
+       once in ``09-event-binding.js`` and never assigned anywhere in
+       ``static/djust/src/``, so no optimistic update is ever applied and
+       there is no revert path. Applying this decorator changes nothing at
+       runtime; it records a declaration a future client would consume.
+       Tracked in issue #2656.
 
     Usage:
         class MyView(LiveView):
@@ -903,11 +903,8 @@ def optimistic(func: F) -> F:
                 todo.completed = not todo.completed
                 todo.save()
 
-    The client will optimistically update the DOM based on the event data,
-    then apply any corrections from the server response.
-
     Returns:
-        Decorated function with optimistic metadata
+        Decorated function with optimistic metadata (no runtime effect)
     """
 
     @functools.wraps(func)

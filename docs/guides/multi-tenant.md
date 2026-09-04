@@ -166,6 +166,97 @@ DJUST_CONFIG = {
 }
 ```
 
+### Path Resolution
+
+Take the tenant from a URL path segment.
+
+```python
+# myapp.com/acme/dashboard → tenant_id: "acme"
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": "path",
+    "TENANT_PATH_POSITION": 1,   # 1-based: the first path segment
+}
+```
+
+```python
+# urls.py
+urlpatterns = [
+    path("<str:tenant_slug>/", include("app.urls")),
+]
+```
+
+### Header Resolution
+
+Take the tenant from an HTTP request header — the usual choice for APIs.
+
+```python
+# X-Tenant-ID: acme → tenant_id: "acme"
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": "header",
+    "TENANT_HEADER": "X-Tenant-ID",   # default
+}
+```
+
+### Session Resolution
+
+Read the tenant from the session, falling back to a JWT claim and then to
+`request.user.tenant_id`.
+
+```python
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": "session",
+    "TENANT_SESSION_KEY": "tenant_id",   # default
+    "TENANT_JWT_CLAIM": "tenant_id",     # default; read from user.jwt_payload
+}
+```
+
+> This resolver **never writes** the session, and a WebSocket handler's
+> `request.session[...] = ...` has no built-in save guarantee — Django's
+> `SessionMiddleware` only persists on the HTTP response cycle. Treat a session
+> write from a WS handler as a best-effort mirror.
+
+### Chained Resolution
+
+Try several strategies in order and take the first that matches. Configure it
+by giving `TENANT_RESOLVER` a **list** of registry names rather than one name.
+
+```python
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": ["header", "subdomain", "session"],
+    "TENANT_HEADER": "X-Tenant-ID",
+}
+```
+
+Unknown names are logged and skipped rather than raising.
+
+### Custom Resolution
+
+Point `TENANT_CUSTOM_RESOLVER` at a callable taking the request and returning a
+`TenantInfo` (or a plain `str`, which is wrapped for you).
+
+```python
+# myapp/tenants.py
+from djust.tenants.resolvers import TenantInfo
+
+def resolve_tenant(request):
+    if request.user.is_authenticated:
+        org = request.user.organization
+        return TenantInfo(tenant_id=org.slug, name=org.name)
+    return TenantInfo(tenant_id="public")
+```
+
+```python
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": "custom",
+    "TENANT_CUSTOM_RESOLVER": "myapp.tenants.resolve_tenant",
+}
+```
+
+The registry names are `subdomain` (default), `path`, `header`, `session` and
+`custom`; an unrecognised name logs a warning and falls back to `subdomain`.
+
+## Mixins
+
 ### TenantMixin
 
 Base mixin for tenant-aware views (`djust/tenants/mixin.py` — there is no

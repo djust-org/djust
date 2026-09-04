@@ -66,8 +66,8 @@ djust's State Management API provides Python-only abstractions for common client
 
 | Decorator | When to Use | Typical Wait/Interval | Bundle Impact |
 |-----------|-------------|----------------------|---------------|
-| `@debounce(wait)` | User is typing, dragging | 0.3-0.5s | +0.8 KB |
-| `@throttle(interval)` | Scroll, resize, mouse move | 0.1-0.2s | +0.8 KB |
+| `@debounce(wait)` | *(inert — no client impl, #2656)* | — | 0 KB |
+| `@throttle(interval)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
 | `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |

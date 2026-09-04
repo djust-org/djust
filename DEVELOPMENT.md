@@ -25,7 +25,7 @@ Working guidelines for all agents and contributors to the djust project. These a
 - One logical change per commit. Keep commits atomic.
 - Include the co-author line on every commit:
   ```
-  Co-Authored-By: <the model that wrote it> <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
   ```
 - Reference issue identifiers in commit messages when applicable (e.g., `fix: correct textarea newline stripping (DJU-42)`).
 

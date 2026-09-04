@@ -78,7 +78,7 @@ def create_server() -> "FastMCP":
 
         Returns all template directives (dj-click, dj-model, etc.),
         lifecycle methods (mount, get_context_data, etc.), decorators
-        (@event_handler, @debounce, etc.), and conventions.
+        (@event_handler, @cache, etc.), and conventions.
 
         This is the first tool to call — it gives you all the context
         needed to write correct djust code.
@@ -102,7 +102,7 @@ def create_server() -> "FastMCP":
     def get_decorators() -> str:
         """Get all available djust decorators with usage examples.
 
-        Returns @event_handler, @debounce, @throttle, @cache, @optimistic,
+        Returns @event_handler, @cache, and (inert, #2656) @debounce/@throttle/@optimistic,
         @client_state, @rate_limit, @permission_required, @reactive, state(),
         and @computed with their parameters and import paths.
         """
@@ -1448,7 +1448,6 @@ def create_server() -> "FastMCP":
         if "search" in feature_set:
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    @debounce(wait=0.3)")
             lines.append("    def search(self, value: str = '', **kwargs):")
             lines.append("        self.search_query = value")
             lines.append("        self.page = 1" if "pagination" in feature_set else "")
