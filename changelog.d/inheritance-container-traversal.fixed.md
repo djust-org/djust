@@ -1,0 +1,1 @@
+- **Nested template blocks:** Discover and apply inheritance overrides through localization scopes, `spaceless`, `ifchanged`, and empty loop branches. Both walks share an exhaustive inventory of node bodies while preserving Django's custom-block-tag discovery rules.

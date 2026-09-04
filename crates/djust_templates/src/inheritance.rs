@@ -15,6 +15,59 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
+// Physical child lists shared by the immutable discovery walk and mutable
+// override walk. Exhaustive matching makes new node variants require a
+// traversal decision; no catch-all may silently hide a new container.
+macro_rules! child_lists {
+    ($node:expr) => {
+        match $node {
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => [Some(true_nodes), Some(false_nodes)],
+            Node::For {
+                nodes, empty_nodes, ..
+            } => [Some(nodes), Some(empty_nodes)],
+            Node::IfChanged {
+                nodes, else_nodes, ..
+            } => [Some(nodes), Some(else_nodes)],
+            Node::BlockSuperScope { super_nodes, nodes } => [Some(super_nodes), Some(nodes)],
+            Node::Block { nodes, .. }
+            | Node::With { nodes, .. }
+            | Node::Spaceless { nodes }
+            | Node::AutoEscape { nodes, .. }
+            | Node::Filter { nodes, .. } => [Some(nodes), None],
+            Node::ReactComponent { children, .. }
+            | Node::BlockCustomTag { children, .. }
+            | Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => [Some(children), None],
+            Node::Text(_)
+            | Node::Variable(..)
+            | Node::Extends(_)
+            | Node::Include { .. }
+            | Node::Comment
+            | Node::Load(_)
+            | Node::CsrfToken
+            | Node::Static(_)
+            | Node::RustComponent { .. }
+            | Node::CustomTag { .. }
+            | Node::WidthRatio { .. }
+            | Node::FirstOf { .. }
+            | Node::TemplateTag(_)
+            | Node::Cycle { .. }
+            | Node::ResetCycle { .. }
+            | Node::Now(_)
+            | Node::UnsupportedTag { .. }
+            | Node::AssignTag { .. }
+            | Node::InlineIf { .. }
+            | Node::RawBlockCustomTag { .. } => [None, None],
+        }
+    };
+}
+
 /// Represents a template in the inheritance chain
 #[derive(Debug, Clone)]
 pub struct TemplateLayer {
@@ -125,73 +178,18 @@ impl InheritanceChain {
     }
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
-        match node {
-            Node::Block { name, nodes } => {
-                // Get the content for this block - either from merged overrides or original
-                let block_content = if let Some(merged_nodes) = self.merged_blocks.get(name) {
-                    merged_nodes.clone()
-                } else {
-                    nodes.clone()
-                };
-                // Always recursively apply overrides to handle nested blocks
-                Node::Block {
-                    name: name.clone(),
-                    nodes: self.apply_block_overrides(&block_content),
-                }
-            }
-            // Recursively process nested structures
-            Node::If {
-                condition,
-                true_nodes,
-                false_nodes,
-                in_tag_context,
-                marker_id,
-            } => Node::If {
-                condition: condition.clone(),
-                true_nodes: self.apply_block_overrides(true_nodes),
-                false_nodes: self.apply_block_overrides(false_nodes),
-                in_tag_context: *in_tag_context,
-                marker_id: marker_id.clone(),
+        let mut overridden = match node {
+            Node::Block { name, nodes } => Node::Block {
+                name: name.clone(),
+                nodes: self.merged_blocks.get(name).unwrap_or(nodes).clone(),
             },
-            Node::For {
-                var_names,
-                iterable,
-                reversed,
-                nodes,
-                empty_nodes,
-            } => Node::For {
-                var_names: var_names.clone(),
-                iterable: iterable.clone(),
-                reversed: *reversed,
-                nodes: self.apply_block_overrides(nodes),
-                empty_nodes: self.apply_block_overrides(empty_nodes),
-            },
-            Node::With { assignments, nodes } => Node::With {
-                assignments: assignments.clone(),
-                nodes: self.apply_block_overrides(nodes),
-            },
-            // A parent's `{% autoescape off %}{% block b %}…` governs the
-            // child's override, so the block inside it must be reachable
-            // (#2556).
-            Node::AutoEscape { on, nodes } => Node::AutoEscape {
-                on: *on,
-                nodes: self.apply_block_overrides(nodes),
-            },
-            Node::Filter { filters, nodes } => Node::Filter {
-                filters: filters.clone(),
-                nodes: self.apply_block_overrides(nodes),
-            },
-            // A parent body reached through block.super still uses the
-            // descendant's overrides for blocks nested inside that body.
-            Node::BlockSuperScope { super_nodes, nodes } => Node::BlockSuperScope {
-                super_nodes: self.apply_block_overrides(super_nodes),
-                nodes: self.apply_block_overrides(nodes),
-            },
-            // Skip extends nodes in the output
-            Node::Extends(_) => Node::Comment,
-            // Everything else passes through unchanged
+            Node::Extends(_) => return Node::Comment,
             _ => node.clone(),
+        };
+        for children in child_lists!(&mut overridden).into_iter().flatten() {
+            *children = self.apply_block_overrides(children);
         }
+        overridden
     }
 }
 
@@ -349,35 +347,18 @@ fn extract_blocks(nodes: &[Node]) -> HashMap<String, Vec<Node>> {
 }
 
 fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>) {
-    match node {
-        Node::Block { name, nodes } => {
-            blocks.insert(name.clone(), nodes.clone());
-            // Also extract nested blocks
-            for child in nodes {
-                extract_blocks_recursive(child, blocks);
-            }
+    // Django SimpleBlockNode inherits SimpleNode.child_nodelists = (). Its
+    // body renders nested blocks, but does not declare descendant overrides.
+    if matches!(node, Node::BlockCustomTag { .. }) {
+        return;
+    }
+    if let Node::Block { name, nodes } = node {
+        blocks.insert(name.clone(), nodes.clone());
+    }
+    for children in child_lists!(node).into_iter().flatten() {
+        for child in children {
+            extract_blocks_recursive(child, blocks);
         }
-        Node::If {
-            true_nodes,
-            false_nodes,
-            ..
-        } => {
-            for child in true_nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-            for child in false_nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-        }
-        Node::For { nodes, .. }
-        | Node::With { nodes, .. }
-        | Node::AutoEscape { nodes, .. }
-        | Node::Filter { nodes, .. } => {
-            for child in nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-        }
-        _ => {}
     }
 }
 
