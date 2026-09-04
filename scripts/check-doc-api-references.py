@@ -12,10 +12,13 @@ Two review rounds fixed those by hand and BOTH missed a second example a
 hundred lines below the tables, because each swept the sites it was pointed at
 rather than the whole file. This script sweeps the file.
 
-It checks two shapes:
+It checks three shapes:
 
   * ``self.foo(...)`` inside a fenced ``python`` block  — the copy-paste path
   * ``| `foo(...)` | ...``  table rows                  — the reference path
+  * ``- `foo(...)` `` bullet rows                       — ditto, other half
+    of the repo. Every backticked call on the line is read, not just the
+    first: ``- `a()` / `b()` — …`` documents two methods.
 
 against the union of the classes registered for that doc below. A name absent
 from every class is reported. Prose is deliberately NOT scanned: a sentence
@@ -47,6 +50,10 @@ DOC_CLASSES: dict[str, tuple[str, ...]] = {
         "djust.pwa.mixins.SyncMixin",
     ),
     "docs/guides/multi-tenant.md": (
+        "djust.tenants.mixin.TenantMixin",
+        "djust.tenants.mixin.TenantScopedMixin",
+    ),
+    "docs/website/guides/multi-tenant.md": (
         "djust.tenants.mixin.TenantMixin",
         "djust.tenants.mixin.TenantScopedMixin",
     ),
@@ -95,8 +102,18 @@ SELF_CALL_RE = re.compile(r"\bself\.([a-z_][a-z0-9_]*)\s*\(")
 # left it blind to two of the three docs it registered — green against the
 # exact defect it was written to catch. Match both; COVERAGE_MIN below makes
 # a future blind spot fail loudly instead of passing.
-TABLE_ROW_RE = re.compile(r"^\|\s*`([a-z_][a-z0-9_]*)\s*\(", re.MULTILINE)
-BULLET_ROW_RE = re.compile(r"^\s*[-*]\s*`([a-z_][a-z0-9_]*)\s*\(", re.MULTILINE)
+# A reference LINE is a table row or a bullet; a single line may name several
+# methods (`- `a()` / `b()` — …`), so the line is matched first and then every
+# backticked call on it is read. Capturing only the first was a live blind spot
+# at docs/guides/multi-tenant.md:203.
+# The line must OPEN with a backticked call — that is what distinguishes a
+# reference row from a prose bullet. Matching any bullet swept up sentences
+# like "- The queue is NOT processed … there is no `queue_sync()`", turning a
+# correction into a reported phantom.
+REFERENCE_LINE_RE = re.compile(
+    r"^(?:\|\s*|\s*[-*]\s+)`[a-z_][a-z0-9_]*\s*\(.*$", re.MULTILINE
+)
+CALL_IN_LINE_RE = re.compile(r"`([a-z_][a-z0-9_]*)\s*\(")
 
 # Every registered doc must yield at least this many checked references. A doc
 # whose reference surface uses a shape the patterns above do not match would
@@ -142,8 +159,8 @@ def check_doc(rel_path: str, dotted_classes: tuple[str, ...]) -> list[str]:
                 record(name, f"self.{name}(")
 
     reference_hits = 0
-    for pattern in (TABLE_ROW_RE, BULLET_ROW_RE):
-        for name in pattern.findall(text):
+    for line in REFERENCE_LINE_RE.findall(text):
+        for name in CALL_IN_LINE_RE.findall(line):
             reference_hits += 1
             record(name, f"`{name}(")
 
@@ -152,7 +169,7 @@ def check_doc(rel_path: str, dotted_classes: tuple[str, ...]) -> list[str]:
         problems.append(
             f"{rel_path}: no API references matched — this doc's reference surface "
             f"uses a shape the checker cannot see, so it is NOT being checked. "
-            f"Add a pattern for it (see TABLE_ROW_RE / BULLET_ROW_RE)."
+            f"Add a pattern for it (see REFERENCE_LINE_RE / CALL_IN_LINE_RE)."
         )
     for name, line_no in sorted(found.items(), key=lambda kv: kv[1]):
         if name in ALWAYS_ALLOWED or name in APP_PROVIDED or PLACEHOLDER_RE.match(name):
@@ -162,6 +179,52 @@ def check_doc(rel_path: str, dotted_classes: tuple[str, ...]) -> list[str]:
         where = f"{rel_path}:{line_no}" if line_no else rel_path
         owners = ", ".join(c.__name__ for c in classes)
         problems.append(f"{where}: `{name}()` is documented but exists on none of: {owners}")
+    return problems
+
+
+def check_hook_scope_matches_registry() -> list[str]:
+    """Every doc the pre-commit hook FIRES on must be one this script CHECKS.
+
+    Round 4 registered the hook against `docs/(website/)?guides/(pwa|multi-tenant).md`
+    but left `docs/website/guides/multi-tenant.md` out of DOC_CLASSES. Editing
+    that file ran the hook, printed "Passed", and examined nothing — a green
+    result that was affirmatively misleading about the file just edited. That
+    is worse than no hook, so the mismatch is now an error rather than a gap
+    someone has to notice.
+    """
+    config = REPO_ROOT / ".pre-commit-config.yaml"
+    if not config.exists():
+        return []
+    hook_files_re = None
+    lines = config.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if "id: check-doc-api-references" in line:
+            for follow in lines[i : i + 12]:
+                m = re.match(r"\s*files:\s*(\S.*?)\s*$", follow)
+                if m:
+                    hook_files_re = m.group(1)
+                    break
+            break
+    if not hook_files_re:
+        return [
+            ".pre-commit-config.yaml: hook `check-doc-api-references` has no "
+            "`files:` pattern — its scope cannot be reconciled with DOC_CLASSES."
+        ]
+
+    try:
+        pattern = re.compile(hook_files_re)
+    except re.error as exc:  # pragma: no cover - malformed config
+        return [f".pre-commit-config.yaml: hook `files:` regex does not compile: {exc}"]
+
+    problems = []
+    for path in sorted((REPO_ROOT / "docs").rglob("*.md")):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if pattern.search(rel) and rel not in DOC_CLASSES:
+            problems.append(
+                f"{rel}: the pre-commit hook runs on this file but it is not in "
+                f"DOC_CLASSES, so the hook reports success without checking it. "
+                f"Register it, or narrow the hook's `files:` pattern."
+            )
     return problems
 
 
@@ -176,7 +239,7 @@ def main() -> int:
     except Exception:  # pragma: no cover - docs check must not hard-fail on setup
         pass
 
-    problems: list[str] = []
+    problems: list[str] = check_hook_scope_matches_registry()
     for rel_path, dotted_classes in DOC_CLASSES.items():
         problems.extend(check_doc(rel_path, dotted_classes))
 
