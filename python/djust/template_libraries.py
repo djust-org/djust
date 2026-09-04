@@ -195,6 +195,10 @@ _current_backend: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "djust_template_backend", default=None
 )
 
+_current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[bool]]] = (
+    contextvars.ContextVar("djust_template_format_flags", default=(None, None))
+)
+
 _lock = threading.RLock()
 
 #: ``OPTIONS['libraries']`` from every ``DjustTemplateBackend`` constructed in
@@ -239,13 +243,17 @@ def raised_by_library(exc: BaseException) -> bool:
 
 
 @contextlib.contextmanager
-def rendering_with_backend(backend: Any) -> Iterator[None]:
+def rendering_with_backend(
+    backend: Any, *, use_l10n: Optional[bool] = None, use_tz: Optional[bool] = None
+) -> Iterator[None]:
     """Make ``backend`` the one a bridged ``inclusion_tag`` renders through
     and a ``{% load %}`` resolves against, for the duration of a render."""
     token = _current_backend.set(backend)
+    flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
         yield
     finally:
+        _current_format_flags.reset(flags_token)
         _current_backend.reset(token)
 
 
@@ -852,7 +860,8 @@ def _render_node(
     # (#1646). `Context(d)` keeps `d` as `dicts[-1]`, so passing the CALLER's
     # dict lets a node's `context[var] =` write through to it; the copy keeps
     # the node's writes inside the returned `bindings` diff, where they belong.
-    ctx = Context(dict(context), autoescape=autoescape)
+    use_l10n, use_tz = _current_format_flags.get()
+    ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
     if "request" in context:
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
@@ -1255,7 +1264,8 @@ class LibraryRawBlockTagHandler:
 
         try:
             before = dict(context)
-            ctx = Context(dict(context), autoescape=autoescape)
+            use_l10n, use_tz = _current_format_flags.get()
+            ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
             output = self._compile(list(args), body).render(ctx)

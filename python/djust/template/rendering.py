@@ -825,7 +825,11 @@ class DjustTemplate:
             # render, which never comes through here, sees the fallback.
             from ..template_libraries import rendering_with_backend
 
-            with rendering_with_backend(self.backend):
+            with rendering_with_backend(
+                self.backend,
+                use_l10n=getattr(context, "use_l10n", None),
+                use_tz=getattr(context, "use_tz", None),
+            ):
                 html = self.backend._render_fn_with_dirs(
                     resolved_template,
                     context_dict,
