@@ -1154,6 +1154,7 @@ fn parse_token_inner(
                     // variable form look for a file of its own name.
                     // Consumers strip the quotes themselves — see
                     // `inheritance::resolve_extends_target`.
+                    validate_tag_operand(&args[0])?;
                     let template = args[0].clone();
                     Ok(Some(Node::Extends(template)))
                 }

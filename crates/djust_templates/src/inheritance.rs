@@ -492,24 +492,28 @@ pub fn build_inheritance_chain<L: TemplateLoader>(
 /// `resolve_inheritance` pre-pass, which runs before any render) an unquoted
 /// token is returned as-is — the same string the pre-#2517 code used, so that
 /// path is unchanged.
-fn resolve_extends_target(token: &str, context: Option<&Context>) -> String {
+fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<String> {
     let trimmed = token.trim();
+    if let Some(context) = context {
+        // Resolve the complete expression, including quoted initial operands.
+        // Checking only its first and last quotes misreads 'base'|cut:'x'.
+        return Ok(
+            match crate::renderer::resolve_extends_operand(trimmed, context)? {
+                Some(name) if !name.is_empty() => name,
+                _ => trimmed.to_string(),
+            },
+        );
+    }
+    // The context-free preprocessing API retains its literal-name behavior.
     let bytes = trimmed.as_bytes();
     let quoted = bytes.len() >= 2
         && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
-    if quoted {
-        return trimmed[1..trimmed.len() - 1].to_string();
-    }
-    let Some(context) = context else {
-        return trimmed.to_string();
-    };
-    match crate::renderer::resolve_extends_operand(trimmed, context) {
-        Some(name) if !name.is_empty() => name,
-        // A miss falls back to the token so the "not found" error still names
-        // what the author wrote.
-        _ => trimmed.to_string(),
-    }
+    Ok(if quoted {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    })
 }
 
 /// [`build_inheritance_chain`] that knows the name of the template it starts
@@ -534,7 +538,7 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
             let parent_name = parent_name.to_string(); // Clone to avoid borrow issues
-            let parent_name = resolve_extends_target(&parent_name, context);
+            let parent_name = resolve_extends_target(&parent_name, context)?;
             let parent_name = construct_relative_path(current_name.as_deref(), &parent_name)?;
             let parent_nodes = loader.load_template(&parent_name)?;
             chain.add_parent(parent_nodes);

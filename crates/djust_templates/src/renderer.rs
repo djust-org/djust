@@ -768,17 +768,17 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     get_value_safe_ignoring_failures(values[idx].trim(), context)
 }
 
-/// Resolve an unquoted `{% extends %}` operand against the render context.
+/// Resolve an `{% extends %}` filter expression against the render context.
 ///
 /// Lives here rather than in `inheritance` because the resolver and its
 /// `ignore_failures` policy belong to the renderer; `inheritance` has no other
 /// reason to reach into context resolution.
-pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Option<String> {
-    let (value, _) = get_value_safe_ignoring_failures(token, context).ok()?;
-    match value {
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<Option<String>> {
+    let (value, _) = get_value_safe_ignoring_failures(token, context)?;
+    Ok(match value {
         Value::Missing | Value::None => None,
         other => Some(other.to_string()),
-    }
+    })
 }
 
 /// Is this template-name token a QUOTED literal rather than a variable?
