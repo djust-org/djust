@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pre-push `cargo test`, scoped to the crates the pushed range touches (#2526).
+# Pre-push `cargo test`, scoped to the crates the pushed range touches (#2526)
+# and run in DEBUG (#2654 — see the invocation at the bottom for the numbers).
 #
 # scripts/select-tests.py --cargo prints `-p <crate>` for every crate whose
 # files changed plus every workspace crate that depends on it, or
@@ -36,5 +37,33 @@ if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     fi
 fi
 
-echo "cargo test ${ARGS[*]} --release -q"
-PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test "${ARGS[@]}" --release -q
+# DEBUG, not --release (#2654).
+#
+# The `--release` this replaces predates the #2526 scoping work — it was in the
+# original inline hook entry and carried no rationale in the script, the config
+# or the commit that moved it here. Measured on a cold worktree, the exact
+# invocation this hook makes:
+#
+#     cargo test --workspace --exclude djust_live            54.7s
+#     cargo test --workspace --exclude djust_live --release  169.0s
+#
+# 3.1x on the workspace (6.6x on a single crate), for identical results: the
+# whole suite passes in debug, 0 failures. That is ~2 minutes back on every
+# push that touches Cargo.toml / Cargo.lock / djust_core, which is what the
+# selector escalates to `--workspace` for.
+#
+# Checked before flipping: the only wall-clock in any Rust test is the 10s
+# HANG watchdog in `crates/djust_templates/tests/free_threaded_safety.rs`,
+# which completes in 0.02s in debug — a 500x margin, and a deadline rather than
+# a performance assertion. No test asserts on elapsed time.
+#
+# Benchmarks are unaffected: they are a separate `cargo bench` / pytest-benchmark
+# path and still build optimised. Set DJUST_PREPUSH_RELEASE=1 to restore the
+# optimised run locally.
+if [ "${DJUST_PREPUSH_RELEASE:-}" = "1" ]; then
+    echo "cargo test ${ARGS[*]} --release -q"
+    PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test "${ARGS[@]}" --release -q
+else
+    echo "cargo test ${ARGS[*]} -q"
+    PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test "${ARGS[@]}" -q
+fi
