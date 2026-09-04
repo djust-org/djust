@@ -1,6 +1,6 @@
 # Multi-Tenant Applications
 
-djust v0.3.0 provides comprehensive multi-tenant support for building SaaS applications with complete tenant isolation.
+djust provides comprehensive multi-tenant support for building SaaS applications with complete tenant isolation.
 
 ## Overview
 
@@ -15,30 +15,41 @@ Multi-tenant support includes:
 
 ### 1. Configure Tenant Resolution
 
+Resolution is configured through flat keys in `DJUST_CONFIG` (there is no
+`DJUST_TENANT_RESOLVER` / `DJUST_TENANT_CONFIG` setting). `TENANT_RESOLVER`
+takes a registry **name**, a list of names (chained), or a callable:
+
 ```python
 # settings.py
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SubdomainResolver'
-
-DJUST_TENANT_CONFIG = {
-    'default_tenant': 'public',
-    'subdomain_resolver': {
-        'domain': 'myapp.com',
-        'exclude_subdomains': ['www', 'api', 'admin']
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'subdomain',       # 'subdomain' | 'path' | 'header' | 'session' | 'custom'
+    'TENANT_MAIN_DOMAIN': 'myapp.com',
+    'TENANT_SUBDOMAIN_EXCLUDE': ['www', 'api', 'admin'],
+    'TENANT_DEFAULT': 'public',           # used when nothing resolves
 }
+
+MIDDLEWARE = [
+    # ...
+    'djust.tenants.middleware.TenantMiddleware',
+]
 ```
 
-### 2. Use TenantMixin in your views
+Equivalent shorthand — `DJUST_TENANTS = {'RESOLVER': 'subdomain', 'REQUIRED': True, ...}`
+also activates the middleware (`REQUIRED: True` raises 404 when nothing
+resolves). With neither key configured, `TenantMiddleware` is a zero-cost
+no-op. A dotted class path in `TENANT_RESOLVER` is NOT a valid value — it
+logs "Unknown tenant resolver" and falls back to subdomain; use
+`'custom'` + `TENANT_CUSTOM_RESOLVER` for callables.
 
 ```python
 from djust import LiveView
-from djust.tenants.mixins import TenantMixin, TenantScopedMixin
+from djust.tenants.mixin import TenantMixin, TenantScopedMixin  # module is `mixin` (singular)
 
 class DashboardView(TenantMixin, LiveView):
     template_name = 'dashboard.html'
 
-    def mount(self, request):
-        # self.tenant automatically available
+    def mount(self, request, **kwargs):
+        # self.tenant (a TenantInfo) is resolved automatically
         self.stats = self.get_tenant_stats()
 
     def get_tenant_stats(self):
@@ -76,28 +87,20 @@ Extract tenant from subdomain:
 
 ```python
 # acme.myapp.com → tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SubdomainResolver'
-DJUST_TENANT_CONFIG = {
-    'subdomain_resolver': {
-        'domain': 'myapp.com',
-        'exclude_subdomains': ['www', 'api'],
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'subdomain',
+    'TENANT_MAIN_DOMAIN': 'myapp.com',            # optional: pin the domain
+    'TENANT_SUBDOMAIN_EXCLUDE': ['www', 'api'],   # ignored subdomains
+    'TENANT_DEFAULT': 'public',
 }
 ```
-
-### Path Resolution
 
 Extract tenant from URL path:
 
 ```python
 # myapp.com/acme/dashboard → tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.PathResolver'
-DJUST_TENANT_CONFIG = {
-    'path_resolver': {
-        'position': 0,  # First path segment
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'path',   # first path segment
 }
 
 # URL patterns
@@ -106,37 +109,25 @@ urlpatterns = [
 ]
 ```
 
-### Header Resolution
-
 Extract tenant from HTTP headers:
 
 ```python
 # X-Tenant-ID: acme → tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.HeaderResolver'
-DJUST_TENANT_CONFIG = {
-    'header_resolver': {
-        'header_name': 'X-Tenant-ID',
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'header',
+    'TENANT_HEADER': 'X-Tenant-ID',   # header name (this is the default)
 }
 ```
-
-### Session Resolution
 
 Extract tenant from session/JWT:
 
 ```python
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SessionResolver'
-DJUST_TENANT_CONFIG = {
-    'session_resolver': {
-        'session_key': 'tenant_id',
-        'jwt_claim': 'tenant',
-        'user_attribute': 'tenant_id'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'session',
+    'TENANT_SESSION_KEY': 'tenant_id',   # session key (default); falls back
+                                         # to a JWT claim / user attribute
 }
 ```
-
-### Custom Resolution
 
 Implement custom tenant logic:
 
@@ -157,137 +148,133 @@ def custom_tenant_resolver(request):
     )
 
 # settings.py
-DJUST_TENANT_RESOLVER = 'myapp.utils.custom_tenant_resolver'
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'custom',
+    'TENANT_CUSTOM_RESOLVER': 'myapp.tenants.resolve_tenant',  # dotted path to a callable
+}
 ```
-
-### Chained Resolution
 
 Try multiple strategies with fallback:
 
 ```python
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.ChainedResolver'
-DJUST_TENANT_CONFIG = {
-    'chained_resolver': {
-        'resolvers': [
-            'djust.tenants.resolvers.HeaderResolver',
-            'djust.tenants.resolvers.SubdomainResolver',
-            'djust.tenants.resolvers.SessionResolver'
-        ],
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    # A LIST of registry names — tried in order, first hit wins
+    'TENANT_RESOLVER': ['header', 'subdomain', 'session'],
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
-## Mixins
-
 ### TenantMixin
 
-Base mixin for tenant-aware views:
+Base mixin for tenant-aware views (`djust/tenants/mixin.py` — there is no
+`tenants.mixins` module and no `setup()` hook; resolution happens in the
+LiveView lifecycle and `self.tenant` is a property over the resolved
+`TenantInfo`):
 
-```python
-class TenantMixin:
-    def setup(self, request, *args, **kwargs):
-        super().setup(request, *args, **kwargs)
-        self.tenant = resolve_tenant(request)
+- `tenant` — property returning the resolved `TenantInfo` (or `None`)
+- `set_tenant(tenant_id) -> TenantInfo` — set/switch the tenant explicitly
+- `resolve_tenant(request)` — run the configured resolver
+- `get_context_data()` — injects the tenant under `TENANT_CONTEXT_NAME`
+  (default `tenant`)
+- `get_presence_key()` / `get_state_key_prefix()` — automatically tenant-scope
+  presence and state keys (`tenant:<id>:…`), so presence and state isolation
+  fall out of the mixin
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['tenant'] = self.tenant
-        return context
-```
-
-Usage:
-
-```python
-class MyView(TenantMixin, LiveView):
-    def mount(self, request):
-        # self.tenant available
-        logger.info("Mounted for tenant: %s", self.tenant.name)
-```
+`TenantInfo` exposes `id`, `name`, `settings` (dict), `metadata` (dict), and
+`raw` (the original object, e.g. a Django model instance).
 
 ### TenantScopedMixin
 
-Provides tenant-scoped querysets:
+Extends `TenantMixin` with tenant-scoped model helpers:
 
-```python
-class TenantScopedMixin(TenantMixin):
-    def tenant_queryset(self, model_class, tenant_field='tenant_id'):
-        """Get queryset filtered by current tenant."""
-
-    def tenant_get_object_or_404(self, model_class, **kwargs):
-        """Get object scoped to current tenant."""
-
-    def tenant_filter(self, queryset, tenant_field='tenant_id'):
-        """Filter existing queryset by tenant."""
-```
+- `get_tenant_queryset(model=None) -> QuerySet` — `model` defaults to the
+  view's `model` attribute; filtered to the current tenant
+- `create_for_tenant(model=None, **kwargs)` — create with the tenant set
+- `get_tenant_object(pk, model=None)` — fetch a pk scoped to the current
+  tenant (raises DoesNotExist for other tenants — an IDOR guard, not a 404
+  helper)
 
 Usage:
 
 ```python
 class ProjectListView(TenantScopedMixin, LiveView):
-    def mount(self, request):
+    model = Project
+
+    def mount(self, request, **kwargs):
         # Automatically filtered by tenant
-        self.projects = self.tenant_queryset(Project)
+        self.projects = self.get_tenant_queryset()
 
     def get_project(self, project_id):
         # Ensures project belongs to current tenant
-        return self.tenant_get_object_or_404(Project, id=project_id)
+        return self.get_tenant_object(project_id)
+
+    def create_project(self, name):
+        return self.create_for_tenant(name=name)
 ```
 
-## State Backend Isolation
+## State & Presence Isolation
 
-### Tenant-Aware Backends
+LiveView **state** backends (`DJUST_STATE_BACKEND` env or
+`DJUST_CONFIG['STATE_BACKEND']`) accept only `'redis' | 'memory'` or a
+`redis://` URL — not dotted class paths. Tenant isolation of state comes from
+`TenantMixin.get_state_key_prefix()` (above): on a tenant-resolved view,
+state keys are automatically prefixed `tenant:<id>:…`.
 
-Configure tenant isolation for LiveView state:
+For **presence**, djust ships tenant-scoped backends
+(`djust/tenants/backends.py`):
 
 ```python
-# settings.py
-DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareRedisBackend'
-
-# or
-DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareMemoryBackend'
+from djust.tenants.backends import (
+    TenantAwareBackendMixin,      # mixin: prefixes keys tenant:<id>:<key> (private _tenant_key)
+    TenantAwareRedisBackend,      # PresenceBackend + tenant scoping
+    TenantAwareMemoryBackend,     # PresenceBackend + tenant scoping
+    get_tenant_presence_backend,  # (tenant_id: str) -> PresenceBackend
+)
 ```
 
-### Custom Backend
-
-```python
-from djust.tenants.backends import TenantAwareBackend
-
-class CustomTenantBackend(TenantAwareBackend):
-    def get_tenant_key(self, tenant, key):
-        return f"tenant:{tenant.id}:{key}"
-
-    def get(self, tenant, key):
-        # Implementation
-
-    def set(self, tenant, key, value, timeout=None):
-        # Implementation
-```
+`TenantAwareBackendMixin` is a mixin (not a standalone backend class), and
+these are **presence** backends — pass one via `DJUST_CONFIG['PRESENCE_BACKEND']`
+if you want tenant-aware presence globally:
 
 ## Presence System Integration
 
 Tenant-aware presence for real-time features:
 
 ```python
-# settings.py
-DJUST_PRESENCE_BACKEND = 'djust.tenants.presence.TenantPresenceBackend'
+from djust.tenants.backends import get_tenant_presence_backend
 
-# In your view
 class CollaborationView(TenantMixin, LiveView):
-    def mount(self, request):
-        self.presence = get_tenant_presence_backend(self.tenant)
-        self.presence.track_user(request.user.id, {
-            'name': request.user.name,
-            'avatar': request.user.avatar_url
+    def mount(self, request, **kwargs):
+        # takes the tenant ID string; returns a PresenceBackend with the
+        # standard join/leave/list/count/heartbeat API
+        self.presence = get_tenant_presence_backend(self.tenant.id)
+        self.presence.join(self.get_presence_key(), str(request.user.id), {
+            'name': request.user.get_full_name(),
         })
 
-    def handle_disconnect(self):
-        self.presence.untrack_user(self.request.user.id)
+    def leave(self):
+        self.presence.leave(self.get_presence_key(), str(self.request.user.id))
 ```
+
+(There is no `djust.tenants.presence` module and no `track_user`/`untrack_user`
+API — presence uses `join`/`leave`/`list`.)
 
 ## Template Context
 
-Tenant information is automatically available in templates:
+Tenant information is available in templates once you register the context
+processor (this step is required, not automatic):
+
+```python
+# settings.py
+TEMPLATES = [{
+    'OPTIONS': {
+        'context_processors': [
+            # ...
+            'djust.tenants.context_processor',
+        ],
+    },
+}]
+```
 
 ```html
 <!-- dashboard.html -->
@@ -465,41 +452,38 @@ class ProjectView(TenantScopedMixin, LiveView):
 
 ```python
 # settings.py
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SubdomainResolver'
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'subdomain',
+    'TENANT_MAIN_DOMAIN': 'myapp.com',
+}
+MIDDLEWARE += ['djust.tenants.middleware.TenantMiddleware']
 ```
 
 ## Testing
 
-### Test Utilities
+There is no `djust.tenants.test` module (`TenantTestCase` /
+`override_tenant` do not exist). Test tenant resolution directly with
+`RequestFactory` + `TenantInfo`, or through the middleware:
 
 ```python
-from djust.tenants.test import TenantTestCase, override_tenant
-
-class ProjectTestCase(TenantTestCase):
-    def test_tenant_scoped_query(self):
-        with override_tenant('acme'):
-            projects = Project.objects.all()  # Scoped to 'acme'
-            self.assertEqual(projects.count(), 2)
-```
-
-### Mock Tenant Resolution
-
-```python
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 from djust.tenants.resolvers import TenantInfo
 
-def test_view_with_tenant():
-    request = RequestFactory().get('/dashboard/')
-    request.tenant = TenantInfo(id='test', name='Test Org')
+class ProjectViewTest(TestCase):
+    def test_view_with_tenant(self):
+        request = RequestFactory().get('/dashboard/')
+        request.tenant = TenantInfo(id='test', name='Test Org')
 
-    view = DashboardView()
-    view.setup(request)
-    view.mount(request)
+        view = DashboardView()
+        view.mount(request)
+        self.assertEqual(view.tenant.id, 'test')
 
-    assert view.tenant.id == 'test'
+    def test_middleware_sets_tenant(self):
+        # with subdomain resolution configured + ALLOWED_HOSTS
+        request = RequestFactory().get('/', HTTP_HOST='acme.myapp.com')
+        response = TenantMiddleware(lambda r: r)(request)
+        self.assertEqual(request.tenant.id, 'acme')
 ```
-
-## Performance Considerations
 
 - **Database Indexes**: Always index tenant_id fields
 - **Query Optimization**: Use select_related/prefetch_related

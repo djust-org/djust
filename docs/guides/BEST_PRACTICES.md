@@ -91,20 +91,21 @@ These types will cause serialization failures:
 
 djust provides multiple layers of protection:
 
-**1. Runtime validation (DEBUG mode)**
+**1. Runtime validation (`LIVEVIEW_CONFIG['strict_serialization']`, opt-in)**
 
-In development, djust detects non-serializable state and raises `TypeError` immediately:
+djust always *warns* about non-serializable state; it only *raises* when you
+opt in via `LIVEVIEW_CONFIG['strict_serialization'] = True` (the default is
+`False`; there is no DEBUG-mode branch):
 
 ```python
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        self.client = boto3.client('s3')  # ✗ TypeError in DEBUG mode
+        self.client = boto3.client('s3')  # ✗ warning (or TypeError if strict)
 ```
 
 ```
-TypeError: Cannot serialize client=<botocore.client.S3 object at 0x...> in MyView.
-Service instances must be created on-demand via helper methods.
-See: docs/guides/services.md
+LiveView state contains non-serializable value: S3 (from botocore.client).
+This will be converted to a string...
 ```
 
 **2. System check V006**
@@ -885,8 +886,9 @@ djust includes a smoke test mixin that automatically tests views for crashes and
 ```python
 from djust.testing import LiveViewSmokeTest
 
-class MyViewSmokeTests(LiveViewSmokeTest, TestCase):
-    view_class = MyView
+class MyAppSmokeTests(LiveViewSmokeTest, TestCase):
+    app_label = "myapp"  # scope to one app (default None = every discovered LiveView)
+    # knobs: app_label, max_queries, fuzz, skip_views, view_config
 ```
 
 ---
@@ -1070,7 +1072,7 @@ Add both attributes to the same root element:
 ```
 
 **Related:**
-- System check: `djust.T002` detects missing `dj-root` (Warning severity)
+- System check: `djust.T002` hints when `dj-root` is absent (INFO severity — it is auto-inferred from `dj-view`)
 - System check: `djust.T005` detects when attributes are on different elements
 - Guide: [Template Requirements](template-requirements.md)
 - Error code: [DJE-053](error-codes.md#dje-053-no-dom-changes)
@@ -1139,13 +1141,24 @@ the same check at the consumer level (defense in depth). Make sure
 - djust client.js fails to load → no WebSocket connection
 
 **Solution:**
-Use `djust.asgi.get_application()` in your `asgi.py`. It wraps your ASGI app with `ASGIStaticFilesHandler`, which intercepts static file requests at the ASGI layer before they reach Django middleware:
+Wrap your Django ASGI app with Django's own `ASGIStaticFilesHandler` (there is
+no `djust.asgi` module) — this is exactly what the `djust new` scaffold emits:
 
 ```python
 # asgi.py
-from djust.asgi import get_application
+import os
+from django.core.asgi import get_asgi_application
 
-application = get_application()
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+django_asgi_app = get_asgi_application()
+
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler  # noqa: E402
+from channels.routing import ProtocolTypeRouter  # noqa: E402
+
+application = ProtocolTypeRouter({
+    "http": ASGIStaticFilesHandler(django_asgi_app),
+    # ... websocket routing ...
+})
 ```
 
 Then collect static files before deployment:
@@ -1381,7 +1394,7 @@ When building a djust LiveView:
 - [ ] Use `dj-confirm` for destructive actions
 - [ ] Check authentication/authorization in `mount()` and handlers
 - [ ] Configure WebSocket routing in `asgi.py` with `ProtocolTypeRouter`
-- [ ] Use `djust.asgi.get_application()` for static file serving with ASGI servers
+- [ ] Wrap the Django ASGI app with `ASGIStaticFilesHandler` (as the scaffold does) for static file serving under ASGI servers
 - [ ] Run `python manage.py check --tag djust` to catch common issues
 - [ ] Read `SECRET_KEY`, `ALLOWED_HOSTS`, and `DATABASES` from the environment for platform deploys (never hardcode; no sqlite on the read-only rootfs)
 - [ ] Address every `djust deploy` "deploy doctor" warning before shipping — they predict runtime 500s on the platform

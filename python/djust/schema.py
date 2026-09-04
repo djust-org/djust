@@ -1217,7 +1217,6 @@ BEST_PRACTICES = {
             "    def form_valid(self, form):\n"
             "        obj = form.save()\n"
             "        self.success_message = 'Saved!'\n"
-            "        self.redirect_url = reverse('detail', kwargs={'pk': obj.pk})\n"
             "\n"
             "    def form_invalid(self, form):\n"
             "        self.error_message = 'Please fix errors below'"
@@ -1299,7 +1298,7 @@ BEST_PRACTICES = {
                 "dj-root: Marks the root element for VDOM patching scope",
             ],
             "example": (
-                '<div dj-view="{{ view_name }}" dj-root>\n  <!-- your template content -->\n</div>'
+                '<div dj-view="myapp.views.MyView" dj-root>\n  <!-- your template content -->\n</div>'
             ),
         },
     },
@@ -1344,8 +1343,9 @@ BEST_PRACTICES = {
                 "Without it, DOM updates silently fail or produce incorrect diffs."
             ),
             "solution": (
-                "Add both dj-view and dj-root to the outermost element: "
-                '<div dj-view="{{ view_name }}" dj-root>'
+                "Add both dj-view and dj-root to the outermost element "
+                "(use the literal dotted path to your view class): "
+                '<div dj-view="myapp.views.MyView" dj-root>'
             ),
             "related_doc": "docs/guides/template-requirements.md",
         },
@@ -1380,9 +1380,9 @@ BEST_PRACTICES = {
                 "Without proper static file handling, client.js and other assets return 404."
             ),
             "solution": (
-                "Use djust's built-in ASGIStaticFilesHandler via djust.asgi.get_application(). "
-                "This intercepts static file requests at the ASGI layer before they reach "
-                "Django middleware. Run collectstatic for production."
+                "Wrap the Django ASGI app with django.contrib.staticfiles.handlers.ASGIStaticFilesHandler "
+                "(as the `djust new` scaffold's asgi.py does): `ASGIStaticFilesHandler(django_asgi_app)`. "
+                "This intercepts static requests at the ASGI layer before Django middleware. Run collectstatic for production."
             ),
             "related_doc": "docs/guides/error-codes.md",
         },

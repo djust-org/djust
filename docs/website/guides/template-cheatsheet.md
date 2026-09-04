@@ -22,7 +22,7 @@ Every LiveView template needs these two things:
 <head>
     {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~58 KB gz client JavaScript #}
 </head>
-<body dj-view="{{ dj_view_id }}">   {# Binds page to WebSocket session #}
+<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
         {{ count }}
         <button dj-click="increment">+</button>
@@ -35,7 +35,7 @@ Every LiveView template needs these two things:
 |---|---|---|
 | `{% load live_tags %}` | Yes | Load djust template tag library |
 | `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~58 KB gz) into every LiveView response |
-| `dj-view="{{ dj_view_id }}"` | Yes | On `<body>` — identifies the WebSocket session |
+| `dj-view="myapp.views.CounterView"` | Yes | On `<body>` — literal dotted path to your LiveView class |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 
 ---
@@ -463,7 +463,7 @@ Handler receives `_target="email"` or `_target="username"`.
 ### Reactive Region
 
 ```html
-<body dj-view="{{ dj_view_id }}">
+<body dj-view="myapp.views.CounterView">
     <div dj-root>
         <!-- Everything inside dj-root is managed by djust's VDOM -->
         <!-- Only this region is diffed and patched after events -->
@@ -937,7 +937,7 @@ Document metadata (Python-side, no template directive):
   self.page_meta = {"key": "value"}    (update/create <meta> tags)
 
 VDOM identity:
-  dj-view="{{ dj_view_id }}"      (on body — required)
+  dj-view="myapp.views.CounterView"      (on body — required, literal dotted path)
   dj-root                         (reactive region — required)
   data-key / dj-key               (stable list identity)
   dj-update="ignore"              (opt out of patching)

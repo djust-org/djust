@@ -75,7 +75,7 @@ from djust.auth import LoginRequiredLiveViewMixin, PermissionRequiredLiveViewMix
 from djust.tenants import TenantMiddleware
 from djust.theming import PaletteGenerator, ThemeManager
 from djust.components.data import TableComponent
-from djust.admin_ext import AdminLiveViewMixin   # note: module renamed to `admin_ext`
+from djust.admin_ext.views import AdminBaseMixin   # note: module renamed to `admin_ext`; the old AdminLiveViewMixin is now AdminBaseMixin
 ```
 
 **Module name caveat — `djust.admin_ext`:** the extra is spelled `djust[admin]` but the Python module is `djust.admin_ext` (to avoid colliding with Django's `django.contrib.admin`). All your `from djust_admin import ...` lines become `from djust.admin_ext import ...`, not `from djust.admin import ...`.

@@ -34,8 +34,11 @@ class ProfileView(UploadMixin, LiveView):
     @event_handler()
     def save_avatar(self, **kwargs):
         for entry in self.consume_uploaded_entries('avatar'):
+            # safe_client_name, NEVER raw client_name, in storage paths —
+            # client_name is the attacker-controlled original filename
+            # (path/object-key injection). client_name is fine for DISPLAY.
             path = default_storage.save(
-                f'avatars/{entry.client_name}', entry.file
+                f'avatars/{entry.safe_client_name}', entry.file
             )
             self.avatar_url = default_storage.url(path)
 ```
@@ -169,17 +172,27 @@ Container for image previews. Automatically populated when image files are selec
 <div dj-upload-preview="avatar" class="preview-container"></div>
 ```
 
-#### `dj-upload-progress="name"`
+#### `[data-upload-ref]` progress bars (attribute `dj-upload-progress` is inert)
 
-Container for progress bars. Each uploading file gets:
-- `.upload-progress-item[data-upload-ref]` wrapper
-- `.upload-progress-name` (filename)
-- `.upload-progress-track` > `.upload-progress-bar[role=progressbar]`
-- `.upload-progress-text` (percentage)
+The client does **not** create progress DOM for you and does not read
+`dj-upload-progress`; it only *updates* elements you render yourself. Author
+one wrapper per uploading slot, keyed by `data-upload-ref`:
 
 ```html
-<div dj-upload-progress="documents"></div>
+{% for f in uploading_files %}
+<div data-upload-ref="{{ f.ref }}">
+  <span class="upload-progress-name">{{ f.name }}</span>
+  <div class="upload-progress-track">
+    <div class="upload-progress-bar" role="progressbar"></div>
+  </div>
+  <span class="upload-progress-text"></span>
+</div>
+{% endfor %}
 ```
+
+While an upload is in flight the client fills `.upload-progress-bar` width and
+`.upload-progress-text` for the matching `[data-upload-ref]`
+(`static/djust/src/15-uploads.js`).
 
 ### Client-Side Events
 
@@ -214,7 +227,7 @@ class GalleryView(UploadMixin, LiveView):
     def upload_photos(self, **kwargs):
         for entry in self.consume_uploaded_entries('photos'):
             path = default_storage.save(
-                f'gallery/{entry.client_name}', entry.file
+                f'gallery/{entry.safe_client_name}', entry.file
             )
             self.images.append({
                 'url': default_storage.url(path),
@@ -263,7 +276,7 @@ class DocumentUploadView(UploadMixin, LiveView):
                 self.errors.append(f"{entry.client_name}: {entry.error}")
             else:
                 path = default_storage.save(
-                    f'documents/{entry.client_name}', entry.file
+                    f'documents/{entry.safe_client_name}', entry.file
                 )
                 self.uploaded_files.append({
                     'name': entry.client_name,

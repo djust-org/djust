@@ -63,7 +63,7 @@ Two numbers, and nothing softer:
 - **85.20%** of Django's own `template_tests` suite passes unmodified against this backend (892 of the 1,047 cells that reach an engine at all; measured by `scripts/run-django-template-suite.py` against the Django tag matching the installed version — see [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md) for the full breakdown and what the remaining cells are). <!-- django-suite-claim -->
 - Rendering is **7–11x faster** on variable- and filter-heavy templates (see [Performance](#performance) below); static markup is not faster, because there is nothing there to accelerate.
 
-The scaffold (`djust startproject`) already configures the `TEMPLATES` setting
+The scaffold (`djust new`) already configures the `TEMPLATES` setting
 this way. Read more in [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md).
 
 ## Quick Example
@@ -109,7 +109,7 @@ everything click.
 <head>
     {% djust_client_config %}        {# Emits client config meta tags; djust auto-injects the client runtime #}
 </head>
-<body dj-view="{{ dj_view_id }}">   {# Identifies the WebSocket session #}
+<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
     <div dj-root>                    {# Reactive boundary — only this is diffed #}
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>
@@ -122,7 +122,7 @@ everything click.
 | Attribute | Where | Purpose |
 |---|---|---|
 | `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~58 KB gz client runtime into every LiveView response — no manual `<script>` tag needed |
-| `dj-view="{{ dj_view_id }}"` | `<body>` | Connects page to WebSocket session |
+| `dj-view="myapp.views.CounterView"` | `<body>` | Literal dotted path to your LiveView class; connects page to WebSocket session |
 | `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched |
 
 ### Stable List Identity
@@ -144,32 +144,10 @@ animations):
 Without a key, djust diffs by position — correct, but it produces more DOM
 mutations for reorders.
 
-### Common Pitfall: One-Sided `{% if %}` in Class Attributes
-
-Using `{% if %}` without `{% else %}` inside an HTML attribute value can cause
-VDOM patching misalignment, because of djust's branch-aware div-depth counting:
-
-```html
-{# WRONG: one-sided if inside class attribute #}
-<div class="card {% if active %}active{% endif %}">
-
-{# CORRECT: use full if/else #}
-<div class="card {% if active %}active{% else %}{% endif %}">
-
-{# ALSO CORRECT: move conditional outside the tag #}
-{% if active %}
-<div class="card active">
-{% else %}
-<div class="card">
-{% endif %}
-    ...
-</div>
-```
-
-This applies only to attribute values — `{% if %}` blocks in element content
-work fine.
-
-See the [VDOM Architecture guide](docs/website/advanced/vdom-architecture.md)
+Conditional attributes (`{% if %}` inside a `class="…"` value, with or without
+`{% else %}`) are handled correctly by the template parser's HTML
+tag/quote-state tracking — no workaround needed. See the
+[VDOM Architecture guide](docs/website/advanced/vdom-architecture.md)
 and [Template Cheat Sheet](docs/website/guides/template-cheatsheet.md) for full
 details.
 
@@ -180,7 +158,7 @@ A complete walkthrough from zero to a working reactive counter in five steps.
 ### Step 1 — Install
 
 ```bash
-pip install djust django-channels
+pip install djust
 ```
 
 ### Step 2 — Add to `INSTALLED_APPS` and configure settings
@@ -272,7 +250,7 @@ class CounterView(LiveView):
     <title>Counter</title>
     {% djust_client_config %}
 </head>
-<body dj-view="{{ dj_view_id }}">
+<body dj-view="myapp.views.CounterView">
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>
@@ -282,7 +260,9 @@ class CounterView(LiveView):
 </html>
 ```
 
-Run with `uvicorn myproject.asgi:application --reload` and open `/counter/`.
+Run with `uvicorn myproject.asgi:application` and open `/counter/`. (No
+`--reload` — djust's HVR hot-reloads in DEBUG without restarting the process
+or dropping view state.)
 Clicking the buttons updates the count without a page reload — no JavaScript
 written, no build step.
 
@@ -654,7 +634,7 @@ LIVEVIEW_CONFIG = {
     'strict_serialization': False,  # Raise TypeError for non-serializable state values (recommended in development)
 
     # CSS Framework
-    'css_framework': 'bootstrap5',  # Options: 'bootstrap5', 'tailwind', None
+    'css_framework': 'bootstrap5',  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
 }
 ```
 
@@ -1039,10 +1019,10 @@ djust/
 ├── python/
 │   └── djust/             # Python package
 │       ├── live_view.py         # LiveView base class
-│       ├── component.py         # Component system
+│       ├── components/          # Component system (base.py, ui/, forms/)
 │       ├── websocket.py         # WebSocket consumer
 │       └── static/
-│           └── client.js        # Client runtime
+│           └── djust/client.js  # Client runtime (built from static/djust/src/)
 ├── branding/                    # Logo and brand assets
 ├── examples/                    # Example projects
 ├── benchmarks/                  # Performance benchmarks

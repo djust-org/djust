@@ -164,7 +164,7 @@ Form recovery and backoff with jitter work identically over the SSE (Server-Sent
 {% load live_tags %}
 <html>
 <head>{% djust_client_config %}</head>
-<body dj-view="{{ dj_view_id }}">
+<body dj-view="myapp.views.CounterView">
   <div dj-root>
     <form dj-submit="save_form">
       {% csrf_token %}

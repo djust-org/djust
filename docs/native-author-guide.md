@@ -116,10 +116,13 @@ the pre-LVN behavior.
   variant resolver + wiring (#1578 closed via #1586, #1587, #1588, #1589)
 - LVN-V (this guide): initial draft
 
+**Also shipped (no longer pending):**
+- LVN-II walker: `NativeRenderer.render_with_diff`
+  (`python/djust/renderers/native.py`) renders the platform variant and emits
+  a single Replace patch carrying the full widget VNode tree (raises
+  `RuntimeError` only when the view has no `template_name`).
+
 **Pending (deferred to focused follow-up sessions):**
-- LVN-II Rust walker: the actual Rust-side widget VDOM differ that
-  produces `Patch` streams from native templates. `NativeRenderer.render_with_diff`
-  currently raises `NotImplementedError` with a clear pointer.
 - LVN-III: full Swift WebSocket transport + msgpack decoder + patch
   applicator + widget renderers + event sender in
   [`djust-native-ios`](https://github.com/djust-org/djust-native-ios)

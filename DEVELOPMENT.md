@@ -8,7 +8,7 @@ Working guidelines for all agents and contributors to the djust project. These a
 
 - **No direct commits to `main`.** All work goes through feature branches.
 - Branch naming:
-  - `feat/<description>` — new functionality
+  - `feature/<description>` — new functionality
   - `fix/<description>` — bug fixes
   - `refactor/<description>` — code restructuring, no behavior change
   - `docs/<description>` — documentation only
@@ -23,9 +23,9 @@ Working guidelines for all agents and contributors to the djust project. These a
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`, `security:`
 - One logical change per commit. Keep commits atomic.
-- Include the Paperclip co-author line on every commit:
+- Include the co-author line on every commit:
   ```
-  Co-Authored-By: Paperclip <noreply@paperclip.ing>
+  Co-Authored-By: Claude Code <noreply@anthropic.com>
   ```
 - Reference issue identifiers in commit messages when applicable (e.g., `fix: correct textarea newline stripping (DJU-42)`).
 
@@ -118,19 +118,21 @@ Full list: [`docs/PULL_REQUEST_CHECKLIST.md`](docs/PULL_REQUEST_CHECKLIST.md) �
 
 ## CHANGELOG
 
-Update `CHANGELOG.md` for every `feat:` and `fix:` PR. Add under the `[Unreleased]` heading:
+Do **not** edit `CHANGELOG.md`'s `[Unreleased]` section directly — the
+`check-changelog-fragments` pre-commit hook rejects it. Instead, add a
+fragment file: `changelog.d/<issue-or-slug>.<section>.md` (section ∈
+added/changed/fixed/security/documentation/removed/deprecated), whose body is
+the bullet that will appear in the compiled changelog:
 
 ```markdown
-## [Unreleased]
-
-### Added
-- Brief description of the new feature
-
-### Fixed
-- Brief description of the bug fix
+# changelog.d/1234.fixed.md
+- Fixed textarea newline stripping on re-render
 ```
 
-Do not update CHANGELOG for `docs:`, `chore:`, `refactor:`, or `test:` PRs unless there is a user-visible behavior change.
+The release cut compiles fragments into `CHANGELOG.md` (see
+`changelog.d/README.md`). Fragments are required for `feat:` and `fix:` PRs;
+optional for `docs:`, `chore:`, `refactor:`, or `test:` PRs unless there is a
+user-visible behavior change.
 
 ---
 

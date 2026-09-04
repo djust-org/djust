@@ -102,7 +102,7 @@ class CounterView(LiveView):
     {% load live_tags %}
     {% djust_client_config %}
 </head>
-<body dj-view="{{ dj_view_id }}">
+<body dj-view="myapp.views.CounterView">
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="decrement">-</button>
@@ -123,7 +123,7 @@ Without `dj-view`, the LiveView will not mount even if the WebSocket connects. W
 
 ```html
 <!-- Both attributes are required -->
-<body dj-view="{{ dj_view_id }}">
+<body dj-view="myapp.views.CounterView">
     <div dj-root>
         <!-- Only this subtree is patched on state changes -->
         <p>{{ content }}</p>
@@ -134,7 +134,7 @@ Without `dj-view`, the LiveView will not mount even if the WebSocket connects. W
 For single-element layouts, combine them on the same element:
 
 ```html
-<div dj-view="{{ dj_view_id }}" dj-root>
+<div dj-view="myapp.views.CounterView" dj-root>
     <p>{{ content }}</p>
 </div>
 ```
@@ -166,8 +166,13 @@ urlpatterns = [
 ### 4. Run It
 
 ```bash
-uvicorn myproject.asgi:application --reload
+uvicorn myproject.asgi:application
 ```
+
+No `--reload` needed: djust's hot-view-replacement (HVR) auto-enables when
+`DEBUG=True` and reloads template/Python changes **without** dropping view
+state (a `--reload` process restart resets counters, form input, and scroll
+position).
 
 Visit **http://localhost:8000/counter/** -- the buttons update the count instantly.
 
@@ -177,7 +182,7 @@ Visit **http://localhost:8000/counter/** -- the buttons update the count instant
 
 **Cause:** The template is missing the `dj-view` attribute.
 
-**Fix:** Add `dj-view="{{ dj_view_id }}"` to a root element (typically `<body>` or a wrapper `<div>`).
+**Fix:** Add `dj-view="myapp.views.CounterView"` (the literal dotted path to your view class, exactly as `djust new` scaffolds it) to a root element (typically `<body>` or a wrapper `<div>`). djust does not provide a `dj_view_id` context variable — the attribute must name the view class.
 
 ### "DOM not updating" / DJE-053
 

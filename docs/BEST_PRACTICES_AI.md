@@ -314,7 +314,7 @@ def search(self, value: str = "", **kwargs):
 
 # Throttling (limit rate of calls)
 @event_handler()
-@throttle(wait=1.0)  # Max once per second
+@throttle(interval=1.0)  # Max once per second
 def track_scroll(self, position: int = 0, **kwargs):
     self.scroll_position = position
 
@@ -446,7 +446,6 @@ def filter_status(self, value: str = "all", **kwargs):
 ```python
 from djust import LiveView
 from djust.forms import FormMixin
-from django.urls import reverse
 
 class LeaseFormView(FormMixin, LiveView):
     """
@@ -485,12 +484,11 @@ class LeaseFormView(FormMixin, LiveView):
         Rules:
         - Save the form
         - Set success message
-        - Set redirect URL (optional)
-        - Return None (FormMixin handles response)
+        - Return None (FormMixin handles response; it re-renders in place —
+          there is no redirect_url mechanism)
         """
         lease = form.save()
         self.success_message = f"Lease saved successfully!"
-        self.redirect_url = reverse('lease-detail', kwargs={'pk': lease.pk})
         # Don't return anything - FormMixin handles it
 
     def form_invalid(self, form):
@@ -872,7 +870,7 @@ Examples:
 What's the interaction pattern?
 
 Search input?          → @debounce(wait=0.5)
-Scroll tracking?       → @throttle(wait=1.0)
+Scroll tracking?       → @throttle(interval=1.0)
 Like button?           → @optimistic
 Autocomplete?          → @cache(ttl=300)
 Multi-component sync?  → @client_state(keys=[...])

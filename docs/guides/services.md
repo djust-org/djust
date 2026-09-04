@@ -142,24 +142,10 @@ This pattern combines the [JIT serialization pattern](../JIT_SERIALIZATION_PATTE
 Pass services via `mount()` kwargs from your URL configuration. This is useful when you want to test views with mock services.
 
 ```python
-# urls.py
-from django.urls import path
-from djust.routing import live_session
-from myapp.views import DashboardView
-from myapp.services import get_metrics_client
-
-
-urlpatterns = [
-    path(
-        "dashboard/",
-        live_session(DashboardView, metrics_client=get_metrics_client),
-    ),
-]
-
-
 # views.py
 from djust import LiveView, state
 from djust.decorators import event_handler
+from myapp.services import get_metrics_client  # your factory
 
 
 class DashboardView(LiveView):
@@ -167,8 +153,13 @@ class DashboardView(LiveView):
 
     metrics = state(default=[])
 
-    def mount(self, request, metrics_client=None, **kwargs):
-        self._metrics_client = metrics_client  # Private: not serialized
+    def mount(self, request, **kwargs):
+        # Create the service ON-DEMAND and store it privately — URL-level
+        # kwargs are not an injection point: `live_session(prefix, patterns)`
+        # is a URL-pattern grouping helper (djust/routing.py), and the
+        # WebSocket path re-resolves the view by its dotted class path, so
+        # nothing is passed through from urls.py.
+        self._metrics_client = get_metrics_client()  # Private: not serialized
         if self._metrics_client:
             self.metrics = self._metrics_client.get_recent(limit=20)
 
@@ -178,7 +169,7 @@ class DashboardView(LiveView):
             self.metrics = self._metrics_client.get_recent(limit=20)
 ```
 
-Note that `self._metrics_client` uses the private prefix (`_`), so it is excluded from state serialization.
+Note that `self._metrics_client` uses the private prefix (`_`), so it is excluded from state serialization. For tests, monkeypatch `get_metrics_client` or inject a stub before calling `mount()`.
 
 ---
 

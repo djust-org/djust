@@ -172,7 +172,7 @@ Targets for interactive updates:
 `dj-root` marks the DOM subtree that djust manages. Only HTML inside `dj-root` is diffed and patched. Everything outside (static headers, navbars, footers) is never touched.
 
 ```html
-<body dj-view="{{ dj_view_id }}">   {# Identifies WebSocket session #}
+<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
     <header>Static header — never patched</header>
     <div dj-root>
         {# Everything here is managed by the VDOM #}

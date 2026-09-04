@@ -209,7 +209,7 @@ When building multi-tenant applications, follow these principles:
 All storage keys (cache, state backends, sessions) must include the tenant identifier:
 
 ```python
-from djust.tenant.mixins import TenantScopedMixin
+from djust.tenants.mixin import TenantScopedMixin
 
 class TenantDocumentView(TenantScopedMixin, LiveView):
     def get_queryset(self):
