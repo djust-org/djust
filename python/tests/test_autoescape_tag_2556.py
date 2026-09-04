@@ -614,12 +614,8 @@ class TestEveryWalkerKnowsTheNewNode:
             lines = _production_lines(rs.read_text(encoding="utf-8"))
             spaceless = sum("Node::Spaceless" in line for line in lines)
             autoescape = sum("Node::AutoEscape" in line for line in lines)
-            if rs.name == "inheritance.rs":
-                # AutoEscape ALSO joins the two `{% block %}` walkers Spaceless
-                # never did (row 15: a parent's `off` governs the child block).
-                assert autoescape == spaceless + 2, (rs.name, spaceless, autoescape)
-            else:
-                assert autoescape == spaceless, (rs.name, spaceless, autoescape)
+            # The shared inheritance child-list inventory now covers both.
+            assert autoescape == spaceless, (rs.name, spaceless, autoescape)
 
     def test_the_generated_backend_list_names_the_tag(self):
         doc = (REPO / "docs" / "TEMPLATE_BACKEND.md").read_text(encoding="utf-8")

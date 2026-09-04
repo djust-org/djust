@@ -633,13 +633,7 @@ class TestTheRegroupUnmaskingIsCLOSED:
 
 
 class TestTheDateWireResidueIsNamed:
-    """A Python `date` reaches this renderer as its ISO STRING.
-
-    `Value` has no date variant, so `{{ "2020-01-01"|date }}` and
-    `{{ real_date|date }}` are the same call here and different calls in
-    Django. Every row below is that one fact, and none of them is closable
-    without a typed `Value`.
-    """
+    """Serialized date strings remain an extension; real dates retain their type."""
 
     @pytest.mark.parametrize(
         ("src", "value", "djust_says"),
@@ -647,9 +641,8 @@ class TestTheDateWireResidueIsNamed:
             ("{{ p|date }}", "2020-01-01", "Jan. 1, 2020"),
             ('{{ p|date:"Y-m-d" }}', "2020-01-01", "2020-01-01"),
             ('{{ p|time:"H:i" }}', "2020-01-01T15:30:00", "15:30"),
-            # The same fact from the other side: a real `date` has no time in
-            # Django, and here it is a string a time parser reads as midnight.
-            ('{{ p|time:"H:i" }}', datetime.date(2020, 1, 2), "00:00"),
+            # Encoded date metadata preserves Django's refusal of time fields.
+            ('{{ p|time:"H:i" }}', datetime.date(2020, 1, 2), ""),
         ],
     )
     def test_django_renders_nothing_and_djust_formats_the_string(

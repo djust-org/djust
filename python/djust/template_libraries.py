@@ -424,8 +424,9 @@ def _library_map() -> Dict[str, Any]:
     #2517 scoreboard adapter) contributes EXACTLY its ``template_libraries``
     — Django parity, including the sorted "Must be one of" list. Otherwise
     (``DjustTemplateBackend``, the LiveView entry) the map is what
-    ``DjangoTemplates`` builds: ``get_installed_libraries()`` plus every
-    backend's ``OPTIONS['libraries']``.
+    ``DjangoTemplates`` builds: ``get_installed_libraries()`` plus the
+    current backend's ``OPTIONS['libraries']``. The bare LiveView entry
+    retains the process-wide library registrations when no backend is active.
     """
     global _installed_cache
     backend = _current_backend.get()
@@ -440,8 +441,10 @@ def _library_map() -> Dict[str, Any]:
 
         _installed_cache = dict(get_installed_libraries())
     known: Dict[str, Any] = dict(_installed_cache)
-    known.update(_extra_libraries)
-    if backend is not None:
+    if backend is None:
+        # The bare LiveView entry has no backend configuration of its own.
+        known.update(_extra_libraries)
+    else:
         known.update(getattr(backend, "template_libraries", None) or {})
     return known
 
