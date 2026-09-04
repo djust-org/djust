@@ -29,9 +29,9 @@ The PWA implementation provides:
     {% djust_offline_indicator %}
     {% djust_offline_styles %}
 
-    <div dj-offline="hide">Only shown when online</div>
-    <div dj-offline="show">Only shown when offline</div>
-    <button dj-offline="disable">Disabled when offline</button>
+    <div dj-offline-hide>Only shown when online</div>
+    <div dj-offline-show style="display: none;">Only shown when offline</div>
+    <button dj-offline-disable>Disabled when offline</button>
 </body>
 </html>
 ```
@@ -95,7 +95,10 @@ Synchronization of offline data (combine **after** `OfflineMixin`:
 `class DataView(SyncMixin, OfflineMixin, LiveView)`):
 
 - Class knobs: `sync_model`, `sync_conflict_strategy`
-  (`'client_wins'|'server_wins'|'merge'|'manual'`), `sync_batch_size`,
+  (`'client_wins'|'server_wins'|'merge_by_timestamp'|'manual_resolution'` —
+  the four `MergeStrategy` values at `pwa/sync.py:20-23`; an unrecognised
+  string falls back to `client_wins` **silently**, so a typo here loses data
+  rather than raising), `sync_batch_size`,
   `sync_timeout`
 - Hook: `sync_create_item(action_data)` (and siblings) for custom sync logic
 - The queue is processed automatically; there is no `queue_sync()` /
@@ -155,9 +158,19 @@ CSS for offline directives:
 
 ## Offline Directives
 
-A single value-form attribute: `dj-offline="<show|hide|disable|enable|queue>"`
-(`static/djust/js/pwa.js` re-evaluates them on connection changes). The
-bare-name forms (`dj-offline-hide`, …) are **not** implemented.
+**Use the bare-name forms** — `dj-offline-hide`, `dj-offline-show`,
+`dj-offline-disable`. They are what ships working: `{% djust_offline_styles %}`
+emits CSS keyed on exactly those attribute selectors
+(`templatetags/djust_pwa.py:328`), and `{% djust_offline_indicator %}` emits
+them itself (`djust_pwa.py:227-229`). They need no JavaScript — visibility
+follows the `djust-offline` / `djust-online` class on `<body>`.
+
+A value form (`dj-offline="<show|hide|disable|enable|queue>"`) is also parsed,
+but only by `static/djust/js/pwa.js`, which is **not** in `static/djust/src/`,
+is **not** in the built bundle, and is loaded by no template tag — so on a
+default install nothing evaluates it. Prefer the bare names until that file is
+either bundled or removed (the two forms are tracked as a documentation-vs-code
+gap, not a supported choice).
 
 ### Only shown when online / offline
 
@@ -192,12 +205,15 @@ captured (and synced) instead of lost.
 For structured offline data:
 
 ```python
-# Storage backend selection on OfflineMixin views (self.offline_storage)
+# `offline_storage` is the NAMESPACE, not a backend selector: it is passed as
+# `storage_name=` (pwa/mixins.py:189). The backend comes from
+# `DJUST_CONFIG['PWA_OFFLINE_STORAGE']` and defaults to `indexeddb`
+# (pwa/storage.py:529-544), so both views below use the SAME backend.
 class TodoView(OfflineMixin, LiveView):
     offline_storage = "todos"  # named backend; IndexedDB-backed via the SW
 ```
 
-### LocalStorage Backend
+### A second namespace (still the configured backend)
 
 For simple key-value storage:
 

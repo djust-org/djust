@@ -423,7 +423,7 @@ embedded copy to keep in sync — do not hand-edit `client.js` /
 - [ ] Update the logic in the relevant `src/<NN>-*.js` module
 - [ ] Add/adjust tests in `tests/js/` (every `src/` feature file needs one)
 - [ ] Run JavaScript tests: `npm test`
-- [ ] Rebuild the bundle (`make build-client` / `scripts/build-client.sh`) if
+- [ ] Rebuild the bundle (`make build-js` / `scripts/build-client.sh`) if
       you need to exercise the runtime locally
 - [ ] Mind the client size budget (see `CLAUDE.md` → JavaScript)
 - Version drift between the two implementations
