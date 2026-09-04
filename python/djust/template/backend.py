@@ -46,6 +46,13 @@ class DjustTemplateBackend(BaseEngine):
 
         self.context_processors = options.pop("context_processors", [])
 
+        # Django's ``OPTIONS['string_if_invalid']`` (#2517): what ``{{ missing }}``
+        # renders. Default ``""`` — render nothing — exactly as ``Engine`` has it.
+        # A non-empty value RETURNS from the variable node without running the
+        # filter chain, which is Django's own control flow; see
+        # ``Context::string_if_invalid_for``.
+        self.string_if_invalid: str = str(options.pop("string_if_invalid", "") or "")
+
         # Django's `OPTIONS['libraries']` / `OPTIONS['builtins']`, with the
         # meaning `DjangoTemplates` gives them (#2547). `libraries` extends
         # the `{% load %}` name map; `builtins` are bridged now.

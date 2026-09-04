@@ -245,21 +245,108 @@ pub trait TemplateLoader {
     }
 }
 
+/// Django's `loader_tags.construct_relative_path` (#2517).
+///
+/// `{% extends "./two.html" %}` in `dir1/one.html` means `dir1/two.html`, and
+/// `../one.html` means `one.html`. A name that does not start with `./` or
+/// `../` is returned unchanged, so this is a no-op for every absolute name.
+///
+/// Django raises rather than escaping the template root, and refuses a
+/// relative path that resolves to the template ITSELF (that is a guaranteed
+/// infinite `{% extends %}` loop, and the message names it as such). Both
+/// refusals are Django's, message for message.
+pub fn construct_relative_path(
+    current_template_name: Option<&str>,
+    relative_name: &str,
+) -> Result<String> {
+    let new_name = relative_name.trim_matches(|c| c == '"' || c == '\'');
+    if !(new_name.starts_with("./") || new_name.starts_with("../")) {
+        return Ok(relative_name.to_string());
+    }
+    // Without a name for the CURRENT template there is nothing to be relative
+    // to; Django is in the same position for a string-built template and
+    // leaves the name alone.
+    let Some(current) = current_template_name else {
+        return Ok(relative_name.to_string());
+    };
+
+    let current = current.trim_start_matches('/');
+    let dir = match current.rsplit_once('/') {
+        Some((head, _)) => head,
+        None => "",
+    };
+
+    // `posixpath.normpath(posixpath.join(dir, new_name))`, spelled out: `/`
+    // is the separator on every template name regardless of host platform,
+    // so this must NOT go through `std::path`.
+    let joined = if dir.is_empty() {
+        new_name.to_string()
+    } else {
+        format!("{dir}/{new_name}")
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in joined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if matches!(parts.last(), Some(&last) if last != "..") {
+                    parts.pop();
+                } else {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let normalized = parts.join("/");
+
+    if normalized.starts_with("../") || normalized == ".." {
+        return Err(DjangoRustError::TemplateError(format!(
+            "The relative path '{relative_name}' points outside the file hierarchy that template '{current}' is in."
+        )));
+    }
+    if normalized == current {
+        return Err(DjangoRustError::TemplateError(format!(
+            "The relative path '{relative_name}' was translated to template name '{normalized}', the same template in which the tag appears."
+        )));
+    }
+    Ok(normalized)
+}
+
 /// Build complete inheritance chain by recursively loading parents
 pub fn build_inheritance_chain<L: TemplateLoader>(
     nodes: Vec<Node>,
     loader: &L,
     max_depth: usize,
 ) -> Result<InheritanceChain> {
+    build_inheritance_chain_from(nodes, loader, max_depth, None)
+}
+
+/// [`build_inheritance_chain`] that knows the name of the template it starts
+/// from, so `{% extends "./parent.html" %}` can resolve (#2517).
+///
+/// The name is threaded DOWN the chain: each layer's relative reference
+/// resolves against the name of the template that declared it, which is what
+/// makes `dir1/one.html` -> `./dir2/one.html` -> `../three.html` land on
+/// `dir1/three.html` rather than on the root's directory.
+pub fn build_inheritance_chain_from<L: TemplateLoader>(
+    nodes: Vec<Node>,
+    loader: &L,
+    max_depth: usize,
+    template_name: Option<&str>,
+) -> Result<InheritanceChain> {
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
+    let mut current_name: Option<String> = template_name.map(str::to_string);
 
     // Follow extends chain up to max_depth
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
             let parent_name = parent_name.to_string(); // Clone to avoid borrow issues
+            let parent_name = construct_relative_path(current_name.as_deref(), &parent_name)?;
             let parent_nodes = loader.load_template(&parent_name)?;
             chain.add_parent(parent_nodes);
+            current_name = Some(parent_name);
             depth += 1;
         } else {
             // No more parents

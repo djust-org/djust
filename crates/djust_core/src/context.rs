@@ -260,6 +260,21 @@ pub struct Context {
     /// Mints `loop_scope` values. Shared like `cycle_state` so two sibling
     /// loops in one render can never collide on an id.
     loop_scope_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Django's `Engine.string_if_invalid` — what `{{ missing }}` renders.
+    ///
+    /// Empty (the default, and Django's) means "render nothing". A NON-empty
+    /// value is returned for a failed lookup and the filter chain is SKIPPED,
+    /// which is Django's own control flow in `FilterExpression.resolve`:
+    ///
+    ///     if string_if_invalid:
+    ///         if "%s" in string_if_invalid:
+    ///             return string_if_invalid % self.var
+    ///         return string_if_invalid          # <- returns; no filters
+    ///
+    /// That is why `{{ missing|default:"Foo" }}` renders `INVALID` and not
+    /// `Foo` under a configured `string_if_invalid`. Carried on the render
+    /// (not the parsed template) for the same reason as `autoescape`.
+    string_if_invalid: String,
 }
 
 impl Default for Context {
@@ -291,6 +306,7 @@ impl Clone for Context {
             ifchanged_state: std::sync::Arc::clone(&self.ifchanged_state),
             loop_scope: self.loop_scope,
             loop_scope_counter: std::sync::Arc::clone(&self.loop_scope_counter),
+            string_if_invalid: self.string_if_invalid.clone(),
         }
     }
 }
@@ -354,6 +370,7 @@ impl Context {
             ifchanged_state: std::sync::Arc::default(),
             loop_scope: 0,
             loop_scope_counter: std::sync::Arc::default(),
+            string_if_invalid: String::new(),
         }
     }
 
@@ -378,6 +395,7 @@ impl Context {
             ifchanged_state: std::sync::Arc::default(),
             loop_scope: 0,
             loop_scope_counter: std::sync::Arc::default(),
+            string_if_invalid: String::new(),
         }
     }
 
@@ -460,6 +478,24 @@ impl Context {
             .loop_scope_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
+    }
+
+    /// Set Django's `string_if_invalid` for this render.
+    pub fn set_string_if_invalid(&mut self, value: impl Into<String>) {
+        self.string_if_invalid = value.into();
+    }
+
+    /// `string_if_invalid` with Django's `%s` substitution already applied for
+    /// `var_name`, or `None` when it is empty (render nothing, the default).
+    pub fn string_if_invalid_for(&self, var_name: &str) -> Option<String> {
+        if self.string_if_invalid.is_empty() {
+            return None;
+        }
+        Some(if self.string_if_invalid.contains("%s") {
+            self.string_if_invalid.replace("%s", var_name)
+        } else {
+            self.string_if_invalid.clone()
+        })
     }
 
     /// The innermost loop-execution identity (`0` outside any loop).

@@ -36,7 +36,7 @@ pub mod truncate;
 
 pub use markdown::render_markdown;
 
-use inheritance::{build_inheritance_chain, TemplateLoader};
+use inheritance::{build_inheritance_chain, build_inheritance_chain_from, TemplateLoader};
 use parser::Node;
 use renderer::render_nodes_with_loader;
 
@@ -136,6 +136,19 @@ impl Template {
         self.nodes
             .iter()
             .any(|node| matches!(node, Node::Extends(_)))
+    }
+
+    /// Does this template's `{% extends %}` target start with `./` or `../`?
+    ///
+    /// A relative target resolves against the CURRENT template's name, so its
+    /// merged result is name-dependent and must not be served from the
+    /// source-keyed `resolved` cache — two templates with identical source
+    /// loaded under different names resolve to different parents.
+    fn extends_is_relative(&self) -> bool {
+        self.nodes.iter().any(|node| match node {
+            Node::Extends(target) => target.starts_with("./") || target.starts_with("../"),
+            _ => false,
+        })
     }
 
     /// Resolve `{% extends %}` inheritance and cache the final merged nodes.
@@ -248,15 +261,31 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<String> {
-        // Use cached resolved nodes if available
-        if let Some(resolved) = self.resolved.get() {
-            return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
+        self.render_with_loader_named(context, loader, None)
+    }
+
+    /// [`Self::render_with_loader`] that knows this template's own name, so a
+    /// relative `{% extends %}` can resolve against it (#2517).
+    pub fn render_with_loader_named<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+        template_name: Option<&str>,
+    ) -> Result<String> {
+        // Use cached resolved nodes if available. Skipped for a RELATIVE
+        // `{% extends %}`: that resolution depends on the template's name and
+        // the cache is keyed by source (#2517).
+        if !self.extends_is_relative() {
+            if let Some(resolved) = self.resolved.get() {
+                return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
+            }
         }
 
         // Check if template uses inheritance
         if self.uses_extends() {
             // Build inheritance chain (not cached — call resolve_inheritance() first)
-            let chain = build_inheritance_chain(self.nodes.clone(), loader, 10)?;
+            let chain =
+                build_inheritance_chain_from(self.nodes.clone(), loader, 10, template_name)?;
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
             render_nodes_with_loader(&final_nodes, context, Some(loader))

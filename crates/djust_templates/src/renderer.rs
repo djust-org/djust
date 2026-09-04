@@ -765,6 +765,19 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     get_value_safe_ignoring_failures(values[idx].trim(), context)
 }
 
+/// Is this template-name token a QUOTED literal rather than a variable?
+///
+/// Django decides this in `Variable.__init__` at compile time; here it is the
+/// same one-line rule — matching quotes on both ends, and at least two
+/// characters so a lone `"` is not read as an empty literal.
+fn is_quoted_literal(token: &str) -> bool {
+    let t = token.trim();
+    let bytes = t.as_bytes();
+    bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+}
+
 /// A comparison key for one `{% ifchanged %}` operand, under PYTHON's
 /// equality rather than Rust's.
 ///
@@ -1996,10 +2009,34 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
             let literal = django_literal(var_name);
             let literal_safe = literal.as_ref().is_some_and(|(_, safe)| *safe);
+            // Captured BEFORE the move below: a literal is never a failed
+            // lookup, so `string_if_invalid` must not fire for one.
+            let was_literal = literal.is_some();
             let mut value = match literal {
                 Some((value, _)) => value,
                 None => context.resolve(var_name)?.unwrap_or(Value::Missing),
             };
+
+            // Django's `string_if_invalid` (#2517). A NON-empty setting is
+            // returned for a failed lookup and RETURNS — the filter chain
+            // never runs, which is why `{{ missing|default:"Foo" }}` renders
+            // the invalid marker rather than `Foo`. A literal is never a
+            // failed lookup, so it is excluded.
+            if matches!(value, Value::Missing) && !was_literal {
+                if let Some(marker) = context.string_if_invalid_for(var_name) {
+                    // Emitted through the same escape decision the arm's tail
+                    // makes: Django puts the marker through
+                    // `render_value_in_context`, which applies
+                    // `conditional_escape` like any other value.
+                    return Ok(if !context.autoescape() {
+                        marker
+                    } else if *in_attr {
+                        filters::html_escape_attr(&marker)
+                    } else {
+                        filters::html_escape(&marker)
+                    });
+                }
+            }
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -3022,8 +3059,31 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         } => {
             // Load and render the included template
             if let Some(loader) = loader {
-                // Remove quotes from template name if present
-                let name = template.trim_matches(|c| c == '"' || c == '\'');
+                // Django's `{% include %}` operand is a FilterExpression, so
+                // an unquoted token is a context lookup, not a filename
+                // (#2517): `{% include template_name %}` renders the template
+                // NAMED BY `template_name`. Treating it literally is why that
+                // form reported `Template not found: template_name` — the
+                // variable's own spelling, which is the tell.
+                //
+                // A missing/blank resolution falls back to the raw token so
+                // the error still names what the author wrote rather than an
+                // empty string.
+                let resolved;
+                let name = if is_quoted_literal(template) {
+                    template.trim_matches(|c| c == '"' || c == '\'')
+                } else {
+                    let (value, _) = get_value_safe_ignoring_failures(template.trim(), context)?;
+                    resolved = match value {
+                        Value::Missing | Value::None => String::new(),
+                        other => other.to_string(),
+                    };
+                    if resolved.is_empty() {
+                        template.trim_matches(|c| c == '"' || c == '\'')
+                    } else {
+                        resolved.as_str()
+                    }
+                };
                 // Use the CACHED loader method (#2074) so the parsed body's
                 // allocation is STABLE across renders — the `{% for %}`
                 // loop-render cache (#2067) keys each For-node's body by
