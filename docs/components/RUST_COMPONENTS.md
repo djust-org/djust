@@ -13,6 +13,13 @@ Rust components provide:
 - **Pythonic API** with both kwargs and builder pattern
 - **LiveView integration** for reactive updates
 
+> **Availability:** only `Button` is currently importable from
+`djust.rust_components` (plus `ComponentNotAvailableError`). The other
+> components below (`Input`, `Text`, `Card`, `Alert`, `Modal`, `Dropdown`,
+> `Tabs`) exist Rust-side in the `_rust_components` extension module but
+> are **not yet wrapped/exposed** — their sections are kept as the target
+> API design. Importing them raises `ImportError`.
+
 ## Architecture
 
 ```
@@ -182,6 +189,8 @@ btn = Button("chain", "Chained") \
 
 ### Input
 
+> **Not yet exposed:** `Input` is not importable from `djust.rust_components` yet — design-only section.
+
 A versatile input component supporting multiple types, sizes, and validation states.
 
 #### Parameters
@@ -302,6 +311,8 @@ input = Input(
 
 ### Text
 
+> **Not yet exposed:** `Text` is not importable from `djust.rust_components` yet — design-only section.
+
 A versatile text/typography component for labels, headings, paragraphs, and spans.
 
 #### Parameters
@@ -408,6 +419,8 @@ text = Text(
 
 ### Card
 
+> **Not yet exposed:** `Card` is not importable from `djust.rust_components` yet — design-only section.
+
 A content card component with header, body, and footer sections.
 
 #### Parameters
@@ -477,6 +490,8 @@ card = Card(
 ```
 
 ### Alert
+
+> **Not yet exposed:** `Alert` is not importable from `djust.rust_components` yet — design-only section.
 
 An alert/notification component with dismissible option and multiple variants.
 
@@ -548,6 +563,8 @@ alert = Alert(
 ```
 
 ### Modal
+
+> **Not yet exposed:** `Modal` is not importable from `djust.rust_components` yet — design-only section.
 
 A modal/dialog overlay component with header, body, and footer sections.
 
@@ -652,6 +669,8 @@ modal = Modal(
 
 ### Dropdown
 
+> **Not yet exposed:** `Dropdown` is not importable from `djust.rust_components` yet — design-only section.
+
 A dropdown/select component for choosing from a list of options.
 
 #### Parameters
@@ -728,6 +747,8 @@ dropdown = Dropdown("disabledDropdown") \
 ```
 
 ### Tabs
+
+> **Not yet exposed:** `Tabs` is not importable from `djust.rust_components` yet — design-only section.
 
 A tabbed interface component for organizing content into multiple panels.
 

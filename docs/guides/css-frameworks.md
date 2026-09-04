@@ -304,35 +304,21 @@ RUN python manage.py check
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
 ```
 
-## Advanced: Custom CSS Adapter
+## Advanced: Customization
 
-If you need framework-specific behavior, create a custom adapter:
+There is no `djust.css.CSSAdapter` module or `DJUST_CSS_ADAPTER` setting. Two
+real customization points:
 
-```python
-# myproject/css_adapter.py
-from djust.css import CSSAdapter
+1. **Utility-config customization** — `djust_setup_css tailwind` writes
+   `tailwind.config.js` and the input CSS only if they don't already exist, so
+   edit those generated files (or pre-create them) to customize content globs,
+   theme, and plugins. The build command it prints respects your files.
 
-class UnoAdapter(CSSAdapter):
-    framework = "unocss"
-
-    def create_config(self, template_dirs):
-        return {
-            "content": [f"{d}/**/*.html" for d in template_dirs],
-            "theme": {},
-        }
-
-    def build_command(self, input_path, output_path, minify=False):
-        cmd = ["npx", "unocss", input_path, "-o", output_path]
-        if minify:
-            cmd.append("--minify")
-        return cmd
-```
-
-Then configure in `settings.py`:
-
-```python
-DJUST_CSS_ADAPTER = "myproject.css_adapter.UnoAdapter"
-```
+2. **Form-field class customization** — subclass
+   `djust.frameworks.FrameworkAdapter` (abstract methods: `render_field`,
+   `render_errors`, `get_field_class`) and register it with
+   `djust.frameworks.register_adapter(name, adapter)` to control the CSS
+   classes djust's form renderers emit per framework.
 
 ## Summary
 

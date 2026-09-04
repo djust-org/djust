@@ -62,7 +62,7 @@ djust's State Management API provides Python-only abstractions for common client
 |-----------|-------------|----------------------|---------------|
 | `@debounce(wait)` | User is typing, dragging | 0.3-0.5s | +0.8 KB |
 | `@throttle(interval)` | Scroll, resize, mouse move | 0.1-0.2s | +0.8 KB |
-| `@optimistic` | Need instant feedback | N/A | +0.5 KB |
+| `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
 | `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
@@ -81,7 +81,7 @@ djust's State Management API provides Python-only abstractions for common client
    → @throttle(interval=0.1)
 
 ❓ Need instant UI update before server responds?
-   → @optimistic
+   → JS Commands (`show`/`hide`/`add_class`) — `@optimistic` is a marker only today
 
 ❓ Same query gets called multiple times?
    → @cache(ttl=60, key_params=["query"])
@@ -118,11 +118,11 @@ def search(self, query: str = "", **kwargs):
 **Pattern 2: Instant Feedback with Server Validation**
 ```python
 @debounce(wait=0.5)     # Debounce server calls
-@optimistic              # Update UI instantly
-def update_value(self, value: int = 0, **kwargs):
-    self.value = max(0, min(100, value))  # Server validates range
+def update_value(self, value: str = "", **kwargs):
+    self.value = max(0, min(100, int(value)))  # Server validates range
 ```
-**Result**: UI updates instantly, server validates/corrects after 500ms
+**Result**: server validates/corrects after 500ms (adding `@optimistic` does
+not change this today — the client-side instant update is not implemented)
 
 ---
 
@@ -151,7 +151,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
     draft_ttl = 3600  # 1 hour
 
     @debounce(wait=1.0)
-    @optimistic
+    @event_handler()
     def auto_save(self, **kwargs):
         # Optional server-side auto-save
         pass
@@ -166,7 +166,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 |-----------|----------------|---------------|----------------|
 | `@debounce` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
 | `@throttle` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
-| `@optimistic` | ~2ms | ➡️ Same calls | ➡️ Same requests |
+| `@optimistic` | 0 (no-op today) | ➡️ Same calls | ➡️ Same requests |
 | `@cache` | ~1ms lookup | ⬇️⬇️ Eliminates repeat calls | ⬇️⬇️ Zero for cache hits |
 | `@client_state` | ~2ms | ➡️ Same calls | ➡️ Same requests |
 | `DraftModeMixin` | ~3ms | ⬆️ Adds save calls (optional) | ➡️ Small localStorage writes |
@@ -185,7 +185,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 |---------|----------|--------|------|
 | **Debouncing** | Search input, text fields | `@debounce(0.5)` | - |
 | **Throttling** | Scroll, resize, mouse move | `@throttle(0.1)` | - |
-| **Optimistic Updates** | Counters, toggles, sliders | `@optimistic` | - |
+| **Optimistic Updates** | Counters, toggles, sliders | `@optimistic` (marker only — not client-implemented yet) | - |
 | **Loading States** | Button disable, spinners, overlays | - | `dj-loading.disable`, `dj-loading.show`, `dj-loading.hide`, `dj-loading.class` |
 | **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
 | **Client State** | Multi-component coordination | `@client_state(keys=["temp"])` | - |
@@ -364,137 +364,44 @@ class ScrollTrackerView(LiveView):
 
 ### @optimistic
 
-**Status:** ✅ Implemented (Phase 3)
+**Status:** ⚠️ Server-side marker only — the client-side optimistic application is **NOT implemented** in the shipped client bundle
 
-Enables optimistic UI updates - client updates DOM immediately while server validates asynchronously. Perfect for counters, toggles, sliders, and any interaction where immediate feedback improves UX.
+`@optimistic` stamps `_djust_decorators["optimistic"] = True` on the handler
+(`python/djust/decorators.py`). The client reads `window.djust.optimistic`
+exactly once (`static/djust/src/09-event-binding.js`) — and nothing ever
+assigns it — so **no optimistic DOM update is applied and no revert happens**.
+Handlers behave identically with or without the decorator today.
+
+Do not use this decorator expecting instant UI feedback. For perceived
+snappiness today, use [`dj-loading.*` attributes](#loading) (immediate pending
+state) or the JS Commands (`show`/`hide`/`add_class`) bound alongside the
+event attribute, which run client-side before the server round-trip.
 
 #### Signature
 
 ```python
 def optimistic(func: F) -> F:
-    """
-    Enable optimistic client-side updates.
-
-    Client applies update immediately (optimistically).
-    Server validates and corrects if needed.
-
-    Returns:
-        Decorated handler function
-    """
+    """Metadata marker (no runtime effect in the shipped client)."""
 ```
 
 #### Parameters
 
 None - this is a marker decorator.
 
-#### Example
+#### Planned behavior (not yet implemented)
 
-```python
-from djust import LiveView
-from djust.decorators import optimistic, debounce
+1. **User clicks button** → Client applies the DOM change instantly
+2. **Event sent to server** → Server executes the handler
+3. **Server sends patch** → Client reconciles; on error, reverts the change
 
-class CounterView(LiveView):
-    template_string = """
-    <div>
-        <h1>Count: {{ count }}</h1>
-        <button dj-click="increment">+1</button>
-    </div>
-    """
-
-    def mount(self, request):
-        self.count = 0
-
-    @optimistic  # UI updates instantly!
-    def increment(self, **kwargs):
-        """
-        User sees count increase IMMEDIATELY.
-        Server validates and updates asynchronously.
-        """
-        self.count += 1
-```
-
-#### Behavior
-
-1. **User clicks button** → Client increments count in DOM **instantly** (< 16ms)
-2. **Event sent to server** → Background request (user doesn't wait)
-3. **Server executes handler** → Validates and processes
-4. **Server sends patch** → Client applies if different from optimistic update
-
-#### With Server Validation
-
-```python
-class SliderView(LiveView):
-    @optimistic
-    @debounce(wait=0.5)  # Combine with debouncing!
-    def update_value(self, value: int = 0, **kwargs):
-        """
-        Client updates slider immediately.
-        Server receives debounced request after 500ms.
-        Server validates bounds and corrects if needed.
-        """
-        # Server-side validation
-        self.value = max(0, min(100, value))
-
-        # If user sent value=150, server corrects to 100
-        # Client receives patch with correct value
-```
-
-#### Error Handling
-
-If server rejects the optimistic update:
-
-```python
-@optimistic
-def delete_item(self, item_id: int = 0, **kwargs):
-    """
-    Client removes item from list immediately.
-    If server fails, client receives error patch and reverts.
-    """
-    item = Item.objects.get(id=item_id)
-
-    # Validate permission
-    if not self.request.user.can_delete(item):
-        raise PermissionError("Cannot delete this item")
-
-    item.delete()
-    # Client shows error toast and reverts deletion
-```
-
-#### Benefits
-
-- **Feels instant:** No waiting for server round trip
-- **Better UX:** Immediate visual feedback
-- **Server validates:** Business logic stays server-side
-- **Auto-corrects:** Client syncs if server changes value
-
-#### Common Use Cases
-
-- Counters (+1, -1 buttons)
-- Toggle switches (on/off)
-- Range sliders
-- Like/favorite buttons
-- Simple CRUD operations (delete, complete)
-
-#### Combining with Other Decorators
-
-```python
-from djust.decorators import optimistic, debounce, throttle
-
-@optimistic        # Update UI immediately
-@debounce(0.5)     # Debounce server requests
-def on_search(self, query: str = "", **kwargs):
-    """
-    Client updates results instantly (optimistically).
-    Server receives debounced request after 500ms.
-    Best of both worlds!
-    """
-    self.results = search_database(query)
-```
+Implementing this requires a client-side `window.djust.optimistic` module
+(the read site in `09-event-binding.js` is the natural hook) and an
+error-revert path (currently a `TODO` in that file).
 
 #### See Also
 
-- [STATE_MANAGEMENT_PATTERNS.md](STATE_MANAGEMENT_PATTERNS.md) - Optimistic UI patterns
-- [STATE_MANAGEMENT_MIGRATION.md](STATE_MANAGEMENT_MIGRATION.md) - Migrating manual optimistic code
+- [STATE_MANAGEMENT_PATTERNS.md](STATE_MANAGEMENT_PATTERNS.md) - Patterns that work today
+
 
 ---
 
@@ -1780,17 +1687,16 @@ Errors are automatically handled by the framework:
 
 #### Custom Error Messages
 
-```python
-from djust.exceptions import LiveViewError
+There is no `djust.exceptions.LiveViewError` (and no `revert_optimistic` /
+`show_toast` mechanism — see the `@optimistic` status above). Raise any
+exception from a handler; djust catches it and sends an error frame to the
+client:
 
-@optimistic
+```python
+@event_handler()
 def transfer_funds(self, amount: int = 0, **kwargs):
     if amount > self.balance:
-        raise LiveViewError(
-            "Insufficient funds",
-            revert_optimistic=True,  # Revert UI change
-            show_toast=True           # Show error to user
-        )
+        raise ValueError("Insufficient funds")  # Delivered as an error frame
 ```
 
 ---

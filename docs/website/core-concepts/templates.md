@@ -13,7 +13,7 @@ Every LiveView template needs two things:
     {% load live_tags %}
     {% djust_client_config %}   {# Emits client config meta tags; djust auto-injects the ~58 KB gz client JS #}
 </head>
-<body dj-view="{{ dj_view_id }}">   {# Connects page to WebSocket session #}
+<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
     <div dj-root>                    {# Reactive region — only this is patched #}
         {{ count }}
         <button dj-click="increment">+</button>
@@ -23,7 +23,7 @@ Every LiveView template needs two things:
 ```
 
 - `{% djust_client_config %}` — emits client config meta tags; djust auto-injects the client JavaScript into every LiveView response (no manual `<script>` tag needed)
-- `dj-view="{{ dj_view_id }}"` — on `<body>`, binds the page to the session (use the context variable `dj_view_id`)
+- `dj-view="myapp.views.CounterView"` — on `<body>`, binds the page to the session (a literal dotted path to your view class; there is no `dj_view_id` context variable — djust injects `dj-view` server-side when missing)
 - `dj-root` — marks the reactive subtree; only HTML inside this element is diffed and patched
 
 ## Event Directives
@@ -228,10 +228,10 @@ While `{% if %}` inside attribute values works, **inline conditionals are recomm
 
 Some older setups used `dj-view` and `dj-root` differently. The required pattern is:
 
-- `dj-view="{{ dj_view_id }}"` on the `<body>` tag (or outermost container)
+- `dj-view="myapp.views.CounterView"` on the `<body>` tag (or outermost container) — literal dotted path, as the scaffold emits
 - `dj-root` on the reactive region inside
 
-See [error codes](../guides/error-codes.md) if you get a `DJUST_E001` or `DJUST_E002` error about missing template attributes.
+See [error codes](../guides/error-codes.md) if you get a `T001`-family system-check warning about missing template attributes.
 
 ## Next Steps
 

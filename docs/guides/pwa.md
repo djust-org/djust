@@ -29,9 +29,9 @@ The PWA implementation provides:
     {% djust_offline_indicator %}
     {% djust_offline_styles %}
 
-    <div dj-offline-hide>Only shown when online</div>
-    <div dj-offline-show>Only shown when offline</div>
-    <button dj-offline-disable>Disabled when offline</button>
+    <div dj-offline="hide">Only shown when online</div>
+    <div dj-offline="show">Only shown when offline</div>
+    <button dj-offline="disable">Disabled when offline</button>
 </body>
 </html>
 ```
@@ -39,17 +39,17 @@ The PWA implementation provides:
 ### 2. Use PWA mixins in your LiveViews
 
 ```python
-from djust.pwa.mixins import PWAMixin, OfflineMixin
+from djust.pwa.mixins import OfflineMixin
 
-class MyView(PWAMixin, LiveView):
+class MyView(OfflineMixin, LiveView):
     def mount(self, request):
-        self.enable_offline()  # Enable offline functionality
-        self.items = []
+        self.items = self.storage.get("items", [])  # offline-capable KV store
 
     def add_item(self, name):
-        # Works offline with automatic sync
-        self.items.append(name)
-        self.sync_when_online()  # Queue for sync
+        # Optimistic offline create: queued for sync automatically
+        created = self.create_offline("Item", {"name": name})
+        self.items.append(created)
+        self.storage.set("items", self.items)
 ```
 
 ### 3. Generate service worker
@@ -60,53 +60,46 @@ python manage.py generate_sw
 
 ## PWA Mixins
 
-### PWAMixin
+### PWAMixin (`python/djust/pwa/mixins.py`)
 
-Base mixin for PWA functionality:
+Install-prompt / update handling for the PWA shell:
 
-```python
-class PWAMixin:
-    def enable_offline(self, storage='indexeddb'):
-        """Enable offline mode with specified storage backend."""
-
-    def disable_offline(self):
-        """Disable offline functionality."""
-
-    def is_offline_enabled(self):
-        """Check if offline mode is enabled."""
-```
+- `get_pwa_config() -> dict`
+- `register_pwa_handlers()`
+- `handle_install_prompt()`
+- `handle_app_update(version)`
 
 ### OfflineMixin
 
-Enhanced offline state management:
+Offline state + optimistic mutations (standalone — it does **not** subclass
+`PWAMixin`; mix both if you want install handling too):
 
-```python
-class OfflineMixin(PWAMixin):
-    def save_offline_state(self, key, data):
-        """Save data for offline access."""
-
-    def load_offline_state(self, key, default=None):
-        """Load saved offline data."""
-
-    def sync_when_online(self):
-        """Queue current state for sync when online."""
-
-    def handle_online(self):
-        """Called when connection restored."""
-```
+- `storage` — property returning the `OfflineStorage` KV backend
+  (`.get/.set/.delete/.clear/.keys/.size`; backend picked from
+  `self.offline_storage`, defaulting per view)
+- `sync_queue` — property returning the `SyncQueue` of pending
+  create/update/delete actions
+- `is_online() -> bool`
+- `get_cached_or_fetch(key, queryset, **kwargs) -> list[dict]`
+- `create_offline(model_name, data) -> dict` — optimistic create with a
+  temporary ID, queued for sync
+- `update_offline(model_name, obj_id, data) -> dict`
+- `delete_offline(model_name, obj_id) -> bool`
+- `sync_when_online()` — flush the sync queue when connectivity returns
+- `get_offline_state() -> dict`
+- `handle_connection_change(online)`
 
 ### SyncMixin
 
-Automatic synchronization:
+Synchronization of offline data (combine **after** `OfflineMixin`:
+`class DataView(SyncMixin, OfflineMixin, LiveView)`):
 
-```python
-class SyncMixin(OfflineMixin):
-    def queue_sync(self, action, data):
-        """Queue action for background sync."""
-
-    def process_sync_queue(self):
-        """Process queued sync actions."""
-```
+- Class knobs: `sync_model`, `sync_conflict_strategy`
+  (`'client_wins'|'server_wins'|'merge'|'manual'`), `sync_batch_size`,
+  `sync_timeout`
+- Hook: `sync_create_item(action_data)` (and siblings) for custom sync logic
+- The queue is processed automatically; there is no `queue_sync()` /
+  `process_sync_queue()` public API
 
 ## Template Tags
 
@@ -162,45 +155,35 @@ CSS for offline directives:
 
 ## Offline Directives
 
-### dj-offline-hide
+A single value-form attribute: `dj-offline="<show|hide|disable|enable|queue>"`
+(`static/djust/js/pwa.js` re-evaluates them on connection changes). The
+bare-name forms (`dj-offline-hide`, …) are **not** implemented.
 
-Hide elements when offline:
+### Only shown when online / offline
 
 ```html
-<div dj-offline-hide>
+<div dj-offline="hide">
     <button dj-click="save_to_server">Save Online</button>
 </div>
-```
-
-### dj-offline-show
-
-Show elements only when offline:
-
-```html
-<div dj-offline-show>
+<div dj-offline="show">
     <p>You're working offline. Changes will sync when online.</p>
 </div>
 ```
 
-### dj-offline-disable
-
-Disable form elements when offline:
+### Disable / enable form elements
 
 ```html
-<button dj-offline-disable dj-click="submit">
-    Submit Form
-</button>
+<button dj-offline="disable" dj-click="submit">Submit Form</button>
 ```
 
-### dj-offline-queued
-
-Show visual feedback for queued actions:
+### Queue the action when offline
 
 ```html
-<div dj-offline-queued>
-    <span class="sync-indicator">Syncing...</span>
-</div>
+<button dj-offline="queue" dj-click="submit">Submit</button>
 ```
+
+`queue` attaches a fallback click handler while offline so the intent is
+captured (and synced) instead of lost.
 
 ## Storage Backends
 
@@ -208,16 +191,20 @@ Show visual feedback for queued actions:
 
 For structured offline data:
 
-```javascript
-// Automatic via PWAMixin.enable_offline('indexeddb')
+```python
+# Storage backend selection on OfflineMixin views (self.offline_storage)
+class TodoView(OfflineMixin, LiveView):
+    offline_storage = "todos"  # named backend; IndexedDB-backed via the SW
 ```
 
 ### LocalStorage Backend
 
 For simple key-value storage:
 
-```javascript
-// Automatic via PWAMixin.enable_offline('localstorage')
+```python
+# Same API — the backend name decides where OfflineStorage persists
+class PrefView(OfflineMixin, LiveView):
+    offline_storage = "prefs"  # simple key-value data
 ```
 
 ## Service Worker Configuration
@@ -298,31 +285,31 @@ class TodoView(OfflineMixin, LiveView):
     template_name = 'todos.html'
 
     def mount(self, request):
-        self.enable_offline()
-        self.todos = self.load_offline_state('todos', [])
+        self.todos = self.storage.get('todos', [])
 
     def add_todo(self, text):
-        todo = {'id': len(self.todos), 'text': text, 'done': False}
+        todo = self.create_offline('Todo', {'text': text, 'done': False})
         self.todos.append(todo)
-        self.save_offline_state('todos', self.todos)
-        self.sync_when_online()
+        self.storage.set('todos', self.todos)
 
     def toggle_todo(self, todo_id):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
-        self.save_offline_state('todos', self.todos)
+                self.update_offline('Todo', todo_id, {'done': todo['done']})
+        self.storage.set('todos', self.todos)
         self.sync_when_online()
 ```
 
 ### Offline Form with Validation
 
 ```python
-class ContactForm(SyncMixin, LiveView):
+from djust.pwa.mixins import OfflineMixin
+
+class ContactForm(OfflineMixin, LiveView):
     template_name = 'contact.html'
 
     def mount(self, request):
-        self.enable_offline()
         self.form_data = {}
         self.errors = {}
 
@@ -341,8 +328,8 @@ class ContactForm(SyncMixin, LiveView):
             if self.is_online():
                 self.send_to_server()
             else:
-                self.queue_sync('submit_contact', self.form_data)
-                self.show_message("Form saved. Will submit when online.")
+                self.create_offline('ContactSubmission', self.form_data)
+                self.storage.set('last_message', 'Form saved. Will submit when online.')
 ```
 
 ## Browser Support
@@ -372,7 +359,7 @@ No breaking changes. To add PWA support to existing views:
 
 1. Add `{% load djust_pwa %}` to templates
 2. Include `{% djust_pwa_head %}` in your base template
-3. Mix `PWAMixin` into existing LiveViews
+3. Mix `PWAMixin` (install/update handling) and/or `OfflineMixin` (offline data) into existing LiveViews
 4. Run `python manage.py generate_sw`
 5. Deploy with HTTPS
 

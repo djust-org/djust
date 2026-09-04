@@ -51,18 +51,16 @@ The main entry point for template compilation and rendering.
 
 #### Python API
 
-```python
-from djust._rust import Template
+The `Template` struct is Rust-side only; the Python surface is function-based:
 
-# Create a compiled template
-template = Template("Hello {{ name }}!")
+```python
+from djust._rust import compile_template, render_template
+
+# Compile up front (cached) and validate syntax — raises RuntimeError on bad source
+compile_template("Hello {{ name }}!")
 
 # Render with context
-context = {"name": "World"}
-html = template.render(context)  # "Hello World!"
-
-# Access original source
-print(template.source)  # "Hello {{ name }}!"
+html = render_template("Hello {{ name }}!", {"name": "World"})  # "Hello World!"
 ```
 
 #### Rust API
@@ -103,29 +101,24 @@ let html = template.render(&context)?;
   - `loader` - Custom template loader implementing `TemplateLoader` trait
 - **Returns**: Rendered HTML with inheritance resolved
 - **Use Case**: Required for `{% extends %}` tags
+- **Note**: Rust-side only. From Python, use `render_template_with_dirs` (below).
 
-**`template.source(&self) -> String` (Python getter)**
-- Returns the original template source code
-- **Returns**: Template source string
+**`render_template_with_dirs(template_source, context, template_dirs, safe_keys=None, auto_call=None) -> str` (Python)**
+- Renders with `{% include %}` / `{% extends %}` support, searching `template_dirs`
+- **Use Case**: Template inheritance and includes from Python
 
 #### Example: Template Inheritance
 
 ```python
-from djust._rust import Template
-from djust.live_view import FileTemplateLoader
+from djust._rust import render_template_with_dirs
 
-# Create loader
-loader = FileTemplateLoader(template_dirs=["/path/to/templates"])
-
-# Child template with inheritance
-template = Template("""
+child = """
     {% extends "base.html" %}
     {% block title %}My Page{% endblock %}
     {% block content %}Hello World{% endblock %}
-""")
+"""
 
-# Render with loader
-html = template.render_with_loader(context, loader)
+html = render_template_with_dirs(child, context, ["/path/to/templates"])
 ```
 
 ---
@@ -524,30 +517,14 @@ Parses tokens into an Abstract Syntax Tree (AST).
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>>
 ```
 
-### parse_html_continue Function
+### ID counter management (internal)
 
-Parses HTML while maintaining ID counter state from previous parsing operations. This is essential for preventing ID collisions when dynamically inserting content (like form validation error messages).
-
-#### Python API
-
-```python
-from djust._rust import parse_html_continue, get_id_counter, set_id_counter
-
-# Get current ID counter state
-current_counter = get_id_counter()
-
-# Parse new content, continuing from current counter
-html, patches = parse_html_continue(template_string, context)
-
-# Or explicitly set counter before parsing
-set_id_counter(100)  # Start IDs from 100
-```
-
-#### Use Cases
-
-- **Form validation**: Error messages inserted mid-session need unique IDs
-- **Dynamic content injection**: Any content added after initial render
-- **Incremental updates**: Avoiding ID conflicts with existing DOM elements
+The `dj-id` counter that keeps dynamically-inserted content collision-free is
+managed internally by the parser/renderer. There are no
+`parse_html_continue` / `get_id_counter` / `set_id_counter` Python exports —
+callers never need to seed or read the counter; every render (including
+patch re-renders of form validation messages) continues the same sequence
+automatically.
 
 ---
 

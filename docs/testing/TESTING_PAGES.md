@@ -65,11 +65,11 @@ Create a new view in `examples/demo_project/demo_app/views/`:
 ```python
 # my_feature_test.py
 from djust import LiveView
-from djust.decorators import my_decorator
+from djust.decorators import event_handler  # the decorator under test
 
 class MyFeatureTestView(LiveView):
     """
-    Automated test for @my_decorator functionality.
+    Automated test for @event_handler functionality.
 
     This view runs tests automatically on page load to verify:
     - Feature X works correctly

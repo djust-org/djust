@@ -74,7 +74,7 @@ Mix into your LiveView to enable the `update_model` event handler. This mixin is
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `allowed_model_fields` | `list` or `None` | `None` | Restrict which fields can be bound. `None` allows all non-forbidden fields. |
+| `allowed_model_fields` | `list` or `None` | `None` | Extra fields that may be bound. Binding is **fail-closed**: a field is bindable only if it appears as `dj-model` in the rendered template source, or is listed here. `None` means "template-derived only" — never "everything". |
 
 ```python
 class MyView(LiveView):

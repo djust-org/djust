@@ -108,7 +108,7 @@ JavaScript that relies on the attribute for DOM lookups). djust-generated HTML a
 patch engine are updated automatically.
 
 **Migration:** Replace any `querySelector('[data-dj-id="..."]')` calls with
-`querySelector('[dj-id="..."]')`. A system check (`djust.T011`) will warn you about
+`querySelector('[dj-id="..."]')`. A system check (`djust.T014`) will warn you about
 `data-dj-id` attributes found in your templates.
 
 ### 2. Keyed VDOM diffing: `id=` fallback removed; use explicit `dj-key`
@@ -340,7 +340,7 @@ if hasattr(method, '_debounce_seconds'):
 ```python
 if hasattr(method, '_djust_decorators'):
     if 'event_handler' in method._djust_decorators:
-        event_name = method._djust_decorators['event_handler']['name']
+        param_names = method._djust_decorators['event_handler']['param_names']
 
     if 'debounce' in method._djust_decorators:
         wait = method._djust_decorators['debounce']['wait']

@@ -43,10 +43,10 @@ cargo test -p djust_vdom              # Single crate
 djust/
 ├── python/djust/           # Python package
 │   ├── live_view.py        # LiveView base class
-│   ├── component.py        # LiveComponent base
+│   ├── components/         # LiveComponent base (components/base.py) + ui/
 │   ├── forms.py            # FormMixin (real-time validation)
 │   ├── websocket.py        # LiveViewConsumer (Channels)
-│   ├── auth.py             # Authentication & authorization (check_view_auth, mixins)
+│   ├── auth/               # Authentication & authorization (core.py: check_view_auth, mixins.py)
 │   ├── decorators.py       # @event_handler, @cache, @debounce, @permission_required, etc.
 │   ├── config.py           # Configuration system
 │   ├── presence.py         # Presence tracking (PresenceMixin, CursorTracker)

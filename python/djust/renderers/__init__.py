@@ -37,11 +37,12 @@ __all__ = [
 # and the ``?platform=`` WebSocket handshake param. Third-party renderers
 # can register by appending to this dict at import time.
 #
-# LVN-I PR-3 added ``html``. LVN-II PR-2 (this PR) registers ``swiftui``
-# and ``compose`` — the body is a scaffold today (raises NotImplementedError);
-# LVN-II PR-3 ships the actual widget-tree walker. Registering them here
-# so the handshake routes ?platform=swiftui to a defined error rather than
-# silently falling through to HTML (which masks client-side misconfigs).
+# LVN-I PR-3 added ``html``. LVN-II PR-2 registered ``swiftui`` and
+# ``compose``; the widget-tree walker shipped in LVN-II PR-3
+# (``NativeRenderer.render_with_diff`` emits a Replace-only patch).
+# Registering them here so the handshake routes ?platform=swiftui to a
+# defined renderer rather than silently falling through to HTML (which
+# masks client-side misconfigs).
 RENDERERS: dict[str, Type[Renderer]] = {
     "html": HtmlRenderer,
     "swiftui": SwiftUIRenderer,
