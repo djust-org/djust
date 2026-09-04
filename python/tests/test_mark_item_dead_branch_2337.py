@@ -98,6 +98,7 @@ sinks — see the comment in ``TestAConvertingProducerLeavesNoNonStrElement``.
 from __future__ import annotations
 
 import itertools
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -592,7 +593,8 @@ class TestTheProducerEnumerationIsComplete:
             "String — that narrowing is what makes mark_item's deleted "
             "non-str guard unreachable (#2337)"
         )
-        assert "Some(Value::List(items)) | Some(Value::Tuple(items)) => items," in body
+        arms = body.split("let items = match self.get(key) {", 1)[1].split("=> items,", 1)[0]
+        assert set(re.findall(r"Value::(\w+)", arms)) == {"List", "Tuple", "NamedTuple"}
         assert "_ => return false," in body
 
     def test_both_item_safe_output_filters_construct_string_elements(self) -> None:
