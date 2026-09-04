@@ -529,15 +529,6 @@ impl Context {
         }
     }
 
-    /// Make this context share `other`'s `{% ifchanged %}` store and loop
-    /// frame — the `{% include … only %}` case, alongside
-    /// [`Self::share_cycle_state_from`].
-    pub fn share_ifchanged_state_from(&mut self, other: &Context) {
-        self.ifchanged_state = std::sync::Arc::clone(&other.ifchanged_state);
-        self.loop_scope = other.loop_scope;
-        self.loop_scope_counter = std::sync::Arc::clone(&other.loop_scope_counter);
-    }
-
     /// Attach a map of raw Python objects for `getattr`-fallback
     /// lookups. Typically called by the live-view layer after
     /// building the context from JSON-compatible state. Safe to

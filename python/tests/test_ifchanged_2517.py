@@ -164,7 +164,7 @@ _NUMERIC_EQUALITY_CASES: list[list[Any]] = [
     [Decimal("0"), 0, False, -0.0],
     [9007199254740993, 9007199254740992],
     [2**62 + 1, 2**62 + 3],
-    [float("nan"), float("nan")],
+    # (the NaN rows live in their own tests below — identity-dependent)
     [float("inf"), float("inf"), float("-inf")],
     [1, "1"],
     [0, ""],
@@ -222,3 +222,77 @@ def test_randomized_differential(seed: int) -> None:
     close = "{% endifchanged %}" if not els else ""
     source = f"{{% for x in v %}}{tag}{body}{els}{close}{{% endfor %}}"
     _assert_agrees(source, {"v": values})
+
+
+def test_include_scoping_matches_django(tmp_path) -> None:
+    """`{% ifchanged %}` state across an include — both directions.
+
+    Django carries the state across a PLAIN include and starts CLEAN in an
+    `only` include (`Template.render` pushes a fresh `render_context` state for
+    the included template). A first pass shared the store into the `only`
+    branch "for symmetry with `{% cycle %}`" and moved `CCC` to `Css`; nothing
+    tested it. Both rows are pinned here so the next symmetry argument has to
+    argue with a measurement.
+    """
+    from django.template.backends.django import DjangoTemplates
+
+    from djust.template.backend import DjustTemplateBackend
+
+    (tmp_path / "ifc.html").write_text(
+        "{% ifchanged %}C{% else %}s{% endifchanged %}", encoding="utf-8"
+    )
+    params = {"NAME": "n", "DIRS": [str(tmp_path)], "APP_DIRS": False, "OPTIONS": {}}
+    django_engine = DjangoTemplates({**params, "NAME": "dj"})
+    djust_engine = DjustTemplateBackend({**params, "NAME": "du"})
+
+    for source, expected in [
+        ("{% for x in v %}{% include 'ifc.html' %}{% endfor %}", "Css"),
+        ("{% for x in v %}{% include 'ifc.html' only %}{% endfor %}", "CCC"),
+    ]:
+        django_out = str(django_engine.from_string(source).render({"v": [1, 1, 2]}))
+        djust_out = str(djust_engine.from_string(source).render({"v": [1, 1, 2]}))
+        assert djust_out == django_out == expected, source
+
+
+_NAN = float("nan")
+
+_SOURCE = "{% for x in v %}{% ifchanged x %}C{% else %}s{% endifchanged %}{% endfor %}"
+
+
+@pytest.mark.parametrize(
+    "values,expected",
+    [
+        # The SAME NaN object repeated reads as UNCHANGED: Django compares a
+        # LIST of resolved operands, and Python's list comparison short-circuits
+        # on identity before calling `==`.
+        ([_NAN, _NAN], "Cs"),
+        ([5, _NAN, 5], "CCC"),
+        ([_NAN, _NAN, 1], "CsC"),
+    ],
+)
+def test_repeated_nan_object_matches_django(values, expected: str) -> None:
+    """Gate-off: make NaN "never equal" (skip the state store) and all three
+    of these regress — that was a real first attempt at this."""
+    _assert_agrees(_SOURCE, {"v": values})
+    assert _rust.render_template(_SOURCE, {"v": values}) == expected
+
+
+def test_two_distinct_nan_objects_diverge_from_django() -> None:
+    """A KNOWN divergence, pinned so it is not mistaken for parity later.
+
+    Django's answer depends on OBJECT IDENTITY: `[nan, nan]` built from one
+    object compares equal (list identity short-circuit, the test above), while
+    two separately-constructed NaNs compare unequal and Django reports both as
+    changed. Identity does not survive the conversion into the Rust `Value`, so
+    no key can reproduce both — `#nan` matches the repeated-object case and
+    misses this one; a never-equal key matches this one and misses three.
+
+    The repeated-object reading is kept because it is also what the pre-#2517
+    engine did, so this pins a limit rather than a regression. Revisit only if
+    `Value` ever carries object identity.
+    """
+    values = [float("nan"), float("nan")]
+    django_out = DjangoTemplate(_SOURCE).render(DjangoContext({"v": values}))
+    djust_out = _rust.render_template(_SOURCE, {"v": values})
+    assert django_out == "CC", "Django's behaviour changed — re-derive this limit"
+    assert djust_out == "Cs", "djust keys both NaNs the same"

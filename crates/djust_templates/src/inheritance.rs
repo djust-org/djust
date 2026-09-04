@@ -199,84 +199,119 @@ fn nodes_reference_block_super(nodes: &[Node]) -> bool {
 }
 
 fn node_references_block_super(node: &Node) -> bool {
+    /// Does any of these expression strings mention it?
+    fn any_expr<'a>(exprs: impl IntoIterator<Item = &'a str>) -> bool {
+        exprs.into_iter().any(|e| e.contains("block.super"))
+    }
+
     match node {
-        Node::Variable(name, _, _) => name.trim() == "block.super",
+        // ---- expression-bearing leaves ------------------------------------
+        Node::Variable(name, filters, _) => {
+            name.trim() == "block.super"
+                || any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
+        }
         Node::InlineIf {
             true_expr,
-            false_expr,
             condition,
+            false_expr,
+            filters,
+        } => {
+            any_expr([true_expr.as_str(), condition.as_str(), false_expr.as_str()])
+                || any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
+        }
+        Node::FirstOf { args, .. }
+        | Node::CustomTag { args, .. }
+        | Node::AssignTag { args, .. }
+        | Node::UnsupportedTag { args, .. } => any_expr(args.iter().map(String::as_str)),
+        Node::Cycle { values, .. } => any_expr(values.iter().map(String::as_str)),
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
             ..
-        } => [true_expr, false_expr, condition]
-            .iter()
-            .any(|e| e.contains("block.super")),
+        } => any_expr([value.as_str(), max_value.as_str(), max_width.as_str()]),
+        Node::Include {
+            template,
+            with_vars,
+            ..
+        } => any_expr([template.as_str()]) || any_expr(with_vars.iter().map(|(_, v)| v.as_str())),
+
+        // ---- containers, with their own expression fields ------------------
         Node::If {
             condition,
             true_nodes,
             false_nodes,
             ..
         } => {
-            condition.contains("block.super")
+            any_expr([condition.as_str()])
                 || nodes_reference_block_super(true_nodes)
                 || nodes_reference_block_super(false_nodes)
         }
-        // These two carry an EXPRESSION beside their body, and the expression
-        // is where the reference hides: `{% for c in block.super %}` and
-        // `{% with s=block.super %}` both rendered empty because only the body
-        // was inspected.
         Node::For {
             iterable,
             nodes,
             empty_nodes,
             ..
         } => {
-            iterable.contains("block.super")
+            any_expr([iterable.as_str()])
                 || nodes_reference_block_super(nodes)
                 || nodes_reference_block_super(empty_nodes)
         }
         Node::With { assignments, nodes } => {
-            assignments
-                .iter()
-                .any(|(_, expr)| expr.contains("block.super"))
+            any_expr(assignments.iter().map(|(_, v)| v.as_str()))
+                || nodes_reference_block_super(nodes)
+        }
+        Node::Filter { filters, nodes } => {
+            any_expr(filters.iter().filter_map(|(_, a)| a.as_deref()))
                 || nodes_reference_block_super(nodes)
         }
         Node::Block { nodes, .. }
         | Node::Spaceless { nodes, .. }
-        | Node::AutoEscape { nodes, .. }
-        | Node::Filter { nodes, .. } => nodes_reference_block_super(nodes),
+        | Node::AutoEscape { nodes, .. } => nodes_reference_block_super(nodes),
         Node::IfChanged {
-            nodes, else_nodes, ..
-        } => nodes_reference_block_super(nodes) || nodes_reference_block_super(else_nodes),
+            vars,
+            nodes,
+            else_nodes,
+            ..
+        } => {
+            any_expr(vars.iter().map(String::as_str))
+                || nodes_reference_block_super(nodes)
+                || nodes_reference_block_super(else_nodes)
+        }
         Node::BlockSuperScope { super_nodes, nodes } => {
             nodes_reference_block_super(super_nodes) || nodes_reference_block_super(nodes)
         }
         Node::Language { children, .. }
         | Node::Timezone { children, .. }
         | Node::Localize { children, .. }
-        | Node::LocalTime { children, .. }
-        | Node::BlockCustomTag { children, .. }
-        | Node::ReactComponent { children, .. } => nodes_reference_block_super(children),
-        // Nodes with NO expression field of their own: a reference cannot hide
-        // in them, so answering `false` is exact.
-        Node::Text(_) | Node::Comment | Node::Load(_) | Node::TemplateTag(_) => false,
-        // EVERYTHING ELSE FAILS SAFE.
+        | Node::LocalTime { children, .. } => nodes_reference_block_super(children),
+        Node::BlockCustomTag { args, children, .. } => {
+            any_expr(args.iter().map(String::as_str)) || nodes_reference_block_super(children)
+        }
+        Node::ReactComponent {
+            props, children, ..
+        } => {
+            any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
+        }
+        Node::RustComponent { props, .. } => any_expr(props.iter().map(|(_, v)| v.as_str())),
+
+        // ---- everything else carries no expression ------------------------
         //
-        // This walk decides whether to bind `block.super` at all, and a missed
-        // reference is not a slow render — it is SILENT CONTENT LOSS: the
-        // variable resolves to nothing and the parent's block disappears with
-        // no error. A whitelist that ends in `_ => false` fails OPEN in the
-        // destructive direction, and it did: `{% with s=block.super %}`,
-        // `{% for c in block.super %}` and `{% firstof block.super %}` each
-        // rendered empty, because the walk inspects `Variable` names and `If`
-        // conditions but not `With` values, `For` iterables or `firstof`
-        // operands — and every other expression-bearing tag is in the same
-        // class (filter arguments, `{% include … with %}`, `{% cycle %}`).
+        // The default is `false`, NOT `true`. A first pass inverted it on the
+        // reasoning that "a false positive costs one wasted parent render" —
+        // that is wrong twice over, measured: the parent block renders into
+        // the SHARED render context, so a `{% cycle %}` in it advances and the
+        // page changes (`I|a` became `I|b`); and if the parent block contains
+        // an `{% include %}` of a name only the parent's context resolves, the
+        // eager render RAISES `TemplateDoesNotExist` on a template that worked.
+        // A child block containing an `{% include %}` is an everyday layout.
         //
-        // Enumerating every expression field is the fix that keeps breaking
-        // (v1.0.0rc4 finding #1: a table samples one axis and blinds you on
-        // the next), so the default is inverted instead. The cost of a false
-        // positive is one wasted parent render; the cost of a false negative
-        // is deleted content.
-        _ => true,
+        // So the arms above enumerate every expression-bearing variant
+        // explicitly. A variant added later without an arm here degrades to a
+        // silently-empty `{{ block.super }}` in that position — the same class
+        // this list exists to close, and the reason the list is exhaustive by
+        // construction rather than by a catch-all.
+        _ => false,
     }
 }
 

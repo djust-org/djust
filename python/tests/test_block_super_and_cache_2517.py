@@ -46,6 +46,7 @@ _TEMPLATES = {
     # block still emits the FIRST value.
     "cycle_parent.html": ("{% block c %}{% cycle 'a' 'b' as k %}{% endblock %}|{% cycle k %}"),
     "cycle_child.html": "{% extends 'cycle_parent.html' %}{% block c %}only{% endblock %}",
+    "leaf.html": "I",
     # A variable target.
     "var_child.html": "{% extends parent_name %}{% block c %}var{% endblock %}",
 }
@@ -147,6 +148,40 @@ def test_block_super_resolves_in_every_expression_position(engines, body: str) -
     # Non-vacuity: the parent's text must actually be present, so a pair of
     # empty strings cannot pass.
     assert "three" in djust_out
+
+
+#: Bodies with NO `block.super` whose parent block has a SIDE EFFECT. A first
+#: fix inverted the walker's fallthrough to `_ => true` on the reasoning that a
+#: false positive costs only a wasted render. Measured, that is wrong twice:
+#: the parent renders into the SHARED render context, so its `{% cycle %}`
+#: advances and the page changes; and a parent block containing an
+#: `{% include %}` the child's context cannot resolve turns a working template
+#: into `TemplateDoesNotExist`. Each body below is a node kind that had no
+#: explicit arm.
+_NO_SUPER_BODIES = {
+    "text": "only",
+    "include": "{% include 'leaf.html' %}",
+    "cycle": "{% cycle 'p' 'q' %}",
+    "widthratio": "{% widthratio 1 2 100 %}",
+    "firstof": "{% firstof 'z' %}",
+}
+
+
+@pytest.mark.parametrize("body", list(_NO_SUPER_BODIES.values()), ids=list(_NO_SUPER_BODIES))
+def test_a_child_without_block_super_never_renders_the_parent_block(engines, body: str) -> None:
+    """The parent's `{% cycle %}` position is the observable.
+
+    If the parent block rendered, its cycle would advance and the sibling after
+    the block would emit the SECOND value. Gate-off: set the walker's
+    fallthrough to `_ => true` and every row but `text` fails.
+    """
+    django_engine, djust_engine = engines
+    src = "{% extends 'cycle_parent.html' %}{% block c %}" + body + "{% endblock %}"
+    django_out = str(django_engine.from_string(src).render({}))
+    djust_out = str(djust_engine.from_string(src).render({}))
+    assert djust_out == django_out
+    # `|a` — not `|b` — is what proves the parent's cycle never advanced.
+    assert djust_out.endswith("|a")
 
 
 def test_extends_accepts_a_context_variable(engines) -> None:
