@@ -269,11 +269,12 @@ fn add_does_not_overflow() {
     let mut c2 = Context::new();
     c2.set("v".to_string(), Value::Integer(5));
     c2.set("inf".to_string(), Value::Float(f64::INFINITY));
-    let out2 = render("{{ v|add:inf }}", &c2);
-    assert!(
-        !out2.starts_with('-'),
-        "float overflow wrapped negative: {out2}"
-    );
+    // Django's int(inf) raises OverflowError; no fabricated sum may render.
+    let error = Template::new("{{ v|add:inf }}")
+        .unwrap()
+        .render(&c2)
+        .unwrap_err();
+    assert!(error.to_string().contains("OverflowError"));
 }
 
 // ---------------------------------------------------------------------------

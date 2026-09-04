@@ -562,12 +562,20 @@ class TestEveryRebuildSiteIsAccountedFor:
     #: tell a match from a construction, and a category that swallowed them
     #: silently would be the hole this test exists to close.
     LIST_NAMED = {
+        "(Value::List(lhs), Value::List(rhs)) => {": (
+            1,
+            "add concatenates lists only with lists; tuples have a separate arm",
+        ),
+        "Value::List(lhs.iter().chain(rhs).cloned().collect())": (
+            1,
+            "list + list returns a list; tuple + tuple returns a tuple",
+        ),
         'Value::List(_) => "list",': (
             1,
             "python_type_name (#2451) — CPython answers 'list' and 'tuple' "
             "differently, so pairing this arm with | Value::Tuple(_) would be "
             "the DEFECT rather than the fix; the tuple arm is the next line",
-        )
+        ),
     }
 
     #: ``slice`` routes through the helper on its ONE sequence exit. It had two

@@ -128,7 +128,7 @@ class TestTheIssuesOwnClaims:
         accepts, which is the whole reason the positions differ."""
         dj, du = _both("{% widthratio 10 2 p %}", {"p": "100.6"})
         assert dj.startswith("<<EXC TemplateSyntaxError"), dj
-        assert du.startswith("<<EXC RuntimeError"), du
+        assert du.startswith("<<EXC TemplateSyntaxError"), du
         # Same value, first position: `float("100.6")` is fine.
         assert _both("{% widthratio p 2 100 %}", {"p": "100.6"}) == ("5030", "5030")
 
@@ -329,6 +329,13 @@ class TestTheChokepointIsTheOnlyIntValueReader:
         source = self._source(FILTERS_RS)
         arms = re.findall(r'"(\w+)" => \{(.*?)\n        \}', source, re.S)
         found = {name for name, body in arms if "python_int_value(" in body}
+        # add preserves both operands and delegates integer conversion to its helper.
+        add_body = next(body for name, body in arms if name == "add")
+        if "add_values(" in add_body:
+            helper = source.split("fn add_values(", 1)[1].split("\n}\n", 1)[0]
+            assert "python_int_value(value)" in helper
+            assert "python_int_value(arg)" in helper
+            found.add("add")
         assert found == set(self.EXPECTED_CALLERS), (
             "the set of dispatch arms reading int(value) through the chokepoint "
             f"changed: new {sorted(found - set(self.EXPECTED_CALLERS))}, "

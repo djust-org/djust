@@ -895,6 +895,7 @@ pub fn apply_filter_full_safe(
         filter_name,
         value,
         builtin_arg,
+        resolved_type.as_ref(),
         context,
         arg_was_quoted,
         arg_type,
@@ -1054,7 +1055,7 @@ pub fn is_known_filter(name: &str) -> bool {
 /// single source of truth, with no parallel built-in-name list that could
 /// drift (#1660; cf. the #1640 parallel-path-drift class).
 ///
-/// Eight parameters since #2556 added `autoescape`: it is kept a separate
+/// `autoescape` is kept a separate
 /// `bool` rather than folded into [`InputSafety`] on purpose — that struct is
 /// Django's `SafeData` term, and the block policy must stay visibly distinct
 /// from it (the plan's §2.3: an emit-time term, never a grant).
@@ -1063,10 +1064,11 @@ fn apply_builtin_filter(
     filter_name: &str,
     value: &Value,
     arg: Option<&str>,
+    resolved_arg: Option<&Value>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    // What the argument's resolved Python TYPE says, which the `&str` above no
-    // longer carries. See [`ArgType`].
+    // Compact argument metadata for filters that only need scalar facts.
+    // `add` uses resolved_arg directly to retain the full operand type.
     arg_type: ArgType,
     input_safety: InputSafety,
     autoescape: bool,
@@ -1348,136 +1350,29 @@ fn apply_builtin_filter(
             )
         }
         "add" => {
-            // Django's `add` is a three-branch chain (#2203):
-            //
-            //     try:    return int(value) + int(arg)
-            //     except: try:    return value + arg
-            //             except: return ""
-            //
-            // The previous implementation was only a partial first branch: it
-            // parsed the argument as `i64` and **defaulted to 0** on failure,
-            // so `{{ n|add:1.5 }}` silently added nothing, and it had no
-            // concatenation branch at all, so `{{ "a"|add:"b" }}` returned "a".
-            //
-            // Branch order is load-bearing: the int branch runs FIRST, so
-            // `{{ "4"|add:"3" }}` is 7, not "43".
-            //
-            // But `int()` is stricter than "looks numeric", and the difference
-            // decides which branch wins. `int("1.5")` RAISES in Python, so
-            // Django falls through and CONCATENATES: `{{ "1.5"|add:"1.5" }}` is
-            // "1.51.5", not 3. A first pass here accepted "1.5" via an `f64`
-            // fallback and returned **2** — not merely a different answer but a
-            // fabricated number where Django produces text, which is worse than
-            // the bug it replaced.
-            //
-            // A float LITERAL is different: `{{ n|add:1.5 }}` passes Python a
-            // float, and `int(1.5)` is 1. The template layer distinguishes the
-            // two by quoting, so `arg_was_quoted` is what separates them —
-            // `float_ok` is false for a quoted argument, mirroring `int(str)`.
-            // DIGIT STRINGS, not a machine integer. `int()` is unbounded in
-            // Python, and every fixed width tried here has been the wrong shape:
-            // `as_f64()` on a `Value::Decimal` is a binary double, so `int()`
-            // was off by one from 2^53 up (`Decimal('9007199254740993')|add:1`
-            // gave back 9007199254740993); `as i64` saturated from 2^63 up, so
-            // the add overflowed and the filter returned its input UNCHANGED
-            // (#2253); and the `i128` that replaced it does the same thing at 39
-            // digits (#2260). `9`×60 `|add:1` was CORRECT on main only by
-            // coincidence — it had arrived as the double `1e60`, whose expansion
-            // is exactly the sum the filter was declining to compute.
-            //
-            // So the width is gone: `add_int_digits` is arbitrary-precision, and
-            // the only way to reach the fail-soft below is an operand `int()`
-            // itself would refuse.
-            //
-            // Non-finite floats are refused rather than saturated. `int(inf)`
-            // raises `OverflowError` in Python — uncaught by Django's
-            // `except (ValueError, TypeError)` — so there is no answer to
-            // agree with, and `i64::MAX` was a fabricated number where the
-            // fail-soft below at least returns the value it was given.
-            let arg_value = arg.map(|s| Value::String(s.to_string()));
-            // The VALUE goes through the `int(value)` chokepoint (#2435), which
-            // is `int()` and nothing else. It used to pass `string_float_ok`
-            // here, so a `Value::String("100.6")` became 100 — but Django calls
-            // `int(value)` on the resolved object and `int("100.6")` is a
-            // ValueError, which drops it to the CONCATENATION branch:
-            // `{{ "100.6"|add:"1" }}` is `"100.61"`, not `101`. A Python float
-            // still truncates, because it arrives as `Value::Float` and never
-            // took that branch. Only the ARGUMENT's quoting decides whether a
-            // float SPELLING is a float, which is why the flag stays there.
-            //
-            // `OverflowError` — `int(±inf)` — escapes Django's
-            // `except (ValueError, TypeError)` and 500s the page; the other two
-            // fall through to the branches below exactly as before.
-            let lhs = match python_int_value(value) {
-                Ok(digits) => Some(digits),
-                Err(IntValueError::Overflow) => {
-                    return Some(Err(int_value_error(filter_name, IntValueError::Overflow)));
+            // Keep the resolved operand's type: stringifying here changes
+            // numeric conversion, concatenation, and every downstream filter.
+            let literal = arg.map(|text| {
+                if !arg_was_quoted {
+                    if let Some(value) = djust_core::context::template_builtin(text) {
+                        return value;
+                    }
+                    if let Some(digits) = int_digits_of(&Value::String(text.to_string()), false) {
+                        return match digits.parse::<i64>() {
+                            Ok(n) => Value::Integer(n),
+                            Err(_) => Value::BigInt(digits),
+                        };
+                    }
+                    if let Some(number) = python_float(text) {
+                        return Value::Float(number);
+                    }
                 }
-                Err(_) => None,
-            };
-            // A bare `True`/`False` first, through the ONE helper that states
-            // that rule (#2347/#1646). `int_digits_of` is `int()` for a
-            // NUMERIC spelling and answers `None` for the text `"True"` — which
-            // is what a resolved builtin arrives as, since the argument channel
-            // is `Option<&str>`. Without this arm `{{ p|add:True }}` fell to
-            // the concatenation branch and rendered its input unchanged (5)
-            // where Django computes `int(5) + int(True)` = 6, while
-            // `{{ p|center:True }}` was already right because `center` reads
-            // its argument through #2328's `python_int_arg`, the helper's other
-            // caller. Two `int()`s, one of which knew the rule: #1646.
-            //
-            // `add` cannot simply use `python_int_arg`: that returns an `i64`
-            // and `add` carries exact DIGITS, because a sum past `i64`
-            // saturated and silently returned the input unchanged (#2253,
-            // #2260). The shared piece is the rule, not the parse.
-            let rhs = arg
-                .and_then(|a| bare_bool_arg_as_int(a, arg_was_quoted))
-                .map(|n| n.to_string())
-                .or_else(|| {
-                    arg_value
-                        .as_ref()
-                        .and_then(|a| int_digits_of(a, !arg_was_quoted))
-                });
-            match lhs.zip(rhs) {
-                // A sum outside `i64` is carried as its exact digits rather than
-                // being thrown away: `Value::Integer` is an i64 and Python's is
-                // not, so `{{ p|add:1 }}` on a 20-digit `DecimalField` had no
-                // Integer to return and silently returned its input (#2253).
-                //
-                // `BigInt`, not `Decimal` (#2260). Django's first branch is
-                // `int(value) + int(arg)` and an `int` is what it returns, so a
-                // `Decimal` here was the nearest exact-digit variant available
-                // rather than the right type: it rendered identically but
-                // spelled itself `Decimal('...')` under `pprint`, quoted itself
-                // under `json_script`, and left the process as a
-                // `decimal.Decimal`.
-                Some((a, b)) => {
-                    let sum = djust_core::decimal::add_int_digits(&a, &b);
-                    Ok(match sum.parse::<i64>() {
-                        Ok(n) => Value::Integer(n),
-                        Err(_) => Value::BigInt(sum),
-                    })
-                }
-                None => match (value, arg) {
-                    // Concatenation branch.
-                    (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
-                    // Django's third branch: `except Exception: return ""`.
-                    //
-                    // This returned the value UNCHANGED until #2359, on the
-                    // argument that "turning a rendered value into silent
-                    // emptiness on upgrade is the silent-wrong-output class
-                    // this engine keeps having to fix". Measuring the class
-                    // inverted the argument: echoing is the MORE PERMISSIVE
-                    // direction — it puts the unfiltered input on the page
-                    // where Django puts nothing — and the values that reach
-                    // here are exactly the ones Django decided have no sum
-                    // and no concatenation (`None`, a list, a dict, a tuple).
-                    // Rendering them is not "preserving" anything; it is
-                    // rendering a Python repr into a page that asked for a
-                    // number.
-                    _ => Ok(Value::String(String::new())),
-                },
-            }
+                Value::String(text.to_string())
+            });
+            add_values(
+                value,
+                resolved_arg.or(literal.as_ref()).unwrap_or(&Value::Missing),
+            )
         }
         "pluralize" => Ok(Value::String(pluralize(value, arg.unwrap_or("s")))),
         "slugify" => {
@@ -2563,6 +2458,39 @@ pub(crate) fn filter_int_arg(
             ))),
         },
     }
+}
+
+/// Django tries integer conversion first, then Python addition, then "".
+fn add_values(value: &Value, arg: &Value) -> Result<Value> {
+    match python_int_value(value) {
+        Ok(lhs) => match python_int_value(arg) {
+            Ok(rhs) => {
+                let sum = djust_core::decimal::add_int_digits(&lhs, &rhs);
+                return Ok(match sum.parse::<i64>() {
+                    Ok(n) => Value::Integer(n),
+                    Err(_) => Value::BigInt(sum),
+                });
+            }
+            Err(IntValueError::Overflow) => {
+                return Err(int_value_error("add", IntValueError::Overflow))
+            }
+            Err(_) => {}
+        },
+        Err(IntValueError::Overflow) => {
+            return Err(int_value_error("add", IntValueError::Overflow))
+        }
+        Err(_) => {}
+    }
+    Ok(match (value, arg) {
+        (Value::String(lhs), Value::String(rhs)) => Value::String(format!("{lhs}{rhs}")),
+        (Value::List(lhs), Value::List(rhs)) => {
+            Value::List(lhs.iter().chain(rhs).cloned().collect())
+        }
+        (Value::Tuple(lhs), Value::Tuple(rhs)) => {
+            Value::Tuple(lhs.iter().chain(rhs).cloned().collect())
+        }
+        _ => Value::String(String::new()),
+    })
 }
 
 /// Is this bare filter argument something Django resolves WITHOUT a context
