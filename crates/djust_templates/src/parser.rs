@@ -1305,10 +1305,9 @@ fn parse_token_inner(
                 }
 
                 "verbatim" => {
-                    // {% verbatim %} tag - output content literally without template processing
-                    // through the ONE raw-source collector (#2558): the raw-block
-                    // arm reconstructs the body the same way, so the two
-                    // re-emitters cannot drift (#1646).
+                    // The lexer preserves the body as Text and exposes only
+                    // the matching (possibly named) endverbatim tag. Collect
+                    // that text without parsing the literal template syntax.
                     let (content, end_pos) = collect_raw_source(
                         tokens,
                         *i + 1,
