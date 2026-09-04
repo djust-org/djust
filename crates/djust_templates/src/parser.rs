@@ -431,10 +431,11 @@ fn parse_internal(
     identity_hash: u64,
 ) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
+    let mut block_names = HashSet::new();
     let mut i = 0;
 
     while i < tokens.len() {
-        let node = parse_token(tokens, spans, source, &mut i)?;
+        let node = parse_token(&mut block_names, tokens, spans, source, &mut i)?;
         if let Some(n) = node {
             // Django's `ExtendsNode.must_be_first` (`loader_tags.py`) refuses
             // the moment a SECOND non-text node is about to be appended
@@ -866,16 +867,19 @@ fn unclosed_tag_error(
 }
 
 fn parse_token(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
     i: &mut usize,
 ) -> Result<Option<Node>> {
     let at = *i;
-    parse_token_inner(tokens, spans, source, i).map_err(|e| e.at(spans.get(at).copied()))
+    parse_token_inner(block_names, tokens, spans, source, i)
+        .map_err(|e| e.at(spans.get(at).copied()))
 }
 
 fn parse_token_inner(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -988,7 +992,7 @@ fn parse_token_inner(
                     // where Variable tokens separate the tag opening from the {% if %}.
                     let in_tag_context = is_inside_html_tag_at(tokens, *i);
                     let (true_nodes, false_nodes, end_pos) =
-                        parse_if_block(tokens, spans, source, *i + 1, in_tag_context)?;
+                        parse_if_block(block_names, tokens, spans, source, *i + 1, in_tag_context)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -1124,7 +1128,7 @@ fn parse_token_inner(
                     // rendered here.
                     validate_tag_operand(&iterable)?;
                     let (nodes, empty_nodes, end_pos) =
-                        parse_for_block(tokens, spans, source, *i + 1)?;
+                        parse_for_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_names,
@@ -1142,7 +1146,15 @@ fn parse_token_inner(
                         ));
                     }
                     let name = args[0].clone();
-                    let (nodes, end_pos) = parse_block(tokens, spans, source, *i + 1, &name)?;
+                    // Django registers names before parsing the block body,
+                    // so even nested or unreachable duplicates fail here.
+                    if !block_names.insert(name.clone()) {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'block' tag with name '{name}' appears more than once",
+                        )));
+                    }
+                    let (nodes, end_pos) =
+                        parse_block(block_names, tokens, spans, source, *i + 1, &name)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
                 }
@@ -1395,7 +1407,8 @@ fn parse_token_inner(
                         )));
                     }
 
-                    let (nodes, end_pos) = parse_with_block(tokens, spans, source, *i + 1)?;
+                    let (nodes, end_pos) =
+                        parse_with_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::With { assignments, nodes }))
                 }
@@ -1506,7 +1519,8 @@ fn parse_token_inner(
 
                 "spaceless" => {
                     // {% spaceless %} ... {% endspaceless %}
-                    let (nodes, end_pos) = parse_spaceless_block(tokens, spans, source, *i + 1)?;
+                    let (nodes, end_pos) =
+                        parse_spaceless_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Spaceless { nodes }))
                 }
@@ -1531,8 +1545,14 @@ fn parse_token_inner(
                             ));
                         }
                     };
-                    let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endautoescape")?;
+                    let (nodes, end_pos) = parse_block_custom_tag(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        "endautoescape",
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
@@ -1561,8 +1581,14 @@ fn parse_token_inner(
                             )));
                         }
                     }
-                    let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endfilter")?;
+                    let (nodes, end_pos) = parse_block_custom_tag(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        "endfilter",
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
@@ -1575,6 +1601,7 @@ fn parse_token_inner(
                     // operands (zero is the compare-the-output form) and so
                     // has no arity error of its own.
                     let (nodes, end_pos, hit) = parse_block_until_any(
+                        block_names,
                         tokens,
                         spans,
                         source,
@@ -1583,6 +1610,7 @@ fn parse_token_inner(
                     )?;
                     let (else_nodes, end_pos) = if hit == "else" {
                         let (else_nodes, end_pos) = parse_block_custom_tag(
+                            block_names,
                             tokens,
                             spans,
                             source,
@@ -1775,8 +1803,14 @@ fn parse_token_inner(
                                 "'language' takes one argument (language)",
                             ));
                         }
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlanguage")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            "endlanguage",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Language {
                             expr: args[0].clone(),
@@ -1794,8 +1828,14 @@ fn parse_token_inner(
                                 ));
                             }
                         };
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocalize")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            "endlocalize",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Localize { use_l10n, children }));
                     }
@@ -1810,8 +1850,14 @@ fn parse_token_inner(
                                 ));
                             }
                         };
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocaltime")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            "endlocaltime",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::LocalTime { use_tz, children }));
                     }
@@ -1821,8 +1867,14 @@ fn parse_token_inner(
                                 "'timezone' takes one argument (timezone)",
                             ));
                         }
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endtimezone")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            "endtimezone",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Timezone {
                             expr: args[0].clone(),
@@ -1853,8 +1905,14 @@ fn parse_token_inner(
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
                         crate::registry::validate_tag_arguments(tag_name, args, true)?;
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, &end_tag)?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            &end_tag,
+                        )?;
                         *i = end_pos;
                         Ok(Some(Node::BlockCustomTag {
                             name: tag_name.clone(),
@@ -1969,6 +2027,7 @@ fn parse_token_inner(
 }
 
 fn parse_if_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2029,7 +2088,7 @@ fn parse_if_block(
                 validate_if_grammar(args)?;
                 let elif_condition = args.join(" ");
                 let (elif_true, elif_false, end_pos) =
-                    parse_if_block(tokens, spans, source, i + 1, in_tag_context)?;
+                    parse_if_block(block_names, tokens, spans, source, i + 1, in_tag_context)?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
@@ -2044,7 +2103,7 @@ fn parse_if_block(
                 return Ok((true_nodes, false_nodes, i));
             }
             _ => {
-                if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+                if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
                     if in_else {
                         false_nodes.push(node);
                     } else {
@@ -2066,6 +2125,7 @@ fn parse_if_block(
 }
 
 fn parse_for_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2088,7 +2148,7 @@ fn parse_for_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             if in_empty_block {
                 empty_nodes.push(node);
             } else {
@@ -2108,6 +2168,7 @@ fn parse_for_block(
 }
 
 fn parse_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2141,7 +2202,7 @@ fn parse_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -2157,6 +2218,7 @@ fn parse_block(
 }
 
 fn parse_with_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2172,7 +2234,7 @@ fn parse_with_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -2201,6 +2263,7 @@ fn split_asvar(args: &[String]) -> (Vec<String>, Option<String>) {
 }
 
 fn parse_spaceless_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2216,7 +2279,7 @@ fn parse_spaceless_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -2300,6 +2363,7 @@ fn collect_raw_source(
 /// The single-terminator helper stays the common path; this one exists for
 /// `{% ifchanged %}`, whose body splits on `{% else %}`.
 fn parse_block_until_any(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2316,7 +2380,7 @@ fn parse_block_until_any(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -2329,6 +2393,7 @@ fn parse_block_until_any(
 }
 
 fn parse_block_custom_tag(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2345,7 +2410,7 @@ fn parse_block_custom_tag(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;

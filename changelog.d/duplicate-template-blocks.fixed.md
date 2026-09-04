@@ -1,0 +1,1 @@
+- **Duplicate template blocks:** Track block names across nested parser bodies and reject the second declaration before parsing its content or loading a parent. Keep each template's names independent and report the duplicate declaration's source location. Django conformance reaches 956 of 1,047 engine tests.
