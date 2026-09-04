@@ -56,3 +56,16 @@ def test_invalid_extends_expression_fails_at_compile_time(operand):
         Engine().from_string(source)
     with pytest.raises(TemplateSyntaxError):
         backend.from_string(source)
+
+
+@pytest.mark.parametrize(
+    "spec", ["cut", "join", 'upper:"x"', 'cut:"a":"b"', "nosuchfilter", "date:_y"]
+)
+def test_extends_rejects_each_differential_refusal_class(spec):
+    # Keep a missing source variable from masking a compile-time refusal.
+    source = "{% extends missing|" + spec + " %}"
+    backend = DjustTemplateBackend({"NAME": "test", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}})
+    with pytest.raises(TemplateSyntaxError):
+        Engine().from_string(source)
+    with pytest.raises(TemplateSyntaxError):
+        backend.from_string(source)

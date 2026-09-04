@@ -2198,6 +2198,7 @@ MASK_POSITIONS = {
     "firstof": "{% firstof p|@SPEC@ 'F' %}",
     "widthratio": "{% widthratio p|@SPEC@ 10 100 %}",
     "include": '{% include "x.html" with v=p|@SPEC@ %}',
+    "extends": "{% extends p|@SPEC@ %}",
 }
 
 #: One spec per COMPILE-time refusal class, so a fix that closes one and not

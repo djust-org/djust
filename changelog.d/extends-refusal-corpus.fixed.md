@@ -1,0 +1,1 @@
+- **Template differential coverage:** Add `extends` operands to the masked-refusal corpus and test each compile-time refusal class, ensuring a missing parent variable cannot hide invalid filter syntax.
