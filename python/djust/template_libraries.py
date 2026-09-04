@@ -282,8 +282,27 @@ def translate_msgid(msgid: str) -> str:
     return str(translation.gettext(mark_safe(msgid)))
 
 
+def resolve_date_format(name: str, index: Optional[int] = None) -> str:
+    """Resolve format settings or localized date-part dictionaries."""
+    from django.utils import dates, formats
+
+    if index is None:
+        return str(formats.get_format(name))
+    tables = {
+        "D": dates.WEEKDAYS_ABBR,
+        "l": dates.WEEKDAYS,
+        "F": dates.MONTHS,
+        "E": dates.MONTHS_ALT,
+        "M": dates.MONTHS_3,
+        "b": dates.MONTHS_3,
+        "N": dates.MONTHS_AP,
+    }
+    value = str(tables[name][index])
+    return value.title() if name == "M" else value
+
+
 def install_translator() -> bool:
-    """Install :func:`translate_msgid` as the ``_("…")`` translator hook (#2558).
+    """Install the translation and date-format hooks for the active language.
 
     Idempotent; ``False`` without the Rust extension.
     """
@@ -291,7 +310,7 @@ def install_translator() -> bool:
         from djust._rust import register_translator
     except ImportError:
         return False
-    register_translator(translate_msgid)
+    register_translator(translate_msgid, resolve_date_format)
     return True
 
 

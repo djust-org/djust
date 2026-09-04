@@ -1633,7 +1633,19 @@ fn apply_builtin_filter(
             } else {
                 None
             };
-            let format_str = arg.or(default_format).unwrap_or("N j, Y"); // Default: "Nov. 13, 2025"
+            let requested = arg
+                .filter(|s| !s.is_empty())
+                .or(default_format)
+                .unwrap_or("DATE_FORMAT");
+            let resolved_format = crate::registry::resolve_format(requested).unwrap_or_else(|| {
+                if requested == "DATE_FORMAT" {
+                    "N j, Y"
+                } else {
+                    requested
+                }
+                .to_string()
+            });
+            let format_str = resolved_format.as_str();
             let datetime_str = value.to_string();
             match format_date(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
@@ -1678,7 +1690,19 @@ fn apply_builtin_filter(
             } else {
                 None
             };
-            let format_str = arg.or(default_format).unwrap_or("P"); // Default: "2:30 p.m."
+            let requested = arg
+                .filter(|s| !s.is_empty())
+                .or(default_format)
+                .unwrap_or("TIME_FORMAT");
+            let resolved_format = crate::registry::resolve_format(requested).unwrap_or_else(|| {
+                if requested == "TIME_FORMAT" {
+                    "P"
+                } else {
+                    requested
+                }
+                .to_string()
+            });
+            let format_str = resolved_format.as_str();
             let datetime_str = value.to_string();
             match format_time(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
@@ -3949,8 +3973,8 @@ fn django_literal_only_format(value: &Value, format_str: &str) -> String {
 
 fn format_has_date_code(format_str: &str) -> bool {
     const DATE_ONLY: &[char] = &[
-        'b', 'd', 'D', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W', 'y',
-        'Y', 'z',
+        'b', 'd', 'D', 'E', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W',
+        'y', 'Y', 'z',
     ];
     let mut chars = format_str.chars();
     while let Some(ch) = chars.next() {
@@ -3997,6 +4021,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
         return Ok(String::new());
     }
 
+    let translate =
+        |text: &str| crate::registry::translate_msgid(text).unwrap_or_else(|| text.to_string());
+
     // Convert common Django format codes to output
     // This is a simplified implementation - Django has many more format codes
     let mut result = String::new();
@@ -4011,11 +4038,23 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'n' => result.push_str(&dt.month().to_string()), // 1-12
             'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
             'j' => result.push_str(&dt.day().to_string()),  // 1-31
-            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
-            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
-            'F' => result.push_str(&dt.format("%B").to_string()), // January
-            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-            'N' => result.push_str(MONTHS_AP[(dt.month() - 1) as usize]),
+            'b' | 'D' | 'l' | 'F' | 'E' | 'M' | 'N' => {
+                let index = if matches!(ch, 'D' | 'l') {
+                    dt.weekday().num_days_from_monday()
+                } else {
+                    dt.month()
+                };
+                let localized = crate::registry::resolve_date_part(&ch.to_string(), index)
+                    .unwrap_or_else(|| match ch {
+                        'b' => dt.format("%b").to_string().to_lowercase(),
+                        'D' => translate(&dt.format("%a").to_string()),
+                        'l' => translate(&dt.format("%A").to_string()),
+                        'F' | 'E' => translate(&dt.format("%B").to_string()),
+                        'M' => translate(&dt.format("%b").to_string()),
+                        _ => translate(MONTHS_AP[(dt.month() - 1) as usize]),
+                    });
+                result.push_str(&localized);
+            }
             // Time format codes
             'G' => result.push_str(&dt.hour().to_string()), // 0-23 (24-hour, no leading zero)
             'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
@@ -4048,9 +4087,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'A' => {
                 // AM/PM
                 if dt.hour() < 12 {
-                    result.push_str("AM");
+                    result.push_str(&translate("AM"));
                 } else {
-                    result.push_str("PM");
+                    result.push_str(&translate("PM"));
                 }
             }
             'a' => {
@@ -4065,9 +4104,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 // now match Django" alongside a wrong `a` in the same match arm
                 // would be odd.
                 if dt.hour() < 12 {
-                    result.push_str("a.m.");
+                    result.push_str(&translate("a.m."));
                 } else {
-                    result.push_str("p.m.");
+                    result.push_str(&translate("p.m."));
                 }
             }
             'P' => {
@@ -4075,9 +4114,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 let hour = dt.hour();
                 let minute = dt.minute();
                 if hour == 0 && minute == 0 {
-                    result.push_str("midnight");
+                    result.push_str(&translate("midnight"));
                 } else if hour == 12 && minute == 0 {
-                    result.push_str("noon");
+                    result.push_str(&translate("noon"));
                 } else {
                     let display_hour = if hour == 0 {
                         12
@@ -4086,7 +4125,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                     } else {
                         hour
                     };
-                    let ampm = if hour < 12 { "a.m." } else { "p.m." };
+                    let ampm = translate(if hour < 12 { "a.m." } else { "p.m." });
                     if minute == 0 {
                         result.push_str(&format!("{display_hour} {ampm}"));
                     } else {
@@ -4103,8 +4142,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             // unimplemented code is indistinguishable from an intentional one
             // without a differential against Django. Every expectation below
             // came from running all 38 characters through Django's own engine.
-            'b' => result.push_str(&dt.format("%b").to_string().to_lowercase()), // aug
-            'S' => result.push_str(ordinal_suffix(dt.day())),                    // nd
+            'S' => result.push_str(ordinal_suffix(dt.day())), // nd
             'w' => result.push_str(&dt.weekday().num_days_from_sunday().to_string()), // 0=Sun
             'z' => result.push_str(&dt.ordinal().to_string()), // day of year, 1-based
             't' => result.push_str(&days_in_month(dt.year(), dt.month()).to_string()),

@@ -98,6 +98,8 @@ class AzureBlockBlobWriter(UploadWriter):
     def _get_blob_client(self) -> Any:
         if self._blob_client is not None:
             return self._blob_client
+        if self._key is None:
+            raise RuntimeError("AzureBlockBlobWriter must be opened before use")
         if self.service_client is not None:
             client = self.service_client.get_blob_client(
                 container=self.container_name, blob=self._key

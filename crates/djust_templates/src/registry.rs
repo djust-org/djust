@@ -1772,19 +1772,31 @@ pub fn call_raw_block_handler_with_bindings(
 /// dict, the GIL already held (~2 µs). `None` (the pure-Rust default) means
 /// "no translation installed" and the caller falls back to the msgid — the
 /// same answer `USE_I18N=False` produces on Django.
-static TRANSLATOR: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::new(None));
+struct LocaleHooks {
+    translator: Py<PyAny>,
+    format_resolver: Option<Py<PyAny>>,
+}
+static TRANSLATOR: Lazy<RwLock<Option<LocaleHooks>>> = Lazy::new(|| RwLock::new(None));
 
-/// Install the `_("…")` translator (#2558): `callable(%-doubled_msgid) -> str`.
-#[pyfunction]
-pub fn register_translator(callable: Py<PyAny>) -> PyResult<()> {
+/// Install the `_("…")` translator: `callable(%-doubled_msgid) -> str`.
+/// The optional resolver returns format strings for `(name)` and translated
+/// date parts for `(format_code, index)`, using the active Django language.
+#[pyfunction(signature = (callable, format_resolver=None))]
+pub fn register_translator(
+    callable: Py<PyAny>,
+    format_resolver: Option<Py<PyAny>>,
+) -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some(callable);
+    *slot = Some(LocaleHooks {
+        translator: callable,
+        format_resolver,
+    });
     Ok(())
 }
 
-/// Drop the `_("…")` translator (#2558) — the `djust.test_isolation` reset.
+/// Drop both locale hooks — the `djust.test_isolation` reset.
 #[pyfunction]
 pub fn clear_translator() -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
@@ -1800,15 +1812,57 @@ pub fn clear_translator() -> PyResult<()> {
 /// fall back to the msgid itself, which is Django's `USE_I18N=False`
 /// answer. A failing gettext should not take a page down.
 pub fn translate_msgid(msgid: &str) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
     Python::attach(|py| {
         let slot = TRANSLATOR.read().ok()?;
-        let callable = slot.as_ref()?.clone_ref(py);
+        let callable = slot.as_ref()?.translator.clone_ref(py);
         drop(slot);
         callable
             .bind(py)
             .call1((msgid,))
             .ok()
             .and_then(|v| v.extract::<String>().ok())
+    })
+}
+
+/// Resolve a Django format setting against the active language.
+pub fn resolve_format(name: &str) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot.as_ref()?.format_resolver.as_ref()?.clone_ref(py);
+        drop(slot);
+        callable
+            .bind(py)
+            .call1((name,))
+            .ok()?
+            .extract::<String>()
+            .ok()
+    })
+}
+
+/// Read Django's context-aware month and weekday translations.
+pub fn resolve_date_part(part: &str, index: u32) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot.as_ref()?.format_resolver.as_ref()?.clone_ref(py);
+        drop(slot);
+        callable
+            .bind(py)
+            .call1((part, index))
+            .ok()?
+            .extract::<String>()
+            .ok()
     })
 }
 

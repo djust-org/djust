@@ -198,3 +198,9 @@ class TestAzureResultShape:
         w.write_chunk(b"x")
         result = w.close()
         _json.dumps(result, cls=DjangoJSONEncoder)
+
+
+def test_unopened_writer_refuses_client_creation():
+    writer = AzureBlockBlobWriter("test", "file.txt", "text/plain")
+    with pytest.raises(RuntimeError, match="must be opened before use"):
+        writer._get_blob_client()
