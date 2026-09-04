@@ -458,6 +458,18 @@ fn parse_internal(
                 let already_has_nontext = nodes
                     .iter()
                     .any(|existing| !matches!(existing, Node::Text(_)));
+                if already_has_extends {
+                    let mut after_extends = nodes
+                        .iter()
+                        .skip_while(|node| !matches!(node, Node::Extends(_)))
+                        .skip(1);
+                    if !after_extends.any(|node| !matches!(node, Node::Text(_))) {
+                        return Err(DjangoRustError::TemplateError(
+                            "'extends' cannot appear more than once in the same template"
+                                .to_string(),
+                        ));
+                    }
+                }
                 if already_has_extends || already_has_nontext {
                     return Err(DjangoRustError::TemplateError(
                         "'extends' must be the first tag in the template".to_string(),
@@ -1162,7 +1174,7 @@ fn parse_token_inner(
                 "include" => {
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "Include tag requires a template name".to_string(),
+                            "'include' tag takes at least one argument: the name of the template to be included.".to_string(),
                         ));
                     }
                     // Strip surrounding quotes (#1396) so Include.template
@@ -1950,7 +1962,9 @@ fn parse_token_inner(
             }
         }
 
-        Token::Comment(_) => Ok(Some(Node::Comment)),
+        // Inline comments create no Django node. Block comments do, and
+        // therefore count as content for the extends must-be-first rule.
+        Token::Comment(_) => Ok(None),
     }
 }
 
@@ -1976,11 +1990,20 @@ fn parse_if_block(
                 // (#2576). djust had ignored the else args entirely, so
                 // `{% else if ... %}` was silently treated as a plain else.
                 if !args.is_empty() {
+                    let fallback = format!("else {}", args.join(" "));
+                    let contents = spans
+                        .get(i)
+                        .and_then(|(start, end)| source.get(*start..*end))
+                        .and_then(|raw| raw.strip_prefix("{%"))
+                        .and_then(|raw| raw.strip_suffix("%}"))
+                        .map(str::trim)
+                        .unwrap_or(&fallback);
                     return Err(DjangoRustError::TemplateError(format!(
-                        "Malformed {{% else %}} tag on line {}: {{% else {} %}} takes no arguments",
+                        "Malformed template tag at line {}: \"{}\"",
                         line_at(spans, source, i),
-                        args.join(" ")
-                    )));
+                        contents,
+                    ))
+                    .at(spans.get(i).copied()));
                 }
                 in_else = true;
                 i += 1;

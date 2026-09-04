@@ -17,10 +17,9 @@ algorithm (`validate_if_grammar`) runs at the exact point Django's parser
 refuses — during ``{% if %}`` / ``{% elif %}`` tag parsing — plus an
 ``{% else %}``-takes-no-arguments refusal.
 
-The fix uses djust's OWN ``TemplateSyntaxError`` wording (``"Invalid
-{% if %} condition: …"`` / ``"Malformed {% else %} tag …"``), NOT Django's
-verbatim text — so the differential below compares the **presence and type
-family** of the raised exception, not the message string. Both are measured
+The condition grammar still uses djust's ``"Invalid {% if %} condition"``
+wording; malformed else clauses use Django's message. The differential below
+compares the **presence and type family** of the raised exception. Both are measured
 against LIVE, in-process Django on BOTH djust entry points (the plain
 ``DjustTemplateBackend`` and the ``RustLiveView`` LiveView entry).
 
