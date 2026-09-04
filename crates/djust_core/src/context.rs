@@ -489,6 +489,10 @@ impl Context {
         self.string_if_invalid = value.into();
     }
 
+    pub fn string_if_invalid(&self) -> &str {
+        &self.string_if_invalid
+    }
+
     /// `string_if_invalid` with Django's `%s` substitution already applied for
     /// `var_name`, or `None` when it is empty (render nothing, the default).
     pub fn string_if_invalid_for(&self, var_name: &str) -> Option<String> {

@@ -597,6 +597,12 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
             context -- ``{% custom p %}`` with ``p="<b>hi</b>"`` arrives as
             ``args == ['<b>hi</b>']``, not as ``['p']``.
 
+    Inline and block handlers may optionally implement
+    ``validate_at_parse(args)``. It receives the original argument tokens at
+    template compilation, before any context resolution or rendering, and
+    may raise to reject invalid syntax. It must not render application code.
+    Django library bridges use this hook to run Django's argument validation.
+
     The return value is ESCAPED unless it is already HTML (#2379), mirroring
     Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
     ``simple_tag``'s return unless it carries ``__html__``. Return a plain

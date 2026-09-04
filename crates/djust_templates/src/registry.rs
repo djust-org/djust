@@ -255,6 +255,7 @@ static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
 /// resolved VALUE of `name`). Same readers, same fields, same semantics as
 /// [`TagHandlerEntry`] now.
 struct BlockHandlerEntry {
+    validator: Option<Py<PyAny>>,
     end_tag: String,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
@@ -383,6 +384,7 @@ fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// hostile `{% render_slot p %}` are the same opaque string once the engine
 /// has resolved them, and only the un-resolved path can tell them apart.
 struct TagHandlerEntry {
+    validator: Option<Py<PyAny>>,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
@@ -397,6 +399,48 @@ struct TagHandlerEntry {
     /// refusal is per TAG so the rest of its library still works. Read off
     /// the handler's `REFUSE_AT_PARSE` attribute at registration.
     parse_refusal: Option<String>,
+}
+
+/// Optional compilation hook. Cache the bound method at registration so
+/// handlers without validation don't incur Python attribute lookups per tag.
+fn read_parse_validator(handler: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+    match handler.getattr("validate_at_parse") {
+        Ok(method) if method.is_callable() => Ok(Some(method.unbind())),
+        Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(
+            "validate_at_parse must be callable",
+        )),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(handler.py()) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Validate original argument tokens, outside the registry lock: a Django
+/// compile function may itself load/register another library.
+pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust_core::Result<()> {
+    let validator = if block {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    } else {
+        let registry = TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    };
+    if let Some(validator) = validator {
+        Python::attach(|py| validator.call1(py, (args.to_vec(),)))
+            .map_err(DjangoRustError::PythonException)?;
+    }
+    Ok(())
 }
 
 /// The handler's opt-in parse-time refusal message (#2547); `None` when the
@@ -485,6 +529,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     }
     let parse_refusal = read_parse_refusal(handler_ref)?;
 
+    let validator = read_parse_validator(handler_ref)?;
+
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -493,6 +539,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         name,
         TagHandlerEntry {
             handler,
+            validator,
             resolve_positions,
             returns_bindings,
             accepts_as_var,
@@ -605,6 +652,8 @@ pub fn register_block_tag_handler(
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
 
+    let validator = read_parse_validator(handler_ref)?;
+
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -613,6 +662,7 @@ pub fn register_block_tag_handler(
         name,
         BlockHandlerEntry {
             end_tag,
+            validator,
             handler,
             resolve_positions,
             returns_bindings,

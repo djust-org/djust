@@ -3216,6 +3216,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // `{% autoescape %}` policy crosses an `only` include
                     // (#2556, `include14`).
                     fresh.set_autoescape(context.autoescape());
+                    fresh.set_string_if_invalid(context.string_if_invalid());
                     // Django's `context.new()` keeps the parent's
                     // `render_context`, so a `{% cycle %}` in an `only`
                     // include advances the parent render's iterator (#2556).
@@ -3520,7 +3521,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
             let content = render_nodes_with_loader(nodes, context, loader)?;
             // Remove whitespace between > and <
-            Ok(SPACELESS_RE.replace_all(&content, "><").to_string())
+            Ok(SPACELESS_RE.replace_all(content.trim(), "><").to_string())
         }
 
         Node::Filter { filters, nodes } => {
@@ -4455,12 +4456,17 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     }
 
     // Handle "in" operator: {% if item in list %}
-    if condition.contains(" in ") {
-        let parts: Vec<&str> = condition.splitn(2, " in ").map(|s| s.trim()).collect();
+    let membership = if condition.contains(" not in ") {
+        " not in "
+    } else {
+        " in "
+    };
+    if condition.contains(membership) {
+        let parts: Vec<&str> = condition.splitn(2, membership).map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let needle = get_value_ignoring_failures(parts[0], context)?;
             let haystack = get_value_ignoring_failures(parts[1], context)?;
-            return match haystack {
+            let result: Result<bool> = match haystack {
                 Value::List(items) | Value::Tuple(items) => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
                 }
@@ -4491,7 +4497,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     if let Value::String(n) = &needle {
                         Ok(s.contains(n.as_str()))
                     } else {
-                        Ok(false)
+                        return Ok(false);
                     }
                 }
                 Value::Object(map) => {
@@ -4517,11 +4523,21 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     // A needle Python could not hash either (a list, a dict)
                     // yields `None` and misses, rather than matching
                     // something by its text.
-                    Ok(djust_core::ObjectKey::from_value(&needle)
-                        .is_some_and(|k| map.contains_key(&k)))
+                    let Some(key) = djust_core::ObjectKey::from_value(&needle) else {
+                        // Python raises for an unhashable needle. Django's
+                        // smart-if makes both in and not-in false on errors.
+                        return Ok(false);
+                    };
+                    Ok(map.contains_key(&key))
                 }
-                _ => Ok(false),
+                _ => return Ok(false),
             };
+            let contains = result?;
+            return Ok(if membership == " not in " {
+                !contains
+            } else {
+                contains
+            });
         }
     }
 

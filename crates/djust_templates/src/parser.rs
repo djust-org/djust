@@ -1321,35 +1321,55 @@ fn parse_token_inner(
                 "endverbatim" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "with" => {
-                    // {% with var=value var2=value2 %} ... {% endwith %}
-                    // Parse assignments
+                    // Django accepts either key=expression assignments or
+                    // expression as key [and expression as key] (legacy).
+                    // Consume every argument: silently dropping a suffix
+                    // accepts malformed templates Django refuses.
                     let mut assignments = Vec::new();
-                    for arg in args {
-                        if let Some(eq_pos) = arg.find('=') {
-                            let var_name = arg[..eq_pos].trim().to_string();
-                            let expression = arg[eq_pos + 1..].trim().to_string();
-                            // Each RHS is a TAG OPERAND — Django's `do_with`
-                            // runs it through `token_kwargs`, which calls
-                            // `compile_filter` at COMPILE time (#2411).
-                            validate_tag_operand(&expression)?;
-                            assignments.push((var_name, expression));
+                    let keyword_pair = |arg: &str| {
+                        arg.split_once('=').and_then(|(key, value)| {
+                            if !key.is_empty()
+                                && key.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                && !value.is_empty()
+                            {
+                                Some((key.to_string(), value.to_string(), 1))
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    let keyword = args.first().is_some_and(|arg| keyword_pair(arg).is_some());
+                    let mut pos = 0;
+                    while pos < args.len() {
+                        let pair = if keyword {
+                            keyword_pair(&args[pos])
+                        } else if pos + 2 < args.len() && args[pos + 1] == "as" {
+                            Some((args[pos + 2].clone(), args[pos].clone(), 3))
+                        } else {
+                            None
+                        };
+                        let Some((name, expression, consumed)) = pair else {
+                            break;
+                        };
+                        validate_tag_operand(&expression)?;
+                        assignments.push((name, expression));
+                        pos += consumed;
+                        if !keyword && pos < args.len() && args[pos] == "and" {
+                            pos += 1;
+                        } else if !keyword {
+                            break;
                         }
                     }
-
-                    // Django's `do_with` refuses when `token_kwargs` finds
-                    // zero valid `key=value` assignments — `{% with dict.key
-                    // xx key %}` and `{% with dict.key as %}` both have no
-                    // `=` anywhere in their args, so `assignments` is empty
-                    // here exactly when Django's `extra_context` is empty
-                    // there (#2580). Argument tokens with no `=` (a bare
-                    // word, or the legacy `expr as key` form djust does not
-                    // parse) are silently dropped by the loop above rather
-                    // than counted, so this check is the smallest fix that
-                    // matches djust's own currently-supported grammar.
                     if assignments.is_empty() {
                         return Err(DjangoRustError::TemplateError(
                             "'with' expected at least one variable assignment".to_string(),
                         ));
+                    }
+                    if pos < args.len() {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'with' received an invalid token: '{}'",
+                            args[pos]
+                        )));
                     }
 
                     let (nodes, end_pos) = parse_with_block(tokens, spans, source, *i + 1)?;
@@ -1799,6 +1819,7 @@ fn parse_token_inner(
                     }
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, true)?;
                         let (children, end_pos) =
                             parse_block_custom_tag(tokens, spans, source, *i + 1, &end_tag)?;
                         *i = end_pos;
@@ -1816,6 +1837,7 @@ fn parse_token_inner(
                         // its library keeps working.
                         Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {
                             name: tag_name.clone(),

@@ -875,6 +875,14 @@ class LibraryTagHandler:
             self._nodes[key] = node
         return node
 
+    def validate_at_parse(self, args: List[str]) -> None:
+        """Compile the tag without executing its render-time application code."""
+        try:
+            self._compile(args)
+        except BaseException as exc:
+            _stamp(exc)
+            raise
+
     def render(
         self, args: List[str], context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
@@ -932,6 +940,16 @@ class LibraryBlockTagHandler(LibraryTagHandler):
     def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
         super().__init__(label, name, compile_func)
         self.end_name = _end_name(compile_func, name)
+
+    def validate_at_parse(self, args: List[str]) -> None:
+        from django.template.base import Token, TokenType
+
+        try:
+            tokens = [Token(TokenType.BLOCK, self.end_name)]
+            self.compile_func(_parser(tokens), _token(self.name, args))
+        except BaseException as exc:
+            _stamp(exc)
+            raise
 
     def render(  # type: ignore[override]
         self, args: List[str], content: Any, context: Dict[str, Any], autoescape: bool = True
@@ -992,6 +1010,16 @@ class CacheTagHandler:
     #: Raw tokens: this handler resolves what Django resolves and leaves the
     #: fragment name alone, which no positional policy can express.
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
+
+    def validate_at_parse(self, args: List[str]) -> None:
+        from django.template.base import Token, TokenType
+        from django.templatetags.cache import do_cache
+
+        try:
+            do_cache(_parser([Token(TokenType.BLOCK, "endcache")]), _token("cache", args))
+        except BaseException as exc:
+            _stamp(exc)
+            raise
 
     def render(self, args: List[str], content: str, context: Dict[str, Any]) -> str:
         from django.core.cache import InvalidCacheBackendError, caches

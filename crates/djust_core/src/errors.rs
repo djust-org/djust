@@ -84,7 +84,17 @@ impl From<DjangoRustError> for PyErr {
             // Hand the caller back the exception user code actually raised,
             // so Django's handler chain still sees `PermissionDenied` /
             // `Http404` / a custom exception and dispatches on its type.
-            DjangoRustError::PythonException(e) => e,
+            DjangoRustError::PythonException(e) => {
+                // Preserve provenance as well as identity. The Python backend
+                // must not wrap an arbitrary user exception merely because
+                // its class isn't one of Django's HTTP exceptions.
+                Python::attach(|py| {
+                    if let Ok(dict) = e.value(py).getattr("__dict__") {
+                        let _ = dict.set_item("_djust_python_exception", true);
+                    }
+                });
+                e
+            }
             other => PyRuntimeError::new_err(other.to_string()),
         }
     }
@@ -116,6 +126,16 @@ impl DjangoRustError {
                     start,
                     end,
                 }
+            }
+            (DjangoRustError::PythonException(error), Some(span)) => {
+                Python::attach(|py| {
+                    if let Ok(dict) = error.value(py).getattr("__dict__") {
+                        if dict.get_item("djust_token_span").is_err() {
+                            let _ = dict.set_item("djust_token_span", span);
+                        }
+                    }
+                });
+                DjangoRustError::PythonException(error)
             }
             (other, _) => other,
         }

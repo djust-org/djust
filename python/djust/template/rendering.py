@@ -103,6 +103,9 @@ def _missing_template_name(message: str) -> str | None:
 
 
 def _is_user_raised(exc: BaseException) -> bool:
+    if getattr(exc, "_djust_python_exception", False):
+        return True
+
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
@@ -232,18 +235,27 @@ class DjustTemplate:
         _ensure_custom_filters_bridged()
         try:
             compile_template(self.template_string)
-        except RuntimeError as e:
+        except Exception as e:
             message = str(e)
-            exc = DjustTemplateSyntaxError(message, origin=self.origin)
+            user_raised = _is_user_raised(e)
+            if not user_raised and not isinstance(e, RuntimeError):
+                raise
+            exc = e if user_raised else DjustTemplateSyntaxError(message, origin=self.origin)
             span = getattr(e, "djust_token_span", None)
             if span is not None:
-                exc.template_debug = build_template_debug(
-                    self.template_string,
-                    getattr(self.origin, "name", None),
-                    span[0],
-                    span[1],
-                    message,
+                setattr(
+                    exc,
+                    "template_debug",
+                    build_template_debug(
+                        self.template_string,
+                        getattr(self.origin, "name", None),
+                        span[0],
+                        span[1],
+                        message,
+                    ),
                 )
+            if user_raised:
+                raise
             raise exc from e
 
     def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
