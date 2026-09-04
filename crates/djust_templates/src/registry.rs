@@ -1775,16 +1775,19 @@ pub fn call_raw_block_handler_with_bindings(
 struct LocaleHooks {
     translator: Py<PyAny>,
     format_resolver: Option<Py<PyAny>>,
+    default_timezone_resolver: Option<Py<PyAny>>,
 }
 static TRANSLATOR: Lazy<RwLock<Option<LocaleHooks>>> = Lazy::new(|| RwLock::new(None));
 
 /// Install the `_("…")` translator: `callable(%-doubled_msgid) -> str`.
 /// The optional resolver returns format strings for `(name)` and translated
 /// date parts for `(format_code, index)`, using the active Django language.
-#[pyfunction(signature = (callable, format_resolver=None))]
+/// The timezone resolver returns the default zone for naive datetime metadata.
+#[pyfunction(signature = (callable, format_resolver=None, default_timezone_resolver=None))]
 pub fn register_translator(
     callable: Py<PyAny>,
     format_resolver: Option<Py<PyAny>>,
+    default_timezone_resolver: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -1792,11 +1795,12 @@ pub fn register_translator(
     *slot = Some(LocaleHooks {
         translator: callable,
         format_resolver,
+        default_timezone_resolver,
     });
     Ok(())
 }
 
-/// Drop both locale hooks — the `djust.test_isolation` reset.
+/// Drop the locale hooks — the `djust.test_isolation` reset.
 #[pyfunction]
 pub fn clear_translator() -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
@@ -1844,6 +1848,23 @@ pub fn resolve_format(name: &str) -> Option<String> {
             .ok()?
             .extract::<String>()
             .ok()
+    })
+}
+
+/// Read the project's default timezone independently of the active render zone.
+pub fn resolve_default_timezone() -> Option<String> {
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot
+            .as_ref()?
+            .default_timezone_resolver
+            .as_ref()?
+            .clone_ref(py);
+        drop(slot);
+        callable.bind(py).call0().ok()?.extract::<String>().ok()
     })
 }
 

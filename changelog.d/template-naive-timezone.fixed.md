@@ -1,0 +1,1 @@
+- **Naive datetimes use the project default timezone for date/time format fields.** The active request timezone and USE_TZ no longer change that lookup. Django 5.2.16 conformance improves to 980 of 1047 exercised tests.

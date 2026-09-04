@@ -301,6 +301,13 @@ def resolve_date_format(name: str, index: Optional[int] = None) -> str:
     return value.title() if name == "M" else value
 
 
+def resolve_default_timezone() -> str:
+    """Naive datetimes use the project default, even inside an active zone."""
+    from django.utils.timezone import get_default_timezone_name
+
+    return get_default_timezone_name()
+
+
 def install_translator() -> bool:
     """Install the translation and date-format hooks for the active language.
 
@@ -310,7 +317,7 @@ def install_translator() -> bool:
         from djust._rust import register_translator
     except ImportError:
         return False
-    register_translator(translate_msgid, resolve_date_format)
+    register_translator(translate_msgid, resolve_date_format, resolve_default_timezone)
     return True
 
 

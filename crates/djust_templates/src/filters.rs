@@ -3693,7 +3693,7 @@ struct Stamped {
 /// | input | wall clock | `T`/`O`/`Z` | `e` |
 /// |---|---|---|---|
 /// | aware  | converted to the active zone | that zone at that instant | same |
-/// | naive  | **unchanged** | the active zone at that local time | `""` |
+/// | naive  | **unchanged** | the default zone at that local time | `""` |
 ///
 /// The naive row is the one that is easy to get wrong. Django does not shift a
 /// naive datetime — it is already understood to be local — but it still reports
@@ -3731,7 +3731,14 @@ fn apply_active_timezone(
         };
     }
 
-    let Some(tz) = crate::timezone::active_timezone() else {
+    let zone = if aware {
+        crate::timezone::active_timezone()
+    } else {
+        crate::registry::resolve_default_timezone()
+            .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+            .or_else(crate::timezone::active_timezone)
+    };
+    let Some(tz) = zone else {
         // No active zone: `USE_TZ = False`, `{% localtime off %}` (#2558), or
         // this crate embedded without Django settings. The wall clock is
         // formatted as it arrived (pre-#2209 behaviour). An AWARE value still
@@ -3764,7 +3771,7 @@ fn apply_active_timezone(
     }
 
     // Naive: keep the wall clock, and read the zone metadata off that same wall
-    // clock interpreted in the active zone. `from_local_datetime` is not total —
+    // clock interpreted in the default zone. `from_local_datetime` is not total —
     // a local time inside a DST gap does not exist, and one inside a fold is
     // ambiguous. `.earliest()` picks the pre-transition offset for a fold, which
     // is what Django's `_datetime_ambiguous_or_imaginary` guard effectively

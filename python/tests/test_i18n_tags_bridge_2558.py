@@ -1090,7 +1090,9 @@ def test_install_sites_are_pinned():
     assert "register_language_scope_hooks(language_scope_enter, language_scope_exit)" in env
     assert "register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)" in env
     lib = (REPO / "python" / "djust" / "template_libraries.py").read_text(encoding="utf-8")
-    assert "register_translator(translate_msgid, resolve_date_format)" in lib
+    assert (
+        "register_translator(translate_msgid, resolve_date_format, resolve_default_timezone)" in lib
+    )
 
 
 def test_collect_raw_source_is_the_one_collector_for_verbatim_and_raw_blocks():
