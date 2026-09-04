@@ -1,0 +1,1 @@
+- **Engine-scoped compilation:** Resolve template libraries using the compiling backend's context. Revalidate explicit compilation even when another engine cached the source, while retaining the parsed result for rendering. Django conformance improves to 961 of 1,047 engine tests without status regressions.

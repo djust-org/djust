@@ -230,11 +230,15 @@ class DjustTemplate:
         """
         from .._rust import compile_template
         from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+        from ..template_libraries import rendering_with_backend
         from .exceptions import DjustTemplateSyntaxError, build_template_debug
 
-        _ensure_custom_filters_bridged()
         try:
-            compile_template(self.template_string)
+            # Library lookup and tag compilation belong to this engine, just
+            # as library rendering does. Restore the enclosing engine on exit.
+            with rendering_with_backend(self.backend):
+                _ensure_custom_filters_bridged()
+                compile_template(self.template_string)
         except Exception as e:
             message = str(e)
             user_raised = _is_user_raised(e)
