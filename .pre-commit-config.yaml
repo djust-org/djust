@@ -211,6 +211,22 @@ repos:
         files: ^(README|QUICKSTART|CLAUDE)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$|^python/djust/static/djust/client-sizes\.json$
         pass_filenames: false
 
+      # Methods named in the mixin guides must exist on the mixins.
+      # docs/website/guides/pwa.md carried EIGHT phantom PWA methods — in an
+      # API table and in two runnable examples — until #2655 removed them;
+      # two hand-sweeps during that PR each fixed the sites they were pointed
+      # at and missed a second example lower in the file. See
+      # scripts/check-doc-api-references.py: it reads table rows and bullet
+      # rows, FAILS when a registered doc matches neither (a checker that
+      # cannot see a doc reads as coverage while providing none), and FAILS
+      # when this hook's `files:` pattern covers a doc DOC_CLASSES does not.
+      - id: check-doc-api-references
+        name: check documented methods exist on their classes (#2652)
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/check-doc-api-references.py'
+        language: system
+        files: ^docs/(website/)?guides/(pwa|multi-tenant)\.md$|^python/djust/(pwa/mixins|tenants/mixin)\.py$|^scripts/check-doc-api-references\.py$
+        pass_filenames: false
+
   # docs/TEMPLATE_BACKEND.md's supported/unsupported tag and filter lists are
   # generated from the engine's own registries (the ARITY filter table, the
   # parser's tag match arms, python/djust/template_tags/ handlers) against the

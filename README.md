@@ -634,7 +634,7 @@ LIVEVIEW_CONFIG = {
     'strict_serialization': False,  # Raise TypeError for non-serializable state values (recommended in development)
 
     # CSS Framework
-    'css_framework': 'bootstrap5',  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
+    'css_framework': 'bootstrap5',  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', 'plain', None
 }
 ```
 

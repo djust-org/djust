@@ -27,7 +27,6 @@ In `get_context_data()`, assign the private variable to a **public instance vari
 
 ```python
 from djust.decorators import event_handler, debounce
-from djust.decorators import event_handler, debounce
 from djust_shared.views import BaseViewWithNavbar
 
 class MyListView(BaseViewWithNavbar):
@@ -125,7 +124,7 @@ class PropertyListView(BaseViewWithNavbar):
         self._properties = properties
 
     @event_handler()
-    @debounce(wait=0.5)
+    @debounce(wait=0.5)  # INERT — no client implementation (#2656)
     def search(self, value: str = "", **kwargs):
         """Event handler for search (input events deliver the typed text as `value`)"""
         self.search_query = value

@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Cross-reference method names in docs against the classes that must provide them.
+
+Motivation (#2652 / PR #2655): `docs/website/guides/pwa.md` documented EIGHT
+methods that do not exist — `enable_offline()`, `load_offline_state()`,
+`save_offline_state()`, `disable_offline()`, `is_offline_enabled()`,
+`handle_online()`, `queue_sync()`, `process_sync_queue()` — in an API table AND
+in two runnable examples. A reader copy-pasting either example got
+`AttributeError` on the first line of `mount()`.
+
+Two review rounds fixed those by hand and BOTH missed a second example a
+hundred lines below the tables, because each swept the sites it was pointed at
+rather than the whole file. This script sweeps the file.
+
+It checks three shapes:
+
+  * ``self.foo(...)`` inside a fenced ``python`` block  — the copy-paste path
+  * ``| `foo(...)` | ...``  table rows                  — the reference path
+  * ``- `foo(...)` `` bullet rows                       — ditto, other half
+    of the repo. Every backticked call on the line is read, not just the
+    first: ``- `a()` / `b()` — …`` documents two methods.
+
+against the union of the classes registered for that doc below. A name absent
+from every class is reported. Prose is deliberately NOT scanned: a sentence
+like "there is no ``enable_offline()``" is a correction, not a claim, and
+flagging it would punish the fix.
+
+Run: python3 scripts/check-doc-api-references.py
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# doc path -> dotted paths of the classes whose surface it documents
+DOC_CLASSES: dict[str, tuple[str, ...]] = {
+    "docs/guides/pwa.md": (
+        "djust.pwa.mixins.PWAMixin",
+        "djust.pwa.mixins.OfflineMixin",
+        "djust.pwa.mixins.SyncMixin",
+    ),
+    "docs/website/guides/pwa.md": (
+        "djust.pwa.mixins.PWAMixin",
+        "djust.pwa.mixins.OfflineMixin",
+        "djust.pwa.mixins.SyncMixin",
+    ),
+    "docs/guides/multi-tenant.md": (
+        "djust.tenants.mixin.TenantMixin",
+        "djust.tenants.mixin.TenantScopedMixin",
+    ),
+    "docs/website/guides/multi-tenant.md": (
+        "djust.tenants.mixin.TenantMixin",
+        "djust.tenants.mixin.TenantScopedMixin",
+    ),
+}
+
+# Names a LiveView/Django base supplies, or that a doc legitimately writes as a
+# placeholder. Not part of the documented mixin surface, so not checked here.
+ALWAYS_ALLOWED = {
+    "mount",
+    "render",
+    "get_context_data",
+    "get_queryset",
+    "get_object",
+    "dispatch",
+    "push_event",
+    "super",
+    "print",
+    "len",
+    "range",
+    "str",
+    "int",
+    "list",
+    "dict",
+    "set",
+    "get",
+}
+
+# `sync_create_Item` and friends are user-defined hooks; the framework looks
+# them up dynamically via f"sync_{verb}_{model}".
+PLACEHOLDER_RE = re.compile(r"^sync_(create|update|delete)_")
+
+# Methods an example calls but expects the READER to supply. Each is marked
+# "# your own method" at its call site in the doc. Keep this list short: a name
+# belongs here only if the surrounding prose makes clear the app provides it.
+APP_PROVIDED = {
+    "send_to_server",
+    "get_api_usage",
+    "has_permission",
+    "send_invitation_email",
+}
+
+PY_FENCE_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
+SELF_CALL_RE = re.compile(r"\bself\.([a-z_][a-z0-9_]*)\s*\(")
+# A doc's reference surface is a table in some files and a bullet list in
+# others; round 3 matched only tables and was blind to two of the three docs
+# it registered. A reference LINE is either, and may name several methods
+# (`- `a()` / `b()` — …`), so the line is matched first and then EVERY
+# backticked call on it is read — capturing only the first was a live blind
+# spot at docs/guides/multi-tenant.md:203.
+#
+# The line must OPEN with a backticked call: that is what separates a
+# reference row from a prose bullet. Matching any bullet swept up sentences
+# like "- The queue is NOT processed … there is no `queue_sync()`", turning a
+# correction into a reported phantom. COVERAGE_MIN below catches the case
+# where a doc uses some third shape neither pattern sees.
+REFERENCE_LINE_RE = re.compile(
+    r"^(?:\|\s*|\s*[-*]\s+)`[a-z_][a-z0-9_]*\s*\(.*$", re.MULTILINE
+)
+CALL_IN_LINE_RE = re.compile(r"`([a-z_][a-z0-9_]*)\s*\(")
+
+# Every registered doc must yield at least this many checked references. A doc
+# whose reference surface uses a shape the patterns above do not match would
+# otherwise contribute zero findings and report OK.
+COVERAGE_MIN = 1
+
+# The pre-commit hook whose scope must stay in sync with DOC_CLASSES.
+HOOK_ID = "check-doc-api-references"
+# An example that defines its own helper is showing YOU how to write one; it is
+# not claiming the framework ships it.
+DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([a-z_][a-z0-9_]*)", re.MULTILINE)
+
+
+def load_class(dotted: str):
+    module_path, _, name = dotted.rpartition(".")
+    module = __import__(module_path, fromlist=[name])
+    return getattr(module, name)
+
+
+def check_doc(rel_path: str, dotted_classes: tuple[str, ...]) -> list[str]:
+    path = REPO_ROOT / rel_path
+    if not path.exists():
+        return [f"{rel_path}: listed in DOC_CLASSES but missing from the repo"]
+
+    classes = [load_class(d) for d in dotted_classes]
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    found: dict[str, int] = {}
+
+    def record(name: str, needle: str) -> None:
+        if name in found:
+            return
+        for i, line in enumerate(lines, 1):
+            if needle in line:
+                found[name] = i
+                return
+        found[name] = 0
+
+    self_defined: set[str] = set()
+    for block in PY_FENCE_RE.findall(text):
+        self_defined.update(DEF_RE.findall(block))
+    for block in PY_FENCE_RE.findall(text):
+        for name in SELF_CALL_RE.findall(block):
+            if name not in self_defined:
+                record(name, f"self.{name}(")
+
+    reference_hits = 0
+    for line in REFERENCE_LINE_RE.findall(text):
+        for name in CALL_IN_LINE_RE.findall(line):
+            reference_hits += 1
+            record(name, f"`{name}(")
+
+    problems = []
+    if reference_hits < COVERAGE_MIN:
+        problems.append(
+            f"{rel_path}: no API references matched — this doc's reference surface "
+            f"uses a shape the checker cannot see, so it is NOT being checked. "
+            f"Add a pattern for it (see REFERENCE_LINE_RE / CALL_IN_LINE_RE)."
+        )
+    for name, line_no in sorted(found.items(), key=lambda kv: kv[1]):
+        if name in ALWAYS_ALLOWED or name in APP_PROVIDED or PLACEHOLDER_RE.match(name):
+            continue
+        if any(hasattr(cls, name) for cls in classes):
+            continue
+        where = f"{rel_path}:{line_no}" if line_no else rel_path
+        owners = ", ".join(c.__name__ for c in classes)
+        problems.append(f"{where}: `{name}()` is documented but exists on none of: {owners}")
+    return problems
+
+
+def check_hook_scope_matches_registry() -> list[str]:
+    """Every doc the pre-commit hook FIRES on must be one this script CHECKS.
+
+    Round 4 registered the hook against `docs/(website/)?guides/(pwa|multi-tenant).md`
+    but left `docs/website/guides/multi-tenant.md` out of DOC_CLASSES. Editing
+    that file ran the hook, printed "Passed", and examined nothing — a green
+    result that was affirmatively misleading about the file just edited. That
+    is worse than no hook, so the mismatch is now an error rather than a gap
+    someone has to notice.
+    """
+    config = REPO_ROOT / ".pre-commit-config.yaml"
+    if not config.exists():
+        return []
+
+    # Parsed with the YAML loader, not a line scan. A hand-rolled
+    # `re.match(r"files:\s*(\S.*)")` captures the raw scalar, so a QUOTED or
+    # folded value ('^docs/…') compiles into a pattern requiring a literal
+    # quote character, matches nothing, and the guard fails OPEN. This repo
+    # already single-quotes regexes on four `exclude:` lines, so that edit is
+    # a realistic one — and a guard retired by a restyle is the same
+    # misleading green it exists to prevent.
+    import yaml
+
+    try:
+        parsed = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        return [f".pre-commit-config.yaml: could not be parsed: {exc}"]
+
+    hook_files_re = None
+    for repo in parsed.get("repos", []) or []:
+        for hook in repo.get("hooks", []) or []:
+            if hook.get("id") == HOOK_ID:
+                hook_files_re = hook.get("files")
+                break
+
+    if not hook_files_re:
+        return [
+            f".pre-commit-config.yaml: hook `{HOOK_ID}` is missing or has no "
+            f"`files:` pattern — its scope cannot be reconciled with DOC_CLASSES."
+        ]
+
+    try:
+        pattern = re.compile(hook_files_re)
+    except re.error as exc:  # pragma: no cover - malformed config
+        return [f".pre-commit-config.yaml: hook `files:` regex does not compile: {exc}"]
+
+    problems = []
+    for path in sorted((REPO_ROOT / "docs").rglob("*.md")):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if pattern.search(rel) and rel not in DOC_CLASSES:
+            problems.append(
+                f"{rel}: the pre-commit hook runs on this file but it is not in "
+                f"DOC_CLASSES, so the hook reports success without checking it. "
+                f"Register it, or narrow the hook's `files:` pattern."
+            )
+    return problems
+
+
+def main() -> int:
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.settings")
+    sys.path.insert(0, str(REPO_ROOT / "python"))
+    sys.path.insert(0, str(REPO_ROOT))
+    try:
+        import django
+
+        django.setup()
+    except Exception:  # pragma: no cover - docs check must not hard-fail on setup
+        pass
+
+    problems: list[str] = check_hook_scope_matches_registry()
+    for rel_path, dotted_classes in DOC_CLASSES.items():
+        problems.extend(check_doc(rel_path, dotted_classes))
+
+    if problems:
+        print("Documented methods that do not exist:\n")
+        for p in problems:
+            print(f"  {p}")
+        print(
+            "\nEither the method was renamed/removed (fix the doc against the code),\n"
+            "or the doc is describing an API that was never implemented.\n"
+            "A reader copy-pasting these examples gets AttributeError."
+        )
+        return 1
+
+    checked = ", ".join(DOC_CLASSES)
+    print(f"OK — every method documented in {checked} exists on its class")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

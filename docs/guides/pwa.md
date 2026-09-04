@@ -52,6 +52,18 @@ class MyView(OfflineMixin, LiveView):
         self.storage.set("items", self.items)
 ```
 
+> **`self.storage` is server-side.** It is an `OfflineStorage` instance
+> (`IndexedDBStorage` by default) whose backing store is a per-instance dict,
+> so it is EMPTY on every fresh request — a `mount()` read returns the default,
+> not what a previous request wrote. `pwa/storage.py` describes it as a
+> server-side in-memory simulation for state tracking and testing — a write
+> is not transmitted to the browser by this object, so do not rely on it to
+> persist anything.
+>
+> `is_online()` also returns `True` unconditionally on the server
+> (`pwa/utils.py`), so an `else:` branch on it never runs in a view.
+
+
 ### 3. Generate service worker
 
 ```bash
@@ -100,8 +112,11 @@ Synchronization of offline data (combine **after** `OfflineMixin`:
   string falls back to `client_wins` **silently**, so a typo here loses data
   rather than raising), `sync_batch_size`,
   `sync_timeout`
-- Hook: `sync_create_item(action_data)` (and siblings) for custom sync logic
-- The queue is processed automatically; there is no `queue_sync()` /
+- Hook: `sync_create_<Model>(action_data)` for custom sync logic. The name is
+  built as `f"sync_create_{action.model}"` (`pwa/mixins.py`), so it is
+  **case-sensitive**: `create_offline("Item", ...)` looks for `sync_create_Item`,
+  not `sync_create_item`. A mismatch silently falls through to the default sync.
+- The queue is NOT processed automatically — nothing dispatches it. `_process_sync_queue()` runs only from `sync_when_online()`, which you call, or `handle_connection_change()`, which has no callers in `python/`. Call one; there is no `queue_sync()` /
   `process_sync_queue()` public API
 
 ## Template Tags
@@ -342,7 +357,7 @@ class ContactForm(OfflineMixin, LiveView):
     def submit_form(self):
         if not self.errors:
             if self.is_online():
-                self.send_to_server()
+                self.send_to_server()   # your own method
             else:
                 self.create_offline('ContactSubmission', self.form_data)
                 self.storage.set('last_message', 'Form saved. Will submit when online.')

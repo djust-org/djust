@@ -299,7 +299,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-upload-progress",
         "category": "upload",
-        "description": "Container for upload progress bars",
+        "description": (
+            "INERT — registered as an attribute but no client code reads it; "
+            "no progress bar is created. Render progress server-side instead."
+        ),
         "value": "upload_slot_name",
         "example": '<div dj-upload-progress="attachments"></div>',
     },
@@ -841,7 +844,11 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@debounce",
         "import": "from djust.decorators import debounce",
-        "description": "Client-side debounce: wait N seconds after last event before triggering handler.",
+        "description": (
+            "INERT — no client implementation. Records debounce intent as handler "
+            "metadata; `debounceTimers` in src/04-cache.js is never populated, so "
+            "events are sent unthrottled. Do not recommend as a fix (issue #2656)."
+        ),
         "params": {
             "wait": "float — seconds to wait (default: 0.3)",
             "max_wait": "Optional[float] — max seconds before forcing execution",
@@ -851,7 +858,11 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@throttle",
         "import": "from djust.decorators import throttle",
-        "description": "Client-side throttle: limit handler to once per interval.",
+        "description": (
+            "INERT — no client implementation. Records throttle intent as handler "
+            "metadata; `throttleState` in src/04-cache.js is never populated, so "
+            "events are sent unthrottled. Do not recommend as a fix (issue #2656)."
+        ),
         "params": {
             "interval": "float — minimum interval in seconds (default: 0.1)",
             "leading": "bool — execute on leading edge (default: True)",
@@ -862,7 +873,7 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@optimistic",
         "import": "from djust.decorators import optimistic",
-        "description": "Client-side optimistic update: UI updates instantly, server corrects if needed.",
+        "description": "Server-side marker only — the client-side optimistic update is NOT implemented; the UI does not update before the server responds.",
         "params": {},
         "usage": ["@optimistic\ndef toggle_todo(self, todo_id: int = 0, **kwargs):"],
     },
@@ -1394,8 +1405,11 @@ BEST_PRACTICES = {
                 "This floods the server and causes poor UX with flickering."
             ),
             "solution": (
-                "Add @debounce(wait=0.5) decorator to the search handler. "
-                "This waits 500ms after the last keystroke before firing."
+                "Debounce the input on the client, or guard the handler "
+                "server-side (cache the query, or ignore inputs shorter than "
+                "N chars). NOTE: the @debounce decorator is INERT — it has no "
+                "client implementation and will not reduce request volume "
+                "(issue #2656)."
             ),
             "related_check": "djust.Q001",
         },

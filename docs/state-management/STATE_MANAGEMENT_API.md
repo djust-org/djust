@@ -1,5 +1,11 @@
 # State Management API Reference
 
+> **Not implemented client-side.** `@debounce`, `@throttle` and `@optimistic` are
+> server-side MARKERS: the decorator stamps metadata and nothing in the shipped
+> client reads it, so the handler runs on every event. Harmless and
+> forward-compatible, but not rate control today. `@cache` IS wired end-to-end.
+
+
 **Status:** ✅ Implemented (Phase 5 Complete: @cache, @client_state, DraftModeMixin, @loading)
 
 **Last Updated:** 2025-11-14
@@ -60,8 +66,8 @@ djust's State Management API provides Python-only abstractions for common client
 
 | Decorator | When to Use | Typical Wait/Interval | Bundle Impact |
 |-----------|-------------|----------------------|---------------|
-| `@debounce(wait)` | User is typing, dragging | 0.3-0.5s | +0.8 KB |
-| `@throttle(interval)` | Scroll, resize, mouse move | 0.1-0.2s | +0.8 KB |
+| `@debounce(wait)` | *(inert — no client impl, #2656)* | — | 0 KB |
+| `@throttle(interval)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
 | `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
@@ -121,7 +127,7 @@ def search(self, query: str = "", **kwargs):
 def update_value(self, value: int = 0, **kwargs):
     self.value = max(0, min(100, value))  # Server validates range
 ```
-**Result**: server validates/corrects after 500ms (adding `@optimistic` does
+**Result**: the server validates/corrects on the event. (The 500ms wait is NOT applied — `@debounce` is a marker with no client implementation, so the handler fires per keystroke.) (adding `@optimistic` does
 not change this today — the client-side instant update is not implemented)
 
 ---
@@ -164,8 +170,8 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 
 | Decorator | Client Overhead | Server Impact | Network Impact |
 |-----------|----------------|---------------|----------------|
-| `@debounce` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
-| `@throttle` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@debounce` | (marker only — client not implemented) | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@throttle` | (marker only — client not implemented) | ⬇️ Reduces calls | ⬇️ Fewer requests |
 | `@optimistic` | 0 (no-op today) | ➡️ Same calls | ➡️ Same requests |
 | `@cache` | ~1ms lookup | ⬇️⬇️ Eliminates repeat calls | ⬇️⬇️ Zero for cache hits |
 | `@client_state` | ~2ms | ➡️ Same calls | ➡️ Same requests |
@@ -1015,7 +1021,7 @@ User submits → localStorage.removeItem() (clear draft)
 
 ## HTML Attributes
 
-### @loading
+### `dj-loading.*` (attributes, not a decorator)
 
 **Status:** ✅ Implemented (PR #83)
 
@@ -1696,7 +1702,11 @@ client:
 @event_handler()
 def transfer_funds(self, amount: int = 0, **kwargs):
     if amount > self.balance:
-        raise ValueError("Insufficient funds")  # Delivered as an error frame
+        raise ValueError("Insufficient funds")  # Error frame — but the TEXT is
+    # replaced with a generic string when DEBUG is False
+    # (security/error_handling.py), so this reads correctly in dev and is
+    # silently generic in production. Put anything the user must see in
+    # view state, not in the exception.
 ```
 
 ---

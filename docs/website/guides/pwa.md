@@ -51,12 +51,13 @@ class MyView(OfflineMixin, LiveView):
     template_name = 'app.html'
 
     def mount(self, request):
-        self.enable_offline()
-        self.items = self.load_offline_state('items', [])
+        # No enable call: inheriting OfflineMixin is what enables offline mode.
+        self.items = self.storage.get('items', [])
 
     def add_item(self, name):
-        self.items.append(name)
-        self.save_offline_state('items', self.items)
+        created = self.create_offline('Item', {'name': name})
+        self.items.append(created)
+        self.storage.set('items', self.items)
         self.sync_when_online()
 ```
 
@@ -74,29 +75,48 @@ Base mixin for PWA functionality:
 
 | Method | Description |
 |--------|-------------|
-| `enable_offline(storage='indexeddb')` | Enable offline mode with specified storage backend |
-| `disable_offline()` | Disable offline functionality |
-| `is_offline_enabled()` | Check if offline mode is enabled |
+| `get_pwa_config()` | PWA config dict injected into the template context |
+| `register_pwa_handlers()` | Register the install/update event handlers |
+| `handle_install_prompt()` | Called when the install prompt is shown |
+| `handle_app_update(version)` | Called when a new app version is available |
+
+There is no `enable_offline()` / `disable_offline()` / `is_offline_enabled()` —
+inheriting the mixin is what turns the behaviour on.
 
 ### OfflineMixin
 
-Enhanced offline state management (extends PWAMixin):
+Enhanced offline state management. It does **not** subclass `PWAMixin` —
+combine them explicitly (`class V(OfflineMixin, PWAMixin, LiveView)`) if you
+want both.
 
 | Method | Description |
 |--------|-------------|
-| `save_offline_state(key, data)` | Save data for offline access |
-| `load_offline_state(key, default=None)` | Load saved offline data |
-| `sync_when_online()` | Queue current state for sync when connection returns |
-| `handle_online()` | Called when connection is restored |
+| `storage` | Property — the `OfflineStorage` instance (`.get(key, default)` / `.set(key, value)`) |
+| `sync_queue` | Property — the pending `SyncQueue` |
+| `create_offline(model, data)` | Queue a create for sync; returns the optimistic record |
+| `update_offline(model, obj_id, data)` | Queue an update for sync |
+| `delete_offline(model, obj_id)` | Queue a delete for sync |
+| `get_cached_or_fetch(key, queryset)` | Serve from cache, else evaluate the queryset |
+| `sync_when_online()` | Drain the sync queue |
+| `get_offline_state()` | Current offline state dict |
+| `is_online()` | Always `True` server-side — see the note below |
+| `handle_connection_change(online)` | Connection-change hook (no built-in caller) |
+
+There is no `save_offline_state()` / `load_offline_state()` / `handle_online()`;
+use the `storage` property directly.
 
 ### SyncMixin
 
-Automatic background synchronization (extends OfflineMixin):
+Automatic background synchronization. It does **not** subclass `OfflineMixin`,
+and it depends on `storage` / `sync_queue` being supplied by one — list it
+**after** `OfflineMixin` (`class V(SyncMixin, OfflineMixin, LiveView)`), or the
+properties raise `AttributeError`.
 
 | Method | Description |
 |--------|-------------|
-| `queue_sync(action, data)` | Queue an action for background sync |
-| `process_sync_queue()` | Process all queued sync actions |
+| `sync_queue` | Property — the pending `SyncQueue`; enqueue via `create_offline()` / `update_offline()` / `delete_offline()` |
+| `sync_manager` | Property — the `SyncManager` that runs the sync |
+| `sync_<verb>_<Model>(action_data)` | Your hook, e.g. `sync_create_Item`; **case-sensitive** (built as `f"sync_create_{action.model}"`) |
 
 ## Template Tags
 
@@ -140,7 +160,7 @@ Visual offline status banner:
 | `dj-offline-hide` | Hide element when offline |
 | `dj-offline-show` | Show element only when offline |
 | `dj-offline-disable` | Disable form element when offline |
-| `dj-offline-queued` | Show visual feedback for queued actions |
+| `dj-offline-queued` | **Not implemented** — no client code reads this attribute; listed here only so it is not mistaken for a working directive |
 
 ```html
 <div dj-offline-hide>
@@ -186,20 +206,20 @@ class TodoView(OfflineMixin, LiveView):
     template_name = 'todos.html'
 
     def mount(self, request):
-        self.enable_offline()
-        self.todos = self.load_offline_state('todos', [])
+        self.todos = self.storage.get('todos', [])
 
     def add_todo(self, text):
-        todo = {'id': len(self.todos), 'text': text, 'done': False}
+        todo = self.create_offline('Todo', {'text': text, 'done': False})
         self.todos.append(todo)
-        self.save_offline_state('todos', self.todos)
+        self.storage.set('todos', self.todos)
         self.sync_when_online()
 
     def toggle_todo(self, todo_id):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
-        self.save_offline_state('todos', self.todos)
+                self.update_offline('Todo', todo_id, {'done': todo['done']})
+        self.storage.set('todos', self.todos)
         self.sync_when_online()
 ```
 

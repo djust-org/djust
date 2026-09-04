@@ -1,5 +1,12 @@
 # Decorators API Reference
 
+> **`@debounce`, `@throttle` and `@optimistic` are INERT.** They record
+> handler metadata but have no client-side implementation — the counterpart
+> state in `static/djust/src/` is declared and never populated, so applying
+> them changes nothing at runtime. Examples below that use them still work,
+> but without the timing or optimistic-update behaviour they describe. Tracked in issue #2656.
+
+
 ```python
 from djust.decorators import (
     event_handler,

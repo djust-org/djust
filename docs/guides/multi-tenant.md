@@ -41,6 +41,8 @@ no-op. A dotted class path in `TENANT_RESOLVER` is NOT a valid value — it
 logs "Unknown tenant resolver" and falls back to subdomain; use
 `'custom'` + `TENANT_CUSTOM_RESOLVER` for callables.
 
+
+### 2. Scope a view to the tenant
 ```python
 from djust import LiveView
 from djust.tenants.mixin import TenantMixin, TenantScopedMixin  # module is `mixin` (singular)
@@ -95,74 +97,96 @@ DJUST_CONFIG = {
 }
 ```
 
-Extract tenant from URL path:
+### Path Resolution
+
+Take the tenant from a URL path segment.
 
 ```python
 # myapp.com/acme/dashboard → tenant_id: "acme"
 DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'path',   # first path segment
+    "TENANT_RESOLVER": "path",
+    "TENANT_PATH_POSITION": 1,   # 1-based: the first path segment
 }
+```
 
-# URL patterns
+```python
+# urls.py
 urlpatterns = [
-    path('<str:tenant_slug>/', include('app.urls')),
+    path("<str:tenant_slug>/", include("app.urls")),
 ]
 ```
 
-Extract tenant from HTTP headers:
+### Header Resolution
+
+Take the tenant from an HTTP request header — the usual choice for APIs.
 
 ```python
 # X-Tenant-ID: acme → tenant_id: "acme"
 DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'header',
-    'TENANT_HEADER': 'X-Tenant-ID',   # header name (this is the default)
+    "TENANT_RESOLVER": "header",
+    "TENANT_HEADER": "X-Tenant-ID",   # default
 }
 ```
 
-Extract tenant from session/JWT:
+### Session Resolution
+
+Read the tenant from the session, falling back to a JWT claim and then to
+`request.user.tenant_id`.
 
 ```python
 DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'session',
-    'TENANT_SESSION_KEY': 'tenant_id',   # session key (default); falls back
-                                         # to a JWT claim / user attribute
+    "TENANT_RESOLVER": "session",
+    "TENANT_SESSION_KEY": "tenant_id",   # default
+    "TENANT_JWT_CLAIM": "tenant_id",     # default; read from user.jwt_payload
 }
 ```
 
-Implement custom tenant logic:
+> This resolver **never writes** the session, and a WebSocket handler's
+> `request.session[...] = ...` has no built-in save guarantee — Django's
+> `SessionMiddleware` only persists on the HTTP response cycle. Treat a session
+> write from a WS handler as a best-effort mirror.
+
+### Chained Resolution
+
+Try several strategies in order and take the first that matches. Configure it
+by giving `TENANT_RESOLVER` a **list** of registry names rather than one name.
 
 ```python
-def custom_tenant_resolver(request):
-    from djust.tenants.resolvers import TenantInfo
+DJUST_CONFIG = {
+    "TENANT_RESOLVER": ["header", "subdomain", "session"],
+    "TENANT_HEADER": "X-Tenant-ID",
+}
+```
 
-    # Custom logic here
+Unknown names are logged and skipped rather than raising.
+
+### Custom Resolution
+
+Point `TENANT_CUSTOM_RESOLVER` at a callable taking the request and returning a
+`TenantInfo` (or a plain `str`, which is wrapped for you).
+
+```python
+# myapp/tenants.py
+from djust.tenants.resolvers import TenantInfo
+
+def resolve_tenant(request):
     if request.user.is_authenticated:
-        tenant_id = request.user.organization.slug
-    else:
-        tenant_id = 'public'
-
-    return TenantInfo(
-        id=tenant_id,
-        name=request.user.organization.name if request.user.is_authenticated else 'Public',
-        settings={'theme': 'blue'}
-    )
-
-# settings.py
-DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'custom',
-    'TENANT_CUSTOM_RESOLVER': 'myapp.tenants.resolve_tenant',  # dotted path to a callable
-}
+        org = request.user.organization
+        return TenantInfo(tenant_id=org.slug, name=org.name)
+    return TenantInfo(tenant_id="public")
 ```
-
-Try multiple strategies with fallback:
 
 ```python
 DJUST_CONFIG = {
-    # A LIST of registry names — tried in order, first hit wins
-    'TENANT_RESOLVER': ['header', 'subdomain', 'session'],
-    'TENANT_DEFAULT': 'public',
+    "TENANT_RESOLVER": "custom",
+    "TENANT_CUSTOM_RESOLVER": "myapp.tenants.resolve_tenant",
 }
 ```
+
+The registry names are `subdomain` (default), `path`, `header`, `session` and
+`custom`; an unrecognised name logs a warning and falls back to `subdomain`.
+
+## Mixins
 
 ### TenantMixin
 
@@ -368,7 +392,7 @@ class SaaSDashboard(TenantScopedMixin, LiveView):
             'storage_used': self.get_tenant_queryset(File).aggregate(
                 total=Sum('size')
             )['total'] or 0,
-            'api_calls': self.get_api_usage(),
+            'api_calls': self.get_api_usage(),   # your own method
             'plan_limit': self.tenant.settings.get('plan_limit', 1000)
         }
 ```
@@ -406,13 +430,13 @@ class TeamWorkspaceView(TenantScopedMixin, LiveView):
         self.recent_activity = self.get_tenant_queryset(Activity).order_by('-created_at')[:10]
 
     def invite_member(self, email):
-        if self.has_permission('invite_users'):
+        if self.has_permission('invite_users'):   # your own method
             invite = TeamInvite.objects.create(
                 tenant_id=self.tenant.id,
                 email=email,
                 invited_by=self.request.user
             )
-            self.send_invitation_email(invite)
+            self.send_invitation_email(invite)   # your own method
 ```
 
 ## Migration Guide

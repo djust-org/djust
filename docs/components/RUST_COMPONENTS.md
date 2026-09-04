@@ -16,7 +16,7 @@ Rust components provide:
 > **Availability:** only `Button` is currently importable from
 `djust.rust_components` (plus `ComponentNotAvailableError`). The other
 > components below (`Input`, `Text`, `Card`, `Alert`, `Modal`, `Dropdown`,
-> `Tabs`) exist Rust-side in the `_rust_components` extension module but
+> `Tabs`) exist Rust-side in the `djust_components` crate (an `rlib`, so `import djust._rust_components` raises `ModuleNotFoundError`) but
 > are **not yet wrapped/exposed** — their sections are kept as the target
 > API design. Importing them raises `ImportError`.
 

@@ -790,11 +790,25 @@ class _ComputedProperty(property):
 
 def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F], F]:
     """
-    Debounce event handler calls on the client side.
+    Declare a client-side debounce for this handler.
 
-    This decorator adds metadata to the event handler that the JavaScript
-    client uses to debounce events. Useful for input events where you want
-    to wait until the user stops typing.
+    .. warning::
+
+       **Server-side marker only — the client half is not implemented.**
+       The decorator stamps metadata on the handler, and nothing in the
+       shipped client reads it: ``debounceTimers`` is declared in
+       ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
+       and ``window.handlerMetadata`` has no readers. So the handler runs on
+       every event exactly as an undecorated one would.
+
+       Applying it is harmless and forward-compatible — it is the declaration
+       the client would consume — but do not rely on it for rate control
+       today. ``@cache`` is the one decorator in this family that IS wired
+       end-to-end (``runtime.py`` reads its metadata and the client honours
+       the TTL).
+
+    Intended for input events where you want to wait until the user stops
+    typing.
 
     Usage:
         class MyView(LiveView):
@@ -821,11 +835,25 @@ def throttle(
     interval: float = 0.1, leading: bool = True, trailing: bool = True
 ) -> Callable[[F], F]:
     """
-    Throttle event handler calls on the client side.
+    Declare a client-side throttle for this handler.
 
-    This decorator adds metadata to the event handler that the JavaScript
-    client uses to throttle events. Useful for scroll, resize, or mouse
-    move events where you want to limit how often the handler runs.
+    .. warning::
+
+       **Server-side marker only — the client half is not implemented.**
+       The decorator stamps metadata on the handler, and nothing in the
+       shipped client reads it: ``throttleState`` is declared in
+       ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
+       and ``window.handlerMetadata`` has no readers. So the handler runs on
+       every event exactly as an undecorated one would.
+
+       Applying it is harmless and forward-compatible — it is the declaration
+       the client would consume — but do not rely on it for rate control
+       today. ``@cache`` is the one decorator in this family that IS wired
+       end-to-end (``runtime.py`` reads its metadata and the client honours
+       the TTL).
+
+    Intended for scroll, resize or mouse-move events where you want to limit
+    how often the handler runs.
 
     Usage:
         class MyView(LiveView):
@@ -853,11 +881,15 @@ def throttle(
 
 def optimistic(func: F) -> F:
     """
-    Apply optimistic updates before server validation.
+    Mark a handler as intended for optimistic client updates (INERT).
 
-    The client will update the UI instantly based on the event data,
-    then apply server corrections if needed. This provides instant
-    feedback for user interactions.
+    .. warning::
+       **Not implemented client-side.** ``window.djust.optimistic`` is read
+       once in ``09-event-binding.js`` and never assigned anywhere in
+       ``static/djust/src/``, so no optimistic update is ever applied and
+       there is no revert path. Applying this decorator changes nothing at
+       runtime; it records a declaration a future client would consume.
+       Tracked in issue #2656.
 
     Usage:
         class MyView(LiveView):
@@ -871,11 +903,8 @@ def optimistic(func: F) -> F:
                 todo.completed = not todo.completed
                 todo.save()
 
-    The client will optimistically update the DOM based on the event data,
-    then apply any corrections from the server response.
-
     Returns:
-        Decorated function with optimistic metadata
+        Decorated function with optimistic metadata (no runtime effect)
     """
 
     @functools.wraps(func)
