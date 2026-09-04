@@ -497,12 +497,7 @@ fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<Stri
     if let Some(context) = context {
         // Resolve the complete expression, including quoted initial operands.
         // Checking only its first and last quotes misreads 'base'|cut:'x'.
-        return Ok(
-            match crate::renderer::resolve_extends_operand(trimmed, context)? {
-                Some(name) if !name.is_empty() => name,
-                _ => trimmed.to_string(),
-            },
-        );
+        return crate::renderer::resolve_extends_operand(trimmed, context);
     }
     // The context-free preprocessing API retains its literal-name behavior.
     let bytes = trimmed.as_bytes();

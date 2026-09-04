@@ -1,0 +1,1 @@
+- **Invalid template parents:** Match Django's exception class and message for falsy `extends` operands, and honor `string_if_invalid` for missing parents. Strict tag expressions skip filter evaluation when a missing variable has a nonempty invalid-value marker. Django conformance reaches 952 of 1,047 engine tests.

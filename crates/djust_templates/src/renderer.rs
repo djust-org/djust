@@ -770,15 +770,27 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
 
 /// Resolve an `{% extends %}` filter expression against the render context.
 ///
-/// Lives here rather than in `inheritance` because the resolver and its
-/// `ignore_failures` policy belong to the renderer; `inheritance` has no other
-/// reason to reach into context resolution.
-pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<Option<String>> {
-    let (value, _) = get_value_safe_ignoring_failures(token, context)?;
-    Ok(match value {
-        Value::Missing | Value::None => None,
-        other => Some(other.to_string()),
-    })
+/// Parent selection uses strict FilterExpression resolution and rejects falsy
+/// results before invoking the loader, as Django's ExtendsNode does.
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<String> {
+    let (mut value, _) = get_value_safe(token, context)?;
+    if matches!(value, Value::Missing) {
+        value = Value::String(context.string_if_invalid_for(token).unwrap_or_default());
+    }
+    if !value.is_truthy() {
+        let mut message = format!(
+            "Invalid template name in 'extends' tag: {}.",
+            value.py_repr()
+        );
+        let parts = crate::filter_lexer::split_pipes(token);
+        let head = parts[0].trim();
+        let constant = is_quoted_literal(head) || (head.starts_with("_(") && head.ends_with(')'));
+        if parts.len() > 1 || !constant {
+            message.push_str(&format!(" Got this from the '{}' variable.", token));
+        }
+        return Err(crate::registry::library_syntax_error(&message));
+    }
+    Ok(value.to_string())
 }
 
 /// Is this template-name token a QUOTED literal rather than a variable?
@@ -4968,6 +4980,13 @@ fn get_value_safe_inner(
         // change, and this movement's contract is flag-OFF byte identity.
         if ignore_failures && djust_core::resolve_lazy() && matches!(value, Value::Missing) {
             value = Value::None;
+        }
+        // Django skips the entire filter chain when a missing strict operand
+        // has a nonempty string_if_invalid; a fallback filter must not hide it.
+        if !ignore_failures && matches!(value, Value::Missing) {
+            if let Some(marker) = context.string_if_invalid_for(var_name) {
+                return Ok((Value::String(marker), false));
+            }
         }
         // See the Variable arm: item-level safety, seeded from the context
         // (#2283, #2287) — the third of the three sites, kept in step with the
