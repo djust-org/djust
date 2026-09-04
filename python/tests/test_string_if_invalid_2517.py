@@ -83,3 +83,72 @@ def test_marker_is_escaped_like_any_other_value() -> None:
     conditionally escaped rather than injected raw."""
     out = _rust.render_template("{{ nope }}", {}, None, "<b>x</b>")
     assert out == "&lt;b&gt;x&lt;/b&gt;"
+
+
+class TestBackendOptions:
+    """`OPTIONS` keys the backend used to discard silently (#2518).
+
+    `DjustTemplateBackend.__init__` popped `context_processors` and dropped
+    every other key, so a project configuring `string_if_invalid`, `autoescape`
+    or `debug` got no error and no effect — the worst shape for a
+    security-relevant switch like `autoescape`.
+
+    Each assertion below checks the OPTION CHANGES RENDERED OUTPUT, not that an
+    attribute was stored: a stored-and-ignored setting is exactly the defect.
+    """
+
+    @staticmethod
+    def _pair(options: dict, name: str):
+        from django.template.backends.django import DjangoTemplates
+
+        from djust.template.backend import DjustTemplateBackend
+
+        params = {"NAME": name, "DIRS": [], "APP_DIRS": False, "OPTIONS": dict(options)}
+        return (
+            DjangoTemplates({**params, "NAME": f"dj{name}"}),
+            DjustTemplateBackend({**params, "NAME": f"du{name}"}),
+        )
+
+    def test_autoescape_false_is_refused_loudly_not_ignored(self) -> None:
+        """djust has no engine-wide escaping switch, by design.
+
+        `Context::set_autoescape` has exactly two production writers, pinned by
+        `test_autoescape_tag_2556.py::TestSecurityPins` on the reasoning that a
+        global escape-off reachable from configuration is an XSS shape. So the
+        option cannot be honoured — but silently dropping it is worse than
+        refusing it, because the project then believes escaping is off when it
+        is not. An explicit `False` raises; `True` is a no-op because it asks
+        for what djust already does.
+        """
+        from django.core.exceptions import ImproperlyConfigured
+
+        from djust.template.backend import DjustTemplateBackend
+
+        with pytest.raises(ImproperlyConfigured, match="autoescape"):
+            DjustTemplateBackend(
+                {"NAME": "ae", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"autoescape": False}}
+            )
+        # True is accepted, and escaping is on.
+        engine = DjustTemplateBackend(
+            {"NAME": "ae2", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"autoescape": True}}
+        )
+        assert str(engine.from_string("{{ p }}").render({"p": "<b>"})) == "&lt;b&gt;"
+
+    def test_string_if_invalid_option_changes_output_like_django(self) -> None:
+        django_engine, djust_engine = self._pair({"string_if_invalid": "INVALID"}, "si")
+        source = "[{{ nope }}]"
+        assert (
+            str(djust_engine.from_string(source).render({}))
+            == str(django_engine.from_string(source).render({}))
+            == "[INVALID]"
+        )
+
+    def test_an_unsupported_option_warns_rather_than_vanishing(self, caplog) -> None:
+        """Silence is what let four keys go unnoticed."""
+        from djust.template.backend import DjustTemplateBackend
+
+        with caplog.at_level("WARNING"):
+            DjustTemplateBackend(
+                {"NAME": "unk", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"zzz_bogus": 1}}
+            )
+        assert any("zzz_bogus" in r.getMessage() for r in caplog.records)

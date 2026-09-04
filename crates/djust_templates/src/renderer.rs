@@ -3174,6 +3174,33 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // per-render identity requirement.
                 let nodes = loader.load_template_cached(name)?;
 
+                // An included template may itself `{% extends %}` — Django
+                // renders it as a template in its own right, so its inheritance
+                // chain resolves before its body does. Rendering the raw nodes
+                // instead reached the `Node::Extends` arm, whose whole job is to
+                // say "this should have been handled at template level", so
+                // `{% include %}` of an extending template RAISED (#2531).
+                //
+                // Resolved here rather than in the loader: the chain needs the
+                // render context (a variable parent name) and the loader is
+                // also the parse cache, which is shared across renders.
+                let resolved_nodes;
+                let nodes: std::sync::Arc<[Node]> =
+                    if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
+                        let chain = crate::inheritance::build_inheritance_chain_from(
+                            nodes.to_vec(),
+                            loader,
+                            10,
+                            Some(name),
+                            Some(context),
+                        )?;
+                        let root = chain.get_root_nodes().to_vec();
+                        resolved_nodes = chain.apply_block_overrides(&root);
+                        std::sync::Arc::from(resolved_nodes.as_slice())
+                    } else {
+                        nodes
+                    };
+
                 // Create context for included template
                 let mut include_context = if *only {
                     // Only use with_vars, not parent context. The render-time
