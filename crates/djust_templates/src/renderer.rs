@@ -3194,23 +3194,6 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // Resolved here rather than in the loader: the chain needs the
                 // render context (a variable parent name) and the loader is
                 // also the parse cache, which is shared across renders.
-                let resolved_nodes;
-                let nodes: std::sync::Arc<[Node]> =
-                    if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
-                        let chain = crate::inheritance::build_inheritance_chain_from(
-                            nodes.to_vec(),
-                            loader,
-                            10,
-                            Some(name),
-                            Some(context),
-                        )?;
-                        let root = chain.get_root_nodes().to_vec();
-                        resolved_nodes = chain.apply_block_overrides(&root);
-                        std::sync::Arc::from(resolved_nodes.as_slice())
-                    } else {
-                        nodes
-                    };
-
                 // Create context for included template
                 let mut include_context = if *only {
                     // Only use with_vars, not parent context. The render-time
@@ -3278,6 +3261,25 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 }
                 let bound: Vec<&str> = with_vars.iter().map(|(k, _)| k.as_str()).collect();
                 register_binding_aliases(&mut include_context, pending, &bound);
+
+                // Resolve the parent only after `with` and `only` establish
+                // the context in which the included template renders.
+                let resolved_nodes;
+                let nodes: std::sync::Arc<[Node]> =
+                    if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
+                        let chain = crate::inheritance::build_inheritance_chain_from(
+                            nodes.to_vec(),
+                            loader,
+                            10,
+                            Some(name),
+                            Some(&include_context),
+                        )?;
+                        let root = chain.get_root_nodes().to_vec();
+                        resolved_nodes = chain.apply_block_overrides(&root);
+                        std::sync::Arc::from(resolved_nodes.as_slice())
+                    } else {
+                        nodes
+                    };
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {

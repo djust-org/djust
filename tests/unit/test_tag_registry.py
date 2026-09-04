@@ -456,7 +456,7 @@ class TestRenderIntegration:
 
         clear_tag_handlers()
 
-        with pytest.raises(RuntimeError, match="Unsupported template tag.*unknown_tag"):
+        with pytest.raises(RuntimeError, match="Invalid block tag.*unknown_tag"):
             render_template("before {% unknown_tag %} after", {})
 
     def test_handler_exception_returns_error(self):

@@ -227,5 +227,5 @@ class TestUnsupportedTagWarning:
             """
 
         view = MyView()
-        with pytest.raises(RuntimeError, match="Unsupported template tag.*zzz_not_a_tag"):
+        with pytest.raises(RuntimeError, match="Invalid block tag.*zzz_not_a_tag"):
             view.render()
