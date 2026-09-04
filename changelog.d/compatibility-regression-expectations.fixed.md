@@ -1,0 +1,1 @@
+- **Template regression coverage:** Replace stale assertions of `add` and Decimal-formatting divergences with Django parity checks, and include `extends` in exact parser-validator caller checks.

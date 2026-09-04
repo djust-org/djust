@@ -1349,14 +1349,12 @@ def test_randomized_underscore_sweep(lang):
     _sweep(cases, lang)
 
 
-def test_decimal_formatting_is_a_preexisting_divergence():
-    """`Decimal("2")` renders `2` on Django and `2,0` here under `de` — the
-    engine localizes it as a number. Visible with NO i18n tag in the template,
-    so it is not this row's; the `blocktranslate count` sweep leaves `Decimal`
-    out for that reason rather than silently passing."""
+@pytest.mark.parametrize("number", ["2", "2.0", "2.000", "9007199254740993.125"])
+def test_decimal_formatting_preserves_decimal_type(number):
+    """The backend no longer converts Decimal to float before localization."""
     with translation.override("de"):
-        assert django_render("{{ dec }}", {"dec": Decimal("2")}) == "2"
-        assert plain_render("{{ dec }}", {"dec": Decimal("2")}) == "2,0"
+        context = {"dec": Decimal(number)}
+        assert plain_render("{{ dec }}", context) == django_render("{{ dec }}", context)
 
 
 def test_a_brace_before_a_tag_now_matches_django():

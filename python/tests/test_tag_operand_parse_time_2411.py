@@ -286,6 +286,7 @@ class TestTheCallerSetIsPinned:
                 "validate_if_operands(args)?",  # the `"if"` arm of parse_token
                 "validate_if_operands(args)?",  # the `{% elif %}` arm of parse_if_block
                 "validate_tag_operand(&iterable)?",  # the `"for"` arm
+                "validate_tag_operand(&args[0])?",  # the `"extends"` arm
                 "validate_tag_operand(&expression)?",  # the `"with"` arm, per assignment
                 "validate_tag_operand(arg)?",  # validate_if_operands' own delegation
                 # The four #2418 added. This test is the reason they were
