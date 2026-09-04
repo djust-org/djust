@@ -185,9 +185,15 @@ def corpus() -> dict:
     # namespace holding exactly the names the corpus uses. `datetime` arrived
     # with the `timedelta` rows (#2469) — the only member of the
     # `Value::Encoded` family with a falsy inhabitant.
+    from collections import namedtuple
     from decimal import Decimal
 
-    env = {"Decimal": Decimal, "mark_safe": mark_safe, "datetime": datetime}
+    env = {
+        "Decimal": Decimal,
+        "mark_safe": mark_safe,
+        "datetime": datetime,
+        "namedtuple": namedtuple,
+    }
 
     def value(node: ast.expr):
         return eval(  # noqa: S307 — a repo file's own literals
@@ -384,6 +390,9 @@ class TestTheReferenceTableIsRunNotTranscribed:
         iterators are unmoved again; none is subscriptable and none has a
         `.lower()`, so `first` / `last` / `phone2numeric` each gain all three.
 
+        The three named-tuple rows are iterable and subscriptable, but have
+        no `.lower()`, so only `phone2numeric` gains three refusals.
+
         `random` is excluded on purpose rather than rounded off: over a mapping
         `random.choice` draws an index and THEN looks it up, so whether Django
         raises at all depends on the draw — its own count flaps between 17 and
@@ -405,9 +414,9 @@ class TestTheReferenceTableIsRunNotTranscribed:
             "unordered_list": 17,
             "first": 27,
             "last": 30,
-            "phone2numeric": 42,
+            "phone2numeric": 45,
         }, per_filter
-        assert sum(per_filter.values()) == 150
+        assert sum(per_filter.values()) == 153
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
