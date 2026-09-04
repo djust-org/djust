@@ -174,7 +174,9 @@ adoption is always safe.
 
 ### VDOM patch cache
 
-When the user clicks a `dj-navigate` link or hits the back button, the SW
+When the user clicks a `dj-navigate` — note the SW fast-paint runs only on the `popstate` (back/forward)
+path (`src/18-navigation.js`); a CLICK goes through `handleLiveRedirect` and never
+consults `djust._sw`. `dj-navigate` link or hits the back button, the SW
 serves a cached HTML snapshot of the destination URL **immediately**,
 then the live WebSocket mount reply reconciles any drift via the
 normal VDOM patch path. The user sees content the instant the route
@@ -189,8 +191,8 @@ djust.registerServiceWorker({ vdomCache: true });
 ```python
 # settings.py
 DJUST_VDOM_CACHE_ENABLED = True
-DJUST_VDOM_CACHE_TTL_SECONDS = 300         # default — entries expire after 5 min
-DJUST_VDOM_CACHE_MAX_ENTRIES = 100         # default — LRU evict beyond this cap
+DJUST_VDOM_CACHE_TTL_SECONDS = 1800        # default — entries expire after 5 min
+DJUST_VDOM_CACHE_MAX_ENTRIES = 50          # default — LRU evict beyond this cap
 ```
 
 Three system checks guard the configuration ranges so a typo (e.g.

@@ -231,7 +231,7 @@ Some older setups used `dj-view` and `dj-root` differently. The required pattern
 - `dj-view="myapp.views.CounterView"` on the `<body>` tag (or outermost container) — literal dotted path, as the scaffold emits
 - `dj-root` on the reactive region inside
 
-See [error codes](../guides/error-codes.md) if you get a `T001`-family system-check warning about missing template attributes.
+See [error codes](../guides/error-codes.md) if you get a `T002` / `T012` (not `T001`, which is the deprecated `@click` syntax check)-family system-check warning about missing template attributes.
 
 ## Next Steps
 

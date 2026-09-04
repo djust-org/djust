@@ -8,7 +8,7 @@ Working guidelines for all agents and contributors to the djust project. These a
 
 - **No direct commits to `main`.** All work goes through feature branches.
 - Branch naming:
-  - `feature/<description>` — new functionality
+  - `feat/<description>` — new functionality
   - `fix/<description>` — bug fixes
   - `refactor/<description>` — code restructuring, no behavior change
   - `docs/<description>` — documentation only
@@ -25,7 +25,7 @@ Working guidelines for all agents and contributors to the djust project. These a
 - One logical change per commit. Keep commits atomic.
 - Include the co-author line on every commit:
   ```
-  Co-Authored-By: Claude Code <noreply@anthropic.com>
+  Co-Authored-By: <the model that wrote it> <noreply@anthropic.com>
   ```
 - Reference issue identifiers in commit messages when applicable (e.g., `fix: correct textarea newline stripping (DJU-42)`).
 

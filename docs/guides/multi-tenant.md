@@ -41,6 +41,8 @@ no-op. A dotted class path in `TENANT_RESOLVER` is NOT a valid value — it
 logs "Unknown tenant resolver" and falls back to subdomain; use
 `'custom'` + `TENANT_CUSTOM_RESOLVER` for callables.
 
+
+### 2. Scope a view to the tenant
 ```python
 from djust import LiveView
 from djust.tenants.mixin import TenantMixin, TenantScopedMixin  # module is `mixin` (singular)

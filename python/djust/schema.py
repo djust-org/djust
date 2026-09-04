@@ -297,7 +297,7 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "example": '<div dj-upload-preview="avatar"></div>',
     },
     {
-        "name": "dj-upload-progress",
+        "name": "dj-upload-progress (INERT: registered but no client code reads it)",
         "category": "upload",
         "description": "Container for upload progress bars",
         "value": "upload_slot_name",
@@ -862,7 +862,7 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@optimistic",
         "import": "from djust.decorators import optimistic",
-        "description": "Client-side optimistic update: UI updates instantly, server corrects if needed.",
+        "description": "Server-side marker only — the client-side optimistic update is NOT implemented; UI does not update instantly, server corrects if needed.",
         "params": {},
         "usage": ["@optimistic\ndef toggle_todo(self, todo_id: int = 0, **kwargs):"],
     },

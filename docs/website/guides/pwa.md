@@ -140,7 +140,7 @@ Visual offline status banner:
 | `dj-offline-hide` | Hide element when offline |
 | `dj-offline-show` | Show element only when offline |
 | `dj-offline-disable` | Disable form element when offline |
-| `dj-offline-queued` | Show visual feedback for queued actions |
+| `dj-offline-queued` | **Not implemented** — no client code reads this attribute; listed here only so it is not mistaken for a working directive |
 
 ```html
 <div dj-offline-hide>

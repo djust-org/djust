@@ -304,8 +304,11 @@ def delete_item(self, item_id: int, **kwargs):
 
 ### Decorator Usage
 
+> `@debounce` / `@throttle` / `@optimistic` are markers with no client
+> implementation — the handler still fires on every event. `@cache` is wired.
+
 ```python
-# Debouncing (wait for user to stop typing)
+# Debouncing (declared; the client half is not implemented)
 @event_handler()
 @debounce(wait=0.5)  # 500ms delay
 def search(self, value: str = "", **kwargs):

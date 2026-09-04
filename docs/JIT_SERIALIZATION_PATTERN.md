@@ -27,7 +27,6 @@ In `get_context_data()`, assign the private variable to a **public instance vari
 
 ```python
 from djust.decorators import event_handler, debounce
-from djust.decorators import event_handler, debounce
 from djust_shared.views import BaseViewWithNavbar
 
 class MyListView(BaseViewWithNavbar):

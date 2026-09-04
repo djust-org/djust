@@ -43,7 +43,11 @@ from djust.pwa.mixins import OfflineMixin
 
 class MyView(OfflineMixin, LiveView):
     def mount(self, request):
-        self.items = self.storage.get("items", [])  # offline-capable KV store
+        self.items = self.storage  # NOTE: a per-instance SERVER-SIDE dict (pwa/storage.py) — it is
+              # empty on every fresh request, so a `mount()` read returns the
+              # default. `is_online()` also returns True unconditionally on the
+              # server (pwa/utils.py), so an `else:` branch on it is unreachable.
+              # self.storage.get("items", [])  # offline-capable KV store
 
     def add_item(self, name):
         # Optimistic offline create: queued for sync automatically
@@ -101,7 +105,7 @@ Synchronization of offline data (combine **after** `OfflineMixin`:
   rather than raising), `sync_batch_size`,
   `sync_timeout`
 - Hook: `sync_create_item(action_data)` (and siblings) for custom sync logic
-- The queue is processed automatically; there is no `queue_sync()` /
+- The queue is NOT processed automatically — nothing dispatches it. `_process_sync_queue()` runs only from `sync_when_online()`, which you call, or `handle_connection_change()`, which has no callers in `python/`. Call one; there is no `queue_sync()` /
   `process_sync_queue()` public API
 
 ## Template Tags

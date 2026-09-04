@@ -62,7 +62,9 @@ djust/
 │   ├── backends/           # Presence backends (memory, redis)
 │   └── static/djust/       # Client JS — shipped client.min.js.gz is ~58 KB
 ├── crates/
-│   ├── djust/              # PyO3 bindings (entry point for Python)
+│   ├── djust_live/         # PyO3 bindings — the entry point
+│   │                       #   (pyproject `manifest-path`; module `djust._rust`)
+│   ├── djust_components/   # Rust-backed components
 │   ├── djust_core/         # Core types, serialization, context
 │   ├── djust_templates/    # Rust template engine
 │   └── djust_vdom/         # Virtual DOM + diffing

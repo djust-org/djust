@@ -411,13 +411,21 @@ struct RustLiveView {
 
 **Pattern 3: Client JavaScript — single ES-module source, bundled at build time**
 
-Client-side JavaScript lives in ONE place: the ES modules under
+The BUNDLED client is built from the ES modules under
 `python/djust/static/djust/src/` (e.g. debounce/throttle logic in
 `src/09-event-binding.js`). `scripts/build-client.sh` concatenates
 `src/[0-9]*.js` (in filename order) into `static/djust/client.js` and the
-minified+gzipped `client.min.js(.gz)` that actually ships. There is no second
-embedded copy to keep in sync — do not hand-edit `client.js` /
-`client.min.js`; they are build artifacts.
+minified+gzipped `client.min.js(.gz)` that actually ships. Do not hand-edit
+`client.js` / `client.min.js`; they are build artifacts.
+
+The `live_view.py`-embedded copy is gone, but "one place" is not yet true in
+full: `static/djust/decorators.js` (~34 KB) still exists outside `src/`, still
+carries an "update BOTH files" header, is imported by several test suites, and
+duplicates debounce/throttle logic against `src/09-event-binding.js`. It is NOT
+in the bundle. A handful of other hand-maintained files also live outside
+`src/` (`js/pwa.js` among them, which no template tag loads). Consolidating
+them is open work — until then, check whether the file you are editing is a
+bundle input before assuming an edit ships.
 
 **Workflow:**
 - [ ] Update the logic in the relevant `src/<NN>-*.js` module
@@ -426,7 +434,6 @@ embedded copy to keep in sync — do not hand-edit `client.js` /
 - [ ] Rebuild the bundle (`make build-js` / `scripts/build-client.sh`) if
       you need to exercise the runtime locally
 - [ ] Mind the client size budget (see `CLAUDE.md` → JavaScript)
-- Version drift between the two implementations
 
 ### Testing Strategy
 
