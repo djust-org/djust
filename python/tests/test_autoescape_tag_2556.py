@@ -130,13 +130,12 @@ def tpl_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def engines(tpl_dir: Path):
     django_engine = Engine(dirs=[str(tpl_dir)], libraries=LIBRARIES)
     django_engine.template_builtins.append(_LIB)
-    # No `OPTIONS['libraries']` here on purpose: that registers the name in
-    # the process-global `{% load %}` map, which the #2547 message tests pin
-    # to THEIR library set. `_bridged` scopes the name to this module's
-    # renders through the Engine's own `template_libraries` instead.
+    # Keep this fixture's library names on each engine, without registering
+    # them globally and changing other modules' unknown-library diagnostics.
     backend = DjustTemplateBackend(
         {"NAME": "djust_2556", "DIRS": [str(tpl_dir)], "APP_DIRS": False, "OPTIONS": {}}
     )
+    backend.template_libraries.update(LIBRARIES)
     return django_engine, backend, tpl_dir
 
 
@@ -171,8 +170,7 @@ def djust_raw(engines, source: str, ctx: dict) -> str:
 def djust_backend(engines, source: str, ctx: dict) -> str:
     """``DjustTemplateBackend`` — what a Django ``TEMPLATES`` entry renders."""
     _, backend, _ = engines
-    with _bridged(engines):
-        return str(backend.from_string(source).render(dict(ctx)))
+    return str(backend.from_string(source).render(dict(ctx)))
 
 
 def djust_live(engines, source: str, ctx: dict) -> str:

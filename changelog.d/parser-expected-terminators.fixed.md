@@ -1,0 +1,1 @@
+- **Template parser diagnostics:** Match Django's unknown-tag and misplaced-closing-tag messages, including the active block's expected terminators. Report missing end tags against the original opening block across `elif`, `else`, and `empty`, and reject repeated `else`/`empty` clauses. Scoreboard parsing accepts both current and historical error formats.

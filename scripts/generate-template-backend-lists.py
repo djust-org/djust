@@ -92,7 +92,7 @@ ARITY_HEADER = "const ARITY: &[(&str, u8, u8, u8)] = &["
 PARSER_MATCH = "match tag_name.as_str() {"
 _ARM_RE = re.compile(r'^ {16}("[a-z_0-9]+"(?:\s*\|\s*"[a-z_0-9]+")*)\s*=>')
 _ARITY_ROW_RE = re.compile(r'^[ \t]*\("([a-z_0-9]+)",', re.M)
-_SCOREBOARD_RE = re.compile(r"Unsupported template tag '\{% ([a-z_0-9]+)")
+_SCOREBOARD_RE = re.compile(r"(?:Unsupported template tag '\{% |Invalid block tag on line \d+: ')([a-z_0-9]+)")
 # Every name the doc block emits comes from a registry the generator reads at
 # runtime (Django's, djust's tag handlers, the Rust filter registry). A name
 # that is not a plain template identifier cannot be a real tag or filter and
@@ -541,7 +541,7 @@ def splice_block(doc_text: str, block: str) -> str:
 
 
 def scoreboard_unsupported_tags(path: Path) -> set[str]:
-    """Distinct tag names in ``Unsupported template tag '{% X`` ERROR lines."""
+    """Tag names in current Django-style or historical unsupported-tag errors."""
     return set(_SCOREBOARD_RE.findall(path.read_text(encoding="utf-8")))
 
 

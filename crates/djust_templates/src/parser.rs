@@ -357,9 +357,8 @@ fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
 /// is available — it yields a more reproducible prefix derived from
 /// the source string itself, which keeps IDs stable across cosmetic
 /// token-stream representation changes (e.g. lexer refactors).
-/// The refusal text for a tag with no registered handler — one producer
-/// for the parser (parse-time, #2549) and the `Node::UnsupportedTag` render
-/// arm (hand-built nodes only), so the two can never drift (#1646).
+/// Legacy renderer diagnostic for a hand-built `Node::UnsupportedTag`.
+/// Source templates fail earlier with the parser's location-aware diagnostic.
 pub fn unsupported_tag_message(name: &str, args: &[String]) -> String {
     let args_str = if args.is_empty() {
         String::new()
@@ -435,7 +434,7 @@ fn parse_internal(
     let mut i = 0;
 
     while i < tokens.len() {
-        let node = parse_token(&mut block_names, tokens, spans, source, &mut i)?;
+        let node = parse_token(&mut block_names, tokens, spans, source, &mut i, &[])?;
         if let Some(n) = node {
             // Django's `ExtendsNode.must_be_first` (`loader_tags.py`) refuses
             // the moment a SECOND non-text node is about to be appended
@@ -822,24 +821,36 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         + 1
 }
 
-/// A closer keyword (`endverbatim`/`endwith`/`endspaceless`/`endautoescape`/
-/// `endfilter`/`endif`/`endfor`/`endblock`/`else`/`elif`) reached where it is
-/// not the awaited terminator: either at the top level with nothing open, or
-/// inside a DIFFERENT block that was watching for a DIFFERENT terminator
-/// (#2580). Every one of these is ONLY ever legitimately consumed by its own
-/// opening tag's dedicated body-loop, which checks for its specific
-/// terminator BEFORE ever falling through to `parse_token` — so reaching
-/// this helper at all means the token is a stray. Django's parser hits the
-/// same fact from the other direction: none of these are independently-
-/// registered tags (`self.tags[command]` raises `KeyError`), so
-/// `Parser.parse` refuses with "Invalid block tag" the moment one appears
-/// where it is not the awaited terminator.
-fn stray_closer_error(spans: &[Span], source: &str, i: usize, tag_name: &str) -> DjangoRustError {
-    DjangoRustError::TemplateError(format!(
+/// Django's invalid-tag diagnostic, including the terminators accepted by
+/// the innermost parser body. Used for unknown tags and misplaced closers.
+fn invalid_block_tag_error(
+    spans: &[Span],
+    source: &str,
+    i: usize,
+    tag_name: &str,
+    expected: &[&str],
+) -> DjangoRustError {
+    let mut message = format!(
         "Invalid block tag on line {}: '{}'",
         line_at(spans, source, i),
         tag_name
-    ))
+    );
+    if let Some((last, rest)) = expected.split_last() {
+        message.push_str(", expected ");
+        if !rest.is_empty() {
+            message.push_str(
+                &rest
+                    .iter()
+                    .map(|name| format!("'{name}'"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            message.push_str(" or ");
+        }
+        message.push_str(&format!("'{last}'"));
+    }
+    message.push_str(". Did you forget to register or load this tag?");
+    DjangoRustError::TemplateError(message)
 }
 
 /// Django's `Parser.unclosed_block_tag` (`base.py:584`), verbatim: "Unclosed
@@ -872,9 +883,10 @@ fn parse_token(
     spans: &[Span],
     source: &str,
     i: &mut usize,
+    expected: &[&str],
 ) -> Result<Option<Node>> {
     let at = *i;
-    parse_token_inner(block_names, tokens, spans, source, i)
+    parse_token_inner(block_names, tokens, spans, source, i, expected)
         .map_err(|e| e.at(spans.get(at).copied()))
 }
 
@@ -884,6 +896,7 @@ fn parse_token_inner(
     spans: &[Span],
     source: &str,
     i: &mut usize,
+    expected: &[&str],
 ) -> Result<Option<Node>> {
     match &tokens[*i] {
         Token::Text(text) => Ok(Some(Node::Text(text.clone()))),
@@ -991,8 +1004,15 @@ fn parse_token_inner(
                     //   <option value="{{ var }}" {% if cond %}selected{% endif %}>
                     // where Variable tokens separate the tag opening from the {% if %}.
                     let in_tag_context = is_inside_html_tag_at(tokens, *i);
-                    let (true_nodes, false_nodes, end_pos) =
-                        parse_if_block(block_names, tokens, spans, source, *i + 1, in_tag_context)?;
+                    let (true_nodes, false_nodes, end_pos) = parse_if_block(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        *i,
+                        in_tag_context,
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -1353,7 +1373,9 @@ fn parse_token_inner(
                     Ok(Some(Node::Text(content)))
                 }
 
-                "endverbatim" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endverbatim" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "with" => {
                     // Django accepts either key=expression assignments or
@@ -1413,7 +1435,9 @@ fn parse_token_inner(
                     Ok(Some(Node::With { assignments, nodes }))
                 }
 
-                "endwith" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endwith" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "load" => {
                     // {% load static %} — preserve library names so inheritance
@@ -1525,7 +1549,9 @@ fn parse_token_inner(
                     Ok(Some(Node::Spaceless { nodes }))
                 }
 
-                "endspaceless" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endspaceless" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "autoescape" => {
                     // {% autoescape on|off %} ... {% endautoescape %} (#2556).
@@ -1551,13 +1577,16 @@ fn parse_token_inner(
                         spans,
                         source,
                         *i + 1,
+                        *i,
                         "endautoescape",
                     )?;
                     *i = end_pos;
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
 
-                "endautoescape" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endautoescape" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "filter" => {
                     // {% filter f1|f2:arg %}...{% endfilter %} (#2556).
@@ -1587,13 +1616,16 @@ fn parse_token_inner(
                         spans,
                         source,
                         *i + 1,
+                        *i,
                         "endfilter",
                     )?;
                     *i = end_pos;
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
 
-                "endfilter" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endfilter" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "ifchanged" => {
                     // {% ifchanged [var …] %}…[{% else %}…]{% endifchanged %}
@@ -1615,6 +1647,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             end_pos + 1,
+                            *i,
                             "endifchanged",
                         )?;
                         (else_nodes, end_pos)
@@ -1630,7 +1663,9 @@ fn parse_token_inner(
                     }))
                 }
 
-                "endifchanged" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endifchanged" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "cycle" => {
                     // Django's `cycle()` grammar, `defaulttags.py` (#2556).
@@ -1753,7 +1788,7 @@ fn parse_token_inner(
                     // `{% endblock %}` inside an unclosed `{% if %}`).
                     // `endverbatim`/`endwith`/`endspaceless`/
                     // `endautoescape`/`endfilter` get the SAME helper
-                    // ([`stray_closer_error`]) from arms placed right
+                    // ([`invalid_block_tag_error`]) from arms placed right
                     // after their own opening tags, deliberately NOT
                     // folded into this multi-name arm: this one already
                     // sat immediately before the match's `_ => { ... }`
@@ -1771,7 +1806,9 @@ fn parse_token_inner(
                     // the other five arms elsewhere in the match avoids
                     // creating that adjacency rather than fixing the
                     // scanner's regex.
-                    Err(stray_closer_error(spans, source, *i, tag_name))
+                    Err(invalid_block_tag_error(
+                        spans, source, *i, tag_name, expected,
+                    ))
                 }
 
                 _ => {
@@ -1809,6 +1846,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             *i + 1,
+                            *i,
                             "endlanguage",
                         )?;
                         *i = end_pos;
@@ -1834,6 +1872,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             *i + 1,
+                            *i,
                             "endlocalize",
                         )?;
                         *i = end_pos;
@@ -1856,6 +1895,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             *i + 1,
+                            *i,
                             "endlocaltime",
                         )?;
                         *i = end_pos;
@@ -1873,6 +1913,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             *i + 1,
+                            *i,
                             "endtimezone",
                         )?;
                         *i = end_pos;
@@ -1911,6 +1952,7 @@ fn parse_token_inner(
                             spans,
                             source,
                             *i + 1,
+                            *i,
                             &end_tag,
                         )?;
                         *i = end_pos;
@@ -1978,13 +2020,11 @@ fn parse_token_inner(
                         // the renderer raised the same message when — and
                         // only if — the node was reached, so a defect in a
                         // branch that never rendered was silently accepted.
-                        // The message text is a published contract
-                        // (`rendering.py` keys a hint on it; the scoreboard
-                        // list generator parses it) and is byte-identical to
-                        // the render arm's.
-                        Err(DjangoRustError::TemplateError(unsupported_tag_message(
-                            tag_name, args,
-                        )))
+                        // Report the parser's active terminator set, matching
+                        // Django's lookup failure at this exact token.
+                        Err(invalid_block_tag_error(
+                            spans, source, *i, tag_name, expected,
+                        ))
                     }
                 }
             }
@@ -2032,6 +2072,7 @@ fn parse_if_block(
     spans: &[Span],
     source: &str,
     start: usize,
+    opening_pos: usize,
     in_tag_context: bool,
 ) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut true_nodes = Vec::new();
@@ -2041,7 +2082,7 @@ fn parse_if_block(
 
     while i < tokens.len() {
         match &tokens[i] {
-            Token::Tag(name, args) if name == "else" => {
+            Token::Tag(name, args) if name == "else" && !in_else => {
                 // Django's `do_if` accepts the else clause only when
                 // `token.contents == "else"` exactly; any trailing content
                 // (`{% else if foo is not bar %}`) fails the following
@@ -2071,9 +2112,8 @@ fn parse_if_block(
             Token::Tag(name, args) if name == "elif" => {
                 // elif after else is invalid (matches Django behavior)
                 if in_else {
-                    return Err(DjangoRustError::TemplateError(
-                        "{% elif %} cannot appear after {% else %}".to_string(),
-                    ));
+                    return Err(invalid_block_tag_error(spans, source, i, name, &["endif"])
+                        .at(spans.get(i).copied()));
                 }
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
@@ -2087,8 +2127,15 @@ fn parse_if_block(
                 // `{% if %}`'s (#2576). See `validate_if_grammar`.
                 validate_if_grammar(args)?;
                 let elif_condition = args.join(" ");
-                let (elif_true, elif_false, end_pos) =
-                    parse_if_block(block_names, tokens, spans, source, i + 1, in_tag_context)?;
+                let (elif_true, elif_false, end_pos) = parse_if_block(
+                    block_names,
+                    tokens,
+                    spans,
+                    source,
+                    i + 1,
+                    opening_pos,
+                    in_tag_context,
+                )?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
@@ -2103,7 +2150,18 @@ fn parse_if_block(
                 return Ok((true_nodes, false_nodes, i));
             }
             _ => {
-                if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+                if let Some(node) = parse_token(
+                    block_names,
+                    tokens,
+                    spans,
+                    source,
+                    &mut i,
+                    if in_else {
+                        &["endif"]
+                    } else {
+                        &["elif", "else", "endif"]
+                    },
+                )? {
                     if in_else {
                         false_nodes.push(node);
                     } else {
@@ -2118,9 +2176,13 @@ fn parse_if_block(
     Err(unclosed_tag_error(
         spans,
         source,
-        start - 1,
+        opening_pos,
         "if",
-        &["elif", "else", "endif"],
+        if in_else {
+            &["endif"]
+        } else {
+            &["elif", "else", "endif"]
+        },
     ))
 }
 
@@ -2140,7 +2202,7 @@ fn parse_for_block(
         if let Token::Tag(name, _) = &tokens[i] {
             if name == "endfor" {
                 return Ok((nodes, empty_nodes, i));
-            } else if name == "empty" {
+            } else if name == "empty" && !in_empty_block {
                 // Switch to parsing the empty block
                 in_empty_block = true;
                 i += 1;
@@ -2148,7 +2210,18 @@ fn parse_for_block(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(
+            block_names,
+            tokens,
+            spans,
+            source,
+            &mut i,
+            if in_empty_block {
+                &["endfor"]
+            } else {
+                &["empty", "endfor"]
+            },
+        )? {
             if in_empty_block {
                 empty_nodes.push(node);
             } else {
@@ -2163,7 +2236,11 @@ fn parse_for_block(
         source,
         start - 1,
         "for",
-        &["endfor"],
+        if in_empty_block {
+            &["endfor"]
+        } else {
+            &["empty", "endfor"]
+        },
     ))
 }
 
@@ -2202,7 +2279,8 @@ fn parse_block(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &["endblock"])?
+        {
             nodes.push(node);
         }
         i += 1;
@@ -2234,14 +2312,18 @@ fn parse_with_block(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &["endwith"])? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed with tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "with",
+        &["endwith"],
     ))
 }
 
@@ -2279,14 +2361,25 @@ fn parse_spaceless_block(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(
+            block_names,
+            tokens,
+            spans,
+            source,
+            &mut i,
+            &["endspaceless"],
+        )? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed spaceless tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "spaceless",
+        &["endspaceless"],
     ))
 }
 
@@ -2380,16 +2473,23 @@ fn parse_block_until_any(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, end_tags)? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(format!(
-        "Unclosed block tag, expected {{% {} %}}",
-        end_tags[end_tags.len() - 1]
-    )))
+    let opening = match &tokens[start - 1] {
+        Token::Tag(name, _) => name.as_str(),
+        _ => "",
+    };
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        opening,
+        end_tags,
+    ))
 }
 
 fn parse_block_custom_tag(
@@ -2398,6 +2498,7 @@ fn parse_block_custom_tag(
     spans: &[Span],
     source: &str,
     start: usize,
+    opening_pos: usize,
     end_tag: &str,
 ) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
@@ -2410,15 +2511,23 @@ fn parse_block_custom_tag(
             }
         }
 
-        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &[end_tag])? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(format!(
-        "Unclosed block tag, expected {{% {end_tag} %}}"
-    )))
+    let opening = match &tokens[opening_pos] {
+        Token::Tag(name, _) => name.as_str(),
+        _ => "",
+    };
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        opening_pos,
+        opening,
+        &[end_tag],
+    ))
 }
 
 /// Extract all variable paths from a Django template for JIT serialization.
@@ -4268,10 +4377,7 @@ mod tests {
         // observed as that refusal rather than as an `UnsupportedTag` node.
         let tokens = tokenize("{% language \"de\" %}x{% endlanguage %}").expect("tokenize failed");
         let err = parse(&tokens).expect_err("an unarmed scope tag must be refused");
-        assert!(
-            err.to_string().contains("Unsupported template tag"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("Invalid block tag"), "{err}");
     }
 
     #[test]
@@ -5015,7 +5121,7 @@ mod tests {
             .expect_err("an unregistered tag must refuse at parse");
         assert!(
             err.to_string()
-                .contains("Unsupported template tag '{% react \"Button\" %}'"),
+                .contains("Invalid block tag on line 1: 'react'"),
             "got: {err}"
         );
     }
@@ -5282,7 +5388,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("elif"));
-        assert!(err.to_string().contains("else"));
+        assert!(err.to_string().contains("expected 'endif'"));
     }
 
     #[test]

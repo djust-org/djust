@@ -190,7 +190,7 @@ _TAG_SOURCES = {
     "cache": "{% load cache %}{% cache 500 k %}x{% endcache %}",
 }
 
-_UNSUPPORTED_TAG_TEXT = "Unsupported template tag"
+_UNSUPPORTED_TAG_TEXT = "Invalid block tag"
 
 
 def _tag_sources(report) -> dict[str, str]:
@@ -580,6 +580,14 @@ class TestCrossCheckDetectsDisagreement:
     """Does not need the real scoreboard: a synthetic one claiming a supported
     tag is unsupported must be reported, by name, and fail the flag."""
 
+    def test_scoreboard_accepts_django_style_errors(self, gen, tmp_path):
+        board = tmp_path / "current.txt"
+        board.write_text(
+            "ERROR x | Invalid block tag on line 12: 'unknown'. Did you forget to register or load this tag?\n",
+            encoding="utf-8",
+        )
+        assert gen.scoreboard_unsupported_tags(board) == {"unknown"}
+
     def test_synthetic_scoreboard_naming_a_supported_tag_is_a_finding(self, gen, report, tmp_path):
         board = tmp_path / "last-run.txt"
         board.write_text(
@@ -620,29 +628,12 @@ class TestDocAndWiring:
 
     def test_troubleshooting_quotes_the_engines_error_text(self):
         text = _DOC.read_text(encoding="utf-8")
-        # One producer for the text since #2549: `unsupported_tag_message` in
-        # parser.rs (the parser refuses at parse time; the renderer's
-        # hand-built-node arm calls the same function).
-        parser = (_REPO / "crates" / "djust_templates" / "src" / "parser.rs").read_text(
-            encoding="utf-8"
-        )
-        # The Rust literal is a `\`-continued format string; collapse it to
-        # the bytes the engine emits before comparing.
-        engine_text = " ".join(
-            re.search(
-                r'"(Unsupported template tag \'\{\{% \{name\}\{args_str\} %\}\}\'\. \\\n.*?instead\.)"',
-                parser,
-                re.S,
-            )
-            .group(1)
-            .replace("\\\n", "\n")
-            .split()
-        )
-        assert engine_text.startswith(
-            "Unsupported template tag '{{% {name}{args_str} %}}'. Register a handler via"
-        )
-        assert engine_text.replace("{{% {name}{args_str} %}}", "{% tag_name %}") in text
-        assert "Unsupported tag '{% tag_name %}'" not in text
+        from djust import _rust
+
+        with pytest.raises(RuntimeError) as excinfo:
+            _rust.compile_template("{% tag_name %}")
+        message = str(excinfo.value).removeprefix("Template error: ")
+        assert message in text
 
     def test_rendered_block_has_no_timestamp(self, gen, report):
         block = gen.render_block(report)

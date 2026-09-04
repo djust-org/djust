@@ -313,7 +313,7 @@ class TestSpanCrossesThePyO3Boundary:
         with pytest.raises(RuntimeError) as info:
             compile_template("{% nosuchtag %}")
         text = str(info.value)
-        assert text.startswith("Template error: Unsupported template tag")
+        assert text.startswith("Template error: Invalid block tag")
         assert "djust_token_span" not in text
         assert "start" not in text
 
