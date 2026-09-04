@@ -146,7 +146,11 @@ impl Template {
     /// loaded under different names resolve to different parents.
     fn extends_is_relative(&self) -> bool {
         self.nodes.iter().any(|node| match node {
-            Node::Extends(target) => target.starts_with("./") || target.starts_with("../"),
+            Node::Extends(target) => {
+                // The token keeps its quotes (#2517); strip before testing.
+                let t = target.trim_matches(|c| c == '"' || c == '\'');
+                t.starts_with("./") || t.starts_with("../")
+            }
             _ => false,
         })
     }
@@ -284,8 +288,13 @@ impl Template {
         // Check if template uses inheritance
         if self.uses_extends() {
             // Build inheritance chain (not cached — call resolve_inheritance() first)
-            let chain =
-                build_inheritance_chain_from(self.nodes.clone(), loader, 10, template_name)?;
+            let chain = build_inheritance_chain_from(
+                self.nodes.clone(),
+                loader,
+                10,
+                template_name,
+                Some(context),
+            )?;
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
             render_nodes_with_loader(&final_nodes, context, Some(loader))

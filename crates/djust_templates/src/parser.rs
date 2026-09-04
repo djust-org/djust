@@ -148,6 +148,25 @@ pub enum Node {
         name: Option<String>,
         id: String,
     },
+    /// A block body that references `{{ block.super }}`, paired with the
+    /// PARENT version it should resolve to (#2517).
+    ///
+    /// Not produced by the parser — `InheritanceChain::merge_blocks` builds it
+    /// while flattening the inheritance chain, because only the chain knows
+    /// what a block's parent version is. Nested for a chain deeper than two:
+    /// the parent body is itself a `BlockSuperScope` when IT references
+    /// `block.super`, which is what makes `three two one` come out in that
+    /// order.
+    ///
+    /// The wrapper is applied ONLY to a body that actually references
+    /// `block.super`. Django resolves it lazily through `BlockContext`, so a
+    /// body that never mentions it must not pay for — or observe the side
+    /// effects of — rendering its parent (a `{% cycle %}` in the parent body
+    /// would otherwise advance).
+    BlockSuperScope {
+        super_nodes: Vec<Node>,
+        nodes: Vec<Node>,
+    },
     /// `{% ifchanged [var …] %}…[{% else %}…]{% endifchanged %}` —
     /// Django's `IfChangedNode`.
     ///
@@ -594,6 +613,10 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
                 assign_if_marker_ids(body, prefix, counter);
                 assign_if_marker_ids(else_nodes, prefix, counter);
             }
+            Node::BlockSuperScope { super_nodes, nodes } => {
+                assign_if_marker_ids(super_nodes, prefix, counter);
+                assign_if_marker_ids(nodes, prefix, counter);
+            }
             Node::BlockCustomTag { children, .. } => {
                 assign_if_marker_ids(children, prefix, counter);
             }
@@ -750,6 +773,10 @@ fn resolve_cycle_nodes(
                 state.ifchanged_counter += 1;
                 resolve_cycle_nodes(body, prefix, state)?;
                 resolve_cycle_nodes(else_nodes, prefix, state)?;
+            }
+            Node::BlockSuperScope { super_nodes, nodes } => {
+                resolve_cycle_nodes(super_nodes, prefix, state)?;
+                resolve_cycle_nodes(nodes, prefix, state)?;
             }
             _ => {}
         }
@@ -1119,8 +1146,14 @@ fn parse_token_inner(
                             "'extends' takes one argument".to_string(),
                         ));
                     }
-                    // Remove quotes from template name
-                    let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    // The RAW operand, quotes included (#2517). Django's
+                    // `do_extends` keeps `parser.compile_filter(bits[1])`, so
+                    // an UNQUOTED token is a context lookup — `{% extends foo %}`
+                    // extends the template NAMED BY `foo`. Stripping the
+                    // quotes here erased that distinction and made every
+                    // variable form look for a file of its own name.
+                    // Consumers strip via `extends_target_is_literal`.
+                    let template = args[0].clone();
                     Ok(Some(Node::Extends(template)))
                 }
 
@@ -2850,6 +2883,10 @@ fn extract_from_nodes(
                 extract_from_nodes(nodes, variables);
                 extract_from_nodes(else_nodes, variables);
             }
+            Node::BlockSuperScope { super_nodes, nodes } => {
+                extract_from_nodes(super_nodes, variables);
+                extract_from_nodes(nodes, variables);
+            }
             Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => {
                 extract_from_nodes(nodes, variables);
             }
@@ -4499,7 +4536,7 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
             Node::Extends(template) => {
-                assert_eq!(template, "base.html");
+                assert_eq!(template, "\"base.html\"");
             }
             _ => panic!("Expected Extends node"),
         }
@@ -4511,7 +4548,8 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         match &nodes[0] {
             Node::Extends(template) => {
-                assert_eq!(template, "parent.html");
+                // The RAW token keeps the quotes the author wrote (#2517).
+                assert_eq!(template, "'parent.html'");
             }
             _ => panic!("Expected Extends node"),
         }
@@ -4524,7 +4562,7 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 2);
         match &nodes[0] {
-            Node::Extends(template) => assert_eq!(template, "base.html"),
+            Node::Extends(template) => assert_eq!(template, "\"base.html\""),
             _ => panic!("Expected Extends node"),
         }
         match &nodes[1] {
@@ -5538,6 +5576,7 @@ mod dep_tests {
             Node::InlineIf { .. } => "InlineIf",
             Node::AssignTag { .. } => "AssignTag",
             Node::IfChanged { .. } => "IfChanged",
+            Node::BlockSuperScope { .. } => "BlockSuperScope",
         }
     }
 
@@ -5658,6 +5697,10 @@ mod dep_tests {
                 id: String::new(),
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
                 else_nodes: vec![],
+            },
+            Node::BlockSuperScope {
+                super_nodes: vec![Node::Text("p".into())],
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::Now("Y-m-d".into()),
             Node::UnsupportedTag {

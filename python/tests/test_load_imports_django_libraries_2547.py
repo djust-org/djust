@@ -454,15 +454,17 @@ def test_a_library_with_one_raw_block_tag_still_bridges_its_other_entries(path):
         RENDER[path]("{% load lib2547_rawblock %}{% wrapblock2547 %}y{% endwrapblock2547 %}", CTX)
 
 
-def test_djangos_own_libraries_resolve_but_are_not_bridged():
-    """An UNBRIDGED Django library keeps parsing and registers nothing here.
+def test_djangos_own_libraries_are_all_bridged_now():
+    """Every Django template library is bridged as of #2517.
 
-    ``static`` was this test's subject until #2517 bridged it (for
-    ``{% get_static_prefix %}`` / ``{% get_media_prefix %}``); ``cache`` is
-    the remaining Django library whose row has not shipped.
+    ``static`` and ``cache`` were the last two this test asserted UNBRIDGED —
+    ``static`` for the prefix tags, ``cache`` for the tag itself — so the
+    assertion is inverted and kept: the day a new Django library appears
+    unbridged, the loop below names it.
     """
     assert plain_render("{% load cache %}x-2547", {}) == "x-2547"
-    assert not any(label == "cache" for label in template_libraries.owned_tags().values())
+    owned = template_libraries.owned_tags()
+    assert owned.get("cache") == "cache", "the cache library must be bridged"
 
 
 def test_static_library_is_bridged_but_the_native_static_tag_survives():

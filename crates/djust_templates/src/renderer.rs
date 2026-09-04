@@ -518,6 +518,9 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::IfChanged {
             nodes, else_nodes, ..
         } => nodes_contain_elements(nodes) || nodes_contain_elements(else_nodes),
+        Node::BlockSuperScope { super_nodes, nodes } => {
+            nodes_contain_elements(super_nodes) || nodes_contain_elements(nodes)
+        }
         // Conservative: tags that may or do produce HTML are treated
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
@@ -763,6 +766,19 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     }
     let idx = context.cycle_advance(id) % values.len();
     get_value_safe_ignoring_failures(values[idx].trim(), context)
+}
+
+/// Resolve an unquoted `{% extends %}` operand against the render context.
+///
+/// Lives here rather than in `inheritance` because the resolver and its
+/// `ignore_failures` policy belong to the renderer; `inheritance` has no other
+/// reason to reach into context resolution.
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Option<String> {
+    let (value, _) = get_value_safe_ignoring_failures(token, context).ok()?;
+    match value {
+        Value::Missing | Value::None => None,
+        other => Some(other.to_string()),
+    }
 }
 
 /// Is this template-name token a QUOTED literal rather than a variable?
@@ -3478,6 +3494,26 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // {% resetcycle [name] %} → `CycleNode.reset(context)`, "" (#2556).
             context.cycle_reset(id);
             Ok(String::new())
+        }
+
+        Node::BlockSuperScope { super_nodes, nodes } => {
+            // `{{ block.super }}` — Django's `BlockNode.super()` (#2517).
+            //
+            // The parent body renders FIRST, into a string bound as
+            // `block.super` for the child body. Django returns that string
+            // `mark_safe`'d (it is rendered template output, already escaped
+            // by whatever produced it), so the binding is marked safe here;
+            // escaping it again would double-escape every parent block.
+            let parent_html = render_nodes_with_loader(super_nodes, context, loader)?;
+            let mut scoped = context.clone();
+            let mut block_obj = indexmap::IndexMap::new();
+            block_obj.insert(
+                djust_core::ObjectKey::from("super"),
+                Value::String(parent_html),
+            );
+            scoped.set("block".to_string(), Value::Object(block_obj));
+            scoped.mark_safe("block.super".to_string());
+            render_nodes_with_loader(nodes, &scoped, loader)
         }
 
         Node::IfChanged {

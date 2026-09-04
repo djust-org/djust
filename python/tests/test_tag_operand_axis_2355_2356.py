@@ -30,7 +30,8 @@ four divergences, three of them silent:
    ``{{ x.grouper }}`` empty. #2333 fixed the SOURCE operand; ``by`` is a
    filter expression too (Django compiles ``<var>.<attr>``).
 
-``ifchanged`` and ``filter`` remain UNSUPPORTED by the Rust engine — every
+``ifchanged`` and ``filter`` were UNSUPPORTED when this module was written; both
+have since landed (#2556, #2517) and their cells now measure escaping. Every
 cell is the same refusal, which is fail-closed and pinned below so a future
 implementation cannot land unmeasured.
 
@@ -320,13 +321,15 @@ class TestRegroupByOperand:
 
 
 class TestTheUnsupportedTwo:
-    """`ifchanged` refuses, which is fail-closed and measured.
+    """`ifchanged`'s escaping, measured against Django.
 
-    The corpus builds its cells anyway: "no cell exists" and "every cell is
-    the same refusal" are different states, and only the second goes red the
-    day someone implements the tag and gets its escaping wrong. `filter` was
-    the second row here until #2556 implemented it; its escaping is now
-    measured against Django in `test_remaining_builtin_tags_2556.py`.
+    This class used to assert that `ifchanged` REFUSED — fail-closed, and
+    deliberately kept as a cell rather than a hole so that it would "go red
+    the day someone implements the tag and gets its escaping wrong". #2517
+    implemented it, so the cells now carry the successor assertion the old
+    docstring described: the hostile payload must escape exactly as Django
+    escapes it. (`filter` was the second row here until #2556; its escaping
+    moved to `test_remaining_builtin_tags_2556.py` for the same reason.)
     """
 
     @pytest.mark.parametrize(
@@ -334,13 +337,22 @@ class TestTheUnsupportedTwo:
         [
             "{% ifchanged p %}[{{ p }}]{% endifchanged %}",
             "{% ifchanged p|upper %}[{{ p }}]{% endifchanged %}",
+            # The compare-the-output form, whose body renders before the tag
+            # can decide — a second render would double-escape.
+            "{% ifchanged %}[{{ p }}]{% endifchanged %}",
+            # The else arm carries the payload too.
+            "{% ifchanged nope %}x{% else %}[{{ p }}]{% endifchanged %}",
         ],
     )
-    def test_the_rust_engine_refuses_rather_than_rendering_something_wrong(self, src) -> None:
-        with pytest.raises(Exception, match="Unsupported template tag"):
-            djust_render(src, {"p": XSS})
-        # Django renders it; the refusal is what the Python fallback catches.
-        assert django_render(src, {"p": XSS})
+    def test_escaping_matches_django(self, src) -> None:
+        assert djust_render(src, {"p": XSS}) == django_render(src, {"p": XSS})
+
+    def test_the_payload_is_actually_escaped(self) -> None:
+        """Non-vacuity: the differential above would also pass if BOTH engines
+        emitted the payload raw."""
+        out = djust_render("{% ifchanged p %}[{{ p }}]{% endifchanged %}", {"p": XSS})
+        assert "<script" not in out
+        assert "&lt;" in out
 
 
 # ===========================================================================

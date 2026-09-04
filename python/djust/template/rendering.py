@@ -833,13 +833,23 @@ class DjustTemplate:
         Returns:
             Rendered HTML as SafeString
         """
-        # Resolve template inheritance ({% extends %})
-        # This is a temporary workaround until Rust engine supports template loaders
-        try:
-            resolved_template = self._resolve_template_inheritance()
-        except Exception as e:
-            logger.warning("Template inheritance resolution failed: %s", e)
-            resolved_template = self.template_string
+        # `{% extends %}` is resolved by the RUST engine, through the loader
+        # passed below (#2517).
+        #
+        # It used to be flattened here first, by `_resolve_template_inheritance`
+        # — a regex/string-level merge written, in its own words, "until Rust
+        # template engine supports template loaders". That premise is long
+        # obsolete, and running both left two parallel implementations of one
+        # invariant (CLAUDE.md #1646): the string merge strips block wrappers,
+        # so `{{ block.super }}` resolved to nothing and a relative
+        # `{% extends "./x" %}` never reached the code that understands it.
+        # Measured: routing inheritance through the one Rust path moved
+        # Django's own suite by +12 cells and regressed none.
+        #
+        # `_resolve_template_inheritance` is retained and still directly
+        # tested (`python/djust/tests/test_template_inheritance_resolution.py`)
+        # — it is simply no longer on the render path.
+        resolved_template = self.template_string
 
         # Convert context to dict
         if context is None:

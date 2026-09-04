@@ -300,9 +300,9 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in tags — unsupported (0):** none
 
-**Library tags (`{% load … %}`) — supported (17):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `get_media_prefix`, `get_static_prefix`, `static`
+**Library tags (`{% load … %}`) — supported (18):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `get_media_prefix`, `get_static_prefix`, `static`; cache `cache`
 
-**Library tags — unsupported (1):** cache `cache`
+**Library tags — unsupported (0):** none
 
 A supported library tag is either a native Rust node or bridged on `{% load %}` (#2547 / #2558): the load imports Django's library and registers its tags with the Rust engine, so the tag is rendered by Django's own compile function and node — `{% blocktranslate %}` crosses its body as raw source; `{% language %}`, `{% localize %}`, `{% localtime %}` and `{% timezone %}` are native scope nodes the load arms.
 
@@ -323,8 +323,8 @@ Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each n
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **82.23%** of the Django template tests that reach the engine pass (861 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 87.23% (1270 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
+- **85.20%** of the Django template tests that reach the engine pass (892 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 89.35% (1301 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
 
 Two result kinds are counted separately because they are different work:
 

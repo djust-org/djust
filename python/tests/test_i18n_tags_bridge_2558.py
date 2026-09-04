@@ -501,9 +501,10 @@ def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
     The mechanism is the handler reading the CURRENT backend's value onto the
     synthetic `Context`'s stub template, so it is exercised at that seam: a
     stub backend through `rendering_with_backend`. The plain
-    `DjustTemplateBackend` does NOT carry `string_if_invalid` — that is the
-    engine-wide #2518 gap, asserted below so this row is not blamed for it and
-    so the day #2518 lands, this test says which half changed.
+    `DjustTemplateBackend` did NOT carry `string_if_invalid` — the engine-wide
+    #2518 gap, which has since landed; the assertion at the end of this test
+    was that gap's canary and is kept, flipped, as the pin that it stays
+    closed.
     """
 
     class _Backend:
@@ -523,8 +524,9 @@ def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
         # `""`, Django's own default.
         assert handler.render([], "{{ missing }}", dict(CTX))[0] == ""
 
-    # The engine-wide gap (#2518): the plain backend ignores the OPTION, so
-    # the same template renders `""` where Django renders `INVALID`.
+    # #2518 has since LANDED: the plain backend now honours the OPTION, so the
+    # two engines agree. This assertion was the gap's canary — it asserted
+    # `""` here and is kept, flipped, as the pin that the gap stays closed.
     options = {"string_if_invalid": "INVALID"}
     django_engine = DjangoTemplates(
         {"NAME": "django2558si", "DIRS": [], "APP_DIRS": False, "OPTIONS": options}
@@ -534,7 +536,7 @@ def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
     )
     source = L + "{% blocktranslate %}{{ missing }}{% endblocktranslate %}"
     assert str(django_engine.from_string(source).render(dict(CTX))) == "INVALID"
-    assert str(djust_engine.from_string(source).render(dict(CTX))) == ""
+    assert str(djust_engine.from_string(source).render(dict(CTX))) == "INVALID"
 
 
 def test_this_module_leaves_no_german_thread_locals_behind():

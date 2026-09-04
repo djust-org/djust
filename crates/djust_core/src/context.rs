@@ -264,12 +264,16 @@ pub struct Context {
     ///
     /// Empty (the default, and Django's) means "render nothing". A NON-empty
     /// value is returned for a failed lookup and the filter chain is SKIPPED,
-    /// which is Django's own control flow in `FilterExpression.resolve`:
+    /// which is Django's own control flow in `FilterExpression.resolve`
+    /// (fenced as `text`: an indented block in a doc comment is compiled as a
+    /// Rust doctest, and this is Python):
     ///
-    ///     if string_if_invalid:
-    ///         if "%s" in string_if_invalid:
-    ///             return string_if_invalid % self.var
-    ///         return string_if_invalid          # <- returns; no filters
+    /// ```text
+    /// if string_if_invalid:
+    ///     if "%s" in string_if_invalid:
+    ///         return string_if_invalid % self.var
+    ///     return string_if_invalid          # <- returns; no filters
+    /// ```
     ///
     /// That is why `{{ missing|default:"Foo" }}` renders `INVALID` and not
     /// `Foo` under a configured `string_if_invalid`. Carried on the render

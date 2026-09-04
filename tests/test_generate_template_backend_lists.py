@@ -171,7 +171,6 @@ _TAG_SOURCES = {
     "static": '{% load static %}{% static "a.css" %}',
     "autoescape": "{% autoescape on %}{{ x }}{% endautoescape %}",
     "filter": "{% filter upper %}x{% endfilter %}",
-    "ifchanged": "{% for i in xs %}{% ifchanged %}{{ i.k }}{% endifchanged %}{% endfor %}",
     "querystring": "{% querystring a=1 %}",
     "resetcycle": '{% for i in xs %}{% cycle "a" "b" %}{% resetcycle %}{% endfor %}',
     "blocktrans": "{% load i18n %}{% blocktrans %}x{% endblocktrans %}",
@@ -285,9 +284,11 @@ class TestExtractionMatchesTheRegistries:
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
         """Gate-off for the arm regex: a new arm in a copy of parser.rs is extracted.
 
-        `autoescape` has an arm since #2556 (v1.2.0-3) and `filter` since
-        #2596, so both are asserted PRESENT — and `ifchanged`, the one Django
-        built-in the parser still has no arm for, absent.
+        `autoescape` has an arm since #2556 (v1.2.0-3), `filter` since #2596
+        and `ifchanged` since #2517, so all three are asserted PRESENT — and
+        `cache`, the one Django tag the parser still has no arm for, absent.
+        (`cache` lives in a library rather than `defaulttags`, which is why it
+        is the last one standing.)
         """
         src = _PARSER_RS.read_text(encoding="utf-8")
         anchor = '                "if" => {'
@@ -300,7 +301,8 @@ class TestExtractionMatchesTheRegistries:
         assert "if" in names
         assert "autoescape" in names
         assert "filter" in names
-        assert "ifchanged" not in names
+        assert "ifchanged" in names
+        assert "cache" not in names
         assert "endif" not in names, "closers must be dropped"
         assert "endautoescape" not in names, "closers must be dropped"
         assert "endfilter" not in names, "closers must be dropped"
@@ -358,12 +360,19 @@ class TestCheckMode:
         # Mutate the unsupported-tags line itself — pick its first entry
         # rather than hard-coding a tag name, so the test keeps targeting
         # that line as tags graduate out of it (#2556 moved four, #2596 five,
-        # leaving one). Two shapes the assertion must not assume, both of
-        # which the one-entry list produced: there is no comma after the last
-        # entry, and the tag name is NOT unique in the file (`ifchanged` is
-        # also named in the ERROR-classes prose below). So the mutation is
-        # applied to the matched SPAN, by offset, not to a bare needle.
-        m = re.search(r"^(\*\*Built-in tags — unsupported \(\d+\):\*\* )`(\w+)`(, )?", text, re.M)
+        # #2517 the last built-in, and #2517 `cache`, the last library tag).
+        # EVERY unsupported list is now empty, so there is nothing left on one
+        # to mutate; the target moved to the SUPPORTED library line, which is
+        # generated from the same registries by the same code path and so
+        # exercises the check identically. Two shapes the assertion must not
+        # assume: there is no comma after a one-entry list's last entry, and
+        # the tag name is NOT unique in the file. So the mutation is applied
+        # to the matched SPAN, by offset, not to a bare needle.
+        m = re.search(
+            r"^(\*\*Library tags \(`\{% load … %\}`\) — supported \(\d+\):\*\* \w+ )`(\w+)`(, )?",
+            text,
+            re.M,
+        )
         assert m, "the unsupported line is the mutation target"
         first_tag = m.group(2)
         edited = tmp_path / "TEMPLATE_BACKEND.md"
@@ -496,12 +505,23 @@ class TestScoreboardParity:
     def test_every_scoreboard_django_tag_is_in_the_generated_unsupported_set(self, gen, report):
         board = gen.scoreboard_unsupported_tags(_SCOREBOARD)
         assert board, "the scoreboard regex found no `Unsupported template tag` lines"
-        # A tag the engine still refuses; `autoescape` left this set in #2556.
-        assert "ifchanged" in board
         assert "autoescape" not in report.all_unsupported_tags
         known = report.django_tags | report.library_tags
+        # Since #2517 the engine refuses NO Django tag — `cache` was the last
+        # one, and `autoescape` (#2556) and `filter` (#2596) left before it. So
+        # the only names the scoreboard still reports are ones Django has no
+        # tag for either (a template_tests fixture's `foobar`), and the
+        # property under test — every Django name on the board is listed
+        # unsupported — holds over an empty set.
+        #
+        # The set is asserted EMPTY rather than skipped: the day a Django
+        # release adds a tag djust does not implement, this line goes red and
+        # names it, which is the signal this test exists to give.
         django_names_on_the_board = board & known
-        assert django_names_on_the_board, "the scoreboard names no Django tag at all?"
+        assert django_names_on_the_board == set(), (
+            f"scoreboard reports Django tags as unsupported: {sorted(django_names_on_the_board)}"
+        )
+        assert board - known, "the board should still carry the non-Django fixture names"
         missing = django_names_on_the_board - report.all_unsupported_tags
         assert missing == set(), (
             "scoreboard says unsupported, generator says supported — a divergence is a finding"
@@ -558,16 +578,17 @@ class TestCrossCheckDetectsDisagreement:
     def test_synthetic_scoreboard_naming_a_supported_tag_is_a_finding(self, gen, report, tmp_path):
         board = tmp_path / "last-run.txt"
         board.write_text(
-            # `for` is supported and so IS a finding; `ifchanged` is the one
-            # Django built-in the engine still refuses, so naming it is not
-            # (`filter` played that control role until #2596 implemented it);
-            # `badtag` is no Django tag at all, so it is bucketed away.
+            # `for` is supported and so IS a finding; `badtag` is no Django
+            # tag at all, so it is bucketed away rather than reported. There is
+            # no longer a third case — a Django tag the engine refuses, which
+            # would be neither — because since #2517 the engine refuses none
+            # (`filter` played that control role until #2596, `cache` until
+            # #2517). The two remaining buckets are what the flag distinguishes.
             "ERROR template_tests.x.y | Unsupported template tag '{% for x in y %}'. Register\n"
-            "ERROR template_tests.x.z | Unsupported template tag '{% ifchanged %}'. Register\n"
             "ERROR template_tests.x.w | Unsupported template tag '{% badtag %}'. Register\n",
             encoding="utf-8",
         )
-        assert gen.scoreboard_unsupported_tags(board) == {"for", "ifchanged", "badtag"}
+        assert gen.scoreboard_unsupported_tags(board) == {"for", "badtag"}
         problems = gen.cross_check(report, board)
         assert len(problems) == 1
         assert "['for']" in problems[0]
@@ -691,10 +712,15 @@ class TestGeneratedTagBucketsMatchTheEngine:
         success — ``extends``/``include``/``url`` fail for other reasons."""
         for shape, rendered in rendered_tags.items():
             assert _direction_findings(report, rendered) == [], shape
-        # The buckets are not vacuous. `ifchanged` is the last Django
-        # built-in the engine still refuses; `filter` left this side in #2596
-        # and `autoescape` in #2556, so both are asserted SUPPORTED below.
-        assert _UNSUPPORTED_TAG_TEXT in rendered_tags["djust_only"]["ifchanged"]
+        # The buckets are not vacuous. The unsupported side is now EMPTY —
+        # #2517 implemented `cache`, the last Django tag the engine refused
+        # (`filter` left in #2596, `autoescape` in #2556) — so what is pinned
+        # here is that the generator agrees, and that the tags which left the
+        # unsupported side really do render.
+        assert report.all_unsupported_tags == set(), (
+            f"expected no unsupported Django tags, got {sorted(report.all_unsupported_tags)}"
+        )
+        assert rendered_tags["djust_only"]["cache"].startswith("OK")
         assert rendered_tags["djust_only"]["filter"] == "OK:X"
         assert rendered_tags["djust_only"]["autoescape"] == "OK:1234"
         assert rendered_tags["djust_only"]["with"] == "OK:1"
