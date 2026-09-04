@@ -213,9 +213,14 @@ class MyView(LiveView):
             type="success",
             dismissible=True
         )
-        # component_id is now e.g. "AlertComponent_1a2b3c4d" (auto-generated).
-        # The attribute-name-derived id is the separate `.id` property
-        # (class-prefixed, e.g. "alert-alert_success").
+        # component_id is auto-generated and LOWER-CASED — e.g.
+        # "alertcomponent_1a2b3c4d" (components/base.py:707).
+        #
+        # `.id` is NOT available here: it is defined on `Component`
+        # (components/base.py:282), not on `LiveComponent`, so
+        # `AlertComponent(...).id` raises AttributeError. On the render path
+        # the ATTRIBUTE NAME does become the component_id
+        # (mixins/components.py:131), which is what the handler below matches.
 
     @event_handler()
     def dismiss(self, component_id: str = None, **kwargs):

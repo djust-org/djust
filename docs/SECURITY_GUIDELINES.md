@@ -544,14 +544,16 @@ When building multi-tenant features, follow these principles to prevent cross-te
 ### Code Example: TenantScopedMixin
 
 ```python
-from djust.tenant.mixins import TenantScopedMixin
+from djust.tenants.mixin import TenantScopedMixin
 
 class TenantDocumentView(TenantScopedMixin, LiveView):
-    """Queries are automatically filtered by current tenant."""
+    """Scope every read through the mixin's helper."""
 
-    def get_queryset(self):
-        # TenantScopedMixin auto-filters: .filter(tenant=self.tenant)
-        return Document.objects.all()
+    def mount(self, request, **kwargs):
+        # `get_tenant_queryset()` applies `.filter(<tenant_field>=self.tenant)`.
+        # There is no `get_queryset()` hook on this mixin — overriding one does
+        # NOT get auto-filtered, which is why the scoping is an explicit call.
+        self._documents = self.get_tenant_queryset(Document)
 ```
 
 ### Cross-Tenant Prevention Checklist

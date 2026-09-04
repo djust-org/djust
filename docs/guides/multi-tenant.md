@@ -76,7 +76,7 @@ class Project(TenantScopedModel):
 class ProjectView(TenantScopedMixin, LiveView):
     def mount(self, request):
         # Automatically filters by tenant
-        self.projects = self.tenant_queryset(Project)
+        self.projects = self.get_tenant_queryset(Project)
 ```
 
 ## Tenant Resolution Strategies
@@ -359,13 +359,13 @@ class SaaSDashboard(TenantScopedMixin, LiveView):
     template_name = 'saas/dashboard.html'
 
     def mount(self, request):
-        self.users_count = self.tenant_queryset(User).count()
-        self.projects = self.tenant_queryset(Project).order_by('-created_at')[:5]
+        self.users_count = self.get_tenant_queryset(User).count()
+        self.projects = self.get_tenant_queryset(Project).order_by('-created_at')[:5]
         self.usage_stats = self.get_usage_stats()
 
     def get_usage_stats(self):
         return {
-            'storage_used': self.tenant_queryset(File).aggregate(
+            'storage_used': self.get_tenant_queryset(File).aggregate(
                 total=Sum('size')
             )['total'] or 0,
             'api_calls': self.get_api_usage(),
@@ -402,8 +402,8 @@ class TeamWorkspaceView(TenantScopedMixin, LiveView):
     template_name = 'workspace.html'
 
     def mount(self, request):
-        self.team_members = self.tenant_queryset(User)
-        self.recent_activity = self.tenant_queryset(Activity).order_by('-created_at')[:10]
+        self.team_members = self.get_tenant_queryset(User)
+        self.recent_activity = self.get_tenant_queryset(Activity).order_by('-created_at')[:10]
 
     def invite_member(self, email):
         if self.has_permission('invite_users'):
@@ -445,7 +445,7 @@ class ProjectView(LiveView):
 # After
 class ProjectView(TenantScopedMixin, LiveView):
     def mount(self, request):
-        self.projects = self.tenant_queryset(Project)
+        self.projects = self.get_tenant_queryset(Project)
 ```
 
 3. **Configure resolution:**
@@ -471,11 +471,17 @@ from djust.tenants.resolvers import TenantInfo
 
 class ProjectViewTest(TestCase):
     def test_view_with_tenant(self):
-        request = RequestFactory().get('/dashboard/')
-        request.tenant = TenantInfo(id='test', name='Test Org')
-
         view = DashboardView()
-        view.mount(request)
+        view.request = RequestFactory().get('/dashboard/')
+        # `TenantInfo`'s first argument is POSITIONAL `tenant_id` — there is no
+        # `id=` keyword (`tenants/resolvers.py:49`). Assign through the `tenant`
+        # property SETTER (`tenants/mixin.py:91`), which marks the tenant
+        # resolved so `_ensure_tenant()` will not overwrite it. Setting
+        # `request.tenant` does NOT work: `resolve_tenant()` runs the configured
+        # resolver and ignores it, and `mount()` never calls `_ensure_tenant()`
+        # (only `dispatch`/`get`/`post` do).
+        view.tenant = TenantInfo('test', name='Test Org')
+
         self.assertEqual(view.tenant.id, 'test')
 
     def test_middleware_sets_tenant(self):

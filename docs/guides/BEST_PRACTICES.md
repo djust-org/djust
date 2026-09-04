@@ -93,9 +93,15 @@ djust provides multiple layers of protection:
 
 **1. Runtime validation (`LIVEVIEW_CONFIG['strict_serialization']`, opt-in)**
 
-djust always *warns* about non-serializable state; it only *raises* when you
-opt in via `LIVEVIEW_CONFIG['strict_serialization'] = True` (the default is
-`False`; there is no DEBUG-mode branch):
+djust always *warns* about non-serializable state. It *raises* on two
+independent paths, so "warn-only" is not the whole story:
+
+* `LIVEVIEW_CONFIG['strict_serialization'] = True` — opt-in, default `False`
+  (`python/djust/serialization.py`).
+* `DEBUG = True` — `LiveView.get_state()` raises `TypeError` for a
+  non-serializable attribute and only logs when `DEBUG` is off
+  (`python/djust/live_view.py:1167-1171`). This one is NOT opt-in, which is
+  why a service instance on `self` surfaces in development as an exception:
 
 ```python
 class MyView(LiveView):
