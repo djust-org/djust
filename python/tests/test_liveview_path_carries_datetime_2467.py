@@ -208,8 +208,9 @@ class TestTheTwoPathsAgree:
         assert _liveview_render("{% if p %}T{% else %}F{% endif %}", zero) == "F"
         assert _liveview_render("{{ p|yesno }}", zero) == "no"
         assert _liveview_render('{{ p|default:"D" }}', zero) == "D"
-        assert _liveview_render("{{ p }}", dt.datetime(2020, 1, 1, 3, 4, 5)) == (
-            "2020-01-01 03:04:05"
+        value = dt.datetime(2020, 1, 1, 3, 4, 5)
+        assert _liveview_render("{{ p }}", value) == DjangoTemplate("{{ p }}").render(
+            DjangoContext({"p": value})
         )
 
 
@@ -375,21 +376,11 @@ class TestTheRustStateBackendRoundTrip:
 class TestWhatThisCosts:
     """The trade, stated rather than discovered later."""
 
-    def test_the_bare_render_spelling_moves(self) -> None:
-        """`{{ p }}` on the LiveView path renders `str(o)` now, where it
-        rendered the encoder's ISO string.
-
-        Both are already non-Django — Django LOCALIZES a bare datetime
-        (`Jan. 1, 2020, 3:04 a.m.`) — so this moves one non-Django spelling to
-        the other one djust already uses on its raw path, and buys agreement
-        between djust's own two paths. #2462 made the mirror-image trade in the
-        other direction and said so; this reverses that particular line.
-        """
+    def test_the_bare_render_uses_django_localization_on_both_paths(self) -> None:
         value = dt.datetime(2020, 1, 1, 3, 4, 5, tzinfo=UTC)
-        assert _liveview_render("{{ p }}", value) == "2020-01-01 03:04:05+00:00"
-        assert _liveview_render("{{ p }}", value) != "2020-01-01T03:04:05Z"
-        # ...and it is the RAW path's spelling, which is the point.
-        assert _liveview_render("{{ p }}", value) == _raw_render("{{ p }}", value)
+        expected = DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+        assert _liveview_render("{{ p }}", value) == expected
+        assert _raw_render("{{ p }}", value) == expected
 
     @override_settings(USE_TZ=True, TIME_ZONE="America/New_York")
     def test_the_date_filters_are_unaffected(self) -> None:

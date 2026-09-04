@@ -887,19 +887,13 @@ def test_localize_off_under_de_with_thousand_separator():
         assert liveview_render(source, CTX) == "1455/3.14|1.455/3,14"
 
 
-def test_localize_off_date_half_is_the_declared_residue():
-    """The DATE half of ``{% localize off %}`` (a bare ``{{ date }}``) is the
-    #2221 piece-3 residue: djust renders ISO on both sides of the scope."""
+def test_localize_off_date_uses_unlocalized_format_then_restores_locale():
     d = datetime.date(2011, 9, 1)
     source = LT + "{% localize off %}{{ d }}{% endlocalize %}|{{ d }}"
     with translation.override("de"):
-        # Django: `use_l10n=False` reads the RAW `DATE_FORMAT` setting
-        # (`N j, Y`); outside the block the `de` locale format applies.
-        # djust: a date crosses the wire as its ISO string (#2216), so a BARE
-        # `{{ d }}` is ISO on both sides of the scope — the #2221 piece-3
-        # residue, declared here rather than silently absent.
-        assert django_render(source, {"d": d}) == "Sept. 1, 2011|1. September 2011"
-        assert plain_render(source, {"d": d}) == "2011-09-01|2011-09-01"
+        expected = django_render(source, {"d": d})
+        assert expected == "Sept. 1, 2011|1. September 2011"
+        assert plain_render(source, {"d": d}) == expected
 
 
 # ---------------------------------------------------------------------------

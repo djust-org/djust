@@ -270,9 +270,9 @@ class TestTheDisplayPositionIsUnchanged:
     """
 
     @pytest.mark.parametrize("name", sorted(FAMILY))
-    def test_the_bare_render_is_still_pythons_str(self, name: str) -> None:
+    def test_the_bare_render_matches_django_localization(self, name: str) -> None:
         value = FAMILY[name]
-        assert djust_render("{{ p }}", {"p": value}) == str(value)
+        assert djust_render("{{ p }}", {"p": value}) == django_render("{{ p }}", {"p": value})
 
     @pytest.mark.parametrize("name", sorted(FAMILY))
     def test_the_string_filters_still_see_the_str(self, name: str) -> None:

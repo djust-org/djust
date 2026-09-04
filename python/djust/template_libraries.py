@@ -242,6 +242,20 @@ def raised_by_library(exc: BaseException) -> bool:
     return bool(getattr(exc, _RAISED_BY_LIBRARY, False))
 
 
+def localize_temporal(value: Any, use_l10n_override: Optional[bool] = None) -> str:
+    """Format a typed temporal render result using the active Context flags."""
+    from django.conf import settings
+    from django.utils.formats import localize
+    from django.utils.timezone import template_localtime
+
+    if not settings.configured:
+        return str(value)
+    use_l10n, use_tz = _current_format_flags.get()
+    if use_l10n_override is not None:
+        use_l10n = use_l10n_override
+    return str(localize(template_localtime(value, use_tz=use_tz), use_l10n=use_l10n))
+
+
 @contextlib.contextmanager
 def rendering_with_backend(
     backend: Any, *, use_l10n: Optional[bool] = None, use_tz: Optional[bool] = None

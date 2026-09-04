@@ -1809,8 +1809,28 @@ fn use_l10n_forced_off() -> bool {
 
 /// One function rather than the expression inlined twice, so the two
 /// variable-output sites cannot drift (#1646).
-fn localize_if_number(value: &Value) -> String {
-    match value {
+fn localize_if_number(value: &Value) -> Result<String> {
+    Ok(match value {
+        Value::Encoded(encoded) => {
+            use pyo3::prelude::*;
+            return Python::attach(|py| -> PyResult<String> {
+                let Some(value) = encoded.temporal_object(py)? else {
+                    return Ok(encoded.display.clone());
+                };
+                let use_l10n = USE_L10N_STACK.with(|stack| stack.borrow().last().copied());
+                match py.import("djust.template_libraries") {
+                    Ok(module) => module
+                        .call_method1("localize_temporal", (value, use_l10n))?
+                        .extract(),
+                    Err(error) if error.is_instance_of::<pyo3::exceptions::PyImportError>(py) => {
+                        Ok(encoded.display.clone())
+                    }
+                    Err(error) => Err(error),
+                }
+            })
+            .map_err(DjangoRustError::PythonException);
+        }
+
         // Decimal included: a German site must localize it the same way it
         // localizes a float — which it did before #2214, when a Decimal simply
         // WAS a float (#2221).
@@ -1877,7 +1897,7 @@ fn localize_if_number(value: &Value) -> String {
             }
         }
         _ => value.to_string(),
-    }
+    })
 }
 
 /// The token/value channels of the ASSIGN and BLOCK paths, unchanged by
@@ -2231,7 +2251,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
-            let text = localize_if_number(&value);
+            let text = localize_if_number(&value)?;
 
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
@@ -2354,7 +2374,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
-            let text = localize_if_number(&value);
+            let text = localize_if_number(&value)?;
             // Same shape as the Variable arm — see `filter_output_is_safe`.
             // Seeded, not OR-ed — see the Variable arm (#2274).
             let is_safe = runtime_safe;

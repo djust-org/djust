@@ -2521,6 +2521,32 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
         }
         Err(_) => {}
     }
+    if matches!(value, Value::Encoded(_)) || matches!(arg, Value::Encoded(_)) {
+        use pyo3::prelude::*;
+        let sum = Python::attach(|py| -> PyResult<Value> {
+            let temporal = |v: &Value| -> PyResult<bool> {
+                match v {
+                    Value::Encoded(e) => Ok(e.temporal_object(py)?.is_some()),
+                    _ => Ok(false),
+                }
+            };
+            if !temporal(value)? && !temporal(arg)? {
+                return Ok(Value::String(String::new()));
+            }
+            py.import("operator")?
+                .call_method1("add", (value.clone(), arg.clone()))?
+                .extract()
+        });
+        // Django's addition fallback catches all ordinary Python exceptions,
+        // including incompatible types and overflow at date.min/date.max.
+        return Python::attach(|py| match sum {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
+                Ok(Value::String(String::new()))
+            }
+            Err(error) => Err(DjangoRustError::PythonException(error)),
+        });
+    }
     Ok(match (value, arg) {
         (Value::String(lhs), Value::String(rhs)) => Value::String(format!("{lhs}{rhs}")),
         (Value::List(lhs), Value::List(rhs)) => {
@@ -4235,7 +4261,24 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
                     result.push_str(&format!("{}:{:02}", hour, dt.minute()));
                 }
             }
-            'c' => result.push_str(&iso_8601(&dt, stamped.time_only)),
+            'c' => {
+                let domain = match original {
+                    Value::Encoded(e) => e.cmp_key.map(|key| key.domain),
+                    _ => None,
+                };
+                if domain == Some(djust_core::CMP_DOMAIN_DATE) {
+                    result.push_str(&dt.format("%Y-%m-%d").to_string());
+                } else if domain == Some(djust_core::CMP_DOMAIN_DATETIME_NAIVE) {
+                    let pattern = if dt.timestamp_subsec_micros() == 0 {
+                        "%Y-%m-%dT%H:%M:%S"
+                    } else {
+                        "%Y-%m-%dT%H:%M:%S%.6f"
+                    };
+                    result.push_str(&dt.format(pattern).to_string());
+                } else {
+                    result.push_str(&iso_8601(&dt, stamped.time_only));
+                }
+            }
             'r' => {
                 // RFC 5322, e.g. `Sat, 22 Aug 2026 19:30:45 -0400`.
                 result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string());

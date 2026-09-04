@@ -696,26 +696,13 @@ class TestTheOtherEncodedSinksWereDecidedNotForgotten:
         ],
         ids=["datetime", "date", "time"],
     )
-    def test_the_localization_divergence_is_still_the_known_one(
+    def test_temporal_values_returned_by_filters_are_localized(
         self, value: object, name: str
     ) -> None:
-        """NOT fixed here, and pinned so it cannot be mistaken for part of this
-        class — nor silently "fixed" into it.
-
-        Django LOCALIZES a bare date/datetime/time (``Jan. 1, 2020, 3:04
-        a.m.``) where djust renders ``str(o)``. ``Value::Encoded``'s own doc
-        declares that out of scope: it is a RENDERING change, and moving it on
-        a value fix would be a second unrelated behaviour change. Every
-        template here reaches it the same way — Django's give-up path hands the
-        object back and the renderer localizes it.
-        """
+        """Bare output and filters returning their input share localization."""
         src = self.ECHOES_THE_VALUE[name]
         dj, du = both(src, {"p": value})
-        assert du != dj, f"{src} on {value!r} now AGREES — this pin needs revisiting"
-        # djust's side is the value's own `str()` in every one of them, which
-        # is what makes this ONE divergence reached three ways rather than
-        # three separate ones.
-        assert du == str(value), f"{src}: djust said {du!r}, not str(value)"
+        assert du == dj
 
     @pytest.mark.parametrize("name", sorted(ECHOES_THE_VALUE))
     def test_a_timedelta_is_not_localized_so_the_same_templates_agree(self, name: str) -> None:

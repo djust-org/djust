@@ -1977,15 +1977,19 @@ class TestTheHandleNeverReachesTheWire2539:
         )
         assert "self.clone().into_pyobject(py)" in borrowed
 
-    def test_a_handle_bearing_value_is_only_built_behind_the_flag(self) -> None:
-        """The carriage's own gate. `opaque_value` is the ONE producer, and it
-        attaches nothing unless `resolve_lazy()`."""
+    def test_opaque_handles_are_gated_and_temporal_handles_are_type_checked(self) -> None:
         core = self._core()
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
         assert "resolve_lazy()" in body
-        assert core.count("Some(std::sync::Arc::new(ob.clone().unbind()))") == 1, (
-            "a second producer of the handle appeared — the ONE producer is opaque_value"
-        )
+        producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
+        assert core.count(producer) == 2
+        assert producer in body
+        temporal = core.split("pub fn django_json_encoded", 1)[1].split(
+            "\nfn is_public_attr_name", 1
+        )[0]
+        assert producer in temporal
+        crossing = core.split("pub fn temporal_object", 1)[1].split("impl<'py> IntoPyObject", 1)[0]
+        assert "is_instance(&module.getattr(kind)?)" in crossing
 
     def test_the_teardown_clears_every_nested_handle(self) -> None:
         """P7. `RustLiveView.state` is the one place a `Value` outlives a

@@ -632,9 +632,9 @@ pub struct Encoded {
     ///
     /// **TRANSIENT.** It is not serialized (the `ENCODED_TAG` payload stays
     /// ELEVEN slots), not compared (`PartialEq for Encoded` does not mention
-    /// it), and not handed back to Python (`IntoPyObject` keeps mapping an
-    /// `Encoded` to [`Encoded::display`], so a handle can never reach a
-    /// custom-tag handler — #2509). A msgpack round trip therefore drops it
+    /// it). Temporal objects may cross back to Python after an isinstance
+    /// check; opaque objects still cross as display strings (#2509), so model
+    /// protection is unchanged. A msgpack round trip drops the handle
     /// for free, and `Deserialize` restores `None`.
     ///
     /// **Why it rides IN the value.** The raw-Python sidecar is keyed by
@@ -2157,12 +2157,9 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         attrs,
         items: None,
         eq_class: None,
-        // NEVER a handle, whatever the flag says (#2539). The datetime family
-        // carries its lookups by NAME in `attrs` (#2481) — measured from a C
-        // type with no `__dict__`, which no live walk would reach — and
-        // routing `{{ dt.year }}` through a handle instead would change the
-        // shape of a value the wire already carries correctly.
-        live: None,
+        // Preserve the immutable temporal object across Python filter calls.
+        // The wire still carries the measured fields; live handles are transient.
+        live: Some(std::sync::Arc::new(ob.clone().unbind())),
     })
 }
 
@@ -4051,6 +4048,82 @@ fn equality_class(ob: &Bound<'_, PyAny>) -> Option<EqClass> {
     None
 }
 
+impl Encoded {
+    /// Reconstitute Python's temporal types without interpreting repr as code.
+    pub fn temporal_object<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let kind = if self.attrs.contains_key("days") && self.attrs.contains_key("microseconds") {
+            "timedelta"
+        } else if self.attrs.contains_key("year") {
+            if self.attrs.contains_key("hour") {
+                "datetime"
+            } else {
+                "date"
+            }
+        } else if self.attrs.contains_key("hour") && self.attrs.contains_key("microsecond") {
+            "time"
+        } else {
+            return Ok(None);
+        };
+        // Restrict reconstruction to encoded temporal values, never arbitrary
+        // objects with similarly named attributes.
+        if !matches!(
+            self.type_name.as_str(),
+            "datetime.date" | "datetime.datetime" | "datetime.time" | "datetime.timedelta"
+        ) && self.live.is_none()
+        {
+            return Ok(None);
+        }
+        let module = py.import("datetime")?;
+        if let Some(live) = &self.live {
+            if live.bind(py).is_instance(&module.getattr(kind)?)? {
+                return Ok(Some(live.bind(py).clone()));
+            }
+            return Ok(None);
+        }
+        let cls = module.getattr(kind)?;
+        let result = if kind == "timedelta" {
+            let kwargs = pyo3::types::PyDict::new(py);
+            for name in ["days", "seconds", "microseconds"] {
+                if let Some(value) = self.attrs.get(name) {
+                    kwargs.set_item(name, value.clone().into_pyobject(py)?)?;
+                }
+            }
+            cls.call((), Some(&kwargs))?
+        } else {
+            let value = cls.call_method1("fromisoformat", (&self.display,))?;
+            let kwargs = pyo3::types::PyDict::new(py);
+            if let Some(fold) = self.attrs.get("fold") {
+                kwargs.set_item("fold", fold.clone().into_pyobject(py)?)?;
+            }
+            if let Some(zone) = self.attrs.get("tzinfo") {
+                let name = zone.to_string();
+                // Named zones retain transition rules across state persistence.
+                let tz = py.import("zoneinfo")?.getattr("ZoneInfo")?.call1((&name,));
+                if let Ok(tz) = tz {
+                    kwargs.set_item("tzinfo", tz)?;
+                } else {
+                    // fromisoformat retains the offset, but not its custom name.
+                    let offset = value.call_method0("utcoffset")?;
+                    if !offset.is_none() {
+                        if let Some(Value::String(name)) = self.attrs.get("tzname") {
+                            kwargs.set_item(
+                                "tzinfo",
+                                module.getattr("timezone")?.call1((offset, name))?,
+                            )?;
+                        }
+                    }
+                }
+            }
+            if kwargs.is_empty() {
+                value
+            } else {
+                value.call_method("replace", (), Some(&kwargs))?
+            }
+        };
+        Ok(Some(result))
+    }
+}
+
 /// Convert Value to Python object using the new IntoPyObject trait.
 impl<'py> IntoPyObject<'py> for Value {
     type Target = PyAny;
@@ -4066,37 +4139,14 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
-            // Back as the DISPLAY string, NOT as a rebuilt `datetime` — which
-            // is what a `datetime` in view state has always come back as, since
-            // it used to BE a `Value::String(str(o))` (#2448). Rebuilding the
-            // object is what the `Decimal` and `BigInt` arms below do, and it is
-            // right there because a type change would break `isinstance`
-            // downstream; here there is no type to change back TO, because
-            // there was none before this variant either. Widening the round
-            // trip is a separate behaviour change, filed as #2458 rather than folded in.
-            //
-            // A CARRIED COLLECTION takes the SAME arm, and that is a
-            // decision #2477/#2489 made and then unmade (#1079).
-            //
-            // It looked like the conservative choice to hand the items back:
-            // `normalize_django_value` used to turn a `set` into a sorted
-            // LIST, so a `set` in view state came back a list, and returning
-            // `"{'a'}"` hands a handler a STRING where it wrote a collection.
-            // Measured against `main`, that premise was false — a TRUTHY set
-            // was declined by the pre-#2477 gate and crossed as
-            // `Value::String(str(o))`, so the Rust state path already returned
-            // the display string, and the LiveView path never reached it
-            // because the normalizer flattened first.
-            //
-            // What the items DID change is the channel that hands a value to
-            // Python and renders the result: `{{ p|custom_filter }}` returning
-            // its input rendered `['a']` where Django renders `{'a'}`, and
-            // `{% regroup %}`'s operand the same way — twenty cells across the
-            // custom-filter axis, reported by the two-build differential.
-            // Widening this round trip is #2458's filed decision, not this
-            // fix's, and taking it here would have paid for a regression with
-            // a premise nobody had run.
-            Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            // Temporal values retain their Python type for arithmetic and
+            // custom filters. Only validated temporal handles cross here;
+            // opaque objects and carried collections keep their display-string
+            // contract, including the model-protection boundary (#2509).
+            Value::Encoded(e) => match e.temporal_object(py)? {
+                Some(value) => Ok(value),
+                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            },
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
             // reading it from the context see their type change under them.
