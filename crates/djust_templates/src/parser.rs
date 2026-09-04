@@ -1152,7 +1152,8 @@ fn parse_token_inner(
                     // extends the template NAMED BY `foo`. Stripping the
                     // quotes here erased that distinction and made every
                     // variable form look for a file of its own name.
-                    // Consumers strip via `extends_target_is_literal`.
+                    // Consumers strip the quotes themselves — see
+                    // `inheritance::resolve_extends_target`.
                     let template = args[0].clone();
                     Ok(Some(Node::Extends(template)))
                 }

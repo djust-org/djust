@@ -522,10 +522,15 @@ class TestScoreboardParity:
             f"scoreboard reports Django tags as unsupported: {sorted(django_names_on_the_board)}"
         )
         assert board - known, "the board should still carry the non-Django fixture names"
-        missing = django_names_on_the_board - report.all_unsupported_tags
-        assert missing == set(), (
-            "scoreboard says unsupported, generator says supported — a divergence is a finding"
-        )
+        # The old cross-check line lived here:
+        #     missing = django_names_on_the_board - report.all_unsupported_tags
+        #     assert missing == set()
+        # With the left operand now asserted empty it was `set() - X`, which is
+        # empty unconditionally — the named property ("scoreboard says
+        # unsupported, generator says supported") could no longer fail. It is
+        # removed rather than left as decoration; the EMPTY assertion above is
+        # the real property today, and `TestCrossCheckDetectsDisagreement`
+        # still exercises the divergence path against a synthetic board.
         # Bucketing rule: names that are neither Django built-in nor library
         # tags are Django's own test-suite custom libraries
         # (template_tests/templatetags/custom.py); they are not support-list

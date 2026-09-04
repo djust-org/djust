@@ -33,6 +33,7 @@ milestone canon gives: a table samples one axis and blinds you on the next).
 from __future__ import annotations
 
 import random
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -150,6 +151,39 @@ def test_no_double_render_of_the_body() -> None:
     _assert_agrees(source, {"v": [1, 2, 3]})
 
 
+#: Value classes the first randomized sweep never generated, each of which
+#: broke the comparison key (PR #2650 review, finding 4). Kept as a CURATED
+#: table beside the sweep because a random pool reaches them rarely: a
+#: `Decimal` must equal an equal int/float (Python's `numbers.Number` rule), an
+#: integer past 2**53 must not collapse onto its `f64` neighbour, NaN is never
+#: equal to itself, and `-0.0 == 0`.
+_NUMERIC_EQUALITY_CASES: list[list[Any]] = [
+    [Decimal("1"), 1, Decimal("1.0")],
+    [Decimal("1.10"), Decimal("1.1")],
+    [Decimal("2.50"), 2.5],
+    [Decimal("0"), 0, False, -0.0],
+    [9007199254740993, 9007199254740992],
+    [2**62 + 1, 2**62 + 3],
+    [float("nan"), float("nan")],
+    [float("inf"), float("inf"), float("-inf")],
+    [1, "1"],
+    [0, ""],
+]
+
+
+@pytest.mark.parametrize("values", _NUMERIC_EQUALITY_CASES, ids=range(len(_NUMERIC_EQUALITY_CASES)))
+def test_equality_key_matches_python_for_hard_numeric_cases(values: list[Any]) -> None:
+    """The key must agree with Python's `==`, not with a string spelling.
+
+    Gate-off: key `Decimal` by its text (the pre-fix behaviour) and case 0
+    fails; cast integers through `f64` and case 4 fails.
+    """
+    _assert_agrees(
+        "{% for x in v %}{% ifchanged x %}C{% else %}s{% endifchanged %}{% endfor %}",
+        {"v": values},
+    )
+
+
 @pytest.mark.parametrize("seed", range(60))
 def test_randomized_differential(seed: int) -> None:
     """Random value sequences over every form, against Django.
@@ -159,7 +193,23 @@ def test_randomized_differential(seed: int) -> None:
     any shape looking unusual.
     """
     rng = random.Random(seed)
-    pool: list[Any] = [0, 1, 2, "1", "a", "", None, True, False]
+    pool: list[Any] = [
+        0,
+        1,
+        2,
+        "1",
+        "a",
+        "",
+        None,
+        True,
+        False,
+        # A Decimal in the pool is what would have caught finding 4 originally.
+        Decimal("1"),
+        Decimal("1.0"),
+        Decimal("2.50"),
+        2.5,
+        1.0,
+    ]
     values = [rng.choice(pool) for _ in range(rng.randint(0, 8))]
     body, tag = rng.choice(
         [

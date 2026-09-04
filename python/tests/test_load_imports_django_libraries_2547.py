@@ -459,8 +459,8 @@ def test_djangos_own_libraries_are_all_bridged_now():
 
     ``static`` and ``cache`` were the last two this test asserted UNBRIDGED —
     ``static`` for the prefix tags, ``cache`` for the tag itself — so the
-    assertion is inverted and kept: the day a new Django library appears
-    unbridged, the loop below names it.
+    assertion is inverted and kept: the day a Django library stops being
+    bridged, the check below fails and names it.
     """
     assert plain_render("{% load cache %}x-2547", {}) == "x-2547"
     owned = template_libraries.owned_tags()

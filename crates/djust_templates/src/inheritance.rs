@@ -219,11 +219,27 @@ fn node_references_block_super(node: &Node) -> bool {
                 || nodes_reference_block_super(true_nodes)
                 || nodes_reference_block_super(false_nodes)
         }
+        // These two carry an EXPRESSION beside their body, and the expression
+        // is where the reference hides: `{% for c in block.super %}` and
+        // `{% with s=block.super %}` both rendered empty because only the body
+        // was inspected.
         Node::For {
-            nodes, empty_nodes, ..
-        } => nodes_reference_block_super(nodes) || nodes_reference_block_super(empty_nodes),
+            iterable,
+            nodes,
+            empty_nodes,
+            ..
+        } => {
+            iterable.contains("block.super")
+                || nodes_reference_block_super(nodes)
+                || nodes_reference_block_super(empty_nodes)
+        }
+        Node::With { assignments, nodes } => {
+            assignments
+                .iter()
+                .any(|(_, expr)| expr.contains("block.super"))
+                || nodes_reference_block_super(nodes)
+        }
         Node::Block { nodes, .. }
-        | Node::With { nodes, .. }
         | Node::Spaceless { nodes, .. }
         | Node::AutoEscape { nodes, .. }
         | Node::Filter { nodes, .. } => nodes_reference_block_super(nodes),
@@ -239,7 +255,28 @@ fn node_references_block_super(node: &Node) -> bool {
         | Node::LocalTime { children, .. }
         | Node::BlockCustomTag { children, .. }
         | Node::ReactComponent { children, .. } => nodes_reference_block_super(children),
-        _ => false,
+        // Nodes with NO expression field of their own: a reference cannot hide
+        // in them, so answering `false` is exact.
+        Node::Text(_) | Node::Comment | Node::Load(_) | Node::TemplateTag(_) => false,
+        // EVERYTHING ELSE FAILS SAFE.
+        //
+        // This walk decides whether to bind `block.super` at all, and a missed
+        // reference is not a slow render — it is SILENT CONTENT LOSS: the
+        // variable resolves to nothing and the parent's block disappears with
+        // no error. A whitelist that ends in `_ => false` fails OPEN in the
+        // destructive direction, and it did: `{% with s=block.super %}`,
+        // `{% for c in block.super %}` and `{% firstof block.super %}` each
+        // rendered empty, because the walk inspects `Variable` names and `If`
+        // conditions but not `With` values, `For` iterables or `firstof`
+        // operands — and every other expression-bearing tag is in the same
+        // class (filter arguments, `{% include … with %}`, `{% cycle %}`).
+        //
+        // Enumerating every expression field is the fix that keeps breaking
+        // (v1.0.0rc4 finding #1: a table samples one axis and blinds you on
+        // the next), so the default is inverted instead. The cost of a false
+        // positive is one wasted parent render; the cost of a false negative
+        // is deleted content.
+        _ => true,
     }
 }
 
@@ -503,6 +540,60 @@ type ParsedTemplateEntry = (SystemTime, Arc<[Node]>);
 static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<PathBuf, ParsedTemplateEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// Is this template name contained within its search directory?
+///
+/// djust's port of what Django's loaders get from `safe_join`
+/// (`django/template/loaders/filesystem.py` raises `SuspiciousFileOperation`
+/// and the loader skips that directory). Without it,
+/// `FilesystemTemplateLoader::find_template` did a bare `dir.join(name)`, so a
+/// name that walked out of the directory read whatever it landed on.
+///
+/// That was reachable only from a template author's literal until
+/// `{% include %}` / `{% extends %}` began resolving an unquoted operand from
+/// the render CONTEXT — at which point `{% include chosen %}` with a
+/// context-supplied `chosen` becomes an arbitrary-file read. Measured before
+/// this guard: `{% include t %}` with `t = "../../SECRET.txt"` rendered the
+/// file's contents; Django answers `TemplateDoesNotExist` for the same input.
+///
+/// The check is LEXICAL and runs before any filesystem call, so it cannot be
+/// defeated by a symlink race and does not require the path to exist. It
+/// refuses:
+///
+/// * an absolute name (`/etc/passwd`, or a Windows drive/UNC prefix), and
+/// * any name whose `..` segments pop above the search directory — at ANY
+///   position, not merely as a prefix. `a/../../x` is refused exactly like
+///   `../x`; the prefix-only reading is what left `construct_relative_path`'s
+///   refusals incomplete.
+///
+/// A `..` that stays inside is allowed, because it names a real template:
+/// `a/b/../c.html` is `a/c.html`.
+fn template_name_is_contained(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // Absolute in the host's terms (covers `/x`, and `C:\x` / `\\host\share`
+    // on Windows), or a bare leading separator.
+    if std::path::Path::new(name).is_absolute() || name.starts_with('/') || name.starts_with('\\') {
+        return false;
+    }
+    let mut depth: i32 = 0;
+    // Split on BOTH separators: a Windows-style name reaches this on any host
+    // (template names travel in template source, not from the local FS).
+    for part in name.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    true
+}
+
 /// Filesystem-based template loader for production use
 pub struct FilesystemTemplateLoader {
     template_dirs: Vec<std::path::PathBuf>,
@@ -517,8 +608,16 @@ impl FilesystemTemplateLoader {
     /// Find a template file by searching through template directories
     fn find_template(&self, name: &str) -> Result<std::path::PathBuf> {
         for dir in &self.template_dirs {
+            // Containment FIRST: a name that escapes the search directory is
+            // skipped, never joined. See `template_name_is_contained`.
+            if !template_name_is_contained(name) {
+                continue;
+            }
             let path = dir.join(name);
-            if path.exists() {
+            // `is_file`, not `exists`: a DIRECTORY named `x.html` satisfied
+            // `exists()` and then failed on read (the #1805 is_dir-parity
+            // class). Django's loaders stat for a file.
+            if path.is_file() {
                 return Ok(path);
             }
         }

@@ -82,8 +82,9 @@ a library every later parse sees its tags, ``{% load %}`` or not — the same
 divergence ``{% url %}`` and every ``register_tag_handler`` user already
 has. A MISSING library is still refused at parse time with Django's exact
 message. Django's own ``i18n`` / ``l10n`` / ``tz`` / ``static`` libraries ARE bridged
-here; every other ``django.templatetags.*`` (``cache``, …) still resolves and
-parses as #2547 left it — those rows have not shipped.
+here, and ``cache`` is bridged through a hand-written handler (its compile
+function consumes a body, which the generic bridge cannot serve). No Django
+template library is unbridged today.
 
 Engine paths (#1051)
 --------------------
@@ -116,9 +117,9 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
-#: Django's own libraries this row bridges (#2558, extended for ``static``).
-#: Every OTHER ``django.templatetags.*`` (``cache``, …) still resolves and
-#: parses exactly as #2547 left it — those rows have not shipped.
+#: Django's own libraries this row bridges (#2558, extended for ``static``
+#: and ``cache`` in #2517). ``cache`` reaches a bespoke handler rather than the
+#: generic tag bridge — see :data:`_BESPOKE_BLOCK_TAGS`.
 _DJANGO_LIBRARIES_BRIDGED = frozenset(
     {
         "django.templatetags.i18n",
@@ -978,9 +979,10 @@ class CacheTagHandler:
     Argument handling is Django's, token for token (``defaulttags`` has no say
     here; this is ``django/templatetags/cache.py``):
 
-    * ``tokens[1]`` — the expiry — is a FilterExpression, so it may be a
+    * ``args[0]`` — the expiry (Django's ``tokens[1]``; ``args`` excludes the
+      tag name) — is a FilterExpression, so it may be a
       variable, and ``None`` means "cache forever".
-    * ``tokens[2]`` — the fragment name — is used RAW. Django's own comment is
+    * ``args[1]`` — the fragment name (Django's ``tokens[2]``) — is used RAW. Django's own comment is
       "fragment_name can't be a variable", so it is not resolved here either.
     * the rest vary the key, and each IS resolved.
     * ``using="alias"`` selects the cache; an unknown alias is a
@@ -1001,7 +1003,12 @@ class CacheTagHandler:
             raise TemplateSyntaxError("'cache' tag requires at least 2 arguments.")
 
         cache_name = None
-        if tokens and tokens[-1].startswith("using="):
+        # Django's guard is `len(tokens) > 2`, NOT "is there a last token":
+        # `{% cache 10 using="default" %}` has only two operands, so the
+        # trailing token is the FRAGMENT NAME (literally `using="default"`),
+        # not a cache selector. Popping it there left one operand and raised
+        # `IndexError` — an unhandled crash on input Django renders.
+        if len(tokens) > 2 and tokens[-1].startswith("using="):
             cache_name = _literal_or_resolve(tokens.pop()[len("using=") :], context)
 
         expire_token, fragment_name, vary_tokens = tokens[0], tokens[1], tokens[2:]
@@ -1083,7 +1090,23 @@ def _literal_or_resolve(token: str, context: Dict[str, Any]) -> Any:
         resolved = expression.resolve(DjangoContext(dict(context)), ignore_failures=True)
     except VariableDoesNotExist:
         return _MISSING
-    return _MISSING if resolved is None and token != "None" else resolved
+    # `ignore_failures=True` answers `None` for BOTH "no such variable" and "the
+    # variable is None". Collapsing them made `{% cache t "f" %}` with `t=None`
+    # raise where Django caches forever, so the two are separated structurally:
+    # a name that does not resolve is a miss, a name that resolves to None is
+    # the value None.
+    if resolved is not None:
+        return resolved
+    if token == "None":
+        return None
+    try:
+        # Django's own miss signal, without the ignore_failures collapse.
+        expression.resolve(DjangoContext(dict(context)))
+    except VariableDoesNotExist:
+        return _MISSING
+    except Exception:
+        return _MISSING
+    return None
 
 
 def _bridge_bespoke_block_tag(label: str, name: str) -> None:

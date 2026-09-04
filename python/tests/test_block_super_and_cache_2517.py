@@ -41,6 +41,11 @@ _TEMPLATES = {
     "for_child.html": "{% extends 'for_parent.html' %}{% block c %}new{{ block.super }}{% endblock %}",
     # No `block.super`: the parent body must NOT be rendered for its side effects.
     "plain_child.html": "{% extends 'three.html' %}{% block c %}only{% endblock %}",
+    # The parent's block ADVANCES A CYCLE. A child that does not reference
+    # `block.super` must leave that cycle untouched, so the sibling after the
+    # block still emits the FIRST value.
+    "cycle_parent.html": ("{% block c %}{% cycle 'a' 'b' as k %}{% endblock %}|{% cycle k %}"),
+    "cycle_child.html": "{% extends 'cycle_parent.html' %}{% block c %}only{% endblock %}",
     # A variable target.
     "var_child.html": "{% extends parent_name %}{% block c %}var{% endblock %}",
 }
@@ -96,10 +101,52 @@ def test_block_super_is_recursive_not_just_one_level(engines) -> None:
 
 def test_a_body_without_block_super_does_not_render_its_parent(engines) -> None:
     """Django resolves `block.super` lazily through `BlockContext`, so a body
-    that never mentions it must not pay for — or observe the side effects of —
-    rendering the parent's version."""
-    django_out, djust_out = _both(engines, "plain_child.html", {})
-    assert djust_out == django_out == "only"
+    that never mentions it must not pay for — or OBSERVE THE SIDE EFFECTS of —
+    rendering the parent's version.
+
+    The assertion has to be on a side effect. Asserting the output is `"only"`
+    (the first version of this test) passes whether or not the parent ran: the
+    parent's render would go into a string that is then discarded. `{% cycle %}`
+    is the observable: it advances per render, so if the parent body ran its
+    cycle would be one step further along and the sibling below would emit the
+    SECOND value instead of the first.
+    """
+    django_out, djust_out = _both(engines, "cycle_child.html", {})
+    assert djust_out == django_out
+    # `a` — not `b` — proves the parent's `{% cycle %}` never advanced.
+    assert djust_out == "only|a"
+
+
+#: The spellings the detection whitelist missed (PR #2650 review, finding 3).
+#: Each rendered SILENTLY EMPTY, because the walk inspected `Variable` names
+#: and `If` conditions but not `With` values, `For` iterables or `firstof`
+#: operands — and its fallthrough was `_ => false`, so an undetected reference
+#: meant no binding at all rather than a wasted render.
+_BLOCK_SUPER_SPELLINGS = {
+    "plain": "[{{ block.super }}]",
+    "with": "{% with s=block.super %}[{{ s }}]{% endwith %}",
+    "for": "{% for ch in block.super %}{{ ch }}{% endfor %}",
+    "firstof": "[{% firstof block.super %}]",
+    "if": "{% if block.super %}[{{ block.super }}]{% endif %}",
+    "nested": "{% if 1 %}{% with s=block.super %}[{{ s }}]{% endwith %}{% endif %}",
+}
+
+
+@pytest.mark.parametrize(
+    "body", list(_BLOCK_SUPER_SPELLINGS.values()), ids=list(_BLOCK_SUPER_SPELLINGS)
+)
+def test_block_super_resolves_in_every_expression_position(engines, body: str) -> None:
+    """Gate-off: restore `_ => false` as the walker's fallthrough and the
+    `for`/`firstof` rows go empty; drop the `With`/`For` expression checks and
+    the `with`/`for` rows do."""
+    django_engine, djust_engine = engines
+    src = "{% extends 'three.html' %}{% block c %}" + body + "{% endblock %}"
+    django_out = str(django_engine.from_string(src).render({}))
+    djust_out = str(djust_engine.from_string(src).render({}))
+    assert djust_out == django_out
+    # Non-vacuity: the parent's text must actually be present, so a pair of
+    # empty strings cannot pass.
+    assert "three" in djust_out
 
 
 def test_extends_accepts_a_context_variable(engines) -> None:
@@ -164,9 +211,38 @@ class TestCacheTag:
         tpl = backend.from_string("{% load cache %}{% cache None k %}b{% endcache %}")
         assert str(tpl.render({})) == "b"
 
+    def test_using_with_only_two_operands_is_the_fragment_name(self, backend) -> None:
+        """Django guards the `using=` pop with `len(tokens) > 2`, so here the
+        trailing token IS the fragment name. Guarding with `if tokens` popped
+        it, left one operand, and raised `IndexError` — an unhandled crash on
+        input Django renders (PR #2650 review, finding 2)."""
+        src = '{% load cache %}{% cache 10 using="default" %}X{% endcache %}'
+        assert str(backend.from_string(src).render({})) == "X"
+
+    def test_an_expiry_that_resolves_to_none_caches_forever(self, backend) -> None:
+        """`ignore_failures=True` answers `None` for BOTH "no such variable"
+        and "the variable is None". Collapsing them made a legitimate `None`
+        raise where Django caches forever (finding 5, row 1)."""
+        src = "{% load cache %}{% cache t f_none %}Y{% endcache %}"
+        assert str(backend.from_string(src).render({"t": None})) == "Y"
+
     def test_matches_django(self, backend) -> None:
+        """Differential against Django — with DISTINCT fragment names.
+
+        The first version of this test rendered the SAME fragment name through
+        both engines into the same `LocMemCache`, so the second render was a
+        cache HIT on the first engine's stored value and the assertion compared
+        a string to itself. It could not fail: a wholly different Django output
+        would still have compared equal. Distinct names give each engine its
+        own key, so the comparison is of two real renders.
+        """
         django_engine = Engine(libraries={"cache": "django.templatetags.cache"})
-        src = "{% load cache %}{% cache 60 shared %}payload{% endcache %}"
-        assert str(backend.from_string(src).render({})) == django_engine.from_string(src).render(
-            DjangoContext({})
+        djust_out = str(
+            backend.from_string(
+                "{% load cache %}{% cache 60 frag_djust %}payload{% endcache %}"
+            ).render({})
         )
+        django_out = django_engine.from_string(
+            "{% load cache %}{% cache 60 frag_django %}payload{% endcache %}"
+        ).render(DjangoContext({}))
+        assert djust_out == django_out == "payload"

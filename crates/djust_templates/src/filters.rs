@@ -5682,13 +5682,17 @@ mod float_sink_set {
             ),
             ("djust_templates/src/floatformat.rs", "python_float_repr"),
             ("djust_templates/src/pprint.rs", "python_float_repr"),
-            // `{% ifchanged %}`'s comparison key (#2517). It is not a RENDER
-            // sink — the string is never emitted — but a float still has to
-            // be SPELLED to be compared, and it must be spelled the way
-            // Python spells it so two Python-equal floats produce one key.
-            // Registered here deliberately: the guard caught this arm's first
-            // version, which used Rust's `{}`.
-            ("djust_templates/src/renderer.rs", "python_float_repr"),
+            // `{% ifchanged %}`'s key was registered here while its
+            // `Value::Float` arm spelled the float inline. The arm now
+            // delegates to `renderer::numeric_key`, which is where the
+            // `python_float_repr` call lives — and which this scanner does not
+            // reach, because it walks `Value::Float(x) => …` arms specifically.
+            // Removed deliberately rather than left stale: an entry the scan
+            // cannot produce fails this test on every run and would be muted
+            // by the next person. `numeric_key` is covered instead by the
+            // Django differential in `python/tests/test_ifchanged_2517.py`,
+            // which compares its output against Python's `==` over ints,
+            // floats, Decimals and NaN.
             // `%d` / `%i` / `%u`'s argument rule (#2358): CPython truncates a
             // finite float toward zero and raises for a non-finite, which is
             // exactly `python_float_trunc_digits`. The `%e`/`%f`/`%g` arm in

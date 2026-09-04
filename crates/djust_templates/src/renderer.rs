@@ -808,22 +808,74 @@ fn is_quoted_literal(token: &str) -> bool {
 /// So: bools fold into the number bucket, integers and floats share one
 /// numeric spelling, and strings / none / containers each get a bucket no
 /// number can land in.
-fn ifchanged_key(value: &Value) -> String {
+fn ifchanged_key(value: &Value) -> Option<String> {
     match value {
         // `Missing` is a `VariableDoesNotExist` under `ignore_failures`,
         // which Django compares as `None`.
-        Value::Missing | Value::None => "n".to_string(),
+        Value::Missing | Value::None => Some("n".to_string()),
         // One numeric spelling for all three, through the APPROVED float
         // repr — Rust's `{}` is the #2258/#2270 defect (the float-sink guard
         // in `filters.rs` fails the build on a new `RUST_DISPLAY` sink, and
         // it caught this line's first version). It matters here and not only
         // as hygiene: two Python-equal floats must produce one key.
-        Value::Bool(b) => format!("#{}", python_float_repr(if *b { 1.0 } else { 0.0 })),
-        Value::Integer(i) => format!("#{}", python_float_repr(*i as f64)),
-        Value::Float(f) => format!("#{}", python_float_repr(*f)),
-        Value::String(s) => format!("s{s}"),
-        other => format!("o{other:?}"),
+        // Bools and integers are EXACT: `0 == False` and `1 == True` in
+        // Python, but `i64 as f64` silently loses precision past 2^53, which
+        // made two distinct snowflake-style ids compare equal. Integers keep
+        // their exact decimal spelling and bools map onto 0/1.
+        Value::Bool(b) => Some(format!("#{}", if *b { 1 } else { 0 })),
+        Value::Integer(i) => Some(format!("#{i}")),
+        Value::Float(f) => numeric_key(*f),
+        // A DECIMAL (and every other `numbers.Number` the sidecar encodes)
+        // arrives here as `Encoded` carrying its `EqClass`. Keying it by that
+        // real component is what makes `Decimal("1")`, `1` and `Decimal("1.0")`
+        // ONE value, as Python's `==` does — without it a `{% ifchanged
+        // item.price %}` over a `DecimalField`, the archetypal use of the tag,
+        // reported every row as changed. A COMPLEX number (non-zero `imag`)
+        // is not equal to any real, so it keeps its own key.
+        Value::Encoded(e) => match e.eq_class {
+            Some(EqClass::Number { real, imag: 0.0 }) => numeric_key(real),
+            Some(EqClass::Number { real, imag }) => Some(format!("#c{real}:{imag}")),
+            _ => Some(format!("o{value:?}")),
+        },
+        // A `Decimal` is a `numbers.Number`, so Python compares it BY VALUE
+        // against ints and floats: `Decimal("1") == 1 == Decimal("1.0")` and
+        // `Decimal("2.50") == 2.5` are all true. Keying it by its decimal TEXT
+        // made each spelling its own value, so `{% ifchanged item.price %}`
+        // over a `DecimalField` — the archetypal use of the tag — reported
+        // every row as changed. Parsed to the shared numeric key; an
+        // unparseable spelling (`NaN`, `Infinity`) falls back to the text.
+        Value::Decimal(text) => match text.parse::<f64>() {
+            Ok(f) => numeric_key(f),
+            Err(_) => Some(format!("d{text}")),
+        },
+        Value::String(s) => Some(format!("s{s}")),
+        other => Some(format!("o{other:?}")),
     }
+}
+
+/// The numeric half of [`ifchanged_key`]: one spelling per Python numeric
+/// value, or `None` for NaN.
+///
+/// An integral float shares the integer spelling because `1 == 1.0`, and
+/// `-0.0` normalises onto `0` because `-0.0 == 0`. Integers keep their EXACT
+/// decimal spelling rather than going through `f64` — past 2^53 that cast
+/// silently collapses distinct ids onto one key, which reported two different
+/// snowflake ids as unchanged.
+///
+/// NaN returns `None`: it is the one value Python says is never equal to
+/// itself, so no key can represent it and the caller treats it as always
+/// changed.
+fn numeric_key(f: f64) -> Option<String> {
+    if f.is_nan() {
+        return None;
+    }
+    if f == 0.0 {
+        return Some("#0".to_string());
+    }
+    if f.fract() == 0.0 && f.abs() < 9.007_199_254_740_992e15 {
+        return Some(format!("#{}", f as i64));
+    }
+    Some(format!("#{}", python_float_repr(f)))
 }
 
 /// The parsed filter specs of a `{% filter %}` block, back as the `f1|f2:arg`
@@ -3130,6 +3182,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // `render_context`, so a `{% cycle %}` in an `only`
                     // include advances the parent render's iterator (#2556).
                     fresh.share_cycle_state_from(context);
+                    // Same rule, same reason (#2517): Django's `context.new()`
+                    // keeps `render_context`, which is where `IfChangedNode`
+                    // stores its state too — so an `{% ifchanged %}` inside an
+                    // `only` include shares the parent render's frame exactly
+                    // as a `{% cycle %}` does. This call was written and never
+                    // made, which left the two halves of one rule disagreeing.
+                    fresh.share_ifchanged_state_from(context);
                     fresh
                 } else {
                     // Start with parent context
@@ -3542,9 +3601,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // and not an error. A type tag keeps `1` and `"1"` distinct,
                 // which bare formatting would collapse.
                 let mut parts = Vec::with_capacity(vars.len());
+                let mut incomparable = false;
                 for var in vars {
                     let (value, _) = get_value_safe_ignoring_failures(var.trim(), context)?;
-                    parts.push(ifchanged_key(&value));
+                    match ifchanged_key(&value) {
+                        Some(key) => parts.push(key),
+                        // NaN: never equal to itself, so no stored key may
+                        // match. Render the true branch and skip the store.
+                        None => incomparable = true,
+                    }
+                }
+                if incomparable {
+                    return render_nodes_with_loader(nodes, context, loader);
                 }
                 (parts.join("\u{1f}"), None)
             };
