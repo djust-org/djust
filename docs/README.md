@@ -59,7 +59,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Forms Implementation](website/guides/forms.md)** - Django Forms integration
 
 ### 🔄 State Management
-- **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Complete decorator reference (@cache, @loading, and the inert @debounce / @throttle / @optimistic — see #2656)
+- **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Complete decorator reference (@cache, @loading, @client_state, DraftModeMixin, and the inert @debounce / @throttle / @optimistic — see #2656)
 - **[Quick Start](state-management/STATE_MANAGEMENT_QUICKSTART.md)** - 5-minute guide to state management
 - **[Tutorial](state-management/STATE_MANAGEMENT_TUTORIAL.md)** - Step-by-step product search example
 - **[Patterns & Best Practices](state-management/STATE_MANAGEMENT_PATTERNS.md)** - Common patterns and anti-patterns

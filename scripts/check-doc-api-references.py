@@ -90,7 +90,18 @@ APP_PROVIDED = {
 
 PY_FENCE_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
 SELF_CALL_RE = re.compile(r"\bself\.([a-z_][a-z0-9_]*)\s*\(")
+# A doc's reference surface is a table in some files and a bullet list in
+# others. Round 3 of PR #2655 shipped a version matching only tables, which
+# left it blind to two of the three docs it registered — green against the
+# exact defect it was written to catch. Match both; COVERAGE_MIN below makes
+# a future blind spot fail loudly instead of passing.
 TABLE_ROW_RE = re.compile(r"^\|\s*`([a-z_][a-z0-9_]*)\s*\(", re.MULTILINE)
+BULLET_ROW_RE = re.compile(r"^\s*[-*]\s*`([a-z_][a-z0-9_]*)\s*\(", re.MULTILINE)
+
+# Every registered doc must yield at least this many checked references. A doc
+# whose reference surface uses a shape the patterns above do not match would
+# otherwise contribute zero findings and report OK.
+COVERAGE_MIN = 1
 # An example that defines its own helper is showing YOU how to write one; it is
 # not claiming the framework ships it.
 DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([a-z_][a-z0-9_]*)", re.MULTILINE)
@@ -130,10 +141,19 @@ def check_doc(rel_path: str, dotted_classes: tuple[str, ...]) -> list[str]:
             if name not in self_defined:
                 record(name, f"self.{name}(")
 
-    for name in TABLE_ROW_RE.findall(text):
-        record(name, f"`{name}(")
+    reference_hits = 0
+    for pattern in (TABLE_ROW_RE, BULLET_ROW_RE):
+        for name in pattern.findall(text):
+            reference_hits += 1
+            record(name, f"`{name}(")
 
     problems = []
+    if reference_hits < COVERAGE_MIN:
+        problems.append(
+            f"{rel_path}: no API references matched — this doc's reference surface "
+            f"uses a shape the checker cannot see, so it is NOT being checked. "
+            f"Add a pattern for it (see TABLE_ROW_RE / BULLET_ROW_RE)."
+        )
     for name, line_no in sorted(found.items(), key=lambda kv: kv[1]):
         if name in ALWAYS_ALLOWED or name in APP_PROVIDED or PLACEHOLDER_RE.match(name):
             continue
