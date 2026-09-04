@@ -85,7 +85,9 @@ inheriting the mixin is what turns the behaviour on.
 
 ### OfflineMixin
 
-Enhanced offline state management (extends PWAMixin):
+Enhanced offline state management. It does **not** subclass `PWAMixin` —
+combine them explicitly (`class V(OfflineMixin, PWAMixin, LiveView)`) if you
+want both.
 
 | Method | Description |
 |--------|-------------|
@@ -105,7 +107,10 @@ use the `storage` property directly.
 
 ### SyncMixin
 
-Automatic background synchronization (extends OfflineMixin):
+Automatic background synchronization. It does **not** subclass `OfflineMixin`,
+and it depends on `storage` / `sync_queue` being supplied by one — list it
+**after** `OfflineMixin` (`class V(SyncMixin, OfflineMixin, LiveView)`), or the
+properties raise `AttributeError`.
 
 | Method | Description |
 |--------|-------------|
@@ -201,20 +206,20 @@ class TodoView(OfflineMixin, LiveView):
     template_name = 'todos.html'
 
     def mount(self, request):
-        self.enable_offline()
-        self.todos = self.load_offline_state('todos', [])
+        self.todos = self.storage.get('todos', [])
 
     def add_todo(self, text):
-        todo = {'id': len(self.todos), 'text': text, 'done': False}
+        todo = self.create_offline('Todo', {'text': text, 'done': False})
         self.todos.append(todo)
-        self.save_offline_state('todos', self.todos)
+        self.storage.set('todos', self.todos)
         self.sync_when_online()
 
     def toggle_todo(self, todo_id):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
-        self.save_offline_state('todos', self.todos)
+                self.update_offline('Todo', todo_id, {'done': todo['done']})
+        self.storage.set('todos', self.todos)
         self.sync_when_online()
 ```
 

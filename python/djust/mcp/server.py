@@ -1374,8 +1374,6 @@ def create_server() -> "FastMCP":
         # Build imports
         imports = ["from djust import LiveView"]
         decorator_imports = ["event_handler"]
-        if "search" in feature_set:
-            decorator_imports.append("debounce")
         if "auth" in feature_set:
             decorator_imports.append("permission_required")
 

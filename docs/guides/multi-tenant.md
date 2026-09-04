@@ -97,75 +97,6 @@ DJUST_CONFIG = {
 }
 ```
 
-Extract tenant from URL path:
-
-```python
-# myapp.com/acme/dashboard → tenant_id: "acme"
-DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'path',   # first path segment
-}
-
-# URL patterns
-urlpatterns = [
-    path('<str:tenant_slug>/', include('app.urls')),
-]
-```
-
-Extract tenant from HTTP headers:
-
-```python
-# X-Tenant-ID: acme → tenant_id: "acme"
-DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'header',
-    'TENANT_HEADER': 'X-Tenant-ID',   # header name (this is the default)
-}
-```
-
-Extract tenant from session/JWT:
-
-```python
-DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'session',
-    'TENANT_SESSION_KEY': 'tenant_id',   # session key (default); falls back
-                                         # to a JWT claim / user attribute
-}
-```
-
-Implement custom tenant logic:
-
-```python
-def custom_tenant_resolver(request):
-    from djust.tenants.resolvers import TenantInfo
-
-    # Custom logic here
-    if request.user.is_authenticated:
-        tenant_id = request.user.organization.slug
-    else:
-        tenant_id = 'public'
-
-    return TenantInfo(
-        id=tenant_id,
-        name=request.user.organization.name if request.user.is_authenticated else 'Public',
-        settings={'theme': 'blue'}
-    )
-
-# settings.py
-DJUST_CONFIG = {
-    'TENANT_RESOLVER': 'custom',
-    'TENANT_CUSTOM_RESOLVER': 'myapp.tenants.resolve_tenant',  # dotted path to a callable
-}
-```
-
-Try multiple strategies with fallback:
-
-```python
-DJUST_CONFIG = {
-    # A LIST of registry names — tried in order, first hit wins
-    'TENANT_RESOLVER': ['header', 'subdomain', 'session'],
-    'TENANT_DEFAULT': 'public',
-}
-```
-
 ### Path Resolution
 
 Take the tenant from a URL path segment.
@@ -461,7 +392,7 @@ class SaaSDashboard(TenantScopedMixin, LiveView):
             'storage_used': self.get_tenant_queryset(File).aggregate(
                 total=Sum('size')
             )['total'] or 0,
-            'api_calls': self.get_api_usage(),
+            'api_calls': self.get_api_usage(),   # your own method
             'plan_limit': self.tenant.settings.get('plan_limit', 1000)
         }
 ```
@@ -499,13 +430,13 @@ class TeamWorkspaceView(TenantScopedMixin, LiveView):
         self.recent_activity = self.get_tenant_queryset(Activity).order_by('-created_at')[:10]
 
     def invite_member(self, email):
-        if self.has_permission('invite_users'):
+        if self.has_permission('invite_users'):   # your own method
             invite = TeamInvite.objects.create(
                 tenant_id=self.tenant.id,
                 email=email,
                 invited_by=self.request.user
             )
-            self.send_invitation_email(invite)
+            self.send_invitation_email(invite)   # your own method
 ```
 
 ## Migration Guide

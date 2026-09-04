@@ -873,7 +873,7 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@optimistic",
         "import": "from djust.decorators import optimistic",
-        "description": "Server-side marker only — the client-side optimistic update is NOT implemented; UI does not update instantly, server corrects if needed.",
+        "description": "Server-side marker only — the client-side optimistic update is NOT implemented; the UI does not update before the server responds.",
         "params": {},
         "usage": ["@optimistic\ndef toggle_todo(self, todo_id: int = 0, **kwargs):"],
     },

@@ -409,7 +409,7 @@ struct RustLiveView {
 }
 ```
 
-**Pattern 3: Client JavaScript — bundled ES modules (plus two unbundled strays)**
+**Pattern 3: Client JavaScript — bundled ES modules, plus ~10 unbundled files outside `src/`**
 
 The BUNDLED client is built from the ES modules under
 `python/djust/static/djust/src/` (e.g. debounce/throttle logic in

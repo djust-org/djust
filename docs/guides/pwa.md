@@ -55,8 +55,10 @@ class MyView(OfflineMixin, LiveView):
 > **`self.storage` is server-side.** It is an `OfflineStorage` instance
 > (`IndexedDBStorage` by default) whose backing store is a per-instance dict,
 > so it is EMPTY on every fresh request — a `mount()` read returns the default,
-> not what a previous request wrote. The durable copy lives in the browser;
-> the server object is the API surface, not the store.
+> not what a previous request wrote. `pwa/storage.py` describes it as a
+> server-side in-memory simulation for state tracking and testing — a write
+> is not transmitted to the browser by this object, so do not rely on it to
+> persist anything.
 >
 > `is_online()` also returns `True` unconditionally on the server
 > (`pwa/utils.py`), so an `else:` branch on it never runs in a view.
@@ -355,7 +357,7 @@ class ContactForm(OfflineMixin, LiveView):
     def submit_form(self):
         if not self.errors:
             if self.is_online():
-                self.send_to_server()
+                self.send_to_server()   # your own method
             else:
                 self.create_offline('ContactSubmission', self.form_data)
                 self.storage.set('last_message', 'Form saved. Will submit when online.')
