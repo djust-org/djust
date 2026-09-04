@@ -1299,9 +1299,11 @@ fn value_to_arg_string(v: &Value) -> String {
         // and the handler received the text `dict_items([…])` instead of the
         // rows. That is the #2042 collapse with a different placeholder — and
         // the compiler could not ask about it, because this match has a `_`.
-        Value::List(_) | Value::Tuple(_) | Value::Object(_) | Value::DictView { .. } => {
-            serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
-        }
+        Value::List(_)
+        | Value::Tuple(_)
+        | Value::NamedTuple { .. }
+        | Value::Object(_)
+        | Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
         _ => v.to_string(),
     }
 }
@@ -2581,7 +2583,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             };
 
             match iterable_value {
-                Value::List(items) | Value::Tuple(items) => {
+                Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
                         return render_nodes_with_loader(empty_nodes, context, loader);
@@ -2841,7 +2843,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                 ));
                             }
                             match &item {
-                                Value::List(tuple_items) | Value::Tuple(tuple_items) => {
+                                Value::List(tuple_items)
+                                | Value::Tuple(tuple_items)
+                                | Value::NamedTuple {
+                                    items: tuple_items, ..
+                                } => {
                                     // `zip(self.loopvars, item)`, and the arity
                                     // check above is what makes it total: the
                                     // two lengths are now equal by construction,
@@ -4479,7 +4485,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
             let needle = get_value_ignoring_failures(parts[0], context)?;
             let haystack = get_value_ignoring_failures(parts[1], context)?;
             let result: Result<bool> = match haystack {
-                Value::List(items) | Value::Tuple(items) => {
+                Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
                 }
                 // `'a' in d.keys()` / `1 in d.values()` / `('a', 1) in
@@ -5263,9 +5269,11 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // randomised differential in
         // `test_dict_iteration_and_sequence_equality_2334_2335.py` samples the
         // cross-type case explicitly.
-        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
-        }
+        (Value::List(a), Value::List(b))
+        | (
+            Value::Tuple(a) | Value::NamedTuple { items: a, .. },
+            Value::Tuple(b) | Value::NamedTuple { items: b, .. },
+        ) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y)),
         // Python compares dicts by key/value pairs, ORDER-INDEPENDENTLY:
         // `{"a": 1, "b": 2} == {"b": 2, "a": 1}` is true. `IndexMap`'s own
         // `PartialEq` agrees, but is spelled out here so the element
@@ -5661,7 +5669,11 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // 28,500 cells; no curated case here had the shape. Returning `None`
         // rather than 0 is what keeps that closed on the `>=` / `<=` side too,
         // where a 0 would have re-opened it as "equal" (#2338).
-        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+        (Value::List(a), Value::List(b))
+        | (
+            Value::Tuple(a) | Value::NamedTuple { items: a, .. },
+            Value::Tuple(b) | Value::NamedTuple { items: b, .. },
+        ) => {
             for (x, y) in a.iter().zip(b.iter()) {
                 if values_equal(x, y) {
                     continue;

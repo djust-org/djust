@@ -119,6 +119,11 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     //     today (it has no index arm below, and none of the carried names
     //     parses as an integer) and correct anyway, so the two cannot come
     //     apart if either set grows.
+    if let Value::NamedTuple { fields, items, .. } = current {
+        if let Some(index) = fields.iter().position(|field| field == part) {
+            return items.get(index);
+        }
+    }
     if let Value::Encoded(encoded) = current {
         if let Some(found) = encoded.attrs.get(part) {
             return Some(found);
@@ -130,7 +135,9 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     //     `ValueError` does.
     let index = part.parse::<usize>().ok()?;
     match current {
-        Value::List(items) | Value::Tuple(items) => items.get(index),
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            items.get(index)
+        }
         // A dict subscripted by an int. `ObjectKey` compares numerics BY
         // VALUE across `Int`/`Float`/`Bool`/`Decimal`/`BigInt` (#2339), which
         // is what makes `{{ d.1 }}` resolve against `{1.0: …}` and
@@ -800,7 +807,9 @@ impl Context {
     /// granularities, because both read this one set.
     pub fn items_are_safe(&self, key: &str) -> bool {
         let items = match self.get(key) {
-            Some(Value::List(items)) | Some(Value::Tuple(items)) => items,
+            Some(Value::List(items))
+            | Some(Value::Tuple(items))
+            | Some(Value::NamedTuple { items, .. }) => items,
             _ => return false,
         };
         if items.is_empty() {

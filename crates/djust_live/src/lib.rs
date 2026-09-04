@@ -1812,7 +1812,7 @@ fn clear_live_handles_in(value: &mut Value) {
                 }
             }
         }
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             for nested in items {
                 clear_live_handles_in(nested);
             }
@@ -2851,6 +2851,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         let mut vec = Vec::with_capacity(items.len());
         for item in items {
             vec.push(python_to_value(&item)?);
+        }
+        if let Ok(fields) = obj
+            .getattr("_fields")
+            .and_then(|f| f.extract::<Vec<String>>())
+        {
+            if fields.len() == vec.len() {
+                return Ok(Value::NamedTuple {
+                    name: obj.get_type().getattr("__name__")?.extract()?,
+                    fields,
+                    items: vec,
+                });
+            }
         }
         return Ok(Value::Tuple(vec));
     }

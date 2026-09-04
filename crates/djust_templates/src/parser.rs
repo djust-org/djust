@@ -1978,37 +1978,6 @@ fn parse_token_inner(
                         }))
                     } else if crate::registry::assign_handler_exists(tag_name) {
                         // Context-mutating assign tag (register_assign_tag_handler).
-                        //
-                        // `{% regroup %}` gets its own PARSE-time grammar
-                        // check here (#2580) rather than at the Python
-                        // handler: `RegroupTagHandler.render` degraded a
-                        // malformed call to a silent no-op merge, since
-                        // "the Rust parser has no such hook" (its own
-                        // comment) — no longer true. Django's `regroup`
-                        // (`defaulttags.py`) checks `len(bits) != 6`
-                        // (`bits` includes the tag name, so `args.len() !=
-                        // 5` here), `bits[2] != "by"` (`args[1]`), and
-                        // `bits[4] != "as"` (`args[3]`) — all at compile
-                        // time. Every other assign-tag handler keeps its
-                        // generic passthrough; this is `regroup`-specific.
-                        if tag_name == "regroup" {
-                            if args.len() != 5 {
-                                return Err(DjangoRustError::TemplateError(
-                                    "'regroup' tag takes five arguments".to_string(),
-                                ));
-                            }
-                            if args[1] != "by" {
-                                return Err(DjangoRustError::TemplateError(
-                                    "second argument to 'regroup' tag must be 'by'".to_string(),
-                                ));
-                            }
-                            if args[3] != "as" {
-                                return Err(DjangoRustError::TemplateError(
-                                    "next-to-last argument to 'regroup' tag must be 'as'"
-                                        .to_string(),
-                                ));
-                            }
-                        }
                         Ok(Some(Node::AssignTag {
                             name: tag_name.clone(),
                             args: args.clone(),

@@ -292,31 +292,23 @@ class TestABoolSourceReachesTheHandlerAsAValue:
     the fail-soft alone left ``bool`` at ``[0]``.
     """
 
-    def test_the_handler_receives_JSON_true_not_python_True(self) -> None:
-        """Measured at the boundary, by spying on the LIVE handler class.
+    def test_the_handler_receives_the_original_bool(self) -> None:
+        handler = _LIVE_HANDLERS["regroup"]
+        original = handler.render
+        seen = []
 
-        The live class off ``_registered_handlers`` rather than a module-level
-        import, for the reason ``test_regroup_string_source_2385_2394``
-        records: a reload in another test file re-registers a NEW class object
-        and a stale import patches something the engine never calls (#2427).
-        """
-        cls = type(_LIVE_HANDLERS["regroup"])
-        original = cls._decode_source.__func__
-        seen: list[str] = []
+        def spy(args, context, autoescape=True):
+            seen.append((args[0], context["p"]))
+            return original(args, context, autoescape)
 
-        def spy(kls, expr, context):
-            seen.append(expr)
-            return original(kls, expr, context)
-
-        cls._decode_source = classmethod(spy)
+        handler.render = spy
         try:
             for value in (True, False):
-                seen.clear()
-                with pytest.raises(Exception):  # noqa: B017, PT011 — it must refuse
+                with pytest.raises(TypeError):
                     _rust.render_template_with_dirs(REGROUP, {"p": value}, [], None)
-                assert seen == [str(value).lower()], (value, seen)
+            assert seen == [("p", True), ("p", False)]
         finally:
-            cls._decode_source = classmethod(original)
+            handler.render = original
 
     def test_the_encoder_has_a_Bool_arm(self) -> None:
         source = production(RENDERER)
@@ -382,23 +374,11 @@ class TestNoSecondIterabilityCheckWasAdded:
             "ValueOpError::NotIterable => format!(\"'{ty}' object is not iterable\"),"
         )
 
-    def test_the_handlers_only_iteration_sink_is_pythons_own_list(self) -> None:
-        """``_decode_source`` ends in a bare ``list(decoded)``.
-
-        Pinned as the LAST statement of the method: an ``if`` guard added above
-        it that re-answers "is this iterable?" without raising would restore
-        the divergence while leaving the ``list()`` in place.
-        """
+    def test_grouping_delegates_to_djangos_regroup_node(self) -> None:
         source = REGROUP_PY.read_text(encoding="utf-8")
-        start = source.index("    def _decode_source(")
-        body = source[start : source.index("\n    @staticmethod", start)]
-        statements = [
-            line.strip()
-            for line in body.splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        assert statements[-1] == "return list(decoded)", statements[-3:]
-        assert "if decoded is None:" in body, body
+        assert "DjangoBuiltinTagHandler" in source
+        assert "from django.template.defaulttags import regroup" in source
+        assert "json.loads" not in source
 
 
 class TestWhatThisDeliberatelyDoesNOTClose:
@@ -419,12 +399,11 @@ class TestWhatThisDeliberatelyDoesNOTClose:
     re-numbered; still not this issue's business.
     """
 
-    def test_a_bare_object_still_renders_where_django_refuses(self) -> None:
+    def test_a_bare_object_refuses_as_django_does(self) -> None:
         value = object()
         assert dj(REGROUP, {"p": value}) == "<<REFUSED>>"
-        # ONE group until #2477/#2489, zero now — the handler stopped being
-        # handed a string. Still a render where Django refuses.
-        assert du(REGROUP, {"p": value}) == "[0]"
+        # The typed bridge now preserves the original non-iterable object.
+        assert du(REGROUP, {"p": value}) == "<<REFUSED>>"
 
     def test_and_the_reason_is_no_longer_that_it_arrives_as_a_string(self) -> None:
         """The evidence, not the assertion — and it is the OTHER way round now.

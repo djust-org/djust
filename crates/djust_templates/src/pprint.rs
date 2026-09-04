@@ -104,6 +104,7 @@ fn flat_repr(value: &Value) -> String {
         // JSON and not `repr()`" — so #2472 put `repr()` on the variant and it
         // came into reach. Not a format string: see the `Encoded::repr` doc.
         Value::Encoded(e) => e.repr.clone(),
+        Value::NamedTuple { .. } => value.py_repr(),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(flat_repr).collect();
             format!("[{}]", parts.join(", "))

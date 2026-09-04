@@ -58,6 +58,7 @@ pub(crate) const BIGINT_TAG: &str = "__djust_bigint__";
 /// `(1.0,)` — verified. So the human-readable arm matching Django means staying
 /// an array, and only the binary arm needs the tag.
 pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
+const NAMED_TUPLE_TAG: &str = "__djust_named_tuple__";
 
 /// Marks a [`Value::Encoded`] in a BINARY encoding (#2448).
 ///
@@ -244,6 +245,12 @@ pub enum Value {
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
     Tuple(Vec<Value>),
+    /// A tuple with named fields, such as Django's GroupedResult.
+    NamedTuple {
+        name: String,
+        fields: Vec<String>,
+        items: Vec<Value>,
+    },
     /// Insertion-ordered, NOT a `HashMap`: Rust randomises `HashMap` iteration
     /// per process, so dict repr would differ between renders of the same
     /// template. Python dicts are insertion-ordered (#2203).
@@ -958,6 +965,25 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Decimal(a), Value::Decimal(b)) => a == b,
         (Value::BigInt(a), Value::BigInt(b)) => a == b,
+        (
+            Value::NamedTuple {
+                name: an,
+                fields: af,
+                items: a,
+            },
+            Value::NamedTuple {
+                name: bn,
+                fields: bf,
+                items: b,
+            },
+        ) => {
+            an == bn
+                && af == bf
+                && a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| values_structurally_equal(a, b))
+        }
         (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
             a.len() == b.len()
                 && a.iter()
@@ -1244,12 +1270,23 @@ impl Serialize for Value {
             Value::String(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(NAMED_TUPLE_TAG, &(name, fields, items))?;
+                m.end()
+            }
             Value::Tuple(items) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(TUPLE_TAG, items)?;
                 m.end()
             }
-            Value::List(items) | Value::Tuple(items) => items.serialize(serializer),
+            Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+                items.serialize(serializer)
+            }
             Value::Object(o) => o.serialize(serializer),
             // A view is built by `Context::dict_view` during a render and is
             // never handed to a serializer on any real path — but `Value` has
@@ -1273,7 +1310,8 @@ impl Serialize for Value {
 /// arms cannot drift apart on how a key is read (#1646). Two copies of this
 /// `match` is the shape where one arm gains a case and the other does not.
 fn decode_cmp_key(key: &Value) -> Option<CmpKey> {
-    let (Value::List(limbs) | Value::Tuple(limbs)) = key else {
+    let (Value::List(limbs) | Value::Tuple(limbs) | Value::NamedTuple { items: limbs, .. }) = key
+    else {
         return None;
     };
     match limbs.as_slice() {
@@ -1337,7 +1375,9 @@ fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
 /// fail in, and a class a future build invents must not be answered by this
 /// one.
 fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
-    let (Value::List(limbs) | Value::Tuple(limbs)) = map.get(EQ_CLASS_KEY)? else {
+    let (Value::List(limbs) | Value::Tuple(limbs) | Value::NamedTuple { items: limbs, .. }) =
+        map.get(EQ_CLASS_KEY)?
+    else {
         return None;
     };
     let [Value::Integer(tag), real, imag] = limbs.as_slice() else {
@@ -1491,6 +1531,26 @@ impl<'de> Deserialize<'de> for Value {
                     // The binary-format tuple tag (#2276). Same shape, but the
                     // payload is a LIST rather than a string — which is also
                     // what keeps it from colliding with the two above.
+                    if let Some(Value::List(parts)) = obj.get(NAMED_TUPLE_TAG) {
+                        if let [Value::String(name), Value::List(fields), Value::List(items)] =
+                            parts.as_slice()
+                        {
+                            let names: Option<Vec<String>> = fields
+                                .iter()
+                                .map(|f| match f {
+                                    Value::String(s) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if let Some(fields) = names.filter(|f| f.len() == items.len()) {
+                                return Ok(Value::NamedTuple {
+                                    name: name.clone(),
+                                    fields,
+                                    items: items.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
                         return Ok(Value::Tuple(items.clone()));
                     }
@@ -2588,7 +2648,7 @@ impl Value {
             // ALSO the display text of a perfectly ordinary truthy `str`.
             Value::Encoded(e) => e.truthy,
             Value::List(l) => !l.is_empty(),
-            Value::Tuple(t) => !t.is_empty(),
+            Value::Tuple(t) | Value::NamedTuple { items: t, .. } => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),
             // `bool({}.keys())` is False; `bool({'a': 1}.keys())` is True.
             Value::DictView { items, .. } => !items.is_empty(),
@@ -3031,7 +3091,10 @@ impl Value {
             // paths" — a prose invariant that had never been run. The gate-off
             // surfaced it as a surviving mutation and the test written to close
             // that gap failed on the first execution (CLAUDE.md #1867).
-            Value::List(_) | Value::Tuple(_) | Value::DictView { .. } => write!(f, "[List]"),
+            Value::List(_)
+            | Value::Tuple(_)
+            | Value::NamedTuple { .. }
+            | Value::DictView { .. } => write!(f, "[List]"),
             Value::Object(_) => match self.object_str() {
                 Some(s) => write!(f, "{s}"),
                 None => write!(f, "[Object]"),
@@ -3103,6 +3166,18 @@ impl fmt::Display for Value {
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
                 write!(f, "[{}]", inner.join(", "))
+            }
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .zip(items)
+                    .map(|(field, item)| format!("{field}={}", item.py_repr()))
+                    .collect();
+                write!(f, "{name}({})", inner.join(", "))
             }
             Value::Tuple(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -3285,6 +3360,18 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // BEFORE the sequence arm: a tuple extracts as `Vec<Value>` too, so
             // checking after it would render every tuple as a list (#2203).
             let items: Vec<Value> = tuple.extract()?;
+            if let Ok(fields) = ob
+                .getattr("_fields")
+                .and_then(|f| f.extract::<Vec<String>>())
+            {
+                if fields.len() == items.len() {
+                    return Ok(Value::NamedTuple {
+                        name: ob.get_type().getattr("__name__")?.extract()?,
+                        fields,
+                        items,
+                    });
+                }
+            }
             Ok(Value::Tuple(items))
         } else if let Ok(list) = ob.extract::<Vec<Value>>() {
             Ok(Value::List(list))
@@ -4042,6 +4129,21 @@ impl<'py> IntoPyObject<'py> for Value {
                     py_list.append(item.into_pyobject(py)?)?;
                 }
                 Ok(py_list.into_any())
+            }
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } => {
+                let cls = py
+                    .import("collections")?
+                    .getattr("namedtuple")?
+                    .call1((name, fields))?;
+                let args: Vec<_> = items
+                    .into_iter()
+                    .map(|v| v.into_pyobject(py))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                cls.call(pyo3::types::PyTuple::new(py, args)?, None)
             }
             Value::Tuple(t) => {
                 // Round-trips back to a real Python tuple, so a tuple that

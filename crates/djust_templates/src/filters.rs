@@ -227,7 +227,7 @@ pub struct InputSafety {
 pub fn python_len(value: &Value) -> Option<usize> {
     match value {
         Value::String(s) => Some(s.chars().count()),
-        Value::List(l) | Value::Tuple(l) => Some(l.len()),
+        Value::List(l) | Value::Tuple(l) | Value::NamedTuple { items: l, .. } => Some(l.len()),
         // `len(d.keys())` is the entry count, not the repr's length.
         Value::DictView { items, .. } => Some(items.len()),
         // A `dict` answers `len(dict)`; a serialized model RAISES, because
@@ -282,7 +282,9 @@ pub fn python_len(value: &Value) -> Option<usize> {
 pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
         Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
-        Value::List(items) | Value::Tuple(items) => Some(items.clone()),
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            Some(items.clone())
+        }
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
         Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
@@ -350,7 +352,7 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
 /// behaviour: making it `value.clone()` would silently discard `items`.
 fn rebuild_like(input: &Value, items: Vec<Value>) -> Value {
     match input {
-        Value::Tuple(_) => Value::Tuple(items),
+        Value::Tuple(_) | Value::NamedTuple { .. } => Value::Tuple(items),
         _ => Value::List(items),
     }
 }
@@ -1783,12 +1785,13 @@ fn apply_builtin_filter(
                 // every arg that resolves. The exhaustive filter sweep missed
                 // it for the same reason: `FILTER_ARGS` carries ONE arg per
                 // filter, which is a curated sample wearing a sweep's clothes.
-                Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
-                    match index {
-                        Some(n) => dictsort_by_index(items, n),
-                        None => dictsort_by_key(items, sort_key),
-                    }
-                }
+                Value::List(items)
+                | Value::Tuple(items)
+                | Value::NamedTuple { items, .. }
+                | Value::DictView { items, .. } => match index {
+                    Some(n) => dictsort_by_index(items, n),
+                    None => dictsort_by_key(items, sort_key),
+                },
                 // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };
@@ -2523,9 +2526,10 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
         (Value::List(lhs), Value::List(rhs)) => {
             Value::List(lhs.iter().chain(rhs).cloned().collect())
         }
-        (Value::Tuple(lhs), Value::Tuple(rhs)) => {
-            Value::Tuple(lhs.iter().chain(rhs).cloned().collect())
-        }
+        (
+            Value::Tuple(lhs) | Value::NamedTuple { items: lhs, .. },
+            Value::Tuple(rhs) | Value::NamedTuple { items: rhs, .. },
+        ) => Value::Tuple(lhs.iter().chain(rhs).cloned().collect()),
         _ => Value::String(String::new()),
     })
 }
@@ -2832,7 +2836,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
                 .collect();
             Ok(Value::String(picked))
         }
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let picked: Vec<Value> = slice_positions(start, stop, step, items.len())
                 .into_iter()
                 .map(|i| items[i].clone())
@@ -4417,7 +4421,9 @@ fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
     for item in items {
         let k = match item {
             Value::String(s) => s.chars().nth(n).map(|c| Value::String(c.to_string())),
-            Value::List(v) | Value::Tuple(v) => v.get(n).cloned(),
+            Value::List(v) | Value::Tuple(v) | Value::NamedTuple { items: v, .. } => {
+                v.get(n).cloned()
+            }
             // `itemgetter(0)` on a str-keyed dict is a `KeyError`, and on a
             // scalar a `TypeError`. Both are Django's raise.
             _ => None,
@@ -4897,7 +4903,7 @@ fn value_to_json(value: &Value) -> String {
         // for exactly the reason the `Decimal` arm above documents.
         Value::Encoded(e) => format!("\"{}\"", json_string_body(&e.json)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
             format!("[{}]", parts.join(", "))
         }
@@ -6055,9 +6061,10 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // `len(value)`, the `TypeError` arm. A dict VIEW answers `len()` in
         // Python, so it counts its entries like any other sized value
         // (#2340).
-        Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
-            return pick(l.len() == 1)
-        }
+        Value::List(l)
+        | Value::Tuple(l)
+        | Value::NamedTuple { items: l, .. }
+        | Value::DictView { items: l, .. } => return pick(l.len() == 1),
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
@@ -6212,7 +6219,7 @@ pub(crate) fn python_int_value(value: &Value) -> std::result::Result<String, Int
         // asks of every `Value::List` match (#2317/#2321): a bare `List` arm
         // here would refuse a list and silently accept the tuple `int()`
         // refuses just as loudly.
-        Value::List(_) | Value::Tuple(_) => Err(IntValueError::Type),
+        Value::List(_) | Value::Tuple(_) | Value::NamedTuple { .. } => Err(IntValueError::Type),
         Value::Float(f) if f.is_nan() => Err(IntValueError::Value),
         Value::Float(f) if f.is_infinite() => Err(IntValueError::Overflow),
         // A `Decimal` carries its EXACT digit string (#2214), so its two
@@ -6278,6 +6285,7 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::String(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
+        Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
                 match map.get(&djust_core::object_key::ObjectKey::Str("__model__".into())) {
@@ -6439,7 +6447,9 @@ pub(crate) fn python_getitem(
         }
         // `string_if_invalid` is `""`, and `""[0]` is an IndexError.
         Value::Missing => Ok(None),
-        Value::List(items) | Value::Tuple(items) => Ok(nth(items, index)),
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            Ok(nth(items, index))
+        }
         // A mapping does NOT index positionally: `d[0]` is a key lookup, and
         // an absent key is a `KeyError` rather than an `IndexError` — which is
         // why `first` and `last` disagree about the corpus's dicts. `ObjectKey`
@@ -6852,7 +6862,7 @@ fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String
         // there is no third variant to match.
         let sublist = if i + 1 < items.len() {
             match &items[i + 1] {
-                Value::List(sub) | Value::Tuple(sub) => {
+                Value::List(sub) | Value::Tuple(sub) | Value::NamedTuple { items: sub, .. } => {
                     i += 1; // consume the sublist
                     Some(sub)
                 }
@@ -7588,6 +7598,7 @@ mod tests {
             Value::String(_) => "String",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
+            Value::NamedTuple { .. } => "NamedTuple",
             Value::Object(_) => "Object",
             Value::DictView { .. } => "DictView",
             Value::Decimal(_) => "Decimal",

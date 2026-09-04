@@ -603,10 +603,15 @@ class TestEveryRebuildSiteIsAccountedFor:
         which is why there is no second test asserting the match half
         separately.
         """
+        lines = _production_lines()
         built = [
             (n, ln.strip())
-            for n, ln in _production_lines()
-            if "Value::List(" in ln and "| Value::Tuple(" not in ln
+            for index, (n, ln) in enumerate(lines)
+            if "Value::List(" in ln
+            and "| Value::Tuple(" not in ln
+            and not (
+                index + 1 < len(lines) and lines[index + 1][1].strip().startswith("| Value::Tuple(")
+            )
         ]
         found = Counter(ln for _, ln in built)
         expected = Counter(

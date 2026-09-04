@@ -75,6 +75,7 @@ fn variant(v: &Value) -> &'static str {
         Value::String(_) => "String",
         Value::List(_) => "List",
         Value::Tuple(_) => "Tuple",
+        Value::NamedTuple { .. } => "NamedTuple",
         Value::Object(_) => "Object",
         Value::Decimal(_) => "Decimal",
         Value::BigInt(_) => "BigInt",

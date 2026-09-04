@@ -51,7 +51,7 @@ def django_refuses(source: str, context: dict | None = None) -> str:
 
 
 def djust_refuses(source: str, context: dict | None = None) -> str:
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises((RuntimeError, TemplateSyntaxError)) as info:
         _rust.render_template(source, context or {})
     return str(info.value)
 

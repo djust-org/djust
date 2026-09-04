@@ -706,6 +706,19 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
                 hash_value(item, hasher);
             }
         }
+        Value::NamedTuple {
+            name,
+            fields,
+            items,
+        } => {
+            12u8.hash(hasher);
+            name.hash(hasher);
+            fields.hash(hasher);
+            items.len().hash(hasher);
+            for item in items {
+                hash_value(item, hasher);
+            }
+        }
         Value::List(items) => {
             5u8.hash(hasher);
             items.len().hash(hasher);
