@@ -928,12 +928,12 @@ class DjustTemplate:
         # This replaces {% url 'name' args %} with the actual resolved URL
         resolved_template = self._resolve_url_tags(resolved_template, context_dict)
 
-        # Serialize remaining context values (datetime, Decimal, UUID, FieldFile,
-        # Form/BoundField, etc.) so all values are JSON-compatible for Rust.
+        # Prepare file fields and forms for rendering while retaining the
+        # Python types accepted directly by the native render API.
         # Form/BoundField objects are converted to SafeString dicts here, so
         # safe-key detection must run AFTER serialization to catch nested paths
         # like "form.first_name".
-        context_dict = serialize_context(context_dict)
+        context_dict = serialize_context(context_dict, for_render=True)
 
         # Detect SafeString values after serialization so that SafeStrings
         # produced by Form/BoundField rendering (above) are included.
