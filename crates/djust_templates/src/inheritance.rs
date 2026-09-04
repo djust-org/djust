@@ -181,6 +181,12 @@ impl InheritanceChain {
                 filters: filters.clone(),
                 nodes: self.apply_block_overrides(nodes),
             },
+            // A parent body reached through block.super still uses the
+            // descendant's overrides for blocks nested inside that body.
+            Node::BlockSuperScope { super_nodes, nodes } => Node::BlockSuperScope {
+                super_nodes: self.apply_block_overrides(super_nodes),
+                nodes: self.apply_block_overrides(nodes),
+            },
             // Skip extends nodes in the output
             Node::Extends(_) => Node::Comment,
             // Everything else passes through unchanged

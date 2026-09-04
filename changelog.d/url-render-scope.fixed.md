@@ -1,0 +1,1 @@
+- **URL tags:** Resolve every URL through the shared render-time handler, preserving autoescape, conditional and block scope, verbatim/comment bodies, and assignment order instead of substituting URLs into template source. Nested blocks reached through `block.super` now retain descendant overrides, including their exceptions.

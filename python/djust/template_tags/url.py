@@ -61,12 +61,9 @@ class UrlTagHandler(TagHandler):
     {% if feature_url %}<a href="{{ feature_url }}">Feature</a>{% endif %}
     ```
 
-    Two render paths reach this handler's semantics (#2563). A ``{% url %}``
-    whose name is a quoted literal is resolved by the Python pre-pass in
-    ``djust.template.rendering.DjustTemplate._resolve_url_tags`` before the
-    Rust parse; every other shape (a variable name, a loop-variable
-    argument) reaches this handler through the Rust ``CustomTag`` channel.
-    Both raise ``NoReverseMatch`` and both honour ``as var``.
+    All rendering entry points resolve URLs through the Rust ``CustomTag``
+    channel at the node's position. Its emission sink applies the active
+    autoescape setting, and ``as var`` binds only subsequent sibling nodes.
     """
 
     #: ``render`` returns ``(output, bindings)`` (#2547) so the ``as var``
