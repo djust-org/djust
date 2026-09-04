@@ -154,11 +154,21 @@ class DashboardView(LiveView):
     metrics = state(default=[])
 
     def mount(self, request, **kwargs):
-        # Create the service ON-DEMAND and store it privately — URL-level
-        # kwargs are not an injection point: `live_session(prefix, patterns)`
-        # is a URL-pattern grouping helper (djust/routing.py), and the
-        # WebSocket path re-resolves the view by its dotted class path, so
-        # nothing is passed through from urls.py.
+        # Create the service ON-DEMAND and store it privately.
+        #
+        # URL kwargs DO reach `mount()` — `runtime.py:2117` does
+        # `mount_kwargs.update(self._resolve_url_kwargs(page_url))`, and
+        # `_resolve_url_kwargs` (`runtime.py:4096`) returns
+        # `dict(resolve(page_url).kwargs)`, which includes the extra-options
+        # dict of `path(route, view, {...})`. So URL-level injection is
+        # available. What is NOT available is passing a service through
+        # `live_session`: that is a URL-pattern grouping helper with the
+        # signature `live_session(prefix, patterns, session_name=None)`
+        # (`djust/routing.py:105`) and takes no view kwargs.
+        #
+        # A factory call here is still preferred for a live CLIENT: it keeps
+        # the object off `self` as public state, and a connection or client
+        # is not serializable.
         self._metrics_client = get_metrics_client()  # Private: not serialized
         if self._metrics_client:
             self.metrics = self._metrics_client.get_recent(limit=20)

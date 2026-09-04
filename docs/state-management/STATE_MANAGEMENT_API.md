@@ -118,8 +118,8 @@ def search(self, query: str = "", **kwargs):
 **Pattern 2: Instant Feedback with Server Validation**
 ```python
 @debounce(wait=0.5)     # Debounce server calls
-def update_value(self, value: str = "", **kwargs):
-    self.value = max(0, min(100, int(value)))  # Server validates range
+def update_value(self, value: int = 0, **kwargs):
+    self.value = max(0, min(100, value))  # Server validates range
 ```
 **Result**: server validates/corrects after 500ms (adding `@optimistic` does
 not change this today — the client-side instant update is not implemented)

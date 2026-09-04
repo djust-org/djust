@@ -169,7 +169,10 @@ urlpatterns = [
 uvicorn myproject.asgi:application
 ```
 
-No `--reload` needed: djust's hot-view-replacement (HVR) auto-enables when
+No `--reload` needed **if `watchdog` is installed** — it ships in the `dev`
+extra (`pip install 'djust[dev]'`), not in the base install, and djust's
+hot-view-replacement (HVR) silently stays off without it
+(`python/djust/__init__.py:292`). HVR auto-enables when
 `DEBUG=True` and reloads template/Python changes **without** dropping view
 state (a `--reload` process restart resets counters, form input, and scroll
 position).
