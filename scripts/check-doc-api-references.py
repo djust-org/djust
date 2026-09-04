@@ -98,18 +98,17 @@ APP_PROVIDED = {
 PY_FENCE_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
 SELF_CALL_RE = re.compile(r"\bself\.([a-z_][a-z0-9_]*)\s*\(")
 # A doc's reference surface is a table in some files and a bullet list in
-# others. Round 3 of PR #2655 shipped a version matching only tables, which
-# left it blind to two of the three docs it registered — green against the
-# exact defect it was written to catch. Match both; COVERAGE_MIN below makes
-# a future blind spot fail loudly instead of passing.
-# A reference LINE is a table row or a bullet; a single line may name several
-# methods (`- `a()` / `b()` — …`), so the line is matched first and then every
-# backticked call on it is read. Capturing only the first was a live blind spot
-# at docs/guides/multi-tenant.md:203.
-# The line must OPEN with a backticked call — that is what distinguishes a
+# others; round 3 matched only tables and was blind to two of the three docs
+# it registered. A reference LINE is either, and may name several methods
+# (`- `a()` / `b()` — …`), so the line is matched first and then EVERY
+# backticked call on it is read — capturing only the first was a live blind
+# spot at docs/guides/multi-tenant.md:203.
+#
+# The line must OPEN with a backticked call: that is what separates a
 # reference row from a prose bullet. Matching any bullet swept up sentences
 # like "- The queue is NOT processed … there is no `queue_sync()`", turning a
-# correction into a reported phantom.
+# correction into a reported phantom. COVERAGE_MIN below catches the case
+# where a doc uses some third shape neither pattern sees.
 REFERENCE_LINE_RE = re.compile(
     r"^(?:\|\s*|\s*[-*]\s+)`[a-z_][a-z0-9_]*\s*\(.*$", re.MULTILINE
 )
@@ -119,6 +118,9 @@ CALL_IN_LINE_RE = re.compile(r"`([a-z_][a-z0-9_]*)\s*\(")
 # whose reference surface uses a shape the patterns above do not match would
 # otherwise contribute zero findings and report OK.
 COVERAGE_MIN = 1
+
+# The pre-commit hook whose scope must stay in sync with DOC_CLASSES.
+HOOK_ID = "check-doc-api-references"
 # An example that defines its own helper is showing YOU how to write one; it is
 # not claiming the framework ships it.
 DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([a-z_][a-z0-9_]*)", re.MULTILINE)
@@ -195,20 +197,32 @@ def check_hook_scope_matches_registry() -> list[str]:
     config = REPO_ROOT / ".pre-commit-config.yaml"
     if not config.exists():
         return []
+
+    # Parsed with the YAML loader, not a line scan. A hand-rolled
+    # `re.match(r"files:\s*(\S.*)")` captures the raw scalar, so a QUOTED or
+    # folded value ('^docs/…') compiles into a pattern requiring a literal
+    # quote character, matches nothing, and the guard fails OPEN. This repo
+    # already single-quotes regexes on four `exclude:` lines, so that edit is
+    # a realistic one — and a guard retired by a restyle is the same
+    # misleading green it exists to prevent.
+    import yaml
+
+    try:
+        parsed = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        return [f".pre-commit-config.yaml: could not be parsed: {exc}"]
+
     hook_files_re = None
-    lines = config.read_text(encoding="utf-8").splitlines()
-    for i, line in enumerate(lines):
-        if "id: check-doc-api-references" in line:
-            for follow in lines[i : i + 12]:
-                m = re.match(r"\s*files:\s*(\S.*?)\s*$", follow)
-                if m:
-                    hook_files_re = m.group(1)
-                    break
-            break
+    for repo in parsed.get("repos", []) or []:
+        for hook in repo.get("hooks", []) or []:
+            if hook.get("id") == HOOK_ID:
+                hook_files_re = hook.get("files")
+                break
+
     if not hook_files_re:
         return [
-            ".pre-commit-config.yaml: hook `check-doc-api-references` has no "
-            "`files:` pattern — its scope cannot be reconciled with DOC_CLASSES."
+            f".pre-commit-config.yaml: hook `{HOOK_ID}` is missing or has no "
+            f"`files:` pattern — its scope cannot be reconciled with DOC_CLASSES."
         ]
 
     try:
