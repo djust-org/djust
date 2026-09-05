@@ -2167,12 +2167,18 @@ fn render_template(
 pub const SPAN_ATTR: &str = "djust_token_span";
 
 #[pyfunction]
-fn compile_template(template_source: String) -> PyResult<()> {
+#[pyo3(signature = (template_source, template_name=None))]
+fn compile_template(template_source: String, template_name: Option<String>) -> PyResult<()> {
     guard_panic("compile_template", move || {
         // Compilation must validate against the calling engine's current
         // libraries, even when another engine compiled the same source.
         // Rendering can reuse the result after this validation boundary.
         let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
+        if let Some(name) = template_name.as_deref() {
+            template
+                .validate_relative_references(name)
+                .map_err(span_aware_pyerr)?;
+        }
         TEMPLATE_CACHE.insert(template_source, Arc::new(template));
         Ok(())
     })

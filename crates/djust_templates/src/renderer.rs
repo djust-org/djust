@@ -3137,6 +3137,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
         }
 
         Node::Include {
+            origin,
             template,
             with_vars,
             only,
@@ -3150,43 +3151,81 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 // form reported `Template not found: template_name` — the
                 // variable's own spelling, which is the tell.
                 //
-                // A missing/blank resolution falls back to the raw token so
-                // the error still names what the author wrote rather than an
-                // empty string.
-                let resolved;
-                let name = if is_quoted_literal(template) {
-                    template.trim_matches(|c| c == '"' || c == '\'')
-                } else {
-                    let (value, _) = get_value_safe_ignoring_failures(template.trim(), context)?;
-                    resolved = match value {
-                        Value::Missing | Value::None => String::new(),
-                        other => other.to_string(),
-                    };
-                    if resolved.is_empty() {
-                        template.trim_matches(|c| c == '"' || c == '\'')
-                    } else {
-                        resolved.as_str()
+                let literal = is_quoted_literal(template)
+                    && !crate::filter_lexer::has_unquoted_pipe(template);
+                let (mut value, _) = get_value_safe(template.trim(), context)?;
+                if matches!(value, Value::Missing) {
+                    value =
+                        Value::String(context.string_if_invalid_for(template).unwrap_or_default());
+                }
+                let candidates: Vec<Value> = if !value.is_truthy() {
+                    Vec::new()
+                } else if let Value::String(name) | Value::SafeString(name) = &value {
+                    if literal {
+                        crate::inheritance::construct_relative_path_allow_recursion(
+                            origin.as_deref(),
+                            template,
+                            true,
+                        )?;
                     }
+                    vec![Value::String(
+                        crate::inheritance::construct_relative_path_allow_recursion(
+                            origin.as_deref(),
+                            name,
+                            literal,
+                        )?,
+                    )]
+                } else {
+                    // Django consumes iterable candidates once. Unlike a
+                    // string operand, their names are not made relative.
+                    filters::iter_values(&value).ok_or_else(|| {
+                        DjangoRustError::PythonException(pyo3::exceptions::PyTypeError::new_err(
+                            format!(
+                                "'{}' object is not iterable",
+                                filters::python_type_name(&value)
+                            ),
+                        ))
+                    })?
                 };
-                // Use the CACHED loader method (#2074) so the parsed body's
-                // allocation is STABLE across renders — the `{% for %}`
-                // loop-render cache (#2067) keys each For-node's body by
-                // identity (`nodes.as_ptr()`), which only matches across
-                // renders when the same allocation is reused. The
-                // `{% extends %}` inheritance path (`build_inheritance_chain`)
-                // intentionally stays on `load_template` — it needs an
-                // owned, mutable `Vec<Node>` for block-merging and has no
-                // per-render identity requirement.
-                let nodes = loader
-                    .load_template_cached(name)
-                    .map_err(|error| match error {
-                        DjangoRustError::TemplateNotFound { .. } => {
-                            DjangoRustError::TemplateSelectionNotFound {
-                                name: name.to_string(),
+                let empty_candidates = candidates.is_empty();
+                let mut not_found = Vec::new();
+                let mut selected = None;
+                for candidate in candidates {
+                    // Validate each candidate only when it is reached; a later
+                    // invalid name cannot invalidate an earlier successful one.
+                    let name = match candidate {
+                        Value::String(name) | Value::SafeString(name) => name,
+                        other => return Err(DjangoRustError::PythonException(
+                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                "join() argument must be str, bytes, or os.PathLike object, not '{}'",
+                                filters::python_type_name(&other),
+                            )),
+                        )),
+                    };
+                    // Preserve cached node allocation identity for loop caches.
+                    match loader.load_template_cached(&name) {
+                        Ok(nodes) => {
+                            selected = Some((name, nodes));
+                            break;
+                        }
+                        Err(DjangoRustError::TemplateNotFound { name, .. })
+                        | Err(DjangoRustError::TemplateSelectionNotFound { name }) => {
+                            if !not_found.contains(&name) {
+                                not_found.push(name);
                             }
                         }
-                        other => other,
+                        Err(error) => return Err(error),
+                    }
+                }
+                let (name, nodes) =
+                    selected.ok_or_else(|| DjangoRustError::TemplateSelectionNotFound {
+                        name: if empty_candidates {
+                            "No template names provided".to_string()
+                        } else {
+                            not_found.join(", ")
+                        },
                     })?;
+                let name = name.as_str();
 
                 // An included template may itself `{% extends %}` — Django
                 // renders it as a template in its own right, so its inheritance
@@ -6128,7 +6167,8 @@ mod tests {
 
     fn panicking_child() -> Node {
         Node::Include {
-            template: "boom.html".to_string(),
+            origin: None,
+            template: "\"boom.html\"".to_string(),
             with_vars: Vec::new(),
             only: false,
         }

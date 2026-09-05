@@ -68,6 +68,53 @@ macro_rules! child_lists {
     };
 }
 
+/// Validate literal path syntax before any branch can be selected.
+pub fn validate_relative_references(nodes: &[Node], name: &str) -> Result<()> {
+    for node in nodes {
+        let operand = match node {
+            Node::Extends(token) => Some((token, name, false)),
+            Node::Include {
+                template, origin, ..
+            } => Some((template, origin.as_deref().unwrap_or(name), true)),
+            _ => None,
+        };
+        if let Some((token, origin, allow_recursion)) = operand {
+            let bytes = token.as_bytes();
+            let quoted = bytes.len() >= 2
+                && matches!(bytes[0], b'\'' | b'"')
+                && bytes[0] == bytes[bytes.len() - 1];
+            if quoted && !crate::filter_lexer::has_unquoted_pipe(token) {
+                construct_relative_path_allow_recursion(Some(origin), token, allow_recursion)?;
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            validate_relative_references(children, name)?;
+        }
+    }
+    Ok(())
+}
+
+/// Prepare named nodes before rendering or storing them in a loader cache.
+pub fn set_include_origins(nodes: &mut [Node], name: &str) -> Result<()> {
+    validate_relative_references(nodes, name)?;
+    attach_include_origins(nodes, name);
+    Ok(())
+}
+
+/// Preserve the defining template name when includes move through inheritance.
+fn attach_include_origins(nodes: &mut [Node], name: &str) {
+    for node in nodes {
+        if let Node::Include { origin, .. } = node {
+            if origin.is_none() {
+                *origin = Some(name.to_string());
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            attach_include_origins(children, name);
+        }
+    }
+}
+
 /// Represents a template in the inheritance chain
 #[derive(Debug, Clone)]
 pub struct TemplateLayer {
@@ -391,7 +438,9 @@ pub trait TemplateLoader {
     /// the cache must be loader-instance-EXTERNAL (a process-global static,
     /// not a `&self` field).
     fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
-        Ok(std::sync::Arc::from(self.load_template(name)?))
+        let mut nodes = self.load_template(name)?;
+        set_include_origins(&mut nodes, name)?;
+        Ok(std::sync::Arc::from(nodes))
     }
 }
 
@@ -408,6 +457,14 @@ pub trait TemplateLoader {
 pub fn construct_relative_path(
     current_template_name: Option<&str>,
     relative_name: &str,
+) -> Result<String> {
+    construct_relative_path_allow_recursion(current_template_name, relative_name, false)
+}
+
+pub fn construct_relative_path_allow_recursion(
+    current_template_name: Option<&str>,
+    relative_name: &str,
+    allow_recursion: bool,
 ) -> Result<String> {
     let new_name = relative_name.trim_matches(|c| c == '"' || c == '\'');
     if !(new_name.starts_with("./") || new_name.starts_with("../")) {
@@ -451,12 +508,12 @@ pub fn construct_relative_path(
     let normalized = parts.join("/");
 
     if normalized.starts_with("../") || normalized == ".." {
-        return Err(DjangoRustError::TemplateError(format!(
+        return Err(DjangoRustError::TemplateSyntax(format!(
             "The relative path '{relative_name}' points outside the file hierarchy that template '{current}' is in."
         )));
     }
-    if normalized == current {
-        return Err(DjangoRustError::TemplateError(format!(
+    if !allow_recursion && normalized == current {
+        return Err(DjangoRustError::TemplateSyntax(format!(
             "The relative path '{relative_name}' was translated to template name '{normalized}', the same template in which the tag appears."
         )));
     }
@@ -492,7 +549,7 @@ fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<Stri
         && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
     Ok(if quoted {
-        trimmed[1..trimmed.len() - 1].to_string()
+        crate::parser::unescape_filter_arg_literal(trimmed).into_owned()
     } else {
         trimmed.to_string()
     })
@@ -512,6 +569,10 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     template_name: Option<&str>,
     context: Option<&Context>,
 ) -> Result<InheritanceChain> {
+    let mut nodes = nodes;
+    if let Some(name) = template_name {
+        set_include_origins(&mut nodes, name)?;
+    }
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
     let mut current_name: Option<String> = template_name.map(str::to_string);
@@ -519,10 +580,20 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     // Follow extends chain up to max_depth
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
-            let parent_name = parent_name.to_string(); // Clone to avoid borrow issues
-            let parent_name = resolve_extends_target(&parent_name, context)?;
-            let parent_name = construct_relative_path(current_name.as_deref(), &parent_name)?;
-            let parent_nodes = loader.load_template(&parent_name)?;
+            let parent_token = parent_name.to_string();
+            let parent_name = resolve_extends_target(&parent_token, context)?;
+            let quoted = parent_token.starts_with(['\'', '"'])
+                && !crate::filter_lexer::has_unquoted_pipe(&parent_token);
+            let parent_name = if quoted {
+                // Validate the raw token for Django's diagnostic spelling,
+                // then resolve the decoded literal for the filesystem lookup.
+                construct_relative_path(current_name.as_deref(), &parent_token)?;
+                construct_relative_path(current_name.as_deref(), &parent_name)?
+            } else {
+                parent_name
+            };
+            let mut parent_nodes = loader.load_template(&parent_name)?;
+            set_include_origins(&mut parent_nodes, &parent_name)?;
             chain.add_parent(parent_nodes);
             current_name = Some(parent_name);
             depth += 1;
@@ -696,7 +767,10 @@ impl TemplateLoader for FilesystemTemplateLoader {
         // in a single rendered output (Stage 11 finding on PR #1363,
         // #1358 Iter 1).
         let tokens = lexer::tokenize(&source)?;
-        parser::parse_with_source(&tokens, &source)
+        let mut nodes = parser::parse_with_source(&tokens, &source)
+            .map_err(DjangoRustError::into_template_syntax)?;
+        set_include_origins(&mut nodes, name)?;
+        Ok(nodes)
     }
 
     /// Cached counterpart of [`load_template`](Self::load_template) — see
@@ -746,7 +820,9 @@ impl TemplateLoader for FilesystemTemplateLoader {
             ))
         })?;
         let tokens = lexer::tokenize(&source)?;
-        let nodes_vec = parser::parse_with_source(&tokens, &source)?;
+        let mut nodes_vec = parser::parse_with_source(&tokens, &source)
+            .map_err(DjangoRustError::into_template_syntax)?;
+        set_include_origins(&mut nodes_vec, name)?;
         let arc: Arc<[Node]> = Arc::from(nodes_vec);
 
         let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {
@@ -878,8 +954,9 @@ fn node_to_template_string(node: &Node) -> String {
             template,
             with_vars,
             only,
+            ..
         } => {
-            let mut result = format!("{{% include \"{template}\"");
+            let mut result = format!("{{% include {template}");
             if !with_vars.is_empty() {
                 result.push_str(" with");
                 for (key, value) in with_vars {
@@ -1121,7 +1198,8 @@ pub fn resolve_template_inheritance(
     // own source — matches the production loader, see #1358 Iter 1
     // Stage 11 fix).
     let tokens = crate::lexer::tokenize(&source)?;
-    let nodes = crate::parser::parse_with_source(&tokens, &source)?;
+    let nodes = crate::parser::parse_with_source(&tokens, &source)
+        .map_err(DjangoRustError::into_template_syntax)?;
 
     // Check if template uses inheritance
     let uses_extends = nodes.iter().any(|node| matches!(node, Node::Extends(_)));

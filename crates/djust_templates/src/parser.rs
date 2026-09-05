@@ -47,6 +47,7 @@ pub enum Node {
     },
     Extends(String), // Parent template path
     Include {
+        origin: Option<String>,
         template: String,
         with_vars: Vec<(String, String)>, // key=value assignments
         only: bool,                       // if true, only pass with_vars, not parent context
@@ -1222,12 +1223,9 @@ fn parse_token_inner(
                             "'include' tag takes at least one argument: the name of the template to be included.".to_string(),
                         ));
                     }
-                    // Strip surrounding quotes (#1396) so Include.template
-                    // shares the unquoted-field contract with Extends/Static/Now.
-                    // Without this strip, the inheritance emitter
-                    // (`nodes_to_template_string`) double-wraps the value,
-                    // producing `{% include ""x.html"" %}` on round-trip.
-                    let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    // Keep the FilterExpression, including literal quotes, so
+                    // a quoted filename cannot resolve as a context variable.
+                    let template = args[0].to_string();
                     let mut with_vars = Vec::new();
                     let mut only = false;
                     let mut with_seen = false;
@@ -1308,6 +1306,7 @@ fn parse_token_inner(
                     }
 
                     Ok(Some(Node::Include {
+                        origin: None,
                         template,
                         with_vars,
                         only,
@@ -5778,7 +5777,8 @@ mod dep_tests {
             },
             Node::Extends("base.html".into()),
             Node::Include {
-                template: "x.html".into(),
+                origin: None,
+                template: "\"x.html\"".into(),
                 with_vars: vec![],
                 only: false,
             },

@@ -136,6 +136,11 @@ impl Template {
         })
     }
 
+    /// Validate syntax that depends on the defining template's origin.
+    pub fn validate_relative_references(&self, name: &str) -> Result<()> {
+        inheritance::validate_relative_references(&self.nodes, name)
+    }
+
     /// Per-node dependency sets (top-level context variable names each node uses).
     pub fn node_deps(&self) -> &[HashSet<String>] {
         &self.node_deps
@@ -289,7 +294,7 @@ impl Template {
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
         // the cache is keyed by source (#2517).
-        if !self.extends_is_relative() {
+        if template_name.is_none() && !self.extends_is_relative() {
             if let Some(resolved) = self.resolved.get() {
                 return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
             }
@@ -309,7 +314,13 @@ impl Template {
             let final_nodes = chain.apply_block_overrides(root_nodes);
             render_nodes_with_loader(&final_nodes, context, Some(loader))
         } else {
-            render_nodes_with_loader(&self.nodes, context, Some(loader))
+            if let Some(name) = template_name {
+                let mut nodes = self.nodes.clone();
+                inheritance::set_include_origins(&mut nodes, name)?;
+                render_nodes_with_loader(&nodes, context, Some(loader))
+            } else {
+                render_nodes_with_loader(&self.nodes, context, Some(loader))
+            }
         }
     }
 }

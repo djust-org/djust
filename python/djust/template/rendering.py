@@ -241,10 +241,13 @@ class DjustTemplate:
             # as library rendering does. Restore the enclosing engine on exit.
             with rendering_with_backend(self.backend):
                 _ensure_custom_filters_bridged()
-                compile_template(self.template_string)
+                compile_template(self.template_string, getattr(self.origin, "template_name", None))
         except Exception as e:
             message = str(e)
             user_raised = _is_user_raised(e)
+            syntax_message = getattr(e, "djust_template_syntax_message", None)
+            if not user_raised and isinstance(syntax_message, str):
+                message = syntax_message
             if not user_raised and not isinstance(e, RuntimeError):
                 raise
             # The parser does not know the loader's template name. Complete
@@ -909,6 +912,12 @@ class DjustTemplate:
             # catches it to try the next loader — so re-wrapping it lost both
             # behaviours. The engine reports the name it could not resolve;
             # that name is what Django puts on the exception.
+            syntax_message = getattr(e, "djust_template_syntax_message", None)
+            if isinstance(syntax_message, str):
+                from .exceptions import DjustTemplateSyntaxError
+
+                raise DjustTemplateSyntaxError(syntax_message, origin=self.origin) from e
+
             missing = _missing_template_exception(e, self.backend)
             if missing is not None:
                 raise missing from e

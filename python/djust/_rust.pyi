@@ -54,7 +54,7 @@ def render_template(
     """
     ...
 
-def compile_template(template_source: str) -> None:
+def compile_template(template_source: str, template_name: str | None = None) -> None:
     """
     Parse a template without rendering it (#2549).
 

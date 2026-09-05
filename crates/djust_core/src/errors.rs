@@ -11,6 +11,17 @@ pub enum DjangoRustError {
     #[error("Template error: {0}")]
     TemplateError(String),
 
+    /// A syntax refusal discovered while resolving a template's origin.
+    #[error("Template error: {0}")]
+    TemplateSyntax(String),
+
+    #[error("Template error: {message}")]
+    TemplateSyntaxAt {
+        message: String,
+        start: usize,
+        end: usize,
+    },
+
     /// A failed filesystem lookup, retaining the paths actually searched.
     /// Keep metadata separate from display text so Python need not parse paths.
     #[error("Template error: Template not found: {name}\nSearched in:\n{}", tried.iter().map(|path| format!("  - {path}")).collect::<Vec<_>>().join("\n"))]
@@ -104,6 +115,20 @@ impl From<DjangoRustError> for PyErr {
                 });
                 e
             }
+            DjangoRustError::TemplateSyntax(ref message)
+            | DjangoRustError::TemplateSyntaxAt { ref message, .. } => {
+                let error = PyRuntimeError::new_err(err.to_string());
+                let span = err.span();
+                Python::attach(|py| {
+                    let _ = error
+                        .value(py)
+                        .setattr("djust_template_syntax_message", message);
+                    if let Some(span) = span {
+                        let _ = error.value(py).setattr("djust_token_span", span);
+                    }
+                });
+                error
+            }
             DjangoRustError::TemplateNotFound {
                 ref name,
                 ref tried,
@@ -130,10 +155,28 @@ impl From<DjangoRustError> for PyErr {
 }
 
 impl DjangoRustError {
+    /// Classify parser failures at a loader boundary without changing user exceptions.
+    pub fn into_template_syntax(self) -> Self {
+        match self {
+            Self::TemplateError(message) => Self::TemplateSyntax(message),
+            Self::TemplateErrorAt {
+                message,
+                start,
+                end,
+            } => Self::TemplateSyntaxAt {
+                message,
+                start,
+                end,
+            },
+            other => other,
+        }
+    }
+
     /// The byte span of the offending token, when this error knows one (#2557).
     pub fn span(&self) -> Option<(usize, usize)> {
         match self {
-            DjangoRustError::TemplateErrorAt { start, end, .. } => Some((*start, *end)),
+            DjangoRustError::TemplateErrorAt { start, end, .. }
+            | DjangoRustError::TemplateSyntaxAt { start, end, .. } => Some((*start, *end)),
             _ => None,
         }
     }
