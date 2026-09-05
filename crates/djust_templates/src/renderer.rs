@@ -2042,14 +2042,21 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     // subsequent siblings via this optional cloned context.
     let mut mutated: Option<Context> = None;
 
+    let mut context_may_have_changed = false;
     for (i, node) in nodes.iter().enumerate() {
         let active_ctx: &Context = match &mutated {
             Some(c) => c,
             None => context,
         };
 
+        // Wildcard nodes may bind names used by later siblings, including
+        // through nested control flow or custom tags. Their effects cannot
+        // be inferred from the caller's changed input keys. Re-evaluate
+        // following dynamic nodes; literal text remains reusable.
+        context_may_have_changed |= node_deps.get(i).is_none_or(|deps| deps.contains("*"));
         let needs_render = if let Some(deps) = node_deps.get(i) {
-            deps.contains("*")
+            (context_may_have_changed && !deps.is_empty())
+                || deps.contains("*")
                 || i >= node_html_cache.len()
                 || deps.iter().any(|dep| changed_keys.contains(dep))
         } else {
