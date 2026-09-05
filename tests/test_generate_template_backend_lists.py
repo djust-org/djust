@@ -255,6 +255,44 @@ def _filter_sources(names: set[str], *, load: bool = True) -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 
 
+class TestHandWrittenCopiesAgreeWithTheEngine:
+    """#2540: the two hand-written copies of the engine's support sets that
+    live in the installed package (where the generator's Rust-source readers
+    are unavailable) are pinned EQUAL to what the generator derives. Set
+    equality, not a floor (#1125): an entry added to one side without the
+    other fails and names the difference."""
+
+    def test_system_check_unsupported_tag_set_equals_the_generated_one(self, report):
+        from djust.checks import templates as templates_checks
+
+        assert templates_checks._UNSUPPORTED_TAGS == report.all_unsupported_tags, (
+            f"python/djust/checks/templates.py:_UNSUPPORTED_TAGS drifted from the engine: "
+            f"check-only={sorted(templates_checks._UNSUPPORTED_TAGS - report.all_unsupported_tags)} "
+            f"engine-only={sorted(report.all_unsupported_tags - templates_checks._UNSUPPORTED_TAGS)}"
+        )
+
+    def test_system_check_regex_flags_exactly_the_unsupported_set(self, report):
+        from djust.checks import templates as templates_checks
+
+        for name in sorted(report.djust_tags):
+            assert templates_checks._UNSUPPORTED_TAGS_RE.search("{%% %s x %%}" % name) is None, (
+                f"T011 would flag the supported tag {name!r}"
+            )
+        for name in sorted(report.all_unsupported_tags):
+            assert templates_checks._UNSUPPORTED_TAGS_RE.search("{%% %s x %%}" % name), (
+                f"T011 would miss the unsupported tag {name!r}"
+            )
+
+    def test_builtin_filter_skip_list_equals_the_arity_table(self, gen):
+        from djust.template_filters import _BUILTIN_NAMES
+
+        arity = gen.djust_arity_filters()
+        assert _BUILTIN_NAMES == arity, (
+            f"python/djust/template_filters.py:_BUILTIN_NAMES drifted from ARITY: "
+            f"skip-only={sorted(_BUILTIN_NAMES - arity)} arity-only={sorted(arity - _BUILTIN_NAMES)}"
+        )
+
+
 class TestExtractionMatchesTheRegistries:
     def test_arity_filter_set_equals_djangos_builtin_filter_registry(self, gen, report):
         from django.template import defaultfilters

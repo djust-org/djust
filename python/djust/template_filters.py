@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 # Filters we never want to forward — built-ins that the Rust engine
 # already implements natively. Forwarding would slow them down and
 # would never trip the Rust unknown-filter fallback anyway, but
-# explicit skipping keeps the registry clean.
+# explicit skipping keeps the registry clean. Pinned equal to the engine's
+# ``ARITY`` table (crates/djust_templates/src/filter_arity.rs) by
+# tests/test_generate_template_backend_lists.py (#2540).
 _BUILTIN_NAMES = frozenset(
     {
         "add",
@@ -50,6 +52,7 @@ _BUILTIN_NAMES = frozenset(
         "divisibleby",
         "escape",
         "escapejs",
+        "escapeseq",
         "filesizeformat",
         "first",
         "floatformat",
@@ -60,7 +63,6 @@ _BUILTIN_NAMES = frozenset(
         "json_script",
         "last",
         "length",
-        "length_is",
         "linebreaks",
         "linebreaksbr",
         "linenumbers",

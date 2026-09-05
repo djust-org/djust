@@ -3811,10 +3811,40 @@ class TestT013InvalidViewPath:
 
 
 class TestT011UnsupportedTemplateTags:
-    """T011 -- unsupported Django template tags in LiveView templates."""
+    """T011 -- unsupported Django template tags in LiveView templates.
 
-    def test_t011_detects_unsupported_tag(self, tmp_path, settings):
-        """T011 fires for tags not implemented in Rust renderer."""
+    The real unsupported set is EMPTY (every Django built-in tag is
+    implemented; pinned against the engine in
+    tests/test_generate_template_backend_lists.py, #2540), so the detection
+    mechanism is exercised with an injected set and the real set is asserted
+    to flag nothing the parser accepts.
+    """
+
+    @staticmethod
+    def _inject(monkeypatch, *tags):
+        from djust.checks import templates as templates_checks
+
+        monkeypatch.setattr(
+            templates_checks,
+            "_UNSUPPORTED_TAGS_RE",
+            templates_checks._unsupported_tags_re(frozenset(tags)),
+        )
+
+    def test_the_real_unsupported_set_is_empty(self):
+        from djust.checks import templates as templates_checks
+
+        assert templates_checks._UNSUPPORTED_TAGS == frozenset()
+        assert templates_checks._UNSUPPORTED_TAGS_RE.search("{% ifchanged x %}") is None
+
+    def test_t011_does_not_fire_for_ifchanged(self, tmp_path, settings):
+        """Regression (#2540): `{% ifchanged %}` shipped in #2650 and the check
+        kept flagging it. The parser accepts it, so T011 must not."""
+        from djust import _rust
+
+        _rust.render_template(
+            "{% for i in items %}{% ifchanged i %}{{ i }}{% endifchanged %}{% endfor %}",
+            {"items": [1, 1, 2]},
+        )
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "page.html").write_text(
@@ -3838,9 +3868,38 @@ class TestT011UnsupportedTemplateTags:
         from djust.checks import check_templates
 
         errors = check_templates(None)
+        assert [e for e in errors if e.id == "djust.T011"] == []
+
+    def test_t011_detects_unsupported_tag(self, tmp_path, settings, monkeypatch):
+        """T011 fires for a tag in the unsupported set (injected: the real set is empty)."""
+        self._inject(monkeypatch, "notatag")
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% notatag item.category %}
+                        <h2>{{ item.category }}</h2>
+                    {% endnotatag %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
         t011 = [e for e in errors if e.id == "djust.T011"]
         assert len(t011) == 1
-        assert "ifchanged" in t011[0].msg
+        assert "notatag" in t011[0].msg
+        assert t011[0].line_number == 2
 
     def test_t011_does_not_fire_for_supported_tags(self, tmp_path, settings):
         """T011 should not fire for tags implemented in Rust (widthratio, etc.)."""
@@ -3857,6 +3916,8 @@ class TestT011UnsupportedTemplateTags:
                     {% cycle "a" "b" "c" %}
                     {% now "Y-m-d" %}
                     {% regroup items by category as grouped %}
+                    {% querystring page=2 %}
+                    {% ifchanged item %}{{ item }}{% endifchanged %}
                 </div>
                 """
             )
@@ -3874,8 +3935,9 @@ class TestT011UnsupportedTemplateTags:
         t011 = [e for e in errors if e.id == "djust.T011"]
         assert len(t011) == 0
 
-    def test_t011_noqa_suppresses_warning(self, tmp_path, settings):
+    def test_t011_noqa_suppresses_warning(self, tmp_path, settings, monkeypatch):
         """T011 is suppressed by {# noqa: T011 #} comment."""
+        self._inject(monkeypatch, "notatag")
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "page.html").write_text(
@@ -3883,7 +3945,7 @@ class TestT011UnsupportedTemplateTags:
                 """\
                 {# noqa: T011 #}
                 <div dj-view="myapp.views.MyView">
-                    {% ifchanged %}x{% endifchanged %}
+                    {% notatag %}x{% endnotatag %}
                 </div>
                 """
             )
@@ -3901,17 +3963,19 @@ class TestT011UnsupportedTemplateTags:
         t011 = [e for e in errors if e.id == "djust.T011"]
         assert len(t011) == 0
 
-    def test_t011_multiple_unsupported_tags(self, tmp_path, settings):
-        """T011 fires once per unsupported tag found."""
+    def test_t011_multiple_unsupported_tags(self, tmp_path, settings, monkeypatch):
+        """T011 fires once per unsupported tag found, across a multi-tag set."""
+        self._inject(monkeypatch, "notatag", "othertag")
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "page.html").write_text(
             textwrap.dedent(
                 """\
                 <div dj-view="myapp.views.MyView">
-                    {% ifchanged a %}x{% endifchanged %}
-                    {% ifchanged b %}y{% endifchanged %}
-                    {% ifchanged c %}z{% endifchanged %}
+                    {% notatag a %}x{% endnotatag %}
+                    {% othertag b %}y{% endothertag %}
+                    {% notatag c %}z{% endnotatag %}
+                    {% notatagged d %}not a match: word boundary{% endnotatagged %}
                 </div>
                 """
             )
