@@ -211,7 +211,7 @@ def get_context_data(self):
     }
 
 # Usage in template
-{{ badge.render }}
+{{ badge }}
 ```
 
 **After (template syntax):**

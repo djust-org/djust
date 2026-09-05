@@ -221,7 +221,7 @@ class MyView(LiveView):
 ### 3. Render in Templates
 
 ```html
-{{ navbar.render }}
+{{ navbar }}
 ```
 
 That's it! The navbar will automatically render with Bootstrap, Tailwind, or plain CSS based on your configuration.
@@ -381,7 +381,7 @@ class StatusBadge(Component):
 badge = StatusBadge('success', 'Active')
 
 # In template
-{{ badge.render }}
+{{ badge }}
 ```
 
 ### LiveComponent (Stateful)

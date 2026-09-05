@@ -120,7 +120,7 @@ class MyView(LiveView):
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
-    {{ navbar.render }}
+    {{ navbar }}
 
     <div class="container mt-4">
         <h1>Your Content Here</h1>
@@ -262,7 +262,7 @@ class AppView(LiveView):
 </head>
 <body>
     <!-- NavBar Component -->
-    {{ navbar.render }}
+    {{ navbar }}
 
     <!-- Page Content -->
     <div class="container-fluid mt-4">

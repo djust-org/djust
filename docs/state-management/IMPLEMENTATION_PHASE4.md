@@ -232,10 +232,10 @@ class DashboardView(LiveView):
     <h1>User Dashboard</h1>
 
     <!-- Embed component -->
-    {{ user_list.render }}
+    {{ user_list }}
 
     <!-- Another component -->
-    {{ user_detail.render }}
+    {{ user_detail }}
 </div>
 ```
 

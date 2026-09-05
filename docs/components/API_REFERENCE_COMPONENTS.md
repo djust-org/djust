@@ -147,7 +147,7 @@ class BadgeComponent(Component):
 class MyView(LiveView):
     template_string = """
         <h1>Counter: {{ counter }}</h1>
-        {{ badge.render }}
+        {{ badge }}
     """
 
     def mount(self, request):
