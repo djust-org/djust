@@ -209,9 +209,8 @@ def test_extends_get_includes_base_head(rf, _djust_backend_app_templates):
 @pytest.mark.django_db
 def test_full_template_is_populated_for_extends(rf, _djust_backend_app_templates):
     """After ``get_template()`` runs for an ``{% extends %}`` view (djust
-    backend, APP_DIRS=True), the resolved full document (with ``<head>``) must
-    be stored on ``self._full_template`` — NOT ``None`` (the silent-catch
-    symptom of #1801)."""
+    backend, APP_DIRS=True), the stored shell must render the full document
+    (with ``<head>``), rather than silently degrading to a fragment (#1801)."""
     view = ExtendsHeadView()
     view.mount(rf.get("/"))
     view.get_template()
@@ -221,8 +220,9 @@ def test_full_template_is_populated_for_extends(rf, _djust_backend_app_templates
         "document for an {% extends %} view; None means the in-flow resolution "
         "silently degraded to fragment-only (#1801)."
     )
-    assert "<head>" in view._full_template
-    assert "<!DOCTYPE html>" in view._full_template
+    rendered = view.render_full_template(None)
+    assert "<head>" in rendered
+    assert "<!DOCTYPE html>" in rendered
 
 
 @pytest.mark.django_db

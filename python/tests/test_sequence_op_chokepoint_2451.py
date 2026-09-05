@@ -185,9 +185,15 @@ def corpus() -> dict:
     # namespace holding exactly the names the corpus uses. `datetime` arrived
     # with the `timedelta` rows (#2469) — the only member of the
     # `Value::Encoded` family with a falsy inhabitant.
+    from collections import namedtuple
     from decimal import Decimal
 
-    env = {"Decimal": Decimal, "mark_safe": mark_safe, "datetime": datetime}
+    env = {
+        "Decimal": Decimal,
+        "mark_safe": mark_safe,
+        "datetime": datetime,
+        "namedtuple": namedtuple,
+    }
 
     def value(node: ast.expr):
         return eval(  # noqa: S307 — a repo file's own literals
@@ -384,6 +390,9 @@ class TestTheReferenceTableIsRunNotTranscribed:
         iterators are unmoved again; none is subscriptable and none has a
         `.lower()`, so `first` / `last` / `phone2numeric` each gain all three.
 
+        The three named-tuple rows are iterable and subscriptable, but have
+        no `.lower()`, so only `phone2numeric` gains three refusals.
+
         `random` is excluded on purpose rather than rounded off: over a mapping
         `random.choice` draws an index and THEN looks it up, so whether Django
         raises at all depends on the draw — its own count flaps between 17 and
@@ -405,9 +414,9 @@ class TestTheReferenceTableIsRunNotTranscribed:
             "unordered_list": 17,
             "first": 27,
             "last": 30,
-            "phone2numeric": 42,
+            "phone2numeric": 45,
         }, per_filter
-        assert sum(per_filter.values()) == 150
+        assert sum(per_filter.values()) == 153
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
@@ -609,13 +618,16 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         for probe in ("python_iter", "python_getitem", "python_lower"):
             assert self.callers(source, probe) == {"apply_builtin_filter"}, probe
 
-    def test_the_type_name_has_exactly_two_readers_across_both_modules(self) -> None:
+    def test_the_type_name_readers_cover_filters_loops_and_include_candidates(self) -> None:
         """The unification, as a set (#1125): ``renderer.rs``'s ``{% for %}``
-        refusal reads the SAME answer the filters do since #2451."""
+        refusal and include candidate errors use the same Python type names."""
         filters_src = production(FILTERS_RS)
         renderer_src = production(RENDERER_RS)
         assert self.callers(filters_src, "python_type_name") == {"detail"}
-        assert self.callers(renderer_src, "python_type_name") == {"python_type_name_for_iteration"}
+        assert self.callers(renderer_src, "python_type_name") == {
+            "python_type_name_for_iteration",
+            "render_node_with_loader_mut",
+        }
         assert "fn python_type_name(" not in renderer_src, (
             "renderer.rs defines its own type-name function again — that is the "
             "four-arm copy #2451 retired (#1646)"

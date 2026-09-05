@@ -286,6 +286,7 @@ class TestTheCallerSetIsPinned:
                 "validate_if_operands(args)?",  # the `"if"` arm of parse_token
                 "validate_if_operands(args)?",  # the `{% elif %}` arm of parse_if_block
                 "validate_tag_operand(&iterable)?",  # the `"for"` arm
+                "validate_tag_operand(&args[0])?",  # the `"extends"` arm
                 "validate_tag_operand(&expression)?",  # the `"with"` arm, per assignment
                 "validate_tag_operand(arg)?",  # validate_if_operands' own delegation
                 # The four #2418 added. This test is the reason they were
@@ -342,7 +343,7 @@ class TestTheTwoRulesThisDoesNotClose:
             assert not django_renders(source), f"premise: {source}"
             rendered, out = djust_renders(source)
             assert not rendered, f"the #2419 parse-time lookup regressed on {source}"
-            assert "Unknown filter" in out, out
+            assert "Invalid filter" in out, out
 
     @pytest.mark.parametrize(
         "source",

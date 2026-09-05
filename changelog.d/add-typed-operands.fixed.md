@@ -1,0 +1,1 @@
+- **Typed filter addition:** Preserve resolved `add` argument types for integer conversion and string/list/tuple concatenation. Reject incompatible operand types and infinite numeric arguments instead of concatenating their display text or silently returning an empty result. Django conformance improves to 947 of 1,047 engine tests.

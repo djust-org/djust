@@ -109,30 +109,13 @@ class TestBackendOptions:
             DjustTemplateBackend({**params, "NAME": f"du{name}"}),
         )
 
-    def test_autoescape_false_is_refused_loudly_not_ignored(self) -> None:
-        """djust has no engine-wide escaping switch, by design.
-
-        `Context::set_autoescape` has exactly two production writers, pinned by
-        `test_autoescape_tag_2556.py::TestSecurityPins` on the reasoning that a
-        global escape-off reachable from configuration is an XSS shape. So the
-        option cannot be honoured — but silently dropping it is worse than
-        refusing it, because the project then believes escaping is off when it
-        is not. An explicit `False` raises; `True` is a no-op because it asks
-        for what djust already does.
-        """
-        from django.core.exceptions import ImproperlyConfigured
-
-        from djust.template.backend import DjustTemplateBackend
-
-        with pytest.raises(ImproperlyConfigured, match="autoescape"):
-            DjustTemplateBackend(
-                {"NAME": "ae", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"autoescape": False}}
-            )
-        # True is accepted, and escaping is on.
-        engine = DjustTemplateBackend(
-            {"NAME": "ae2", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"autoescape": True}}
-        )
-        assert str(engine.from_string("{{ p }}").render({"p": "<b>"})) == "&lt;b&gt;"
+    @pytest.mark.parametrize("on", [False, True])
+    def test_autoescape_option_matches_django(self, on) -> None:
+        django_engine, djust_engine = self._pair({"autoescape": on}, "ae")
+        source, data = "{{ p }}", {"p": "<b>"}
+        assert djust_engine.from_string(source).render(data) == django_engine.from_string(
+            source
+        ).render(data)
 
     def test_string_if_invalid_option_changes_output_like_django(self) -> None:
         django_engine, djust_engine = self._pair({"string_if_invalid": "INVALID"}, "si")

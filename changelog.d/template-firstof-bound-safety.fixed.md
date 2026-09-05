@@ -1,0 +1,1 @@
+- **Firstof assignment safety**: Preserve the actual safety of firstof output instead of always granting SafeString status, including plain output under autoescape off and the empty result when no operand is truthy.

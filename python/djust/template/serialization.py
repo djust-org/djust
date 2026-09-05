@@ -1,12 +1,13 @@
 """
 Serialization utilities for djust template rendering.
 
-Converts Django/Python types to JSON-compatible values for the Rust engine.
+Prepares Django/Python values for native rendering or JSON serialization.
 """
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from django.utils.datastructures import MultiValueDict
+from django.utils.functional import Promise
 from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
@@ -20,9 +21,11 @@ JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 
 def serialize_value(
     value: Any,
-) -> JSONValue:
+    *,
+    for_render: bool = False,
+) -> Any:
     """
-    Serialize a single value to a JSON-compatible type.
+    Prepare a value for JSON or, with ``for_render=True``, native rendering.
 
     Handles:
     - datetime/date/time -> ``DjangoJSONEncoder.default``'s spelling (#2462)
@@ -39,6 +42,15 @@ def serialize_value(
     Returns:
         JSON-serializable value
     """
+    # The native render API accepts Python objects directly. JSON conversion
+    # would erase the types needed by filters, comparisons, and date formatting.
+    # Keep the existing JSON-oriented helper contract for other callers.
+    if for_render:
+        if isinstance(value, Promise):
+            return str(value)
+        if isinstance(value, (datetime, date, time, timedelta, Decimal, UUID)):
+            return value
+
     if value is None:
         return None
 
@@ -104,19 +116,23 @@ def serialize_value(
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):
-        return {k: serialize_value(v) for k, v in value.items()}
+        return {k: serialize_value(v, for_render=for_render) for k, v in value.items()}
 
     # Handle list/tuple - recursively serialize
     if isinstance(value, (list, tuple)):
-        return [serialize_value(item) for item in value]
+        items = [serialize_value(item, for_render=for_render) for item in value]
+        return tuple(items) if for_render and isinstance(value, tuple) else items
 
     # Pass through other types (str, int, float, bool, etc.)
     return cast(JSONValue, value)
 
 
-def serialize_context(context: Dict[str, Any]) -> Dict[str, Any]:
+def serialize_context(context: Dict[str, Any], *, for_render: bool = False) -> Dict[str, Any]:
     """
-    Serialize all context values to ensure JSON compatibility for Rust rendering.
+    Prepare context values for JSON or the native renderer.
+
+    ``for_render=True`` retains Python scalar and tuple types and evaluates
+    lazy translation strings. Form and file-field rendering applies in both modes.
 
     This function recursively processes the context dictionary, converting
     Django/Python types that are not natively JSON-serializable into their
@@ -150,4 +166,4 @@ def serialize_context(context: Dict[str, Any]) -> Dict[str, Any]:
         >>> serialized['price']
         99.99
     """
-    return {key: serialize_value(value) for key, value in context.items()}
+    return {key: serialize_value(value, for_render=for_render) for key, value in context.items()}

@@ -11,6 +11,50 @@ pub enum DjangoRustError {
     #[error("Template error: {0}")]
     TemplateError(String),
 
+    /// A syntax refusal discovered while resolving a template's origin.
+    #[error("Template error: {0}")]
+    TemplateSyntax(String),
+
+    #[error("Template error: {message}")]
+    TemplateSyntaxAt {
+        message: String,
+        start: usize,
+        end: usize,
+    },
+
+    /// Locate a runtime failure without changing its exception category.
+    #[error("{error}")]
+    RuntimeAt {
+        error: Box<DjangoRustError>,
+        start: usize,
+        end: usize,
+    },
+
+    /// Source provenance for an error raised while compiling or rendering a template.
+    #[error("{error}")]
+    TemplateSource {
+        error: Box<DjangoRustError>,
+        template_source: String,
+        origin: String,
+    },
+
+    /// A failed filesystem lookup, retaining the paths actually searched.
+    /// Keep metadata separate from display text so Python need not parse paths.
+    #[error("Template error: Template not found: {name}\nSearched in:\n{}", tried.iter().map(|path| format!("  - {path}")).collect::<Vec<_>>().join("\n"))]
+    TemplateNotFound { name: String, tried: Vec<String> },
+
+    /// Lookup exhausted after excluding sources already used by inheritance.
+    #[error("Template error: Template not found: {name}")]
+    TemplateHistoryNotFound {
+        name: String,
+        tried: Vec<String>,
+        skipped: Vec<String>,
+    },
+
+    /// Django Engine.select_template reports candidate names without origins.
+    #[error("Template error: Template not found: {name}")]
+    TemplateSelectionNotFound { name: String },
+
     /// A template error that knows WHERE in the source it happened (#2557).
     ///
     /// `start`/`end` are BYTE offsets of the offending token in the template
@@ -81,26 +125,154 @@ pub enum DjangoRustError {
 impl From<DjangoRustError> for PyErr {
     fn from(err: DjangoRustError) -> PyErr {
         match err {
+            DjangoRustError::RuntimeAt { error, start, end } => {
+                let error: PyErr = (*error).into();
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    if !value.hasattr("djust_token_span").unwrap_or(false) {
+                        let _ = value.setattr("djust_token_span", (start, end));
+                    }
+                });
+                error
+            }
+            DjangoRustError::TemplateSource {
+                error,
+                template_source,
+                origin,
+            } => {
+                let error: PyErr = (*error).into();
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    if !value.hasattr("djust_template_source").unwrap_or(false) {
+                        let _ = value.setattr("djust_template_source", template_source);
+                        let _ = value.setattr("djust_template_origin", origin);
+                    }
+                });
+                error
+            }
+
             // Hand the caller back the exception user code actually raised,
             // so Django's handler chain still sees `PermissionDenied` /
             // `Http404` / a custom exception and dispatches on its type.
-            DjangoRustError::PythonException(e) => e,
-            other => PyRuntimeError::new_err(other.to_string()),
+            DjangoRustError::PythonException(e) => {
+                // Preserve provenance as well as identity. The Python backend
+                // must not wrap an arbitrary user exception merely because
+                // its class isn't one of Django's HTTP exceptions.
+                Python::attach(|py| {
+                    if let Ok(dict) = e.value(py).getattr("__dict__") {
+                        let _ = dict.set_item("_djust_python_exception", true);
+                    }
+                });
+                e
+            }
+            DjangoRustError::TemplateSyntax(ref message)
+            | DjangoRustError::TemplateSyntaxAt { ref message, .. } => {
+                let error = PyRuntimeError::new_err(err.to_string());
+                let span = err.span();
+                Python::attach(|py| {
+                    let _ = error
+                        .value(py)
+                        .setattr("djust_template_syntax_message", message);
+                    if let Some(span) = span {
+                        let _ = error.value(py).setattr("djust_token_span", span);
+                    }
+                });
+                error
+            }
+            DjangoRustError::TemplateNotFound {
+                ref name,
+                ref tried,
+            }
+            | DjangoRustError::TemplateHistoryNotFound {
+                ref name,
+                ref tried,
+                ..
+            } => {
+                let error = PyRuntimeError::new_err(err.to_string());
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    let _ = value.setattr("djust_missing_template_name", name);
+                    let _ = value.setattr("djust_tried_template_paths", tried.clone());
+                    if let DjangoRustError::TemplateHistoryNotFound { ref skipped, .. } = err {
+                        let _ = value.setattr("djust_skipped_template_paths", skipped.clone());
+                    }
+                });
+                error
+            }
+            DjangoRustError::TemplateSelectionNotFound { name } => {
+                let error =
+                    PyRuntimeError::new_err(format!("Template error: Template not found: {name}"));
+                Python::attach(|py| {
+                    let _ = error.value(py).setattr("djust_missing_template_name", name);
+                });
+                error
+            }
+            other => {
+                let error = PyRuntimeError::new_err(other.to_string());
+                if let Some(span) = other.span() {
+                    Python::attach(|py| {
+                        let _ = error.value(py).setattr("djust_token_span", span);
+                    });
+                }
+                error
+            }
         }
     }
 }
 
 impl DjangoRustError {
+    /// Keep loaded-template source beside the error; never replace an inner origin.
+    pub fn with_template_source(self, source: &str, origin: &str) -> Self {
+        if matches!(self, Self::TemplateSource { .. }) {
+            self
+        } else {
+            Self::TemplateSource {
+                error: Box::new(self),
+                template_source: source.to_string(),
+                origin: origin.to_string(),
+            }
+        }
+    }
+
+    /// Classify parser failures at a loader boundary without changing user exceptions.
+    pub fn into_template_syntax(self) -> Self {
+        match self {
+            Self::TemplateSource {
+                error,
+                template_source,
+                origin,
+            } => Self::TemplateSource {
+                error: Box::new(error.into_template_syntax()),
+                template_source,
+                origin,
+            },
+            Self::TemplateError(message) => Self::TemplateSyntax(message),
+            Self::TemplateErrorAt {
+                message,
+                start,
+                end,
+            } => Self::TemplateSyntaxAt {
+                message,
+                start,
+                end,
+            },
+            other => other,
+        }
+    }
+
     /// The byte span of the offending token, when this error knows one (#2557).
     pub fn span(&self) -> Option<(usize, usize)> {
         match self {
-            DjangoRustError::TemplateErrorAt { start, end, .. } => Some((*start, *end)),
+            Self::TemplateSource { error, .. } => error.span(),
+            Self::RuntimeAt { start, end, .. } => Some((*start, *end)),
+            DjangoRustError::TemplateErrorAt { start, end, .. }
+            | DjangoRustError::TemplateSyntaxAt { start, end, .. } => Some((*start, *end)),
             _ => None,
         }
     }
 
-    /// Attach `span` to a plain [`Self::TemplateError`], leaving every other
-    /// variant — an already-located error included — untouched (#2557).
+    /// Locate an error without replacing an existing location or discarding
+    /// its exception category.
     ///
     /// The "already-located wins" rule is what makes the INNERMOST enclosing
     /// token the one reported: the deepest `parse_token` frame attaches first
@@ -117,6 +289,28 @@ impl DjangoRustError {
                     end,
                 }
             }
+            (DjangoRustError::PythonException(error), Some(span)) => {
+                Python::attach(|py| {
+                    if let Ok(dict) = error.value(py).getattr("__dict__") {
+                        if dict.get_item("djust_token_span").is_err() {
+                            let _ = dict.set_item("djust_token_span", span);
+                        }
+                    }
+                });
+                DjangoRustError::PythonException(error)
+            }
+            (
+                other @ (Self::TemplateSource { .. }
+                | Self::RuntimeAt { .. }
+                | Self::TemplateErrorAt { .. }
+                | Self::TemplateSyntaxAt { .. }),
+                _,
+            ) => other,
+            (other, Some((start, end))) => Self::RuntimeAt {
+                error: Box::new(other),
+                start,
+                end,
+            },
             (other, _) => other,
         }
     }

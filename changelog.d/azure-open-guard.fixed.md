@@ -1,0 +1,1 @@
+- **Azure upload lifecycle:** Reject use before `open()` initializes the blob key, and type-check correctly when the optional Azure SDK is installed.

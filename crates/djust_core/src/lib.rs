@@ -58,6 +58,7 @@ pub(crate) const BIGINT_TAG: &str = "__djust_bigint__";
 /// `(1.0,)` — verified. So the human-readable arm matching Django means staying
 /// an array, and only the binary arm needs the tag.
 pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
+const NAMED_TUPLE_TAG: &str = "__djust_named_tuple__";
 
 /// Marks a [`Value::Encoded`] in a BINARY encoding (#2448).
 ///
@@ -240,10 +241,18 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     String(String),
+    /// Runtime SafeData string. Serialized as plain text; wire data cannot mint safety.
+    SafeString(String),
     List(Vec<Value>),
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
     Tuple(Vec<Value>),
+    /// A tuple with named fields, such as Django's GroupedResult.
+    NamedTuple {
+        name: String,
+        fields: Vec<String>,
+        items: Vec<Value>,
+    },
     /// Insertion-ordered, NOT a `HashMap`: Rust randomises `HashMap` iteration
     /// per process, so dict repr would differ between renders of the same
     /// template. Python dicts are insertion-ordered (#2203).
@@ -414,6 +423,8 @@ pub struct Encoded {
     /// `str(o)` — what `{{ p }}` renders, and what this value looked like
     /// before the variant existed.
     pub display: String,
+    /// Runtime safety of str(o), not of o itself. Never restored from wire data.
+    pub display_safe: bool,
     /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
     pub json: String,
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
@@ -625,9 +636,9 @@ pub struct Encoded {
     ///
     /// **TRANSIENT.** It is not serialized (the `ENCODED_TAG` payload stays
     /// ELEVEN slots), not compared (`PartialEq for Encoded` does not mention
-    /// it), and not handed back to Python (`IntoPyObject` keeps mapping an
-    /// `Encoded` to [`Encoded::display`], so a handle can never reach a
-    /// custom-tag handler — #2509). A msgpack round trip therefore drops it
+    /// it). Temporal objects may cross back to Python after an isinstance
+    /// check; opaque objects still cross as display strings (#2509), so model
+    /// protection is unchanged. A msgpack round trip drops the handle
     /// for free, and `Deserialize` restores `None`.
     ///
     /// **Why it rides IN the value.** The raw-Python sidecar is keyed by
@@ -885,6 +896,7 @@ impl PartialEq for Encoded {
     fn eq(&self, other: &Self) -> bool {
         self.type_name == other.type_name
             && self.display == other.display
+            && self.display_safe == other.display_safe
             && self.json == other.json
             && self.truthy == other.truthy
             && self.len == other.len
@@ -955,9 +967,30 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a), Value::String(b)) | (Value::SafeString(a), Value::SafeString(b)) => {
+            a == b
+        }
         (Value::Decimal(a), Value::Decimal(b)) => a == b,
         (Value::BigInt(a), Value::BigInt(b)) => a == b,
+        (
+            Value::NamedTuple {
+                name: an,
+                fields: af,
+                items: a,
+            },
+            Value::NamedTuple {
+                name: bn,
+                fields: bf,
+                items: b,
+            },
+        ) => {
+            an == bn
+                && af == bf
+                && a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| values_structurally_equal(a, b))
+        }
         (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
             a.len() == b.len()
                 && a.iter()
@@ -1241,15 +1274,26 @@ impl Serialize for Value {
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
             Value::Float(f) => serializer.serialize_f64(*f),
-            Value::String(st) => serializer.serialize_str(st),
+            Value::String(st) | Value::SafeString(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(NAMED_TUPLE_TAG, &(name, fields, items))?;
+                m.end()
+            }
             Value::Tuple(items) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(TUPLE_TAG, items)?;
                 m.end()
             }
-            Value::List(items) | Value::Tuple(items) => items.serialize(serializer),
+            Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+                items.serialize(serializer)
+            }
             Value::Object(o) => o.serialize(serializer),
             // A view is built by `Context::dict_view` during a render and is
             // never handed to a serializer on any real path — but `Value` has
@@ -1273,7 +1317,8 @@ impl Serialize for Value {
 /// arms cannot drift apart on how a key is read (#1646). Two copies of this
 /// `match` is the shape where one arm gains a case and the other does not.
 fn decode_cmp_key(key: &Value) -> Option<CmpKey> {
-    let (Value::List(limbs) | Value::Tuple(limbs)) = key else {
+    let (Value::List(limbs) | Value::Tuple(limbs) | Value::NamedTuple { items: limbs, .. }) = key
+    else {
         return None;
     };
     match limbs.as_slice() {
@@ -1337,7 +1382,9 @@ fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
 /// fail in, and a class a future build invents must not be answered by this
 /// one.
 fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
-    let (Value::List(limbs) | Value::Tuple(limbs)) = map.get(EQ_CLASS_KEY)? else {
+    let (Value::List(limbs) | Value::Tuple(limbs) | Value::NamedTuple { items: limbs, .. }) =
+        map.get(EQ_CLASS_KEY)?
+    else {
         return None;
     };
     let [Value::Integer(tag), real, imag] = limbs.as_slice() else {
@@ -1491,6 +1538,26 @@ impl<'de> Deserialize<'de> for Value {
                     // The binary-format tuple tag (#2276). Same shape, but the
                     // payload is a LIST rather than a string — which is also
                     // what keeps it from colliding with the two above.
+                    if let Some(Value::List(parts)) = obj.get(NAMED_TUPLE_TAG) {
+                        if let [Value::String(name), Value::List(fields), Value::List(items)] =
+                            parts.as_slice()
+                        {
+                            let names: Option<Vec<String>> = fields
+                                .iter()
+                                .map(|f| match f {
+                                    Value::String(s) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if let Some(fields) = names.filter(|f| f.len() == items.len()) {
+                                return Ok(Value::NamedTuple {
+                                    name: name.clone(),
+                                    fields,
+                                    items: items.clone(),
+                                });
+                            }
+                        }
+                    }
                     if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
                         return Ok(Value::Tuple(items.clone()));
                     }
@@ -1564,6 +1631,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1626,6 +1694,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1682,6 +1751,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1740,6 +1810,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1796,6 +1867,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1843,6 +1915,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -1888,6 +1961,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                     }
@@ -2097,12 +2171,10 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         attrs,
         items: None,
         eq_class: None,
-        // NEVER a handle, whatever the flag says (#2539). The datetime family
-        // carries its lookups by NAME in `attrs` (#2481) — measured from a C
-        // type with no `__dict__`, which no live walk would reach — and
-        // routing `{{ dt.year }}` through a handle instead would change the
-        // shape of a value the wire already carries correctly.
-        live: None,
+        // Preserve the immutable temporal object across Python filter calls.
+        // The wire still carries the measured fields; live handles are transient.
+        live: Some(std::sync::Arc::new(ob.clone().unbind())),
+        display_safe: false,
     })
 }
 
@@ -2562,6 +2634,21 @@ impl Value {
         }
     }
 
+    /// Safety after Python str() conversion, for final rendering and stringfilter.
+    /// This is not the original object's SafeData status: join must still escape
+    /// an opaque object whose __str__ returns SafeString.
+    pub fn string_conversion_is_safe(&self) -> bool {
+        match self {
+            Value::SafeString(_) => true,
+            Value::Encoded(e) => e.display_safe,
+            _ => false,
+        }
+    }
+
+    pub fn is_safe_string(&self) -> bool {
+        matches!(self, Value::SafeString(_))
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Missing => false,
@@ -2577,7 +2664,7 @@ impl Value {
             // written on the digits anyway rather than through a parse that
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
-            Value::String(s) => !s.is_empty(),
+            Value::String(s) | Value::SafeString(s) => !s.is_empty(),
             // Python's own `bool(o)`, asked at the conversion and carried
             // (#2458). #2448 read `!e.display.is_empty()` here — always true
             // for this family — which kept `bool(timedelta(0))` at `True`
@@ -2588,7 +2675,7 @@ impl Value {
             // ALSO the display text of a perfectly ordinary truthy `str`.
             Value::Encoded(e) => e.truthy,
             Value::List(l) => !l.is_empty(),
-            Value::Tuple(t) => !t.is_empty(),
+            Value::Tuple(t) | Value::NamedTuple { items: t, .. } => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),
             // `bool({}.keys())` is False; `bool({'a': 1}.keys())` is True.
             Value::DictView { items, .. } => !items.is_empty(),
@@ -2974,7 +3061,7 @@ impl Value {
     /// top-level one.
     pub fn py_repr(&self) -> String {
         match self {
-            Value::String(s) => py_repr_string(s),
+            Value::String(s) | Value::SafeString(s) => py_repr_string(s),
             // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
             // nested in a list or dict renders the constructor form while a
             // top-level one renders bare digits — the same str/repr split that
@@ -3013,7 +3100,7 @@ impl Value {
             // `BigInt` and the #2260 loss.
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
             // The DISPLAY spelling on both display paths — an `Encoded` is
             // exactly the `Value::String(str(o))` this used to be, plus the two
             // fields nothing outside `json_script` and the refusal filters
@@ -3031,7 +3118,10 @@ impl Value {
             // paths" — a prose invariant that had never been run. The gate-off
             // surfaced it as a surviving mutation and the test written to close
             // that gap failed on the first execution (CLAUDE.md #1867).
-            Value::List(_) | Value::Tuple(_) | Value::DictView { .. } => write!(f, "[List]"),
+            Value::List(_)
+            | Value::Tuple(_)
+            | Value::NamedTuple { .. }
+            | Value::DictView { .. } => write!(f, "[List]"),
             Value::Object(_) => match self.object_str() {
                 Some(s) => write!(f, "{s}"),
                 None => write!(f, "[Object]"),
@@ -3096,13 +3186,25 @@ impl fmt::Display for Value {
             // `numberformat.format` short-circuits an `int` before it reaches
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
             // See the `legacy_display` arm: the display spelling is `str(o)`
             // on both paths, and only `json_script` reads the other one.
             Value::Encoded(e) => write!(f, "{}", e.display),
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
                 write!(f, "[{}]", inner.join(", "))
+            }
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .zip(items)
+                    .map(|(field, item)| format!("{field}={}", item.py_repr()))
+                    .collect();
+                write!(f, "{name}({})", inner.join(", "))
             }
             Value::Tuple(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -3247,6 +3349,16 @@ pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
     }
 }
 
+/// Called only after the caller has established that the value is a Python string.
+fn python_string_is_safe(value: &Bound<'_, PyAny>) -> bool {
+    value
+        .py()
+        .import("django.utils.safestring")
+        .and_then(|m| m.getattr("SafeData"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
+}
+
 impl<'py> FromPyObject<'_, 'py> for Value {
     // PyO3 0.29 reshaped FromPyObject: it now carries an associated `Error`
     // type and a single `extract(Borrowed<...>)` method (the old single-lifetime
@@ -3280,11 +3392,28 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
-            Ok(Value::String(s))
+            let safe = python_string_is_safe(&ob.to_owned());
+            Ok(if safe {
+                Value::SafeString(s)
+            } else {
+                Value::String(s)
+            })
         } else if let Ok(tuple) = ob.cast::<pyo3::types::PyTuple>() {
             // BEFORE the sequence arm: a tuple extracts as `Vec<Value>` too, so
             // checking after it would render every tuple as a list (#2203).
             let items: Vec<Value> = tuple.extract()?;
+            if let Ok(fields) = ob
+                .getattr("_fields")
+                .and_then(|f| f.extract::<Vec<String>>())
+            {
+                if fields.len() == items.len() {
+                    return Ok(Value::NamedTuple {
+                        name: ob.get_type().getattr("__name__")?.extract()?,
+                        fields,
+                        items,
+                    });
+                }
+            }
             Ok(Value::Tuple(items))
         } else if let Ok(list) = ob.extract::<Vec<Value>>() {
             Ok(Value::List(list))
@@ -3791,7 +3920,9 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         .ok()?
         .extract::<String>()
         .ok()?;
-    let display = ob.str().ok()?.extract::<String>().ok()?;
+    let text = ob.str().ok()?;
+    let display_safe = python_string_is_safe(text.as_any());
+    let display = text.extract::<String>().ok()?;
     // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
     // `complex(0)` the two spellings coincide, which is exactly why copying
     // `display` here would look correct on every builtin this function was
@@ -3835,6 +3966,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
         live,
+        display_safe,
         // The object's PUBLIC `__dict__` (#2478) — the same map, built by the
         // same function, that the `__dict__` bulk-dump arm below would have
         // built. That IS the fix: this arm now claims a falsy object WITH
@@ -3964,6 +4096,82 @@ fn equality_class(ob: &Bound<'_, PyAny>) -> Option<EqClass> {
     None
 }
 
+impl Encoded {
+    /// Reconstitute Python's temporal types without interpreting repr as code.
+    pub fn temporal_object<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let kind = if self.attrs.contains_key("days") && self.attrs.contains_key("microseconds") {
+            "timedelta"
+        } else if self.attrs.contains_key("year") {
+            if self.attrs.contains_key("hour") {
+                "datetime"
+            } else {
+                "date"
+            }
+        } else if self.attrs.contains_key("hour") && self.attrs.contains_key("microsecond") {
+            "time"
+        } else {
+            return Ok(None);
+        };
+        // Restrict reconstruction to encoded temporal values, never arbitrary
+        // objects with similarly named attributes.
+        if !matches!(
+            self.type_name.as_str(),
+            "datetime.date" | "datetime.datetime" | "datetime.time" | "datetime.timedelta"
+        ) && self.live.is_none()
+        {
+            return Ok(None);
+        }
+        let module = py.import("datetime")?;
+        if let Some(live) = &self.live {
+            if live.bind(py).is_instance(&module.getattr(kind)?)? {
+                return Ok(Some(live.bind(py).clone()));
+            }
+            return Ok(None);
+        }
+        let cls = module.getattr(kind)?;
+        let result = if kind == "timedelta" {
+            let kwargs = pyo3::types::PyDict::new(py);
+            for name in ["days", "seconds", "microseconds"] {
+                if let Some(value) = self.attrs.get(name) {
+                    kwargs.set_item(name, value.clone().into_pyobject(py)?)?;
+                }
+            }
+            cls.call((), Some(&kwargs))?
+        } else {
+            let value = cls.call_method1("fromisoformat", (&self.display,))?;
+            let kwargs = pyo3::types::PyDict::new(py);
+            if let Some(fold) = self.attrs.get("fold") {
+                kwargs.set_item("fold", fold.clone().into_pyobject(py)?)?;
+            }
+            if let Some(zone) = self.attrs.get("tzinfo") {
+                let name = zone.to_string();
+                // Named zones retain transition rules across state persistence.
+                let tz = py.import("zoneinfo")?.getattr("ZoneInfo")?.call1((&name,));
+                if let Ok(tz) = tz {
+                    kwargs.set_item("tzinfo", tz)?;
+                } else {
+                    // fromisoformat retains the offset, but not its custom name.
+                    let offset = value.call_method0("utcoffset")?;
+                    if !offset.is_none() {
+                        if let Some(Value::String(name)) = self.attrs.get("tzname") {
+                            kwargs.set_item(
+                                "tzinfo",
+                                module.getattr("timezone")?.call1((offset, name))?,
+                            )?;
+                        }
+                    }
+                }
+            }
+            if kwargs.is_empty() {
+                value
+            } else {
+                value.call_method("replace", (), Some(&kwargs))?
+            }
+        };
+        Ok(Some(result))
+    }
+}
+
 /// Convert Value to Python object using the new IntoPyObject trait.
 impl<'py> IntoPyObject<'py> for Value {
     type Target = PyAny;
@@ -3979,37 +4187,17 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
-            // Back as the DISPLAY string, NOT as a rebuilt `datetime` — which
-            // is what a `datetime` in view state has always come back as, since
-            // it used to BE a `Value::String(str(o))` (#2448). Rebuilding the
-            // object is what the `Decimal` and `BigInt` arms below do, and it is
-            // right there because a type change would break `isinstance`
-            // downstream; here there is no type to change back TO, because
-            // there was none before this variant either. Widening the round
-            // trip is a separate behaviour change, filed as #2458 rather than folded in.
-            //
-            // A CARRIED COLLECTION takes the SAME arm, and that is a
-            // decision #2477/#2489 made and then unmade (#1079).
-            //
-            // It looked like the conservative choice to hand the items back:
-            // `normalize_django_value` used to turn a `set` into a sorted
-            // LIST, so a `set` in view state came back a list, and returning
-            // `"{'a'}"` hands a handler a STRING where it wrote a collection.
-            // Measured against `main`, that premise was false — a TRUTHY set
-            // was declined by the pre-#2477 gate and crossed as
-            // `Value::String(str(o))`, so the Rust state path already returned
-            // the display string, and the LiveView path never reached it
-            // because the normalizer flattened first.
-            //
-            // What the items DID change is the channel that hands a value to
-            // Python and renders the result: `{{ p|custom_filter }}` returning
-            // its input rendered `['a']` where Django renders `{'a'}`, and
-            // `{% regroup %}`'s operand the same way — twenty cells across the
-            // custom-filter axis, reported by the two-build differential.
-            // Widening this round trip is #2458's filed decision, not this
-            // fix's, and taking it here would have paid for a regression with
-            // a premise nobody had run.
-            Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            Value::SafeString(s) => py
+                .import("django.utils.safestring")?
+                .call_method1("mark_safe", (s,)),
+            // Temporal values retain their Python type for arithmetic and
+            // custom filters. Only validated temporal handles cross here;
+            // opaque objects and carried collections keep their display-string
+            // contract, including the model-protection boundary (#2509).
+            Value::Encoded(e) => match e.temporal_object(py)? {
+                Some(value) => Ok(value),
+                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            },
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
             // reading it from the context see their type change under them.
@@ -4042,6 +4230,21 @@ impl<'py> IntoPyObject<'py> for Value {
                     py_list.append(item.into_pyobject(py)?)?;
                 }
                 Ok(py_list.into_any())
+            }
+            Value::NamedTuple {
+                name,
+                fields,
+                items,
+            } => {
+                let cls = py
+                    .import("collections")?
+                    .getattr("namedtuple")?
+                    .call1((name, fields))?;
+                let args: Vec<_> = items
+                    .into_iter()
+                    .map(|v| v.into_pyobject(py))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                cls.call(pyo3::types::PyTuple::new(py, args)?, None)
             }
             Value::Tuple(t) => {
                 // Round-trips back to a real Python tuple, so a tuple that

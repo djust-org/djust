@@ -154,10 +154,12 @@ class TestTemplateInheritance:
         assert "{% extends" not in result
         assert "{% block" not in result
 
-        # Full template should be stored in _full_template attribute
-        assert hasattr(view, "_full_template")
-        assert "<!DOCTYPE html>" in view._full_template
-        assert "<body>" in view._full_template
+        # The stored shell must render the full document with inheritance intact.
+        from djust._rust import RustLiveView
+
+        shell = RustLiveView(view._full_template, [str(templates_dir)]).render()
+        assert "<!DOCTYPE html>" in shell
+        assert "<body>" in shell
 
     @pytest.mark.django_db
     def test_get_template_without_extends_unchanged(self):

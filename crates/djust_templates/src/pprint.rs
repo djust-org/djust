@@ -92,7 +92,7 @@ fn flat_repr(value: &Value) -> String {
         Value::Decimal(d) => format!("Decimal('{d}')"),
         // `repr(int)` is the digits, however many there are (#2260).
         Value::BigInt(d) => d.clone(),
-        Value::String(s) => py_repr_string(s),
+        Value::String(s) | Value::SafeString(s) => py_repr_string(s),
         // The CONSTRUCTOR form — `datetime.datetime(2020, 1, 1, 3, 4, 5)` —
         // the way the `Decimal` arm above spells `Decimal('…')` (#2472).
         //
@@ -104,6 +104,7 @@ fn flat_repr(value: &Value) -> String {
         // JSON and not `repr()`" — so #2472 put `repr()` on the variant and it
         // came into reach. Not a format string: see the `Encoded::repr` doc.
         Value::Encoded(e) => e.repr.clone(),
+        Value::NamedTuple { .. } => value.py_repr(),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(flat_repr).collect();
             format!("[{}]", parts.join(", "))
@@ -188,7 +189,7 @@ fn format_value(value: &Value, out: &mut String, indent: isize, allowance: isize
                 out.push('}');
                 return;
             }
-            Value::String(s) => {
+            Value::String(s) | Value::SafeString(s) => {
                 format_str(s, out, indent, allowance, level + 1);
                 return;
             }

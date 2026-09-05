@@ -479,6 +479,7 @@ class TestTheCallerSetIsPinned:
                 "validate_if_operands(args)?",  # the `"if"` arm of parse_token
                 "validate_if_operands(args)?",  # the `{% elif %}` arm
                 "validate_tag_operand(&iterable)?",  # the `"for"` arm
+                "validate_tag_operand(&args[0])?",  # the `"extends"` arm
                 "validate_tag_operand(&expression)?",  # the `"with"` arm
                 "validate_tag_operand(arg)?",  # validate_if_operands' delegation
                 "validate_tag_operand(value)?",  # `{% include … with k=v %}` (#2579)

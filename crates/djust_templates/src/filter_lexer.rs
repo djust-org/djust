@@ -2,8 +2,8 @@
 //!
 //! # The defect this closes
 //!
-//! Django's variable lexer allows a filter **at most one** argument, and it
-//! decides that before any filter is looked up — `filter_raw_string` in
+//! Django's variable lexer matches **at most one** argument per filter.
+//! The parser validates that match before rejecting leftover text. See `filter_raw_string` in
 //! `django/template/base.py`:
 //!
 //! ```python
@@ -202,46 +202,35 @@ pub(crate) fn argument_end(arg: &str) -> Option<usize> {
 /// removes them at render time so the dep-tracking extractor (#787) can still
 /// tell a literal from a bare identifier.
 pub fn split_filter_spec<'a>(spec: &'a str, token: &str) -> Result<(&'a str, Option<&'a str>)> {
-    let bytes = spec.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' | b'\'' => match quoted_string_end(bytes, i) {
-                Some(end) => i = end,
-                None => break,
-            },
-            b':' => {
-                let name = spec[..i].trim();
-                let arg = spec[i + 1..].trim();
-                let consumed = argument_end(arg).unwrap_or(0);
-                // Django's own wording. It reaches Python as a `RuntimeError`
-                // rather than `TemplateSyntaxError`, as every djust template
-                // error does; the property both engines share is that the
-                // template does not render.
-                if consumed == 0 {
-                    // Nothing usable after the separator, so Django's
-                    // `(?:arg_sep …)?` group does not match at all and the
-                    // COLON is part of the remainder — `{{ p|default: }}`
-                    // reports `':'`, not `''`.
-                    return Err(DjangoRustError::TemplateError(format!(
-                        "Could not parse the remainder: '{}' from '{}'",
-                        &spec[i..],
-                        token
-                    )));
-                }
-                if consumed != arg.len() {
-                    return Err(DjangoRustError::TemplateError(format!(
-                        "Could not parse the remainder: '{}' from '{}'",
-                        &arg[consumed..],
-                        token
-                    )));
-                }
-                return Ok((name, Some(arg)));
-            }
-            _ => i += 1,
+    let spec = spec.trim();
+    let (name, arg, consumed) = scan_filter_spec(spec);
+    if name.is_empty() || consumed != spec.len() {
+        return Err(DjangoRustError::TemplateError(format!(
+            "Could not parse the remainder: '{}' from '{}'",
+            &spec[consumed..],
+            token
+        )));
+    }
+    Ok((name, arg))
+}
+
+/// Read one filter match without rejecting its tail. The parser validates
+/// the matched argument/name/arity before Django reports an unmatched suffix.
+pub(crate) fn scan_filter_spec(spec: &str) -> (&str, Option<&str>, usize) {
+    let name_end: usize = spec
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .map(char::len_utf8)
+        .sum();
+    let mut consumed = name_end;
+    let mut arg = None;
+    if let Some(rest) = spec[name_end..].strip_prefix(':') {
+        if let Some(end) = argument_end(rest) {
+            arg = Some(&rest[..end]);
+            consumed += 1 + end;
         }
     }
-    Ok((spec.trim(), None))
+    (&spec[..name_end], arg, consumed)
 }
 
 #[cfg(test)]

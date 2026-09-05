@@ -40,7 +40,7 @@ if not settings.configured:
     )
     django.setup()
 
-from djust._rust import RustLiveView, has_assign_tag_handler, render_template
+from djust._rust import RustLiveView, has_assign_tag_handler, has_tag_handler, render_template
 
 # The template used across most tests: regroup then iterate the groups.
 TEMPLATE = (
@@ -53,26 +53,7 @@ TEMPLATE = (
 
 @pytest.fixture(autouse=True)
 def _ensure_regroup_handler_registered():
-    """Self-heal the built-in assign-tag handlers before every test (#2053).
-
-    ``python/djust/tests/conftest.py``'s autouse ``reset_djust_globals``
-    fixture already re-asserts the built-ins before each test in this
-    directory, so this is belt-and-suspenders: a sibling test ANYWHERE
-    in the same xdist worker that blindly re-registers every built-in
-    handler via ``register_tag_handler`` (the plain, non-assign registry)
-    — without checking ``isinstance(handler, AssignTagHandler)`` — plants
-    ``regroup`` in the WRONG Rust registry. Because the parser decides a
-    tag's node type at PARSE time by checking the plain registry BEFORE
-    the assign registry (``parser.rs`` — ``handler_exists`` before
-    ``assign_handler_exists``), the stray entry wins even though
-    ``has_assign_tag_handler("regroup")`` still (correctly) reports it
-    registered — every ``render_template()`` call in this file then fails
-    with "Handler 'regroup' render() must return a string". Calling
-    ``reregister_builtins()`` (idempotent) re-asserts the correct
-    registration AND strips any such cross-registry pollution, so this
-    file is self-contained regardless of what ran before it in the
-    worker.
-    """
+    """Restore built-in handlers before parsing, regardless of test order."""
     from djust.template_tags import reregister_builtins
 
     reregister_builtins()
@@ -86,10 +67,8 @@ def _ensure_regroup_handler_registered():
 
 def test_regroup_handler_is_registered():
     """The handler auto-registers on ``import djust`` (before any parse)."""
-    assert has_assign_tag_handler("regroup"), (
-        "{% regroup %} has no Rust assign-tag handler — the tag is unusable "
-        "in the Rust engine and renders as an unsupported tag."
-    )
+    assert has_tag_handler("regroup")
+    assert not has_assign_tag_handler("regroup")
 
 
 # ---------------------------------------------------------------------------
@@ -281,20 +260,25 @@ def test_handler_returns_grouped_result_shape():
             {"name": "NYC", "country": "USA"},
         ]
     }
-    result = handler.render(args, context)
+    html, result = handler.render(args, context)
+    assert html == ""
     assert list(result.keys()) == ["country_list"]
     groups = result["country_list"]
-    assert [g["grouper"] for g in groups] == ["India", "USA"]
-    assert [c["name"] for c in groups[0]["list"]] == ["Mumbai", "Delhi"]
-    assert [c["name"] for c in groups[1]["list"]] == ["NYC"]
+    assert [g.grouper for g in groups] == ["India", "USA"]
+    assert [c["name"] for c in groups[0].list] == ["Mumbai", "Delhi"]
+    assert [c["name"] for c in groups[1].list] == ["NYC"]
 
 
-def test_handler_malformed_args_is_noop():
-    """Malformed ``regroup`` args merge nothing (no crash)."""
+def test_handler_malformed_args_raises_django_syntax_error():
+    """Reject malformed operands at compilation, as Django does."""
+    from django.template import TemplateSyntaxError
     from djust.template_tags.regroup import RegroupTagHandler
 
     handler = RegroupTagHandler()
-    assert handler.render(["cities", "as", "x"], {"cities": []}) == {}
+    with pytest.raises(TemplateSyntaxError, match="takes five arguments"):
+        handler.validate_at_parse(["cities", "as", "x"])
+    with pytest.raises(TemplateSyntaxError, match="takes five arguments"):
+        handler.render(["cities", "as", "x"], {"cities": []})
 
 
 def test_handler_matches_django_regroup_grouper_values():
@@ -321,16 +305,9 @@ def test_handler_matches_django_regroup_grouper_values():
     assert rust_out == django_out == "India,USA,India,"
 
 
-def test_regroup_handler_declares_resolve_only_source():
-    """The handler opts into literal keyword/name operands (#2041).
-
-    ``RESOLVE_ARG_POSITIONS = {0}`` is the contract the Rust engine reads
-    at registration time to resolve ONLY the source expression and pass
-    ``by`` / ``<attr>`` / ``as`` / ``<var>`` through as literal tokens.
-    Pinning it here couples the declaration to the operand-shadow fix: an
-    accidental widening (e.g. back to ``None`` = resolve-all) reopens the
-    shadowing bug the end-to-end tests above guard.
-    """
+def test_regroup_handler_passes_raw_operands_to_django():
+    """Django compiles the source expression and literal keywords itself."""
     from djust.template_tags.regroup import RegroupTagHandler
 
-    assert RegroupTagHandler.RESOLVE_ARG_POSITIONS == {0}
+    assert RegroupTagHandler.RESOLVE_ARG_POSITIONS == set()
+    assert RegroupTagHandler.RETURNS_BINDINGS is True

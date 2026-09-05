@@ -201,8 +201,9 @@ class TemplateMixin:
                             template_dirs_str[:3],
                         )
 
-                # Store full template for initial GET rendering
-                self._full_template = resolved
+                # Keep inheritance intact for the initial GET: source flattening
+                # loses runtime block.super scopes and their parent bodies.
+                self._full_template = "{% extends " + json.dumps(self.template_name) + " %}"
 
                 # For VDOM tracking, prefer the child template source — it contains
                 # the dj-root block directly without base template surrounding HTML,

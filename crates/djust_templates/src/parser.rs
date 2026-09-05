@@ -8,6 +8,13 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
 pub enum Node {
+    /// Source provenance retained through inheritance and nested rendering.
+    Located {
+        nodes: Vec<Node>,
+        span: Span,
+        source: std::sync::Arc<str>,
+        origin: Option<String>,
+    },
     Text(String),
     /// Variable expression `{{ var|filter:arg }}`.
     ///
@@ -47,6 +54,7 @@ pub enum Node {
     },
     Extends(String), // Parent template path
     Include {
+        origin: Option<String>,
         template: String,
         with_vars: Vec<(String, String)>, // key=value assignments
         only: bool,                       // if true, only pass with_vars, not parent context
@@ -177,6 +185,7 @@ pub enum Node {
     /// alongside the cycle ids — the per-render state it keys lives on the
     /// `Context`, exactly as `{% cycle %}`'s does.
     IfChanged {
+        origin: Option<String>,
         vars: Vec<String>,
         id: String,
         nodes: Vec<Node>,
@@ -357,9 +366,8 @@ fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
 /// is available — it yields a more reproducible prefix derived from
 /// the source string itself, which keeps IDs stable across cosmetic
 /// token-stream representation changes (e.g. lexer refactors).
-/// The refusal text for a tag with no registered handler — one producer
-/// for the parser (parse-time, #2549) and the `Node::UnsupportedTag` render
-/// arm (hand-built nodes only), so the two can never drift (#1646).
+/// Legacy renderer diagnostic for a hand-built `Node::UnsupportedTag`.
+/// Source templates fail earlier with the parser's location-aware diagnostic.
 pub fn unsupported_tag_message(name: &str, args: &[String]) -> String {
     let args_str = if args.is_empty() {
         String::new()
@@ -385,6 +393,15 @@ pub const TEMPLATETAG_NAMES: [&str; 8] = [
     "opencomment",
     "closecomment",
 ];
+
+impl Node {
+    pub fn unlocated(&self) -> &Node {
+        match self {
+            Self::Located { nodes, .. } => nodes[0].unlocated(),
+            other => other,
+        }
+    }
+}
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
     parse_internal(tokens, &[], "", hash_tokens(tokens))
@@ -431,10 +448,12 @@ fn parse_internal(
     identity_hash: u64,
 ) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
+    let mut block_names = HashSet::new();
     let mut i = 0;
 
     while i < tokens.len() {
-        let node = parse_token(tokens, spans, source, &mut i)?;
+        let token_index = i;
+        let node = parse_token(&mut block_names, tokens, spans, source, &mut i, &[])?;
         if let Some(n) = node {
             // Django's `ExtendsNode.must_be_first` (`loader_tags.py`) refuses
             // the moment a SECOND non-text node is about to be appended
@@ -458,10 +477,34 @@ fn parse_internal(
                 let already_has_nontext = nodes
                     .iter()
                     .any(|existing| !matches!(existing, Node::Text(_)));
+                if already_has_extends {
+                    let mut after_extends = nodes
+                        .iter()
+                        .skip_while(|node| !matches!(node, Node::Extends(_)))
+                        .skip(1);
+                    if !after_extends.any(|node| !matches!(node, Node::Text(_))) {
+                        return Err(DjangoRustError::TemplateError(
+                            "'extends' cannot appear more than once in the same template"
+                                .to_string(),
+                        ));
+                    }
+                }
                 if already_has_extends || already_has_nontext {
-                    return Err(DjangoRustError::TemplateError(
-                        "'extends' must be the first tag in the template".to_string(),
-                    ));
+                    // Django reports the offending token's contents, preserving
+                    // internal whitespace but normalizing the delimiters.
+                    let contents = spans
+                        .get(token_index)
+                        .and_then(|(start, end)| source.get(*start..*end))
+                        .and_then(|raw| raw.strip_prefix("{%")?.strip_suffix("%}"))
+                        .map(|contents| contents.trim().to_string())
+                        .unwrap_or_else(|| match &tokens[token_index] {
+                            Token::Tag(name, args) => format!("{} {}", name, args.join(" ")),
+                            _ => unreachable!("an extends node comes from a tag token"),
+                        });
+                    return Err(DjangoRustError::TemplateError(format!(
+                        "{{% {contents} %}} must be the first tag in the template."
+                    ))
+                    .at(spans.get(token_index).copied()));
                 }
             }
             nodes.push(n);
@@ -494,6 +537,9 @@ fn parse_internal(
     let mut cycles = CycleResolution::default();
     resolve_cycle_nodes(&mut nodes, &prefix, &mut cycles)?;
 
+    if !spans.is_empty() {
+        crate::inheritance::set_node_sources(&mut nodes, &std::sync::Arc::from(source), None);
+    }
     Ok(nodes)
 }
 
@@ -574,6 +620,7 @@ pub fn template_hash_hex(source: &str) -> String {
 pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
     for node in nodes.iter_mut() {
         match node {
+            Node::Located { nodes, .. } => assign_if_marker_ids(nodes, prefix, counter),
             Node::If {
                 marker_id,
                 true_nodes,
@@ -669,6 +716,7 @@ fn resolve_cycle_nodes(
 ) -> Result<()> {
     for node in nodes.iter_mut() {
         match node {
+            Node::Located { nodes, .. } => resolve_cycle_nodes(nodes, prefix, state)?,
             Node::Cycle {
                 values,
                 name,
@@ -809,24 +857,36 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         + 1
 }
 
-/// A closer keyword (`endverbatim`/`endwith`/`endspaceless`/`endautoescape`/
-/// `endfilter`/`endif`/`endfor`/`endblock`/`else`/`elif`) reached where it is
-/// not the awaited terminator: either at the top level with nothing open, or
-/// inside a DIFFERENT block that was watching for a DIFFERENT terminator
-/// (#2580). Every one of these is ONLY ever legitimately consumed by its own
-/// opening tag's dedicated body-loop, which checks for its specific
-/// terminator BEFORE ever falling through to `parse_token` — so reaching
-/// this helper at all means the token is a stray. Django's parser hits the
-/// same fact from the other direction: none of these are independently-
-/// registered tags (`self.tags[command]` raises `KeyError`), so
-/// `Parser.parse` refuses with "Invalid block tag" the moment one appears
-/// where it is not the awaited terminator.
-fn stray_closer_error(spans: &[Span], source: &str, i: usize, tag_name: &str) -> DjangoRustError {
-    DjangoRustError::TemplateError(format!(
+/// Django's invalid-tag diagnostic, including the terminators accepted by
+/// the innermost parser body. Used for unknown tags and misplaced closers.
+fn invalid_block_tag_error(
+    spans: &[Span],
+    source: &str,
+    i: usize,
+    tag_name: &str,
+    expected: &[&str],
+) -> DjangoRustError {
+    let mut message = format!(
         "Invalid block tag on line {}: '{}'",
         line_at(spans, source, i),
         tag_name
-    ))
+    );
+    if let Some((last, rest)) = expected.split_last() {
+        message.push_str(", expected ");
+        if !rest.is_empty() {
+            message.push_str(
+                &rest
+                    .iter()
+                    .map(|name| format!("'{name}'"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            message.push_str(" or ");
+        }
+        message.push_str(&format!("'{last}'"));
+    }
+    message.push_str(". Did you forget to register or load this tag?");
+    DjangoRustError::TemplateError(message)
 }
 
 /// Django's `Parser.unclosed_block_tag` (`base.py:584`), verbatim: "Unclosed
@@ -854,20 +914,47 @@ fn unclosed_tag_error(
 }
 
 fn parse_token(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
     i: &mut usize,
+    expected: &[&str],
 ) -> Result<Option<Node>> {
     let at = *i;
-    parse_token_inner(tokens, spans, source, i).map_err(|e| e.at(spans.get(at).copied()))
+    parse_token_inner(block_names, tokens, spans, source, i, expected)
+        .map(|node| {
+            node.map(|node| {
+                if let Some(span) = spans.get(at) {
+                    if !matches!(
+                        node,
+                        Node::Text(_)
+                            | Node::Extends(_)
+                            | Node::Block { .. }
+                            | Node::Load(_)
+                            | Node::Comment
+                    ) {
+                        return Node::Located {
+                            nodes: vec![node],
+                            span: *span,
+                            source: std::sync::Arc::from(""),
+                            origin: None,
+                        };
+                    }
+                }
+                node
+            })
+        })
+        .map_err(|e| e.at(spans.get(at).copied()))
 }
 
 fn parse_token_inner(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
     i: &mut usize,
+    expected: &[&str],
 ) -> Result<Option<Node>> {
     match &tokens[*i] {
         Token::Text(text) => Ok(Some(Node::Text(text.clone()))),
@@ -975,8 +1062,15 @@ fn parse_token_inner(
                     //   <option value="{{ var }}" {% if cond %}selected{% endif %}>
                     // where Variable tokens separate the tag opening from the {% if %}.
                     let in_tag_context = is_inside_html_tag_at(tokens, *i);
-                    let (true_nodes, false_nodes, end_pos) =
-                        parse_if_block(tokens, spans, source, *i + 1, in_tag_context)?;
+                    let (true_nodes, false_nodes, end_pos) = parse_if_block(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        *i,
+                        in_tag_context,
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -1112,7 +1206,7 @@ fn parse_token_inner(
                     // rendered here.
                     validate_tag_operand(&iterable)?;
                     let (nodes, empty_nodes, end_pos) =
-                        parse_for_block(tokens, spans, source, *i + 1)?;
+                        parse_for_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_names,
@@ -1130,7 +1224,15 @@ fn parse_token_inner(
                         ));
                     }
                     let name = args[0].clone();
-                    let (nodes, end_pos) = parse_block(tokens, spans, source, *i + 1, &name)?;
+                    // Django registers names before parsing the block body,
+                    // so even nested or unreachable duplicates fail here.
+                    if !block_names.insert(name.clone()) {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'block' tag with name '{name}' appears more than once",
+                        )));
+                    }
+                    let (nodes, end_pos) =
+                        parse_block(block_names, tokens, spans, source, *i + 1, &name)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
                 }
@@ -1154,6 +1256,7 @@ fn parse_token_inner(
                     // variable form look for a file of its own name.
                     // Consumers strip the quotes themselves — see
                     // `inheritance::resolve_extends_target`.
+                    validate_tag_operand(&args[0])?;
                     let template = args[0].clone();
                     Ok(Some(Node::Extends(template)))
                 }
@@ -1161,15 +1264,12 @@ fn parse_token_inner(
                 "include" => {
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "Include tag requires a template name".to_string(),
+                            "'include' tag takes at least one argument: the name of the template to be included.".to_string(),
                         ));
                     }
-                    // Strip surrounding quotes (#1396) so Include.template
-                    // shares the unquoted-field contract with Extends/Static/Now.
-                    // Without this strip, the inheritance emitter
-                    // (`nodes_to_template_string`) double-wraps the value,
-                    // producing `{% include ""x.html"" %}` on round-trip.
-                    let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    // Keep the FilterExpression, including literal quotes, so
+                    // a quoted filename cannot resolve as a context variable.
+                    let template = args[0].to_string();
                     let mut with_vars = Vec::new();
                     let mut only = false;
                     let mut with_seen = false;
@@ -1250,6 +1350,7 @@ fn parse_token_inner(
                     }
 
                     Ok(Some(Node::Include {
+                        origin: None,
                         template,
                         with_vars,
                         only,
@@ -1262,6 +1363,16 @@ fn parse_token_inner(
                 }
 
                 "static" => {
+                    // Python-backed renders use Django's own compiler and
+                    // node, including expression and as-variable semantics.
+                    // Retain the native node for standalone Rust callers.
+                    if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        return Ok(Some(Node::CustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }));
+                    }
                     // {% static 'path/to/file' %} - generates static file URL.
                     // Django's `defaulttags.static`: "'static' takes at
                     // least one argument (path to file)" (#2581). Note
@@ -1305,10 +1416,9 @@ fn parse_token_inner(
                 }
 
                 "verbatim" => {
-                    // {% verbatim %} tag - output content literally without template processing
-                    // through the ONE raw-source collector (#2558): the raw-block
-                    // arm reconstructs the body the same way, so the two
-                    // re-emitters cannot drift (#1646).
+                    // The lexer preserves the body as Text and exposes only
+                    // the matching (possibly named) endverbatim tag. Collect
+                    // that text without parsing the literal template syntax.
                     let (content, end_pos) = collect_raw_source(
                         tokens,
                         *i + 1,
@@ -1319,46 +1429,71 @@ fn parse_token_inner(
                     Ok(Some(Node::Text(content)))
                 }
 
-                "endverbatim" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endverbatim" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "with" => {
-                    // {% with var=value var2=value2 %} ... {% endwith %}
-                    // Parse assignments
+                    // Django accepts either key=expression assignments or
+                    // expression as key [and expression as key] (legacy).
+                    // Consume every argument: silently dropping a suffix
+                    // accepts malformed templates Django refuses.
                     let mut assignments = Vec::new();
-                    for arg in args {
-                        if let Some(eq_pos) = arg.find('=') {
-                            let var_name = arg[..eq_pos].trim().to_string();
-                            let expression = arg[eq_pos + 1..].trim().to_string();
-                            // Each RHS is a TAG OPERAND — Django's `do_with`
-                            // runs it through `token_kwargs`, which calls
-                            // `compile_filter` at COMPILE time (#2411).
-                            validate_tag_operand(&expression)?;
-                            assignments.push((var_name, expression));
+                    let keyword_pair = |arg: &str| {
+                        arg.split_once('=').and_then(|(key, value)| {
+                            if !key.is_empty()
+                                && key.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                && !value.is_empty()
+                            {
+                                Some((key.to_string(), value.to_string(), 1))
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    let keyword = args.first().is_some_and(|arg| keyword_pair(arg).is_some());
+                    let mut pos = 0;
+                    while pos < args.len() {
+                        let pair = if keyword {
+                            keyword_pair(&args[pos])
+                        } else if pos + 2 < args.len() && args[pos + 1] == "as" {
+                            Some((args[pos + 2].clone(), args[pos].clone(), 3))
+                        } else {
+                            None
+                        };
+                        let Some((name, expression, consumed)) = pair else {
+                            break;
+                        };
+                        validate_tag_operand(&expression)?;
+                        assignments.push((name, expression));
+                        pos += consumed;
+                        if !keyword && pos < args.len() && args[pos] == "and" {
+                            pos += 1;
+                        } else if !keyword {
+                            break;
                         }
                     }
-
-                    // Django's `do_with` refuses when `token_kwargs` finds
-                    // zero valid `key=value` assignments — `{% with dict.key
-                    // xx key %}` and `{% with dict.key as %}` both have no
-                    // `=` anywhere in their args, so `assignments` is empty
-                    // here exactly when Django's `extra_context` is empty
-                    // there (#2580). Argument tokens with no `=` (a bare
-                    // word, or the legacy `expr as key` form djust does not
-                    // parse) are silently dropped by the loop above rather
-                    // than counted, so this check is the smallest fix that
-                    // matches djust's own currently-supported grammar.
                     if assignments.is_empty() {
                         return Err(DjangoRustError::TemplateError(
                             "'with' expected at least one variable assignment".to_string(),
                         ));
                     }
+                    if pos < args.len() {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'with' received an invalid token: '{}'",
+                            args[pos]
+                        )));
+                    }
 
-                    let (nodes, end_pos) = parse_with_block(tokens, spans, source, *i + 1)?;
+                    let (nodes, end_pos) =
+                        parse_with_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::With { assignments, nodes }))
                 }
 
-                "endwith" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endwith" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "load" => {
                     // {% load static %} — preserve library names so inheritance
@@ -1464,12 +1599,15 @@ fn parse_token_inner(
 
                 "spaceless" => {
                     // {% spaceless %} ... {% endspaceless %}
-                    let (nodes, end_pos) = parse_spaceless_block(tokens, spans, source, *i + 1)?;
+                    let (nodes, end_pos) =
+                        parse_spaceless_block(block_names, tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Spaceless { nodes }))
                 }
 
-                "endspaceless" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endspaceless" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "autoescape" => {
                     // {% autoescape on|off %} ... {% endautoescape %} (#2556).
@@ -1489,13 +1627,22 @@ fn parse_token_inner(
                             ));
                         }
                     };
-                    let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endautoescape")?;
+                    let (nodes, end_pos) = parse_block_custom_tag(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        *i,
+                        "endautoescape",
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
 
-                "endautoescape" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endautoescape" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "filter" => {
                     // {% filter f1|f2:arg %}...{% endfilter %} (#2556).
@@ -1519,13 +1666,22 @@ fn parse_token_inner(
                             )));
                         }
                     }
-                    let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endfilter")?;
+                    let (nodes, end_pos) = parse_block_custom_tag(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        *i,
+                        "endfilter",
+                    )?;
                     *i = end_pos;
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
 
-                "endfilter" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endfilter" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "ifchanged" => {
                     // {% ifchanged [var …] %}…[{% else %}…]{% endifchanged %}
@@ -1533,6 +1689,7 @@ fn parse_token_inner(
                     // operands (zero is the compare-the-output form) and so
                     // has no arity error of its own.
                     let (nodes, end_pos, hit) = parse_block_until_any(
+                        block_names,
                         tokens,
                         spans,
                         source,
@@ -1541,10 +1698,12 @@ fn parse_token_inner(
                     )?;
                     let (else_nodes, end_pos) = if hit == "else" {
                         let (else_nodes, end_pos) = parse_block_custom_tag(
+                            block_names,
                             tokens,
                             spans,
                             source,
                             end_pos + 1,
+                            *i,
                             "endifchanged",
                         )?;
                         (else_nodes, end_pos)
@@ -1553,6 +1712,7 @@ fn parse_token_inner(
                     };
                     *i = end_pos;
                     Ok(Some(Node::IfChanged {
+                        origin: None,
                         vars: args.clone(),
                         id: String::new(),
                         nodes,
@@ -1560,7 +1720,9 @@ fn parse_token_inner(
                     }))
                 }
 
-                "endifchanged" => Err(stray_closer_error(spans, source, *i, tag_name)),
+                "endifchanged" => Err(invalid_block_tag_error(
+                    spans, source, *i, tag_name, expected,
+                )),
 
                 "cycle" => {
                     // Django's `cycle()` grammar, `defaulttags.py` (#2556).
@@ -1640,6 +1802,16 @@ fn parse_token_inner(
                 }
 
                 "now" => {
+                    // Python-backed renders use Django's own compiler and
+                    // node, including expression and as-variable semantics.
+                    // Retain the native node for standalone Rust callers.
+                    if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        return Ok(Some(Node::CustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }));
+                    }
                     // {% now "format_string" %}. Django's `now` also
                     // accepts `{% now "fmt" as var %}` (`defaulttags.py`)
                     // and requires len(bits) == 2 after stripping that
@@ -1673,7 +1845,7 @@ fn parse_token_inner(
                     // `{% endblock %}` inside an unclosed `{% if %}`).
                     // `endverbatim`/`endwith`/`endspaceless`/
                     // `endautoescape`/`endfilter` get the SAME helper
-                    // ([`stray_closer_error`]) from arms placed right
+                    // ([`invalid_block_tag_error`]) from arms placed right
                     // after their own opening tags, deliberately NOT
                     // folded into this multi-name arm: this one already
                     // sat immediately before the match's `_ => { ... }`
@@ -1691,7 +1863,9 @@ fn parse_token_inner(
                     // the other five arms elsewhere in the match avoids
                     // creating that adjacency rather than fixing the
                     // scanner's regex.
-                    Err(stray_closer_error(spans, source, *i, tag_name))
+                    Err(invalid_block_tag_error(
+                        spans, source, *i, tag_name, expected,
+                    ))
                 }
 
                 _ => {
@@ -1723,8 +1897,15 @@ fn parse_token_inner(
                                 "'language' takes one argument (language)",
                             ));
                         }
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlanguage")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            *i,
+                            "endlanguage",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Language {
                             expr: args[0].clone(),
@@ -1742,8 +1923,15 @@ fn parse_token_inner(
                                 ));
                             }
                         };
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocalize")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            *i,
+                            "endlocalize",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Localize { use_l10n, children }));
                     }
@@ -1758,8 +1946,15 @@ fn parse_token_inner(
                                 ));
                             }
                         };
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocaltime")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            *i,
+                            "endlocaltime",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::LocalTime { use_tz, children }));
                     }
@@ -1769,8 +1964,15 @@ fn parse_token_inner(
                                 "'timezone' takes one argument (timezone)",
                             ));
                         }
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endtimezone")?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            *i,
+                            "endtimezone",
+                        )?;
                         *i = end_pos;
                         return Ok(Some(Node::Timezone {
                             expr: args[0].clone(),
@@ -1800,9 +2002,18 @@ fn parse_token_inner(
                     }
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
-                        let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, source, *i + 1, &end_tag)?;
+                        crate::registry::validate_tag_arguments(tag_name, args, true)?;
+                        let (children, end_pos) = parse_block_custom_tag(
+                            block_names,
+                            tokens,
+                            spans,
+                            source,
+                            *i + 1,
+                            *i,
+                            &end_tag,
+                        )?;
                         *i = end_pos;
+                        crate::registry::validate_block_after_body(tag_name, args)?;
                         Ok(Some(Node::BlockCustomTag {
                             name: tag_name.clone(),
                             args: args.clone(),
@@ -1817,6 +2028,7 @@ fn parse_token_inner(
                         // its library keeps working.
                         Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
+                        crate::registry::validate_tag_arguments(tag_name, args, false)?;
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {
                             name: tag_name.clone(),
@@ -1824,37 +2036,6 @@ fn parse_token_inner(
                         }))
                     } else if crate::registry::assign_handler_exists(tag_name) {
                         // Context-mutating assign tag (register_assign_tag_handler).
-                        //
-                        // `{% regroup %}` gets its own PARSE-time grammar
-                        // check here (#2580) rather than at the Python
-                        // handler: `RegroupTagHandler.render` degraded a
-                        // malformed call to a silent no-op merge, since
-                        // "the Rust parser has no such hook" (its own
-                        // comment) — no longer true. Django's `regroup`
-                        // (`defaulttags.py`) checks `len(bits) != 6`
-                        // (`bits` includes the tag name, so `args.len() !=
-                        // 5` here), `bits[2] != "by"` (`args[1]`), and
-                        // `bits[4] != "as"` (`args[3]`) — all at compile
-                        // time. Every other assign-tag handler keeps its
-                        // generic passthrough; this is `regroup`-specific.
-                        if tag_name == "regroup" {
-                            if args.len() != 5 {
-                                return Err(DjangoRustError::TemplateError(
-                                    "'regroup' tag takes five arguments".to_string(),
-                                ));
-                            }
-                            if args[1] != "by" {
-                                return Err(DjangoRustError::TemplateError(
-                                    "second argument to 'regroup' tag must be 'by'".to_string(),
-                                ));
-                            }
-                            if args[3] != "as" {
-                                return Err(DjangoRustError::TemplateError(
-                                    "next-to-last argument to 'regroup' tag must be 'as'"
-                                        .to_string(),
-                                ));
-                            }
-                        }
                         Ok(Some(Node::AssignTag {
                             name: tag_name.clone(),
                             args: args.clone(),
@@ -1866,13 +2047,11 @@ fn parse_token_inner(
                         // the renderer raised the same message when — and
                         // only if — the node was reached, so a defect in a
                         // branch that never rendered was silently accepted.
-                        // The message text is a published contract
-                        // (`rendering.py` keys a hint on it; the scoreboard
-                        // list generator parses it) and is byte-identical to
-                        // the render arm's.
-                        Err(DjangoRustError::TemplateError(unsupported_tag_message(
-                            tag_name, args,
-                        )))
+                        // Report the parser's active terminator set, matching
+                        // Django's lookup failure at this exact token.
+                        Err(invalid_block_tag_error(
+                            spans, source, *i, tag_name, expected,
+                        ))
                     }
                 }
             }
@@ -1908,15 +2087,19 @@ fn parse_token_inner(
             }
         }
 
-        Token::Comment(_) => Ok(Some(Node::Comment)),
+        // Inline comments create no Django node. Block comments do, and
+        // therefore count as content for the extends must-be-first rule.
+        Token::Comment(_) => Ok(None),
     }
 }
 
 fn parse_if_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
     start: usize,
+    opening_pos: usize,
     in_tag_context: bool,
 ) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut true_nodes = Vec::new();
@@ -1926,7 +2109,7 @@ fn parse_if_block(
 
     while i < tokens.len() {
         match &tokens[i] {
-            Token::Tag(name, args) if name == "else" => {
+            Token::Tag(name, args) if name == "else" && !in_else => {
                 // Django's `do_if` accepts the else clause only when
                 // `token.contents == "else"` exactly; any trailing content
                 // (`{% else if foo is not bar %}`) fails the following
@@ -1934,11 +2117,20 @@ fn parse_if_block(
                 // (#2576). djust had ignored the else args entirely, so
                 // `{% else if ... %}` was silently treated as a plain else.
                 if !args.is_empty() {
+                    let fallback = format!("else {}", args.join(" "));
+                    let contents = spans
+                        .get(i)
+                        .and_then(|(start, end)| source.get(*start..*end))
+                        .and_then(|raw| raw.strip_prefix("{%"))
+                        .and_then(|raw| raw.strip_suffix("%}"))
+                        .map(str::trim)
+                        .unwrap_or(&fallback);
                     return Err(DjangoRustError::TemplateError(format!(
-                        "Malformed {{% else %}} tag on line {}: {{% else {} %}} takes no arguments",
+                        "Malformed template tag at line {}: \"{}\"",
                         line_at(spans, source, i),
-                        args.join(" ")
-                    )));
+                        contents,
+                    ))
+                    .at(spans.get(i).copied()));
                 }
                 in_else = true;
                 i += 1;
@@ -1947,9 +2139,8 @@ fn parse_if_block(
             Token::Tag(name, args) if name == "elif" => {
                 // elif after else is invalid (matches Django behavior)
                 if in_else {
-                    return Err(DjangoRustError::TemplateError(
-                        "{% elif %} cannot appear after {% else %}".to_string(),
-                    ));
+                    return Err(invalid_block_tag_error(spans, source, i, name, &["endif"])
+                        .at(spans.get(i).copied()));
                 }
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
@@ -1963,8 +2154,15 @@ fn parse_if_block(
                 // `{% if %}`'s (#2576). See `validate_if_grammar`.
                 validate_if_grammar(args)?;
                 let elif_condition = args.join(" ");
-                let (elif_true, elif_false, end_pos) =
-                    parse_if_block(tokens, spans, source, i + 1, in_tag_context)?;
+                let (elif_true, elif_false, end_pos) = parse_if_block(
+                    block_names,
+                    tokens,
+                    spans,
+                    source,
+                    i + 1,
+                    opening_pos,
+                    in_tag_context,
+                )?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
@@ -1979,7 +2177,18 @@ fn parse_if_block(
                 return Ok((true_nodes, false_nodes, i));
             }
             _ => {
-                if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+                if let Some(node) = parse_token(
+                    block_names,
+                    tokens,
+                    spans,
+                    source,
+                    &mut i,
+                    if in_else {
+                        &["endif"]
+                    } else {
+                        &["elif", "else", "endif"]
+                    },
+                )? {
                     if in_else {
                         false_nodes.push(node);
                     } else {
@@ -1994,13 +2203,18 @@ fn parse_if_block(
     Err(unclosed_tag_error(
         spans,
         source,
-        start - 1,
+        opening_pos,
         "if",
-        &["elif", "else", "endif"],
+        if in_else {
+            &["endif"]
+        } else {
+            &["elif", "else", "endif"]
+        },
     ))
 }
 
 fn parse_for_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2015,7 +2229,7 @@ fn parse_for_block(
         if let Token::Tag(name, _) = &tokens[i] {
             if name == "endfor" {
                 return Ok((nodes, empty_nodes, i));
-            } else if name == "empty" {
+            } else if name == "empty" && !in_empty_block {
                 // Switch to parsing the empty block
                 in_empty_block = true;
                 i += 1;
@@ -2023,7 +2237,18 @@ fn parse_for_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(
+            block_names,
+            tokens,
+            spans,
+            source,
+            &mut i,
+            if in_empty_block {
+                &["endfor"]
+            } else {
+                &["empty", "endfor"]
+            },
+        )? {
             if in_empty_block {
                 empty_nodes.push(node);
             } else {
@@ -2038,11 +2263,16 @@ fn parse_for_block(
         source,
         start - 1,
         "for",
-        &["endfor"],
+        if in_empty_block {
+            &["endfor"]
+        } else {
+            &["empty", "endfor"]
+        },
     ))
 }
 
 fn parse_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2076,7 +2306,8 @@ fn parse_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &["endblock"])?
+        {
             nodes.push(node);
         }
         i += 1;
@@ -2092,6 +2323,7 @@ fn parse_block(
 }
 
 fn parse_with_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2107,14 +2339,18 @@ fn parse_with_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &["endwith"])? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed with tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "with",
+        &["endwith"],
     ))
 }
 
@@ -2136,6 +2372,7 @@ fn split_asvar(args: &[String]) -> (Vec<String>, Option<String>) {
 }
 
 fn parse_spaceless_block(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2151,14 +2388,25 @@ fn parse_spaceless_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(
+            block_names,
+            tokens,
+            spans,
+            source,
+            &mut i,
+            &["endspaceless"],
+        )? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed spaceless tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "spaceless",
+        &["endspaceless"],
     ))
 }
 
@@ -2235,6 +2483,7 @@ fn collect_raw_source(
 /// The single-terminator helper stays the common path; this one exists for
 /// `{% ifchanged %}`, whose body splits on `{% else %}`.
 fn parse_block_until_any(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
@@ -2251,23 +2500,32 @@ fn parse_block_until_any(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, end_tags)? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(format!(
-        "Unclosed block tag, expected {{% {} %}}",
-        end_tags[end_tags.len() - 1]
-    )))
+    let opening = match &tokens[start - 1] {
+        Token::Tag(name, _) => name.as_str(),
+        _ => "",
+    };
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        opening,
+        end_tags,
+    ))
 }
 
 fn parse_block_custom_tag(
+    block_names: &mut HashSet<String>,
     tokens: &[Token],
     spans: &[Span],
     source: &str,
     start: usize,
+    opening_pos: usize,
     end_tag: &str,
 ) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
@@ -2280,15 +2538,23 @@ fn parse_block_custom_tag(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
+        if let Some(node) = parse_token(block_names, tokens, spans, source, &mut i, &[end_tag])? {
             nodes.push(node);
         }
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(format!(
-        "Unclosed block tag, expected {{% {end_tag} %}}"
-    )))
+    let opening = match &tokens[opening_pos] {
+        Token::Tag(name, _) => name.as_str(),
+        _ => "",
+    };
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        opening_pos,
+        opening,
+        &[end_tag],
+    ))
 }
 
 /// Extract all variable paths from a Django template for JIT serialization.
@@ -2427,6 +2693,9 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
 ) {
     for node in nodes {
         match node {
+            Node::Located { nodes, .. } => {
+                collect_dj_model_fields_depth(nodes, loader, fields, depth)
+            }
             // The immune source: developer template text literals.
             Node::Text(text) => scan_dj_model_in_text(text, fields),
 
@@ -2594,6 +2863,7 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
     nodes
         .iter()
         .map(|node| {
+            let node = node.unlocated();
             let mut variables: HashMap<String, Vec<String>> = HashMap::new();
             extract_from_nodes(std::slice::from_ref(node), &mut variables);
             let mut deps: HashSet<String> = variables.into_keys().collect();
@@ -2650,6 +2920,7 @@ fn extract_from_nodes(
 ) {
     for node in nodes {
         match node {
+            Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
             Node::Variable(var_expr, filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}
                 extract_from_variable(var_expr, variables);
@@ -3117,89 +3388,39 @@ fn find_if_keyword(expr: &str) -> Option<usize> {
 /// `python/tests/test_filter_arity_2400.py` names the test that goes red when
 /// only one of them is removed.
 fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Option<String>)>> {
-    // Django's LEXER rule, one layer above the arity check (#2409):
-    // `filter_raw_string` allows at most ONE argument and requires the matches
-    // to tile the token, so a second `:arg` is `Could not parse the
-    // remainder`. `str::find(':')` took the first colon and kept the rest as
-    // one argument, so `{{ p|cut:"a":"b" }}` rendered rather than being
-    // refused. See [`crate::filter_lexer`], which both this site and
-    // `renderer::get_value_safe` call rather than carrying a copy each.
-    //
-    // NOTE: surrounding quotes on literal args (e.g. `"none"` in
-    // `default:"none"`) are preserved here so the dep-tracking extractor
-    // (issue #787) can tell a literal apart from a bare-identifier variable
-    // reference. The quote-strip happens at render time inside
-    // `strip_filter_arg_quotes`.
-    let mut specs: Vec<(String, Option<String>)> = Vec::with_capacity(parts.len());
+    let mut specs = Vec::with_capacity(parts.len());
     for filter_spec in parts {
-        let (name, arg) = crate::filter_lexer::split_filter_spec(filter_spec, token)?;
-        specs.push((name.to_string(), arg.map(str::to_string)));
-    }
-    for (name, arg) in &specs {
-        // Django builds the argument's `Variable` BEFORE `args_check` runs for
-        // that same filter, and both run before the NEXT filter is looked at
-        // (`FilterExpression.__init__`). So `{{ p|upper:_x }}` reports the
-        // underscore and `{{ p|upper:"a"|cut:_y }}` reports `upper`'s arity —
-        // which is why these two checks are interleaved per spec rather than
-        // run as two passes (#2418).
+        let spec = filter_spec.trim();
+        let (name, arg, consumed) = crate::filter_lexer::scan_filter_spec(spec);
+        let name_end = name.len();
+        // Django validates each regex match before inspecting its remainder:
+        // argument Variable, filter lookup, then argument count.
         if let Some(arg) = arg {
             validate_variable_name(arg)?;
         }
-        if let Some(message) =
-            crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
-        {
-            // Django's `TemplateSyntaxError` text verbatim. It crosses to
-            // Python as a `RuntimeError` rather than Django's class, as every
-            // djust template error does; the property both engines share is
-            // that the template does not compile.
-            return Err(DjangoRustError::TemplateError(message));
+        if name_end != 0 {
+            if !crate::filters::is_known_filter(name) {
+                return Err(DjangoRustError::TemplateError(format!(
+                    "Invalid filter: '{name}'"
+                )));
+            }
+            if let Some(message) =
+                crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
+            {
+                return Err(DjangoRustError::TemplateError(message));
+            }
         }
-        // `Invalid filter` — the name LOOKUP, at Django's time (#2419).
-        //
-        // Django resolves the name in `FilterExpression.__init__`
-        // (`filter_func = parser.find_filter(filter_name)`), so a name nothing
-        // implements refuses the template whether or not the node ever
-        // renders. djust looked it up in `filters::apply_filter_full_safe`, on
-        // the value — so `{% if 0 %}{{ p|nosuchfilter }}{% endif %}` and
-        // `{% if 0 and p|nosuchfilter %}` compiled here and refused there.
-        //
-        // Its position among the three refusals is NOT a behavioural choice,
-        // and saying so is the point (#2233). Django's own order inside
-        // `FilterExpression.__init__` is argument-`Variable` → `find_filter`
-        // → `args_check`, and this sits third — but the arity check and this
-        // one are MUTUALLY EXCLUSIVE by construction: `parse_time_arity_error`
-        // answers `None` for every name outside the built-in table, which is
-        // exactly the set this refuses. No template can reach both, so no
-        // test could tell the two orderings apart, and reordering to "match
-        // Django" would be a mechanism that changes nothing.
-        //
-        // The one place djust's order IS visible is against the LEXER bound
-        // above: `{{ p|nosuchfilter:"a":"b" }}` is `Invalid filter` on Django
-        // and `Could not parse the remainder` here, because `split_filter_spec`
-        // is what produces the name at all and so has to run first. Both
-        // engines refuse the template, which is the property this closes;
-        // only the wording differs. `TestDjangosOrderAmongTheRefusals`
-        // measures all of this against live Django rather than asserting the
-        // comment.
-        //
-        // ONE site closes both shapes, which is the condition #2411 attached
-        // to moving this at all: `{{ … }}` reaches here through
-        // `parse_token`, and every tag operand reaches here through
-        // `validate_tag_operand`. A check written for one of them would have
-        // been a second parallel path (#1646).
-        //
-        // The message keeps djust's existing `Unknown filter: <name>` wording
-        // rather than Django's `Invalid filter: '<name>'`. Both engines refuse,
-        // which is the property that matters; the wording is a published
-        // contract here — `template/rendering.py` keys its "not supported by
-        // the Rust engine" hint off this substring, and
-        // `tests/unit/test_rust_custom_filters_1121.py` pins it — so a second
-        // spelling for the same condition would be a drift of its own.
-        if !crate::filters::is_known_filter(name) {
+        if name_end == 0 || consumed != spec.len() {
+            let remainder = if name_end == 0 {
+                filter_spec.as_str()
+            } else {
+                &spec[consumed..]
+            };
             return Err(DjangoRustError::TemplateError(format!(
-                "Unknown filter: {name}"
+                "Could not parse the remainder: '{remainder}' from '{token}'"
             )));
         }
+        specs.push((name.to_string(), arg.map(str::to_string)));
     }
     Ok(specs)
 }
@@ -4138,10 +4359,7 @@ mod tests {
         // observed as that refusal rather than as an `UnsupportedTag` node.
         let tokens = tokenize("{% language \"de\" %}x{% endlanguage %}").expect("tokenize failed");
         let err = parse(&tokens).expect_err("an unarmed scope tag must be refused");
-        assert!(
-            err.to_string().contains("Unsupported template tag"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("Invalid block tag"), "{err}");
     }
 
     #[test]
@@ -4885,7 +5103,7 @@ mod tests {
             .expect_err("an unregistered tag must refuse at parse");
         assert!(
             err.to_string()
-                .contains("Unsupported template tag '{% react \"Button\" %}'"),
+                .contains("Invalid block tag on line 1: 'react'"),
             "got: {err}"
         );
     }
@@ -5152,7 +5370,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("elif"));
-        assert!(err.to_string().contains("else"));
+        assert!(err.to_string().contains("expected 'endif'"));
     }
 
     #[test]
@@ -5543,6 +5761,7 @@ mod dep_tests {
     /// isn't updated, compilation fails.
     fn sample_for_coverage(n: &Node) -> &'static str {
         match n {
+            Node::Located { .. } => "Located",
             Node::Text(_) => "Text",
             Node::Variable(..) => "Variable",
             Node::If { .. } => "If",
@@ -5587,6 +5806,12 @@ mod dep_tests {
     /// allow-listed variants).
     fn sample_nodes() -> Vec<Node> {
         vec![
+            Node::Located {
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
+                span: (0, 7),
+                source: std::sync::Arc::from("{{ a }}"),
+                origin: None,
+            },
             Node::Text("hi".into()),
             Node::Variable("a".into(), vec![], false),
             Node::If {
@@ -5609,7 +5834,8 @@ mod dep_tests {
             },
             Node::Extends("base.html".into()),
             Node::Include {
-                template: "x.html".into(),
+                origin: None,
+                template: "\"x.html\"".into(),
                 with_vars: vec![],
                 only: false,
             },
@@ -5694,6 +5920,7 @@ mod dep_tests {
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::IfChanged {
+                origin: None,
                 vars: vec!["a".into()],
                 id: String::new(),
                 nodes: vec![Node::Variable("a".into(), vec![], false)],

@@ -1,0 +1,1 @@
+- **Template library names stay local to their configured backend.** Constructing another backend no longer makes its extra libraries loadable or visible in unknown-library errors on existing backends.

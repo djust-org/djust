@@ -119,6 +119,11 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     //     today (it has no index arm below, and none of the carried names
     //     parses as an integer) and correct anyway, so the two cannot come
     //     apart if either set grows.
+    if let Value::NamedTuple { fields, items, .. } = current {
+        if let Some(index) = fields.iter().position(|field| field == part) {
+            return items.get(index);
+        }
+    }
     if let Value::Encoded(encoded) = current {
         if let Some(found) = encoded.attrs.get(part) {
             return Some(found);
@@ -130,13 +135,46 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     //     `ValueError` does.
     let index = part.parse::<usize>().ok()?;
     match current {
-        Value::List(items) | Value::Tuple(items) => items.get(index),
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            items.get(index)
+        }
         // A dict subscripted by an int. `ObjectKey` compares numerics BY
         // VALUE across `Int`/`Float`/`Bool`/`Decimal`/`BigInt` (#2339), which
         // is what makes `{{ d.1 }}` resolve against `{1.0: …}` and
         // `{True: …}` exactly as CPython's `{1.0: "a"}[1]` does.
         Value::Object(obj) => obj.get(&crate::ObjectKey::Int(index as i64)),
         _ => None,
+    }
+}
+
+/// One lexical binding scope, including the provenance of its values.
+#[derive(Clone, Debug, Default)]
+struct ScopeFrame {
+    values: AHashMap<String, Value>,
+    assignments: indexmap::IndexSet<String>,
+    invalid_block_super: bool,
+    safe_keys: AHashSet<String>,
+    unsafe_keys: AHashSet<String>,
+    revoked_safe_subtrees: AHashSet<String>,
+    // Canonical source paths preserve descendant safety and model lookup
+    // provenance. None masks an inherited alias after its name is rebound.
+    // Register aliases only when the new name still denotes that source value.
+    aliases: AHashMap<String, Option<String>>,
+    render_bindings: AHashSet<String>,
+    loop_scope: Option<u64>,
+    render_scope: Option<u64>,
+    include_instance: Option<String>,
+}
+
+impl std::ops::Deref for ScopeFrame {
+    type Target = AHashMap<String, Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+impl std::ops::DerefMut for ScopeFrame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.values
     }
 }
 
@@ -148,44 +186,8 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
 /// `user.username` cannot be resolved through the normal value stack.
 #[derive(Debug)]
 pub struct Context {
-    stack: Vec<AHashMap<String, Value>>,
-    /// Keys marked as safe (skip auto-escaping), like Django's SafeData
-    safe_keys: AHashSet<String>,
-    /// Name ALIASES: `name -> <dotted path prefix>` (#2375).
-    ///
-    /// djust's safety channel is keyed BY NAME — `safe_keys` holds dotted
-    /// paths written by `rust_bridge._collect_safe_keys` — so a construct that
-    /// binds a value to a NEW name has two ways to keep its grants:
-    ///
-    /// * **copy** them, which is what [`Context::bind`] does at the NAME
-    ///   granularity, and which cannot reach the paths BENEATH the name
-    ///   without an `O(len(safe_keys))` scan per bind;
-    /// * **alias** the name, which rewrites the whole dotted path on the way
-    ///   IN to [`Context::is_safe`] and costs `O(1)`.
-    ///
-    /// This was `loop_var -> (iterable_name, index)`, an alias in everything
-    /// but generality: it could express `item -> items.<i>` and nothing else,
-    /// so `{% for x in rows %}{{ x.a }}` resolved its grant and
-    /// `{% with q=p %}{{ q.a }}` did not. Widening it to a plain path prefix
-    /// retires that split rather than adding a second copy — the #1646 cure
-    /// of stating one mechanism rather than two.
-    ///
-    /// The invariant an alias asserts is that `name` **IS** the value at
-    /// `<prefix>`, so it may only be registered where that correspondence is
-    /// REAL. A filtered expression breaks it (`slice` shifts indices,
-    /// `dictsort` reorders), and for a dict the loop's positional form is a
-    /// live XSS rather than a theoretical one (#2334) — see the guards at
-    /// each registration site. Registering nothing costs only over-escaping,
-    /// which is the direction to fail in.
-    ///
-    /// A [`Context::bind`] REMOVES the alias for the name it binds, through
-    /// [`Context::revoke_safe_subtree`]. That is not an optimisation: without
-    /// it, `{% with q=p %}{% with q=hostile %}{{ q.a }}` would resolve `q.a`
-    /// through the STALE alias to `p.a` and emit the hostile value raw —
-    /// exactly the under-escape #2361/#2363 closed for the name itself,
-    /// reopened one path segment down. "A bind REPLACES the grant" has to
-    /// mean the alias too, or it means nothing.
-    aliases: AHashMap<String, String>,
+    stack: Vec<ScopeFrame>,
+    node_identity: Option<(usize, usize)>,
     /// Optional sidecar of raw Python objects keyed by top-level
     /// context name. Used only as a fallback when `get()` misses —
     /// the value-stack path remains the fast path for JSON-friendly
@@ -215,10 +217,10 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
-    /// Django's `Context.autoescape` (#2556). Default `true`; flipped ONLY by
-    /// the `{% autoescape off %}` render arm on a per-block clone, and copied
-    /// into the fresh `Context` an `{% include … only %}` builds — never from
-    /// data (a context key spelled `autoescape` has no effect). It is an
+    /// Django's `Context.autoescape` (#2556). Default `true`; plain render APIs
+    /// accept explicit policy, lexical autoescape bodies restore it on exit,
+    /// and `{% include … only %}` copies it into its fresh context. Context
+    /// dictionary keys cannot alter the policy. It is an
     /// EMIT-time term and the `needs_autoescape` argument, not a safety
     /// grant: `renderer::filter_output_is_safe` never reads it. Render-time on
     /// the `Context` for the same reason as `emit_dj_if_markers` — the parsed
@@ -237,8 +239,8 @@ pub struct Context {
     /// so two `{% include %}`s of one template share a node's state exactly
     /// as Django's cached `Template` shares its `CycleNode` objects.
     cycle_state: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
-    /// Per-RENDER state for `{% ifchanged %}`: `"<loop scope>|<node id>" ->
-    /// the last compared value`. Django keeps this in the frame returned by
+    /// Per-render `{% ifchanged %}` state, keyed by loop/render frame, source
+    /// origin, and node id, storing the last compared value. Django keeps this in the frame returned by
     /// `IfChangedNode._get_context_stack_frame` — `context["forloop"]` when
     /// inside a loop, else `context.render_context` — keyed by the node.
     ///
@@ -252,13 +254,8 @@ pub struct Context {
     /// Shared through the same `Arc` as `cycle_state` and for the same
     /// reason (`Context.__copy__` shallow-copies `render_context`).
     ifchanged_state: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
-    /// Identity of the innermost `{% for %}` execution, or `0` outside any
-    /// loop (Django's `render_context` frame). Cloned BY VALUE — a derived
-    /// context inherits the loop it sits in — and replaced only by
-    /// `begin_loop_scope`.
-    loop_scope: u64,
-    /// Mints `loop_scope` values. Shared like `cycle_state` so two sibling
-    /// loops in one render can never collide on an id.
+    /// Mints loop and template-render frame identities. Shared across clones
+    /// so sibling frames in one render cannot collide.
     loop_scope_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Django's `Engine.string_if_invalid` — what `{{ missing }}` renders.
     ///
@@ -291,8 +288,7 @@ impl Clone for Context {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
-            safe_keys: self.safe_keys.clone(),
-            aliases: self.aliases.clone(),
+            node_identity: self.node_identity,
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
@@ -308,7 +304,6 @@ impl Clone for Context {
             // `{% ifchanged %}` frame its parent does. `loop_scope` copies by
             // value so the clone stays in the loop it was made in.
             ifchanged_state: std::sync::Arc::clone(&self.ifchanged_state),
-            loop_scope: self.loop_scope,
             loop_scope_counter: std::sync::Arc::clone(&self.loop_scope_counter),
             string_if_invalid: self.string_if_invalid.clone(),
         }
@@ -363,16 +358,14 @@ pub enum Walked<'py> {
 impl Context {
     pub fn new() -> Self {
         Self {
-            stack: vec![AHashMap::new()],
-            safe_keys: AHashSet::new(),
-            aliases: AHashMap::new(),
+            stack: vec![ScopeFrame::default()],
+            node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
-            loop_scope: 0,
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
         }
@@ -388,16 +381,17 @@ impl Context {
             map.insert(k, v);
         }
         Self {
-            stack: vec![map],
-            safe_keys: AHashSet::new(),
-            aliases: AHashMap::new(),
+            stack: vec![ScopeFrame {
+                values: map,
+                ..ScopeFrame::default()
+            }],
+            node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
-            loop_scope: 0,
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
         }
@@ -423,8 +417,8 @@ impl Context {
     }
 
     /// Set Django's `Context.autoescape` for renders under this context
-    /// (#2556). Production writers are exactly the `{% autoescape %}` render
-    /// arm and the `{% include … only %}` fresh-context copy — pinned by a
+    /// (#2556). Production writers are the explicit plain-render API options,
+    /// lexical setting/restoration, and the include-only context copy, pinned by a
     /// source grep in `python/tests/test_autoescape_tag_2556.py`.
     pub fn set_autoescape(&mut self, on: bool) {
         self.autoescape = on;
@@ -478,15 +472,60 @@ impl Context {
     /// renders through — not per iteration, which would reset the state the
     /// tag exists to carry across iterations.
     pub fn begin_loop_scope(&mut self) {
-        self.loop_scope = self
+        let id = self
             .loop_scope_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
+        self.stack.last_mut().unwrap().loop_scope = Some(id);
+    }
+
+    pub fn replace_node_identity(
+        &mut self,
+        identity: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        std::mem::replace(&mut self.node_identity, identity)
+    }
+
+    pub fn node_identity(&self) -> Option<(usize, usize)> {
+        self.node_identity
+    }
+
+    fn include_instance(&self) -> &str {
+        self.stack
+            .iter()
+            .rev()
+            .find_map(|frame| frame.include_instance.as_deref())
+            .unwrap_or("")
+    }
+
+    /// Uncached Django loaders produce a distinct template for each IncludeNode.
+    /// Repeated execution of that same node still reuses its render-local template.
+    pub fn enter_include_instance(&mut self, shared: bool, identity: (usize, usize)) {
+        let instance = if shared {
+            String::new()
+        } else {
+            format!("{}/{:?}", self.include_instance(), identity)
+        };
+        self.stack.last_mut().unwrap().include_instance = Some(instance);
+    }
+
+    /// Template.render pushes fresh render_context state for each include.
+    /// Loop-bound ifchanged state still belongs to the enclosing forloop.
+    pub fn begin_template_render(&mut self) {
+        let id = self
+            .loop_scope_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        self.stack.last_mut().unwrap().render_scope = Some(id);
     }
 
     /// Set Django's `string_if_invalid` for this render.
     pub fn set_string_if_invalid(&mut self, value: impl Into<String>) {
         self.string_if_invalid = value.into();
+    }
+
+    pub fn string_if_invalid(&self) -> &str {
+        &self.string_if_invalid
     }
 
     /// `string_if_invalid` with Django's `%s` substitution already applied for
@@ -504,7 +543,11 @@ impl Context {
 
     /// The innermost loop-execution identity (`0` outside any loop).
     pub fn loop_scope(&self) -> u64 {
-        self.loop_scope
+        self.stack
+            .iter()
+            .rev()
+            .find_map(|frame| frame.loop_scope)
+            .unwrap_or(0)
     }
 
     /// `IfChangedNode.render`'s state check: has `value` changed since this
@@ -515,7 +558,30 @@ impl Context {
     /// resolved value equals) or when `value` differs from the stored one,
     /// and stores `value` in that case. Returns `false` when unchanged.
     pub fn ifchanged_step(&self, id: &str, value: &str) -> bool {
-        let key = format!("{}|{}", self.loop_scope, id);
+        self.ifchanged_step_in_template(id, None, value)
+    }
+
+    pub fn ifchanged_step_in_template(&self, id: &str, origin: Option<&str>, value: &str) -> bool {
+        let loop_scope = self.loop_scope();
+        let render_scope = if loop_scope == 0 {
+            self.stack
+                .iter()
+                .rev()
+                .find_map(|frame| frame.render_scope)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let key = format!(
+            "{:?}",
+            (
+                loop_scope,
+                render_scope,
+                self.include_instance(),
+                origin,
+                id
+            )
+        );
         let mut state = self
             .ifchanged_state
             .lock()
@@ -534,6 +600,9 @@ impl Context {
     /// building the context from JSON-compatible state. Safe to
     /// call with an empty map (no-op on lookup).
     pub fn set_raw_py_objects(&mut self, objects: HashMap<String, Py<PyAny>>) {
+        self.stack
+            .iter_mut()
+            .for_each(|frame| frame.render_bindings.clear());
         if objects.is_empty() {
             self.raw_py_objects = None;
         } else {
@@ -558,9 +627,32 @@ impl Context {
         self.raw_py_objects.as_deref()
     }
 
+    /// Sidecar values visible to a Python tag, excluding names rebound by
+    /// template scopes. Keep the original sidecar for lazy lookup and aliases;
+    /// a tag's flattened context must instead honor its current local values.
+    pub fn render_raw_py_objects(&self) -> Option<std::sync::Arc<HashMap<String, Py<PyAny>>>> {
+        let raw = self.raw_py_objects.as_ref()?;
+        let shadowed = |key: &String| {
+            self.stack
+                .iter()
+                .any(|frame| frame.render_bindings.contains(key))
+        };
+        if !raw.keys().any(shadowed) {
+            return Some(std::sync::Arc::clone(raw));
+        }
+        Some(Python::attach(|py| {
+            std::sync::Arc::new(
+                raw.iter()
+                    .filter(|(key, _)| !shadowed(key))
+                    .map(|(key, value)| (key.clone(), value.clone_ref(py)))
+                    .collect(),
+            )
+        }))
+    }
+
     /// Mark a variable name as safe (skip auto-escaping on render).
     pub fn mark_safe(&mut self, key: String) {
-        self.safe_keys.insert(key);
+        self.set_safety(&key, true);
     }
 
     /// Every dotted path currently marked safe, in no particular order (#2547).
@@ -571,7 +663,14 @@ impl Context {
     /// dict's values — `{% echo_arg safe %}` over a `mark_safe`d value must
     /// not escape it, as it does not on Django.
     pub fn safe_key_paths(&self) -> Vec<String> {
-        self.safe_keys.iter().cloned().collect()
+        self.stack
+            .iter()
+            .flat_map(|frame| frame.safe_keys.iter())
+            .filter(|key| self.is_marked_safe(key))
+            .cloned()
+            .collect::<AHashSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     /// Bind `name` to `value`, **REPLACING** whatever safety grant `name`
@@ -621,10 +720,54 @@ impl Context {
     /// only where the positional correspondence is genuine. That alias is
     /// left alone deliberately — it is how a real list's per-item marks
     /// (#2287) still resolve.
+    /// Assignments which survived at the caller's lexical scope.
+    pub fn root_assignments(&self) -> Vec<(String, Value)> {
+        let frame = &self.stack[0];
+        frame
+            .assignments
+            .iter()
+            .filter_map(|key| {
+                frame.get(key).map(|value| {
+                    let value = match value {
+                        Value::String(text) if self.is_safe(key) => Value::SafeString(text.clone()),
+                        other => other.clone(),
+                    };
+                    (key.clone(), value)
+                })
+            })
+            .collect()
+    }
+
+    /// A base block has no inheritance context; super is invalid until evaluated.
+    pub fn enter_base_block(&mut self) {
+        self.set("block".to_owned(), Value::Object(Default::default()));
+        self.stack.last_mut().unwrap().invalid_block_super = true;
+    }
+
     pub fn bind(&mut self, name: String, value: Value, safe: bool) {
-        self.revoke_safe_subtree(&name);
-        self.set_safety(&name, safe);
-        self.set(name, value);
+        self.bind_at(self.stack.len() - 1, name, value, safe);
+    }
+
+    /// Django's Context.set_upward: update the nearest existing binding.
+    pub fn bind_upward(&mut self, name: String, value: Value, safe: bool) {
+        let index = self
+            .stack
+            .iter()
+            .rposition(|frame| frame.contains_key(&name))
+            .unwrap_or(self.stack.len() - 1);
+        self.bind_at(index, name, value, safe);
+    }
+
+    fn bind_at(&mut self, index: usize, name: String, value: Value, safe: bool) {
+        if index == 0 {
+            self.stack[index].assignments.insert(name.clone());
+        }
+        if name == "block" {
+            self.stack[index].invalid_block_super = false;
+        }
+        self.revoke_safe_subtree_at(index, &name);
+        self.set_safety_at(index, &name, safe);
+        self.set_at(index, name, value);
     }
 
     /// The EXACT-NAME half of a [`Context::bind`]. `O(1)`.
@@ -642,10 +785,17 @@ impl Context {
     /// marked pays `O(N²)` prefix comparisons — `_collect_safe_keys` emits one
     /// path per marked item, so both factors are the list's own length.
     pub fn set_safety(&mut self, name: &str, safe: bool) {
+        self.set_safety_at(self.stack.len() - 1, name, safe);
+    }
+
+    fn set_safety_at(&mut self, index: usize, name: &str, safe: bool) {
+        let frame = &mut self.stack[index];
         if safe {
-            self.safe_keys.insert(name.to_string());
+            frame.unsafe_keys.remove(name);
+            frame.safe_keys.insert(name.to_string());
         } else {
-            self.safe_keys.remove(name);
+            frame.safe_keys.remove(name);
+            frame.unsafe_keys.insert(name.to_string());
         }
     }
 
@@ -656,62 +806,64 @@ impl Context {
     /// With `p.a` marked, leaving them makes
     /// `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw.
     pub fn revoke_safe_subtree(&mut self, key: &str) {
-        // The ALIASES go first, and deliberately BEFORE the `safe_keys`
-        // early-return below (#2375). An alias is a claim that one name IS the
-        // value at some path; a bind makes two such claims false, and BOTH are
-        // UNDER-escapes rather than over-escapes.
-        //
-        // 1. The alias ON this name. `{% with q=p %}{% with q=hostile %}`
-        //    would otherwise resolve `q.a` through the stale `p.a` and emit
-        //    raw. That is #2378's "a bind REPLACES the grant", one path
-        //    segment down.
-        //
-        // 2. Every alias whose TARGET is this name, or lives beneath it. This
-        //    one was found by probing rather than by reading, and it was a
-        //    LIVE XSS in the first version of this change:
-        //
-        //        {% with q=p %}{% with p=r|safe %}{{ q }}{% endwith %}{% endwith %}
-        //
-        //    binds `q` to the ORIGINAL `p` and then re-binds `p` to something
-        //    SAFE. `set_safety("p", true)` marks the NAME `p`; the surviving
-        //    alias `q -> p` then answered `is_safe("q")` from it, and `q`'s
-        //    value — the original, hostile one — went to the page UNESCAPED.
-        //    An alias asserts an identity, so rebinding either END of it has
-        //    to retire it.
-        //
-        // Both sit above the `safe_keys.is_empty()` guard, and that placement
-        // is load-bearing rather than defensive: in the leak above `safe_keys`
-        // IS empty at this point — `set_safety` fills it one line later — so
-        // an alias removal under the guard would not run at all.
-        self.aliases.remove(key);
-        let beneath = format!("{key}.");
-        self.aliases
-            .retain(|_, target| target != key && !target.starts_with(&beneath));
-        if self.safe_keys.is_empty() {
-            return;
-        }
-        self.safe_keys.remove(key);
+        self.revoke_safe_subtree_at(self.stack.len() - 1, key);
+    }
+
+    fn revoke_safe_subtree_at(&mut self, index: usize, key: &str) {
         let prefix = format!("{key}.");
-        self.safe_keys.retain(|k| !k.starts_with(&prefix));
+        let refers_to_key = |target: &str| target == key || target.starts_with(&prefix);
+        let aliases: Vec<String> = self
+            .stack
+            .iter()
+            .flat_map(|frame| frame.aliases.iter())
+            .filter(|(_, target)| target.as_deref().is_some_and(refers_to_key))
+            .map(|(name, _)| name.clone())
+            .collect();
+        // Mask aliases inherited from lower scopes, without modifying them.
+        let frame = &mut self.stack[index];
+        frame.aliases.insert(key.to_string(), None);
+        for name in aliases {
+            frame.aliases.insert(name, None);
+        }
+        frame.revoked_safe_subtrees.insert(key.to_string());
+        // An upward assignment also invalidates grants in scopes above its
+        // binding. Those scopes cannot keep grants for the replaced value.
+        for frame in &mut self.stack[index..] {
+            frame.safe_keys.retain(|name| !refers_to_key(name));
+            frame.unsafe_keys.retain(|name| !refers_to_key(name));
+            frame
+                .aliases
+                .retain(|_, target| !target.as_deref().is_some_and(refers_to_key));
+        }
     }
 
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
-        // First check directly
-        if self.safe_keys.contains(key) {
-            return true;
-        }
+        self.get(key).is_some_and(Value::is_safe_string)
+            || self.is_marked_safe(key)
+            || self
+                .resolve_alias(key)
+                .is_some_and(|target| self.is_marked_safe(&target))
+    }
 
-        // If not found, rewrite the path through the name ALIASES (#2375).
-        // `item.content` becomes `items.0.content` inside a loop, and `q.a`
-        // becomes `p.a` inside `{% with q=p %}` — one mechanism for what used
-        // to be a loop-only one.
-        if let Some(resolved_key) = self.resolve_alias(key) {
-            if self.safe_keys.contains(&resolved_key) {
+    fn is_marked_safe(&self, key: &str) -> bool {
+        let root = key.split('.').next().unwrap_or(key);
+        for frame in self.stack.iter().rev() {
+            if frame.safe_keys.contains(key) {
                 return true;
             }
+            if frame.unsafe_keys.contains(key)
+                || frame.revoked_safe_subtrees.iter().any(|name| {
+                    key == name
+                        || key
+                            .strip_prefix(name)
+                            .is_some_and(|rest| rest.starts_with('.'))
+                })
+                || frame.contains_key(root)
+            {
+                return false;
+            }
         }
-
         false
     }
 
@@ -769,7 +921,9 @@ impl Context {
     /// granularities, because both read this one set.
     pub fn items_are_safe(&self, key: &str) -> bool {
         let items = match self.get(key) {
-            Some(Value::List(items)) | Some(Value::Tuple(items)) => items,
+            Some(Value::List(items))
+            | Some(Value::Tuple(items))
+            | Some(Value::NamedTuple { items, .. }) => items,
             _ => return false,
         };
         if items.is_empty() {
@@ -786,8 +940,7 @@ impl Context {
 
         prefixes.iter().any(|prefix| {
             items.iter().enumerate().all(|(i, item)| {
-                matches!(item, Value::String(_))
-                    && self.safe_keys.contains(&format!("{prefix}.{i}"))
+                matches!(item, Value::String(_)) && self.is_marked_safe(&format!("{prefix}.{i}"))
             })
         })
     }
@@ -912,7 +1065,7 @@ impl Context {
         let (prefix, last) = key.rsplit_once('.')?;
         let index = last.parse::<usize>().ok()?;
         let base = match self.get(prefix) {
-            Some(Value::String(s)) => s.clone(),
+            Some(Value::String(s) | Value::SafeString(s)) => s.clone(),
             // A non-string prefix is not this step's business — `get` has
             // already tried every arm that applies to it.
             //
@@ -926,7 +1079,7 @@ impl Context {
             // the intent without depending on that invariant being noticed.
             Some(_) => return None,
             None => match self.string_index(prefix)? {
-                Value::String(s) => s,
+                Value::String(s) | Value::SafeString(s) => s,
                 _ => return None,
             },
         };
@@ -966,13 +1119,42 @@ impl Context {
     }
 
     pub fn set(&mut self, key: String, value: Value) {
-        if let Some(frame) = self.stack.last_mut() {
-            frame.insert(key, value);
+        self.set_at(self.stack.len() - 1, key, value);
+    }
+
+    fn set_at(&mut self, index: usize, key: String, value: Value) {
+        if self
+            .raw_py_objects
+            .as_ref()
+            .is_some_and(|raw| raw.contains_key(&key))
+        {
+            self.stack[index].render_bindings.insert(key.clone());
         }
+        self.stack[index].insert(key, value);
     }
 
     pub fn push(&mut self) {
-        self.stack.push(AHashMap::new());
+        self.stack.push(ScopeFrame::default());
+    }
+
+    /// Enter a lexical variable scope, restoring it on errors and panics.
+    pub fn with_scope<T>(&mut self, render: impl FnOnce(&mut Context) -> T) -> T {
+        struct Guard<'a> {
+            context: &'a mut Context,
+            depth: usize,
+        }
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.context.stack.truncate(self.depth);
+            }
+        }
+        let depth = self.stack.len();
+        self.push();
+        let guard = Guard {
+            context: self,
+            depth,
+        };
+        render(&mut *guard.context)
     }
 
     pub fn pop(&mut self) {
@@ -1022,7 +1204,11 @@ impl Context {
         if target == name || target.starts_with(&format!("{name}.")) {
             return;
         }
-        self.aliases.insert(name, target);
+        self.stack
+            .last_mut()
+            .unwrap()
+            .aliases
+            .insert(name, Some(target));
     }
 
     /// `path` with its first segment expanded through THIS context's aliases.
@@ -1038,7 +1224,11 @@ impl Context {
 
     /// Clear a loop variable's alias (when exiting the loop scope).
     pub fn clear_loop_mapping(&mut self, loop_var: &str) {
-        self.aliases.remove(loop_var);
+        self.stack
+            .last_mut()
+            .unwrap()
+            .aliases
+            .insert(loop_var.to_string(), None);
     }
 
     /// `key` rewritten through the alias on its FIRST segment, or `None` when
@@ -1048,15 +1238,22 @@ impl Context {
     /// "an alias that resolves to itself" — `is_safe` has already checked the
     /// un-rewritten spelling by the time it calls this.
     fn resolve_alias(&self, key: &str) -> Option<String> {
-        let (first, rest) = match key.split_once('.') {
-            Some((first, rest)) => (first, Some(rest)),
-            None => (key, None),
-        };
-        let prefix = self.aliases.get(first)?;
-        Some(match rest {
-            Some(rest) => format!("{prefix}.{rest}"),
-            None => prefix.clone(),
-        })
+        let (first, rest) = key
+            .split_once('.')
+            .map_or((key, None), |(a, b)| (a, Some(b)));
+        for frame in self.stack.iter().rev() {
+            if let Some(target) = frame.aliases.get(first) {
+                let prefix = target.as_ref()?;
+                return Some(match rest {
+                    Some(rest) => format!("{prefix}.{rest}"),
+                    None => prefix.clone(),
+                });
+            }
+            if frame.contains_key(first) {
+                return None;
+            }
+        }
+        None
     }
 
     /// `path` with its first segment expanded through the aliases, or `path`
@@ -1108,6 +1305,25 @@ impl Context {
     /// auto-called method* (Django propagates those); lookup failures
     /// stay `Ok(None)` as before.
     pub fn resolve(&self, key: &str) -> crate::Result<Option<Value>> {
+        if key.contains(".super") {
+            let canonical = self.alias_path(key);
+            if (canonical == "block.super" || canonical.starts_with("block.super."))
+                && self
+                    .stack
+                    .iter()
+                    .rev()
+                    .find(|frame| frame.contains_key("block"))
+                    .is_some_and(|frame| frame.invalid_block_super)
+            {
+                return Err(crate::DjangoRustError::TemplateSyntax(
+                    concat!(
+                        "'BlockNode' object has no attribute 'context'. Did you use ",
+                        "{{ block.super }} in a base template?"
+                    )
+                    .to_owned(),
+                ));
+            }
+        }
         // Django's THREE template builtins, tried LAST (#2347).
         //
         // `django.template.context.builtins` is `[{"True": True, "False":
@@ -1232,15 +1448,18 @@ impl Context {
         // register nothing and are NOT reached here either — they stay empty,
         // tracked at #2504.
         //
-        // Consulted only when `key`'s OWN head names no sidecar entry, which
-        // keeps the miss-only property this whole change is bounded by: the
-        // sidecar can ADD a resolution and never CHANGE one. In particular a
-        // loop variable that SHADOWS a top-level context name still resolves
-        // against the outer object exactly as it does today (wrongly — a
-        // pre-existing defect this fix deliberately does not move, #2505).
+        // A local binding must not fall back to the old object under the
+        // same name. Prefer its registered source alias when one exists;
+        // otherwise a shadowed raw root is unavailable. Local live handles
+        // have already been resolved by walk_from_handle above.
+        let is_shadowed = |name: &str| {
+            self.stack
+                .iter()
+                .any(|frame| frame.render_bindings.contains(name))
+        };
         let head = key.split('.').next().unwrap_or(key);
         let expanded;
-        let key = if raw.contains_key(head) {
+        let key = if raw.contains_key(head) && !is_shadowed(head) {
             key
         } else {
             match self.resolve_alias(key) {
@@ -1255,6 +1474,9 @@ impl Context {
         let Some(first) = parts.first().copied() else {
             return Ok(None);
         };
+        if is_shadowed(first) {
+            return Ok(None);
+        }
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };
@@ -1808,7 +2030,7 @@ impl Context {
         let mut result = HashMap::new();
         // Iterate from bottom to top so later frames override earlier ones
         for frame in &self.stack {
-            for (key, value) in frame {
+            for (key, value) in &frame.values {
                 result.insert(key.clone(), value.clone());
             }
         }

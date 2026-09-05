@@ -187,3 +187,23 @@ class TestRenderFullTemplateDoesNotDoubleRender:
             "child declaring its own real <div dj-root> regressed: expected "
             "ONE <footer>, got %d." % html.lower().count("<footer")
         )
+
+
+@pytest.mark.parametrize("expression", ["block.super", "block.super|upper"])
+def test_initial_shell_preserves_runtime_block_super(expression):
+    base = (
+        "<html><body>{% block content %}{% endblock %}"
+        "<footer>{% block footer %}parent{% endblock %}</footer></body></html>"
+    )
+    child = (
+        '{% extends "base_1746.html" %}'
+        "{% block content %}<div dj-root>reactive</div>{% endblock %}"
+        "{% block footer %}child:{{ " + expression + " }}{% endblock %}"
+    )
+    with _TemplateHarness(base, child):
+        view = _make_view_class("ShellSuperView")()
+        view.mount(None)
+        view.get_template()
+        html = view.render_full_template(None)
+    expected = "PARENT" if "upper" in expression else "parent"
+    assert f"<footer>child:{expected}</footer>" in html

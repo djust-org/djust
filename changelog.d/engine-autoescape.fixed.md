@@ -1,0 +1,1 @@
+- **Engine autoescape compatibility**: Honor the engine autoescape option and explicit Django Context overrides for plain template rendering, while retaining escaped defaults, lexical restoration, and isolation from context dictionary data.

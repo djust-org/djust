@@ -13,45 +13,13 @@ Django's `URLNode.render`::
         return ""
     return url
 
-djust had TWO `{% url %}` paths and they diverged in OPPOSITE directions:
+Historically the backend had a regex URL pre-pass alongside the native
+CustomTag channel. Issue #2616 removed that pre-pass: every entry point now
+uses UrlTagHandler at the node's actual render position. These tests retain
+coverage of literal and variable names, assignment, and exception identity.
 
-* **P1** — `DjustTemplate._resolve_url_tags`, a regex pre-pass in Python that
-  resolves every `{% url %}` whose name is a QUOTED literal before the Rust
-  parse. It raised — and raised even under `as var` (Django's
-  `test_url_asvar03` was an ERROR), with a re-worded message that dropped
-  Django's "N pattern(s) tried" text.
-* **P2** — the Rust `Node::CustomTag` → `UrlTagHandler.render` path, reached
-  by a variable name (`{% url named %}`) or a loop-variable argument. It
-  caught `NoReverseMatch` AND `Exception` and rendered `''` — a blank `href`
-  where Django raises (`test_url_fail11/12/13`).
-
-Three coordinated changes close it, and each has a test here that goes red
-when ONLY it is reverted (#2129/#2135 — no two mechanisms may shadow each
-other):
-
-1. `UrlTagHandler` raises (P2), and its `as var` form binds `''` on failure
-   through the `RETURNS_BINDINGS` channel (#2547). The renderer hands it the
-   trailing `as <name>` as TOKENS (`ACCEPTS_AS_VAR`, #2563) — before that
-   the two arrived as two empty strings, indistinguishable from
-   `{% url named "" "" %}`.
-2. P1 honours `as var` and re-raises Django's exception bare.
-3. `NoReverseMatch` is in `rendering.py::_is_user_raised`, so
-   `DjustTemplate.render` re-raises it bare instead of wrapping it as
-   `Exception("Error rendering template: …")`. Without this the raise in (1)
-   reaches the caller untyped and `assertRaises(NoReverseMatch)` still fails.
-
-   `{% url %}` needs NOTHING else from the boundary: it declares
-   `RETURNS_BINDINGS`, so it is called through `call_handler_with_bindings`,
-   which has mapped a handler's `PyErr` to `DjangoRustError::PythonException`
-   since #2547 — that half was already whole. The widening of the same
-   passthrough to the three `call_*_with_py_sidecar` sites (and
-   `renderer.rs::handler_call_error`) that this PR also carries is the #2506
-   class — every OTHER handler shape, none of which is `{% url %}` — and its
-   tests are `TestExceptionCrossesWhole` below, not the parity rows.
-
-Every parity case is measured against LIVE Django in-process on BOTH the plain
-backend (P1 + P2) and the LiveView entry (`RustLiveView`, which never runs the
-P1 regex — every `{% url %}` there is P2).
+Every parity case is measured against LIVE Django in-process on both the
+plain backend and the LiveView entry.
 
 Refs #2563, #2557 (the parse-time cells), #2547, #2508, #2506, #2037, #1646.
 """
@@ -105,7 +73,7 @@ def django_render(source: str, context: dict) -> str:
 
 
 def backend_render(source: str, context: dict) -> str:
-    """The plain backend: the P1 pre-pass, then Rust (P2) for the rest."""
+    """The plain backend, with URL nodes dispatched during rendering."""
     from djust.template_backend import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
@@ -115,7 +83,7 @@ def backend_render(source: str, context: dict) -> str:
 
 
 def liveview_render(source: str, context: dict) -> str:
-    """The LiveView entry: no P1 regex, every `{% url %}` is P2."""
+    """The LiveView entry uses the same URL handler."""
     view = _rust.RustLiveView(source, [])
     view.set_raw_py_values(dict(context))
     return view.render()
@@ -385,11 +353,11 @@ class TestUrlTagHandlerContract:
         handler = UrlTagHandler()
         assert handler.RETURNS_BINDINGS is True
         assert handler.ACCEPTS_AS_VAR is True
-        assert handler.render(["index"], {}) == ("/", {})
-        assert handler.render(["index", "as", AsVarName("v")], {}) == ("", {"v": "/"})
-        assert handler.render(["nope", "as", AsVarName("v")], {}) == ("", {"v": ""})
+        assert handler.render(["'index'"], {}) == ("/", {})
+        assert handler.render(["'index'", "as", AsVarName("v")], {}) == ("", {"v": "/"})
+        assert handler.render(["'nope'", "as", AsVarName("v")], {}) == ("", {"v": ""})
         with pytest.raises(NoReverseMatch):
-            handler.render(["nope"], {})
+            handler.render(["'nope'"], {})
 
     def test_accepts_as_var_requires_returns_bindings(self):
         """The Rust registry refuses the half-declaration: an `as var` tail
@@ -527,9 +495,11 @@ class TestStructuralPins:
                         f"{node.lineno} — the engine already decided; read AsVarName"
                     )
 
-        # And the handler consumes the marker.
-        url_src = (REPO / "python/djust/template_tags/url.py").read_text()
-        assert "isinstance(args[-1], AsVarName)" in url_src
+        # URL delegates the original tokens to Django instead of resolving
+        # them a second time; the generic marker channel remains available.
+        from djust.template_tags.url import UrlTagHandler
+
+        assert UrlTagHandler.RESOLVE_ARG_POSITIONS == set()
 
     def test_as_var_name_is_a_plain_str_subclass(self):
         """The marker must not change what a handler that ignores it sees."""

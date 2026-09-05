@@ -702,12 +702,11 @@ class TestTheFalsinessRuleStillHasONEDefinition:
             encoding="utf-8"
         )
 
-    def test_the_carrier_is_reused_and_no_new_variant_was_added(self) -> None:
-        """The `Value` enum is the same size it was.
+    def test_the_falsy_carrier_is_reused_and_variants_are_accounted_for(self) -> None:
+        """The falsy conversion keeps using Encoded, without another carrier.
 
-        A new variant would be a second carrier for one question, and would
-        have to be classified at every wildcard `match` arm in the workspace.
-        The count is an equality so a DELETED variant reddens it as well.
+        NamedTuple separately preserves tuple field names and is accounted
+        for here. Equality also detects an accidentally deleted variant.
         """
         source = self._production(CORE_RS)
         start = source.index("pub enum Value {")
@@ -729,8 +728,10 @@ class TestTheFalsinessRuleStillHasONEDefinition:
                 "Integer",
                 "Float",
                 "String",
+                "SafeString",
                 "List",
                 "Tuple",
+                "NamedTuple",
                 "Object",
                 "DictView",
                 "Decimal",

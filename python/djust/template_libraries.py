@@ -195,6 +195,10 @@ _current_backend: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "djust_template_backend", default=None
 )
 
+_current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[bool]]] = (
+    contextvars.ContextVar("djust_template_format_flags", default=(None, None))
+)
+
 _lock = threading.RLock()
 
 #: ``OPTIONS['libraries']`` from every ``DjustTemplateBackend`` constructed in
@@ -238,14 +242,32 @@ def raised_by_library(exc: BaseException) -> bool:
     return bool(getattr(exc, _RAISED_BY_LIBRARY, False))
 
 
+def localize_temporal(value: Any, use_l10n_override: Optional[bool] = None) -> str:
+    """Format a typed temporal render result using the active Context flags."""
+    from django.conf import settings
+    from django.utils.formats import localize
+    from django.utils.timezone import template_localtime
+
+    if not settings.configured:
+        return str(value)
+    use_l10n, use_tz = _current_format_flags.get()
+    if use_l10n_override is not None:
+        use_l10n = use_l10n_override
+    return str(localize(template_localtime(value, use_tz=use_tz), use_l10n=use_l10n))
+
+
 @contextlib.contextmanager
-def rendering_with_backend(backend: Any) -> Iterator[None]:
+def rendering_with_backend(
+    backend: Any, *, use_l10n: Optional[bool] = None, use_tz: Optional[bool] = None
+) -> Iterator[None]:
     """Make ``backend`` the one a bridged ``inclusion_tag`` renders through
     and a ``{% load %}`` resolves against, for the duration of a render."""
     token = _current_backend.set(backend)
+    flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
         yield
     finally:
+        _current_format_flags.reset(flags_token)
         _current_backend.reset(token)
 
 
@@ -282,8 +304,34 @@ def translate_msgid(msgid: str) -> str:
     return str(translation.gettext(mark_safe(msgid)))
 
 
+def resolve_date_format(name: str, index: Optional[int] = None) -> str:
+    """Resolve format settings or localized date-part dictionaries."""
+    from django.utils import dates, formats
+
+    if index is None:
+        return str(formats.get_format(name))
+    tables = {
+        "D": dates.WEEKDAYS_ABBR,
+        "l": dates.WEEKDAYS,
+        "F": dates.MONTHS,
+        "E": dates.MONTHS_ALT,
+        "M": dates.MONTHS_3,
+        "b": dates.MONTHS_3,
+        "N": dates.MONTHS_AP,
+    }
+    value = str(tables[name][index])
+    return value.title() if name == "M" else value
+
+
+def resolve_default_timezone() -> str:
+    """Naive datetimes use the project default, even inside an active zone."""
+    from django.utils.timezone import get_default_timezone_name
+
+    return get_default_timezone_name()
+
+
 def install_translator() -> bool:
-    """Install :func:`translate_msgid` as the ``_("…")`` translator hook (#2558).
+    """Install the translation and date-format hooks for the active language.
 
     Idempotent; ``False`` without the Rust extension.
     """
@@ -291,7 +339,7 @@ def install_translator() -> bool:
         from djust._rust import register_translator
     except ImportError:
         return False
-    register_translator(translate_msgid)
+    register_translator(translate_msgid, resolve_date_format, resolve_default_timezone)
     return True
 
 
@@ -398,8 +446,9 @@ def _library_map() -> Dict[str, Any]:
     #2517 scoreboard adapter) contributes EXACTLY its ``template_libraries``
     — Django parity, including the sorted "Must be one of" list. Otherwise
     (``DjustTemplateBackend``, the LiveView entry) the map is what
-    ``DjangoTemplates`` builds: ``get_installed_libraries()`` plus every
-    backend's ``OPTIONS['libraries']``.
+    ``DjangoTemplates`` builds: ``get_installed_libraries()`` plus the
+    current backend's ``OPTIONS['libraries']``. The bare LiveView entry
+    retains the process-wide library registrations when no backend is active.
     """
     global _installed_cache
     backend = _current_backend.get()
@@ -414,8 +463,10 @@ def _library_map() -> Dict[str, Any]:
 
         _installed_cache = dict(get_installed_libraries())
     known: Dict[str, Any] = dict(_installed_cache)
-    known.update(_extra_libraries)
-    if backend is not None:
+    if backend is None:
+        # The bare LiveView entry has no backend configuration of its own.
+        known.update(_extra_libraries)
+    else:
         known.update(getattr(backend, "template_libraries", None) or {})
     return known
 
@@ -749,9 +800,6 @@ class _StubTemplate:
     origin = None
 
 
-_STUB_TEMPLATE = _StubTemplate()
-
-
 class _LoaderBackend:
     """Django's ``template.loader`` as a backend-shaped object."""
 
@@ -798,7 +846,11 @@ def _materialize_lazy(value: Any) -> Any:
         return {k: _materialize_lazy(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         materialized = [_materialize_lazy(v) for v in value]
-        return type(value)(materialized) if isinstance(value, tuple) else materialized
+        if isinstance(value, tuple):
+            if isinstance(getattr(type(value), "_fields", None), tuple):
+                return type(value)(*materialized)
+            return type(value)(materialized)
+        return materialized
     return value
 
 
@@ -822,8 +874,11 @@ def _render_node(
     # (#1646). `Context(d)` keeps `d` as `dicts[-1]`, so passing the CALLER's
     # dict lets a node's `context[var] =` write through to it; the copy keeps
     # the node's writes inside the returned `bindings` diff, where they belong.
-    ctx = Context(dict(context), autoescape=autoescape)
-    ctx.template = _STUB_TEMPLATE
+    use_l10n, use_tz = _current_format_flags.get()
+    ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
+    if "request" in context:
+        ctx.request = context["request"]
+    ctx.template = _stub_template_with(*_render_engine_options())
     output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
@@ -874,6 +929,14 @@ class LibraryTagHandler:
             node = self.compile_func(_parser([]), _token(self.name, args))
             self._nodes[key] = node
         return node
+
+    def validate_at_parse(self, args: List[str]) -> None:
+        """Compile the tag without executing its render-time application code."""
+        try:
+            self._compile(args)
+        except BaseException as exc:
+            _stamp(exc)
+            raise
 
     def render(
         self, args: List[str], context: Dict[str, Any], autoescape: bool = True
@@ -933,6 +996,35 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         super().__init__(label, name, compile_func)
         self.end_name = _end_name(compile_func, name)
 
+    def validate_at_parse(self, args: List[str]) -> None:
+        # Let Django validate the signature, but stop exactly where it asks
+        # for the body. Argument errors must not hide errors inside that body.
+        class BodyReached(Exception):
+            pass
+
+        def stop_at_body(*args: Any, **kwargs: Any) -> Any:
+            raise BodyReached
+
+        parser = _parser([])
+        parser.parse = stop_at_body  # type: ignore[method-assign]
+        try:
+            self.compile_func(parser, _token(self.name, args))
+        except BodyReached:
+            pass
+        except BaseException as exc:
+            _stamp(exc)
+            raise
+
+    def validate_after_body(self, args: List[str]) -> None:
+        from django.template.base import Token, TokenType
+
+        try:
+            tokens = [Token(TokenType.BLOCK, self.end_name)]
+            self.compile_func(_parser(tokens), _token(self.name, args))
+        except BaseException as exc:
+            _stamp(exc)
+            raise
+
     def render(  # type: ignore[override]
         self, args: List[str], content: Any, context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
@@ -947,17 +1039,16 @@ class LibraryBlockTagHandler(LibraryTagHandler):
             raise
 
 
-def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
-    """A ``_StubTemplate`` whose engine carries the CURRENT render's
-    ``string_if_invalid`` (#2558).
+def _render_engine_options() -> Tuple[str, bool]:
+    backend = _current_backend.get()
+    return (
+        str(getattr(backend, "string_if_invalid", "") or ""),
+        bool(getattr(backend, "debug", False)),
+    )
 
-    ``BlockTranslateNode.render`` resolves a MISSING placeholder variable to
-    ``context.template.engine.string_if_invalid`` — that is how the suite's
-    i18n34 / invalidstr07 cells render ``INVALID`` under the scoreboard's
-    second engine. The scoreboard's ``DjustEngine`` IS a real Django
-    ``Engine``, so its attribute is read directly; the plain
-    ``DjustTemplateBackend`` does not carry one and contributes ``""``.
-    """
+
+def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
+    """Carry the active backend's variable-resolution and debug settings."""
     engine = _StubEngine()
     engine.string_if_invalid = string_if_invalid
     engine.debug = debug
@@ -992,6 +1083,16 @@ class CacheTagHandler:
     #: Raw tokens: this handler resolves what Django resolves and leaves the
     #: fragment name alone, which no positional policy can express.
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
+
+    def validate_at_parse(self, args: List[str]) -> None:
+        from django.template.base import Token, TokenType
+        from django.templatetags.cache import do_cache
+
+        try:
+            do_cache(_parser([Token(TokenType.BLOCK, "endcache")]), _token("cache", args))
+        except BaseException as exc:
+            _stamp(exc)
+            raise
 
     def render(self, args: List[str], content: str, context: Dict[str, Any]) -> str:
         from django.core.cache import InvalidCacheBackendError, caches
@@ -1175,13 +1276,7 @@ class LibraryRawBlockTagHandler:
         return node
 
     def _string_if_invalid(self) -> Tuple[str, bool]:
-        backend = _current_backend.get()
-        if backend is None:
-            return "", False
-        return (
-            str(getattr(backend, "string_if_invalid", "") or ""),
-            bool(getattr(backend, "debug", False)),
-        )
+        return _render_engine_options()
 
     #: The same opt-in the inline bridge declares (#2556). `{% blocktranslate %}`
     #: resolves its `%(var)s` placeholders INSIDE `BlockTranslateNode`, against
@@ -1202,7 +1297,8 @@ class LibraryRawBlockTagHandler:
 
         try:
             before = dict(context)
-            ctx = Context(dict(context), autoescape=autoescape)
+            use_l10n, use_tz = _current_format_flags.get()
+            ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
             output = self._compile(list(args), body).render(ctx)

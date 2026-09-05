@@ -612,10 +612,7 @@ class TestRandomisedDifferential:
                 value_side += 1
         assert checked > 1500, f"corpus collapsed to {checked} comparable cells"
         assert not mismatched, "\n".join(sorted(set(mismatched))[:25])
-        assert value_side > 0, (
-            "no cell was classified value-side — either everything agrees now "
-            "or `_is_about_the_literal` stopped discriminating"
-        )
+        assert value_side == 0, "the remaining value-side add mismatches should now agree"
 
 
 class TestOneStatementOfEachRule:
@@ -676,15 +673,12 @@ class TestOneStatementOfEachRule:
             "the lowercase djust extension is mapped in more than one place (#1646)"
         )
 
-    def test_the_bool_argument_rule_has_both_int_helpers_as_callers(self) -> None:
-        """``python_int_arg`` AND ``add`` — the drift that broke ``add:True``."""
+    def test_bool_arguments_use_shared_conversion_helpers(self) -> None:
+        """String-only filters use the literal helper; add retains Value::Bool."""
         filters = self._read("crates/djust_templates/src/filters.rs")
-        callers = filters.count("bare_bool_arg_as_int(")
-        # One definition plus two call sites.
-        assert callers == 3, (
-            f"bare_bool_arg_as_int appears {callers} times (expected 1 "
-            "definition + 2 call sites: python_int_arg and the add arm)"
-        )
+        assert filters.count("bare_bool_arg_as_int(") == 2
+        helper = filters.split("fn add_values(", 1)[1].split("\n}\n", 1)[0]
+        assert "python_int_value(arg)" in helper
 
     def test_the_literal_exemption_no_longer_lists_the_builtins(self) -> None:
         """The redundant mechanism was deleted, not left to shadow (#2233).

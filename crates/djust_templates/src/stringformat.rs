@@ -658,7 +658,7 @@ fn char_of(value: &Value) -> Result<String, Reject> {
             .map(String::from)
             .ok_or(Reject),
         Value::Bool(b) => Ok(String::from(char::from(u8::from(*b)))),
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             if s.chars().count() == 1 {
                 Ok(s.clone())
             } else {

@@ -22,19 +22,9 @@ Two independent mechanisms:
   `now`, `static` — each verified against LIVE Django, not transcribed
   from the issue body (which paraphrased some of these).
 
-**Not fixed here, and explicitly not part of the 8-cell scope this PR
-closes:**
-
-* `test_static_prefixtag_without_as` (`{% get_media_prefix %}`) — the tag
-  is not implemented AT ALL (confirmed: no `get_media_prefix` /
-  `get_static_prefix` anywhere in the crate or `python/djust/`), so djust
-  currently answers "Unsupported template tag", not a wrong message for a
-  supported one. Building the tag is a #2556-adjacent feature gap, not a
-  message-text fix.
-* `tests.DebugTemplateTests.test_compile_tag_error` — the issue's own text
-  excludes this from its 32-cell count. Different failure shape entirely
-  (`RuntimeError not raised`), needs the `{% load %}` bridge to import a
-  test-only library whose compile function deliberately raises.
+The static library is now bridged and its argument errors come directly from
+Django. Native Rust parse failures retain their RuntimeError boundary, while
+bridged compiler exceptions retain Django's TemplateSyntaxError class.
 
 Every Django expectation below is LIVE Django, never a transcription.
 """
@@ -55,7 +45,7 @@ def django_message(source: str, context: dict | None = None) -> str:
 
 
 def djust_message(source: str, context: dict | None = None) -> str:
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises((RuntimeError, TemplateSyntaxError)) as info:
         _rust.render_template(source, context or {})
     return str(info.value)
 
@@ -129,7 +119,7 @@ class TestExtendsTakesOneArgument:
         # No loader configured on the raw entry — confirms the arg-count
         # check does not fire (it reaches the loader stage instead), not
         # that the whole tag "works" in this harness.
-        with pytest.raises(RuntimeError) as info:
+        with pytest.raises((RuntimeError, TemplateSyntaxError)) as info:
             _rust.render_template('{% extends "base.html" %}{% block a %}x{% endblock %}', {})
         assert "takes one argument" not in str(info.value)
 
@@ -206,18 +196,14 @@ class TestStaticTakesAtLeastOneArgument:
 
 
 # --------------------------------------------------------------------------- #
-# scoped out — confirm the excluded cell is genuinely a different shape,
-# not silently fixed or silently made worse by this PR
+# static library prefix validation
 # --------------------------------------------------------------------------- #
 
 
-class TestGetMediaPrefixIsStillUnimplemented:
-    """`{% get_media_prefix as var %}` is not built — this PR must not
-    accidentally start answering something DIFFERENT for it (a crash, a
-    wrong render) while leaving the message wrong; "unsupported tag" is
-    the correct, unchanged shape until the tag itself exists (#2531-
-    adjacent, out of #2581's scope)."""
-
-    def test_still_unsupported(self):
-        msg = djust_message("{% get_media_prefix ad media_prefix %}")
-        assert "Unsupported template tag" in msg
+class TestGetMediaPrefixArgumentValidation:
+    def test_invalid_option_matches_django(self):
+        source = "{% load static %}{% get_media_prefix ad media_prefix %}"
+        engine = Engine(libraries={"static": "django.templatetags.static"})
+        with pytest.raises(TemplateSyntaxError) as reference:
+            engine.from_string(source)
+        assert djust_message(source) == str(reference.value)

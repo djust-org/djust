@@ -77,9 +77,9 @@ PARSE_TIME_CLASSES = [
     # instead of djust's prior "Unclosed if tag".
     ("{% for x in %}", "at least four words"),
     ("{% if x %}", "Unclosed tag on line"),
-    ("{{ x|nosuchfilter }}", "Unknown filter: nosuchfilter"),
+    ("{{ x|nosuchfilter }}", "Invalid filter: 'nosuchfilter'"),
     ("{{ x|upper:1 }}", "upper"),
-    ("{% unknowntag a b %}", "Unsupported template tag '{% unknowntag a b %}'"),
+    ("{% unknowntag a b %}", "Invalid block tag on line 1: 'unknowntag'"),
     ("{% templatetag bogus %}", "Unknown templatetag argument: 'bogus'"),
 ]
 
@@ -114,13 +114,13 @@ class TestConstructionTimeRefusal:
         """The whole point: a defect Django refuses at load and djust used to render."""
         source = "{% if False %}{% unknown %}{% endif %}"
         django_refuses_at_construction(source)
-        with pytest.raises(TemplateSyntaxError, match="Unsupported template tag '{% unknown %}'"):
+        with pytest.raises(TemplateSyntaxError, match="Invalid block tag on line 1: 'unknown'"):
             backend.from_string(source)
 
     def test_untaken_branch_unknown_filter_is_refused_like_django(self, backend):
         source = "{% if False %}{{ x|nosuchfilter }}{% endif %}"
         django_refuses_at_construction(source)
-        with pytest.raises(TemplateSyntaxError, match="Unknown filter: nosuchfilter"):
+        with pytest.raises(TemplateSyntaxError, match="Invalid filter: 'nosuchfilter'"):
             backend.from_string(source)
 
     def test_direct_construction_is_the_one_site(self):
@@ -141,30 +141,26 @@ class TestConstructionTimeRefusal:
         assert _rust.template_cache_contains(source) is True
 
     def test_message_is_the_engine_text_unchanged(self, backend):
-        """Published contract: the same bytes the render path raised with."""
+        """The Python exception preserves the native parser diagnostic."""
         with pytest.raises(DjustTemplateSyntaxError) as info:
-            # An unregistered tag. This used to be a REAL Django tag djust
-            # did not implement — `ifchanged` until #2517, `cache` until its
-            # library row — but no Django tag is refused any more, so what is
-            # pinned here is the message for a tag nothing registers, which is
-            # the same published text.
             backend.from_string("{% zzz_not_a_tag %}")
         assert str(info.value) == (
-            "Template error: Unsupported template tag '{% zzz_not_a_tag %}'. "
-            "Register a handler via djust._rust.register_tag_handler(), "
-            "or use Django's template engine instead."
+            "Template error: Invalid block tag on line 1: 'zzz_not_a_tag'. "
+            "Did you forget to register or load this tag?"
         )
 
     def test_render_time_failure_is_unchanged(self, backend):
         """``widthratio``'s non-numeric final argument is a RENDER-time error on
         Django (``WidthRatioNode.render``) and stays one here: construction
-        succeeds, render raises the wrapper's bare ``Exception`` as before."""
+        succeeds, render raises Django's ``TemplateSyntaxError``."""
         source = "{% widthratio a b c %}"
         Engine().from_string(source)  # Django constructs it fine
         t = backend.from_string(source)
-        with pytest.raises(Exception, match=r"^Error rendering template: .*widthratio") as info:
+        with pytest.raises(
+            TemplateSyntaxError, match="widthratio final argument must be a number"
+        ) as info:
             t.render({"a": 1, "b": 2, "c": "notanumber"})
-        assert type(info.value) is Exception
+        assert type(info.value) is TemplateSyntaxError
 
 
 class TestPromotedToParseTime:
@@ -172,7 +168,7 @@ class TestPromotedToParseTime:
     Rust parse directly, so they are red when ONLY the promotion is reverted."""
 
     def test_unregistered_tag_refuses_at_parse(self):
-        with pytest.raises(RuntimeError, match="Unsupported template tag '{% unknowntag %}'"):
+        with pytest.raises(RuntimeError, match="Invalid block tag on line 1: 'unknowntag'"):
             _rust.compile_template("{% if False %}{% unknowntag %}{% endif %}")
 
     def test_unknown_templatetag_argument_refuses_at_parse(self):
@@ -201,7 +197,7 @@ class TestPromotedToParseTime:
     def test_late_registration_is_honoured(self):
         """A failed parse is never cached: register the handler, parse again, it works."""
         source = "{% late_2549_tag %}"
-        with pytest.raises(RuntimeError, match="Unsupported template tag"):
+        with pytest.raises(RuntimeError, match="Invalid block tag"):
             _rust.compile_template(source)
 
         class Late:
@@ -262,4 +258,4 @@ class TestExistingCallersStillCatch:
             reporter = ExceptionReporter(rf.get("/"), *sys.exc_info())
             data = reporter.get_traceback_data()
         assert data["template_info"]["during"] == "{% unknown %}"
-        assert "Unsupported template tag" in data["exception_value"]
+        assert "Invalid block tag" in data["exception_value"]

@@ -225,9 +225,8 @@ class TestTheUnpackArityDivergenceMoved:
         with pytest.raises(ValueError) as django_exc:
             DjangoTemplate(tpl).render(DjangoContext(dict(ctx)))
         assert str(django_exc.value) == expected
-        # `RuntimeError`, not `ValueError`: every djust render error crosses
-        # the PyO3 boundary as one. The message is Django's, verbatim.
-        with pytest.raises(RuntimeError) as djust_exc:
+        # The class and message both survive the PyO3 boundary unchanged.
+        with pytest.raises(ValueError) as djust_exc:
             _rust.render_template_with_dirs(tpl, dict(ctx), [], None)
         assert str(djust_exc.value).endswith(expected), djust_exc.value
 

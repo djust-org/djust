@@ -8,12 +8,151 @@
 //! - Rendering final templates with block overrides
 
 use crate::parser::Node;
-use djust_core::{Context, DjangoRustError, Result};
+use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
+
+// Physical child lists shared by the immutable discovery walk and mutable
+// override walk. Exhaustive matching makes new node variants require a
+// traversal decision; no catch-all may silently hide a new container.
+macro_rules! child_lists {
+    ($node:expr) => {
+        match $node {
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => [Some(true_nodes), Some(false_nodes)],
+            Node::For {
+                nodes, empty_nodes, ..
+            } => [Some(nodes), Some(empty_nodes)],
+            Node::IfChanged {
+                nodes, else_nodes, ..
+            } => [Some(nodes), Some(else_nodes)],
+            Node::BlockSuperScope { super_nodes, nodes } => [Some(super_nodes), Some(nodes)],
+            Node::Located { nodes, .. }
+            | Node::Block { nodes, .. }
+            | Node::With { nodes, .. }
+            | Node::Spaceless { nodes }
+            | Node::AutoEscape { nodes, .. }
+            | Node::Filter { nodes, .. } => [Some(nodes), None],
+            Node::ReactComponent { children, .. }
+            | Node::BlockCustomTag { children, .. }
+            | Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => [Some(children), None],
+            Node::Text(_)
+            | Node::Variable(..)
+            | Node::Extends(_)
+            | Node::Include { .. }
+            | Node::Comment
+            | Node::Load(_)
+            | Node::CsrfToken
+            | Node::Static(_)
+            | Node::RustComponent { .. }
+            | Node::CustomTag { .. }
+            | Node::WidthRatio { .. }
+            | Node::FirstOf { .. }
+            | Node::TemplateTag(_)
+            | Node::Cycle { .. }
+            | Node::ResetCycle { .. }
+            | Node::Now(_)
+            | Node::UnsupportedTag { .. }
+            | Node::AssignTag { .. }
+            | Node::InlineIf { .. }
+            | Node::RawBlockCustomTag { .. } => [None, None],
+        }
+    };
+}
+
+/// Validate literal path syntax before any branch can be selected.
+pub fn validate_relative_references(nodes: &[Node], name: &str) -> Result<()> {
+    for node in nodes {
+        let operand = match node {
+            Node::Extends(token) => Some((token, name, false)),
+            Node::Include {
+                template, origin, ..
+            } => Some((template, origin.as_deref().unwrap_or(name), true)),
+            _ => None,
+        };
+        if let Some((token, origin, allow_recursion)) = operand {
+            let bytes = token.as_bytes();
+            let quoted = bytes.len() >= 2
+                && matches!(bytes[0], b'\'' | b'"')
+                && bytes[0] == bytes[bytes.len() - 1];
+            if quoted && !crate::filter_lexer::has_unquoted_pipe(token) {
+                construct_relative_path_allow_recursion(Some(origin), token, allow_recursion)?;
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            validate_relative_references(children, name)?;
+        }
+    }
+    Ok(())
+}
+
+/// Prepare named nodes before rendering or storing them in a loader cache.
+pub fn set_include_origins(nodes: &mut [Node], name: &str) -> Result<()> {
+    validate_relative_references(nodes, name)?;
+    attach_include_origins(nodes, name);
+    Ok(())
+}
+
+/// Preserve the defining template name when includes move through inheritance.
+fn attach_include_origins(nodes: &mut [Node], name: &str) {
+    for node in nodes {
+        if let Node::Include { origin, .. } = node {
+            if origin.is_none() {
+                *origin = Some(name.to_string());
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            attach_include_origins(children, name);
+        }
+    }
+}
+
+/// Preserve node identity across files with identical template source.
+/// Loaded parent origins survive block merging; the same cached origin keeps
+/// sharing its state when included repeatedly inside a loop.
+pub fn set_ifchanged_origins(nodes: &mut [Node], template_origin: &str) {
+    for node in nodes {
+        if let Node::IfChanged { origin, .. } = node {
+            if origin.is_none() {
+                *origin = Some(template_origin.to_string());
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            set_ifchanged_origins(children, template_origin);
+        }
+    }
+}
+
+/// Fill provenance once; inherited child nodes keep their defining source.
+pub fn set_node_sources(nodes: &mut [Node], source: &Arc<str>, origin: Option<&str>) {
+    for node in nodes {
+        if let Node::Located {
+            source: own,
+            origin: name,
+            ..
+        } = node
+        {
+            if own.is_empty() {
+                *own = source.clone();
+            }
+            if name.is_none() {
+                *name = origin.map(str::to_owned);
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            set_node_sources(children, source, origin);
+        }
+    }
+}
 
 /// Represents a template in the inheritance chain
 #[derive(Debug, Clone)]
@@ -92,12 +231,18 @@ impl InheritanceChain {
                     parents.insert(name.clone(), existing.clone());
                 }
                 let content = match merged.get(name) {
-                    // Only a body that actually references `block.super` gets
-                    // the wrapper: Django resolves it lazily, so an unwrapped
-                    // body must not render its parent at all.
+                    // Only a body referencing `block.super` requests parent
+                    // content; other inherited blocks get an empty context
+                    // below without evaluating an unused parent.
                     Some(previous) if nodes_reference_block_super(nodes) => {
                         vec![Node::BlockSuperScope {
                             super_nodes: previous.clone(),
+                            nodes: nodes.clone(),
+                        }]
+                    }
+                    _ if self.layers.len() > 1 => {
+                        vec![Node::BlockSuperScope {
+                            super_nodes: vec![],
                             nodes: nodes.clone(),
                         }]
                     }
@@ -125,67 +270,18 @@ impl InheritanceChain {
     }
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
-        match node {
-            Node::Block { name, nodes } => {
-                // Get the content for this block - either from merged overrides or original
-                let block_content = if let Some(merged_nodes) = self.merged_blocks.get(name) {
-                    merged_nodes.clone()
-                } else {
-                    nodes.clone()
-                };
-                // Always recursively apply overrides to handle nested blocks
-                Node::Block {
-                    name: name.clone(),
-                    nodes: self.apply_block_overrides(&block_content),
-                }
-            }
-            // Recursively process nested structures
-            Node::If {
-                condition,
-                true_nodes,
-                false_nodes,
-                in_tag_context,
-                marker_id,
-            } => Node::If {
-                condition: condition.clone(),
-                true_nodes: self.apply_block_overrides(true_nodes),
-                false_nodes: self.apply_block_overrides(false_nodes),
-                in_tag_context: *in_tag_context,
-                marker_id: marker_id.clone(),
+        let mut overridden = match node {
+            Node::Block { name, nodes } => Node::Block {
+                name: name.clone(),
+                nodes: self.merged_blocks.get(name).unwrap_or(nodes).clone(),
             },
-            Node::For {
-                var_names,
-                iterable,
-                reversed,
-                nodes,
-                empty_nodes,
-            } => Node::For {
-                var_names: var_names.clone(),
-                iterable: iterable.clone(),
-                reversed: *reversed,
-                nodes: self.apply_block_overrides(nodes),
-                empty_nodes: self.apply_block_overrides(empty_nodes),
-            },
-            Node::With { assignments, nodes } => Node::With {
-                assignments: assignments.clone(),
-                nodes: self.apply_block_overrides(nodes),
-            },
-            // A parent's `{% autoescape off %}{% block b %}…` governs the
-            // child's override, so the block inside it must be reachable
-            // (#2556).
-            Node::AutoEscape { on, nodes } => Node::AutoEscape {
-                on: *on,
-                nodes: self.apply_block_overrides(nodes),
-            },
-            Node::Filter { filters, nodes } => Node::Filter {
-                filters: filters.clone(),
-                nodes: self.apply_block_overrides(nodes),
-            },
-            // Skip extends nodes in the output
-            Node::Extends(_) => Node::Comment,
-            // Everything else passes through unchanged
+            Node::Extends(_) => return Node::Comment,
             _ => node.clone(),
+        };
+        for children in child_lists!(&mut overridden).into_iter().flatten() {
+            *children = self.apply_block_overrides(children);
         }
+        overridden
     }
 }
 
@@ -205,6 +301,7 @@ fn node_references_block_super(node: &Node) -> bool {
     }
 
     match node {
+        Node::Located { nodes, .. } => nodes.iter().any(node_references_block_super),
         // ---- expression-bearing leaves ------------------------------------
         Node::Variable(name, filters, _) => {
             name.trim() == "block.super"
@@ -343,42 +440,45 @@ fn extract_blocks(nodes: &[Node]) -> HashMap<String, Vec<Node>> {
 }
 
 fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>) {
-    match node {
-        Node::Block { name, nodes } => {
-            blocks.insert(name.clone(), nodes.clone());
-            // Also extract nested blocks
-            for child in nodes {
-                extract_blocks_recursive(child, blocks);
-            }
+    // Django SimpleBlockNode inherits SimpleNode.child_nodelists = (). Its
+    // body renders nested blocks, but does not declare descendant overrides.
+    if matches!(node, Node::BlockCustomTag { .. }) {
+        return;
+    }
+    if let Node::Block { name, nodes } = node {
+        blocks.insert(name.clone(), nodes.clone());
+    }
+    for children in child_lists!(node).into_iter().flatten() {
+        for child in children {
+            extract_blocks_recursive(child, blocks);
         }
-        Node::If {
-            true_nodes,
-            false_nodes,
-            ..
-        } => {
-            for child in true_nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-            for child in false_nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-        }
-        Node::For { nodes, .. }
-        | Node::With { nodes, .. }
-        | Node::AutoEscape { nodes, .. }
-        | Node::Filter { nodes, .. } => {
-            for child in nodes {
-                extract_blocks_recursive(child, blocks);
-            }
-        }
-        _ => {}
     }
 }
 
 /// Trait for loading parent templates
 /// This will be implemented by the Python integration layer
 pub trait TemplateLoader {
+    /// Whether separate include nodes receive the same compiled target.
+    fn shares_include_nodes(&self, _name: &str) -> bool {
+        true
+    }
+
     fn load_template(&self, name: &str) -> Result<Vec<Node>>;
+
+    /// Identity of the first source this loader would select, when available.
+    fn template_origin(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    /// Load an ancestor while excluding origins already in this extends chain.
+    /// Loaders without origin support retain their existing depth-limit behavior.
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        _skip: &[String],
+    ) -> Result<(Vec<Node>, Option<String>)> {
+        Ok((self.load_template(name)?, None))
+    }
 
     /// Like [`load_template`](Self::load_template), but returns a
     /// reference-counted, immutable slice whose ALLOCATION is stable across
@@ -404,7 +504,15 @@ pub trait TemplateLoader {
     /// the cache must be loader-instance-EXTERNAL (a process-global static,
     /// not a `&self` field).
     fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
-        Ok(std::sync::Arc::from(self.load_template(name)?))
+        let mut nodes = self.load_template(name)?;
+        set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(
+            &mut nodes,
+            &self
+                .template_origin(name)
+                .unwrap_or_else(|| name.to_string()),
+        );
+        Ok(std::sync::Arc::from(nodes))
     }
 }
 
@@ -421,6 +529,14 @@ pub trait TemplateLoader {
 pub fn construct_relative_path(
     current_template_name: Option<&str>,
     relative_name: &str,
+) -> Result<String> {
+    construct_relative_path_allow_recursion(current_template_name, relative_name, false)
+}
+
+pub fn construct_relative_path_allow_recursion(
+    current_template_name: Option<&str>,
+    relative_name: &str,
+    allow_recursion: bool,
 ) -> Result<String> {
     let new_name = relative_name.trim_matches(|c| c == '"' || c == '\'');
     if !(new_name.starts_with("./") || new_name.starts_with("../")) {
@@ -464,12 +580,12 @@ pub fn construct_relative_path(
     let normalized = parts.join("/");
 
     if normalized.starts_with("../") || normalized == ".." {
-        return Err(DjangoRustError::TemplateError(format!(
+        return Err(DjangoRustError::TemplateSyntax(format!(
             "The relative path '{relative_name}' points outside the file hierarchy that template '{current}' is in."
         )));
     }
-    if normalized == current {
-        return Err(DjangoRustError::TemplateError(format!(
+    if !allow_recursion && normalized == current {
+        return Err(DjangoRustError::TemplateSyntax(format!(
             "The relative path '{relative_name}' was translated to template name '{normalized}', the same template in which the tag appears."
         )));
     }
@@ -492,24 +608,23 @@ pub fn build_inheritance_chain<L: TemplateLoader>(
 /// `resolve_inheritance` pre-pass, which runs before any render) an unquoted
 /// token is returned as-is — the same string the pre-#2517 code used, so that
 /// path is unchanged.
-fn resolve_extends_target(token: &str, context: Option<&Context>) -> String {
+fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<Value> {
     let trimmed = token.trim();
+    if let Some(context) = context {
+        // Resolve the complete expression, including quoted initial operands.
+        // Checking only its first and last quotes misreads 'base'|cut:'x'.
+        return crate::renderer::resolve_extends_operand(trimmed, context);
+    }
+    // The context-free preprocessing API retains its literal-name behavior.
     let bytes = trimmed.as_bytes();
     let quoted = bytes.len() >= 2
         && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
-    if quoted {
-        return trimmed[1..trimmed.len() - 1].to_string();
-    }
-    let Some(context) = context else {
-        return trimmed.to_string();
-    };
-    match crate::renderer::resolve_extends_operand(trimmed, context) {
-        Some(name) if !name.is_empty() => name,
-        // A miss falls back to the token so the "not found" error still names
-        // what the author wrote.
-        _ => trimmed.to_string(),
-    }
+    Ok(Value::String(if quoted {
+        crate::parser::unescape_filter_arg_literal(trimmed).into_owned()
+    } else {
+        trimmed.to_string()
+    }))
 }
 
 /// [`build_inheritance_chain`] that knows the name of the template it starts
@@ -526,17 +641,73 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     template_name: Option<&str>,
     context: Option<&Context>,
 ) -> Result<InheritanceChain> {
+    let mut nodes = nodes;
+    if let Some(name) = template_name {
+        set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(
+            &mut nodes,
+            &loader
+                .template_origin(name)
+                .unwrap_or_else(|| name.to_string()),
+        );
+    }
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
     let mut current_name: Option<String> = template_name.map(str::to_string);
+    let mut history: Vec<String> = template_name
+        .and_then(|name| loader.template_origin(name))
+        .into_iter()
+        .collect();
 
     // Follow extends chain up to max_depth
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
-            let parent_name = parent_name.to_string(); // Clone to avoid borrow issues
-            let parent_name = resolve_extends_target(&parent_name, context);
-            let parent_name = construct_relative_path(current_name.as_deref(), &parent_name)?;
-            let parent_nodes = loader.load_template(&parent_name)?;
+            let parent_token = parent_name.to_string();
+            let parent_value = resolve_extends_target(&parent_token, context)?;
+            if let Some((source, name, origin, compiled)) =
+                crate::renderer::compiled_template_operand(&parent_value)?
+            {
+                let mut parent_nodes = if let Some(compiled) = compiled {
+                    pyo3::Python::attach(|py| compiled.borrow(py).nodes())
+                } else {
+                    let (tokens, spans) = crate::lexer::tokenize_spanned(&source)?;
+                    crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
+                        .map_err(DjangoRustError::into_template_syntax)
+                        .map_err(|error| error.with_template_source(&source, &origin))?
+                };
+                set_node_sources(
+                    &mut parent_nodes,
+                    &Arc::from(source.as_str()),
+                    Some(&origin),
+                );
+                if let Some(name) = &name {
+                    set_include_origins(&mut parent_nodes, name)?;
+                }
+                set_ifchanged_origins(&mut parent_nodes, &origin);
+                chain.add_parent(parent_nodes);
+                history.push(origin);
+                current_name = name;
+                depth += 1;
+                continue;
+            }
+            let parent_name = parent_value.to_string();
+            let quoted = parent_token.starts_with(['\'', '"'])
+                && !crate::filter_lexer::has_unquoted_pipe(&parent_token);
+            let parent_name = if quoted {
+                // Validate the raw token for Django's diagnostic spelling,
+                // then resolve the decoded literal for the filesystem lookup.
+                construct_relative_path(current_name.as_deref(), &parent_token)?;
+                construct_relative_path(current_name.as_deref(), &parent_name)?
+            } else {
+                parent_name
+            };
+            let (mut parent_nodes, origin) =
+                loader.load_template_skipping(&parent_name, &history)?;
+            if let Some(origin) = origin {
+                history.push(origin);
+            }
+            set_include_origins(&mut parent_nodes, &parent_name)?;
+            set_ifchanged_origins(&mut parent_nodes, &parent_name);
             chain.add_parent(parent_nodes);
             current_name = Some(parent_name);
             depth += 1;
@@ -645,74 +816,137 @@ fn template_name_is_contained(name: &str) -> bool {
     true
 }
 
+/// Keep cache-policy comparison identical to origin-history comparison.
+fn absolute_template_path(input: PathBuf) -> Result<PathBuf> {
+    let absolute = std::path::absolute(input)?;
+    let mut path = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => path.push(other.as_os_str()),
+        }
+    }
+    Ok(path)
+}
+
 /// Filesystem-based template loader for production use
 pub struct FilesystemTemplateLoader {
     template_dirs: Vec<std::path::PathBuf>,
+    uncached_dirs: Vec<std::path::PathBuf>,
 }
 
 impl FilesystemTemplateLoader {
     /// Create a new filesystem template loader with search directories
     pub fn new(template_dirs: Vec<std::path::PathBuf>) -> Self {
-        Self { template_dirs }
+        Self {
+            template_dirs,
+            uncached_dirs: Vec::new(),
+        }
+    }
+
+    pub fn with_uncached_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.uncached_dirs = dirs;
+        self
     }
 
     /// Find a template file by searching through template directories
-    fn find_template(&self, name: &str) -> Result<std::path::PathBuf> {
+    fn find_template(&self, name: &str) -> Result<PathBuf> {
+        self.find_template_skipping(name, &[])
+    }
+
+    fn find_template_skipping(&self, name: &str, skip: &[String]) -> Result<PathBuf> {
+        let mut tried = Vec::new();
+        let mut skipped = Vec::new();
         for dir in &self.template_dirs {
-            // Containment FIRST: a name that escapes the search directory is
-            // skipped, never joined. See `template_name_is_contained`.
+            // Check containment before joining or touching the filesystem.
             if !template_name_is_contained(name) {
                 continue;
             }
-            let path = dir.join(name);
-            // `is_file`, not `exists`: a DIRECTORY named `x.html` satisfied
-            // `exists()` and then failed on read (the #1805 is_dir-parity
-            // class). Django's loaders stat for a file.
+            // Django safe_join uses absolute, lexically normalized names.
+            // Do not canonicalize symlinks: distinct loader origins can point
+            // at the same physical file and remain distinct in Django.
+            let path = absolute_template_path(dir.join(name))?;
+            let origin = path.to_string_lossy().into_owned();
+            tried.push(origin.clone());
+            if skip.contains(&origin) {
+                skipped.push(origin);
+                continue;
+            }
             if path.is_file() {
                 return Ok(path);
             }
         }
-
-        // Build list of searched directories for error message
-        let searched_paths: Vec<String> = self
-            .template_dirs
-            .iter()
-            .map(|dir| format!("  - {}", dir.display()))
-            .collect();
-
-        Err(DjangoRustError::TemplateError(format!(
-            "Template not found: {}\nSearched in:\n{}",
-            name,
-            searched_paths.join("\n")
-        )))
+        if skipped.is_empty() {
+            Err(DjangoRustError::TemplateNotFound {
+                name: name.to_string(),
+                tried,
+            })
+        } else {
+            Err(DjangoRustError::TemplateHistoryNotFound {
+                name: name.to_string(),
+                tried,
+                skipped,
+            })
+        }
     }
-}
 
-impl TemplateLoader for FilesystemTemplateLoader {
-    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
-        use crate::lexer;
-        use crate::parser;
-
-        // Find template file
-        let path = self.find_template(name)?;
-
-        // Read template source
-        let source = std::fs::read_to_string(&path).map_err(|e| {
+    fn parse_template_path(&self, name: &str, path: &std::path::Path) -> Result<Vec<Node>> {
+        let source = std::fs::read_to_string(path).map_err(|e| {
             DjangoRustError::TemplateError(format!(
                 "Failed to read template {}: {}",
                 path.display(),
                 e
             ))
         })?;
+        let (tokens, spans) = crate::lexer::tokenize_spanned(&source)?;
+        let mut nodes = crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
+            .map_err(DjangoRustError::into_template_syntax)
+            .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
+        set_node_sources(
+            &mut nodes,
+            &Arc::from(source.as_str()),
+            Some(&path.to_string_lossy()),
+        );
+        set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(&mut nodes, &path.to_string_lossy());
+        Ok(nodes)
+    }
+}
 
-        // Parse template. Use `parse_with_source` so each loaded
-        // template gets its own boundary-marker ID prefix derived
-        // from its own source — prevents `if-<prefix>-N` collisions
-        // when a parent + child + included templates are composed
-        // in a single rendered output (Stage 11 finding on PR #1363,
-        // #1358 Iter 1).
-        let tokens = lexer::tokenize(&source)?;
-        parser::parse_with_source(&tokens, &source)
+impl TemplateLoader for FilesystemTemplateLoader {
+    fn shares_include_nodes(&self, name: &str) -> bool {
+        if self.uncached_dirs.is_empty() {
+            return true;
+        }
+        let Ok(path) = self.find_template(name) else {
+            return true;
+        };
+        !self.uncached_dirs.iter().any(|dir| {
+            absolute_template_path(dir.join(name)).is_ok_and(|candidate| candidate == path)
+        })
+    }
+
+    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+        self.parse_template_path(name, &self.find_template(name)?)
+    }
+
+    fn template_origin(&self, name: &str) -> Option<String> {
+        self.find_template(name)
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        skip: &[String],
+    ) -> Result<(Vec<Node>, Option<String>)> {
+        let path = self.find_template_skipping(name, skip)?;
+        let nodes = self.parse_template_path(name, &path)?;
+        Ok((nodes, Some(path.to_string_lossy().into_owned())))
     }
 
     /// Cached counterpart of [`load_template`](Self::load_template) — see
@@ -761,8 +995,17 @@ impl TemplateLoader for FilesystemTemplateLoader {
                 e
             ))
         })?;
-        let tokens = lexer::tokenize(&source)?;
-        let nodes_vec = parser::parse_with_source(&tokens, &source)?;
+        let (tokens, spans) = lexer::tokenize_spanned(&source)?;
+        let mut nodes_vec = parser::parse_with_source_spanned(&tokens, &spans, &source)
+            .map_err(DjangoRustError::into_template_syntax)
+            .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
+        set_node_sources(
+            &mut nodes_vec,
+            &Arc::from(source.as_str()),
+            Some(&path.to_string_lossy()),
+        );
+        set_include_origins(&mut nodes_vec, name)?;
+        set_ifchanged_origins(&mut nodes_vec, &path.to_string_lossy());
         let arc: Arc<[Node]> = Arc::from(nodes_vec);
 
         let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {
@@ -785,6 +1028,7 @@ fn nodes_to_template_string(nodes: &[Node]) -> String {
 /// Convert a single node back to template string format
 fn node_to_template_string(node: &Node) -> String {
     match node {
+        Node::Located { nodes, .. } => nodes_to_template_string(nodes),
         Node::Text(text) => text.clone(),
         Node::Variable(var_name, filters, _in_attr) => {
             let mut result = format!("{{{{ {var_name} ");
@@ -894,8 +1138,9 @@ fn node_to_template_string(node: &Node) -> String {
             template,
             with_vars,
             only,
+            ..
         } => {
-            let mut result = format!("{{% include \"{template}\"");
+            let mut result = format!("{{% include {template}");
             if !with_vars.is_empty() {
                 result.push_str(" with");
                 for (key, value) in with_vars {
@@ -1137,7 +1382,8 @@ pub fn resolve_template_inheritance(
     // own source — matches the production loader, see #1358 Iter 1
     // Stage 11 fix).
     let tokens = crate::lexer::tokenize(&source)?;
-    let nodes = crate::parser::parse_with_source(&tokens, &source)?;
+    let nodes = crate::parser::parse_with_source(&tokens, &source)
+        .map_err(DjangoRustError::into_template_syntax)?;
 
     // Check if template uses inheritance
     let uses_extends = nodes.iter().any(|node| matches!(node, Node::Extends(_)));

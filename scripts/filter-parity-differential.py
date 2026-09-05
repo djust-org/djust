@@ -210,6 +210,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+from collections import namedtuple
 import hashlib
 import inspect
 import itertools
@@ -630,6 +631,9 @@ FILTER_ARGS = {
 }
 
 INPUTS = {
+    "nt-empty": namedtuple("Empty", [])(),
+    "nt-plain": namedtuple("Pair", "left right")("a", "b"),
+    "nt-marked": namedtuple("Pair", "left right")(mark_safe("<b>x</b>"), mark_safe("<i>y</i>")),
     "s-img": "<img src=x onerror=alert(1)>",
     "s-script": "</script><script>alert(1)</script>",
     "s-lt": "a < b",
@@ -823,6 +827,7 @@ INPUTS = {
     "l-marked": [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")],
     "l-marked-img": [mark_safe("<img src=x onerror=alert(1)>")],
     "l-mixed": [mark_safe("<b>ok</b>"), "<img src=x onerror=alert(1)>"],
+    "s-marked-empty": mark_safe(""),
     "s-marked": mark_safe("<img src=x onerror=alert(1)>"),
     # A marked TUPLE, which is a genuinely different cell from `l-marked` and
     # not a shape-coverage nicety (#2305). `render_both` hands the context to
@@ -1876,6 +1881,10 @@ ARG_SPELLINGS = [
     # membership must stay consistent with.
     "known_list",
     "known_tuple",
+    "known_named_tuple",
+    "known_empty_named_tuple",
+    "known_safe_string",
+    "known_empty_safe_string",
     "known_dict",
     "known_dt",
     # Arguments whose resolved value is FALSY (#2469). Every spelling above
@@ -1962,6 +1971,10 @@ ARG_SPELLINGS = [
 #: this argument's Python TYPE" — `int()` raises TypeError for a list, a tuple
 #: and a dict, and Django's `except ValueError` does not catch it.
 ARG_CONTEXT = {
+    "known_safe_string": mark_safe("<b>&</b>"),
+    "known_empty_safe_string": mark_safe(""),
+    "known_named_tuple": namedtuple("Pair", "left right")("a", "b"),
+    "known_empty_named_tuple": namedtuple("Empty", [])(),
     "known": "3",
     # BOUND on purpose (#2418). An unbound `_x` is refused by djust for the
     # unrelated "does not resolve" reason, which is the masking that made the
@@ -2198,6 +2211,7 @@ MASK_POSITIONS = {
     "firstof": "{% firstof p|@SPEC@ 'F' %}",
     "widthratio": "{% widthratio p|@SPEC@ 10 100 %}",
     "include": '{% include "x.html" with v=p|@SPEC@ %}',
+    "extends": "{% extends p|@SPEC@ %}",
 }
 
 #: One spec per COMPILE-time refusal class, so a fix that closes one and not
@@ -3067,8 +3081,15 @@ def _value_variant(obj: object) -> str:
     if isinstance(obj, float):
         return "Float"
     if isinstance(obj, str):
-        return "String"
+        return "SafeString" if isinstance(obj, SafeData) else "String"
     if isinstance(obj, tuple):
+        fields = getattr(obj, "_fields", None)
+        if (
+            isinstance(fields, (tuple, list))
+            and len(fields) == len(obj)
+            and all(isinstance(f, str) for f in fields)
+        ):
+            return "NamedTuple"
         return "Tuple"
     if isinstance(obj, list):
         return "List"
@@ -3596,20 +3617,20 @@ def _swept_entry_points() -> set[str]:
 #: Python shape a context value must have to reach each. The only slice of the
 #: INPUT axis with a mechanical source — see the `input-shape` row, which is
 #: UNVERIFIED precisely because the rest of it has none.
-_GRANT_SHAPE_TO_PYTHON = {"List": list, "Tuple": tuple}
+_GRANT_SHAPE_TO_PYTHON = {"List": list, "Tuple": tuple, "NamedTuple": tuple}
 
 
 def _required_grant_shapes() -> dict[str, str]:
     """Every container shape the CONTEXT can grant item safety on (#2305).
 
-    `items_are_safe` accepts `Value::List` and `Value::Tuple`; the corpus
+    `items_are_safe` accepts lists, tuples, and named tuples; the corpus
     carried only a marked LIST, so `mark_input_safety`'s missing `PyTuple` arm
     was invisible to the tool built to see it. Adding `t-marked` moved 80
     cells, so this is load-bearing rather than shape-coverage tidiness.
     """
     src = (REPO / "crates" / "djust_core" / "src" / "context.rs").read_text(encoding="utf-8")
     body = src.split("pub fn items_are_safe", 1)[1].split("\n    pub fn ", 1)[0]
-    accepted = set(re.findall(r"Value::(\w+)\(items\)", body))
+    accepted = set(re.findall(r"Value::(\w+)(?:\(items\)|\s*\{\s*items\s*,\s*\.\.\s*\})", body))
     assert accepted, "the `items_are_safe` match did not parse"
     return {variant: "context.rs::items_are_safe" for variant in accepted}
 
@@ -3618,7 +3639,10 @@ def _swept_grant_shapes() -> set[str]:
     swept = set()
     for variant, py_type in _GRANT_SHAPE_TO_PYTHON.items():
         if any(
-            type(value) is py_type and value and all(isinstance(v, SafeData) for v in value)
+            isinstance(value, py_type)
+            and _value_variant(value) == variant
+            and value
+            and all(isinstance(v, SafeData) for v in value)
             for value in INPUTS.values()
         ):
             swept.add(variant)

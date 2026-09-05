@@ -559,10 +559,7 @@ class TestWhatThisDeliberatelyDoesNOTClose:
             django_render(src, ctx)
         assert djust_render(src, ctx)  # renders a duration rather than raising
 
-    def test_the_bare_display_of_a_datetime_is_unchanged(self) -> None:
-        """`Encoded::display` is `str(o)` and `{{ p }}` still renders it —
-        djust's bare-render spelling already diverges from Django's localized
-        one, and moving it would be an unrelated behaviour change riding a
-        truthiness fix (the same reasoning #2448 gave)."""
+    def test_the_bare_display_of_a_datetime_is_localized(self) -> None:
         value = datetime.datetime(2020, 1, 1, 3, 4, 5)
-        assert djust_render("{{ p }}", {"p": value}) == "2020-01-01 03:04:05"
+        expected = DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+        assert djust_render("{{ p }}", {"p": value}) == expected

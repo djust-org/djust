@@ -42,11 +42,10 @@ What is pinned, per issue
   (rows N, N2), plus the unfiled real-entry instance: a plain object inside a
   TOP-LEVEL list/tuple reaches no attribute on the LiveView path, filter or no
   filter (rows N0, N0b).
-* #2505 — a loop / ``{% with %}`` variable shadowing a top-level name resolves
-  against the OUTER object (rows M2, M3, M6 render ``OUTER``). Premise
-  correction to the issue: the hazard is NOT confined to the alias-less
-  shapes — when the shadowed name is itself a sidecar entry,
-  ``raw.contains_key(head)`` wins before the alias is consulted (M3, M6).
+* #2505 — local bindings no longer read the shadowed OUTER object. The eager
+  hatch resolves unfiltered source aliases on plain entries (M3, M6), while
+  filtered/LiveView cases retain the object-attribute misses recorded below.
+  The default live-handle path matches Django for all three rows.
 * #2513 — the page-shell path wires no sidecar on either branch.
 * #2506 / #2507 — permanent security pins: a lookup exception never fails
   OPEN; ``{{ c.unmount }}`` never runs a mutator.
@@ -549,16 +548,16 @@ ROWS: list[Row] = [
         "{% for x in p|slice:':2' %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        OUTER_2,
-        OUTER_2,
+        ",,",
+        ",,",
     ),
     _r(
         "M3",
         "{% for x in p %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        OUTER_2,
-        OUTER_2,
+        CLASS_LEVEL_2,
+        ",,",
     ),
     _r(
         "M4",
@@ -581,8 +580,8 @@ ROWS: list[Row] = [
         "{% with x=p.0 %}{{ x.cls_attr }}{% endwith %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         "class-level",
-        "OUTER",
-        "OUTER",
+        "class-level",
+        "",
     ),
     _r(
         "N",
@@ -621,8 +620,8 @@ ROWS: list[Row] = [
         "{{ s }}",
         lambda: {"s": SafeObj()},
         "<b>s</b>",
-        "&lt;b&gt;s&lt;/b&gt;",
-        "&lt;b&gt;s&lt;/b&gt;",
+        "<b>s</b>",
+        "<b>s</b>",
     ),
     _r(
         "P",
@@ -660,8 +659,8 @@ ROW_BY_ID: dict[str, Row] = {row.id: row for row in ROWS}
 #: Rows whose djust cell is NOT Django's answer today, per path — a stated
 #: SET, not a floor (#1125): an unrelated PR that fixes or breaks a cell must
 #: edit the table AND this set. The floor rows (E1–E4) are listed apart.
-PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M3 M5 M6 N N2 O P Q T V".split())
-LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b O P Q T V".split())
+PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M5 N N2 P Q T V".split())
+LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P Q T V".split())
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
 #: The same question with ADR-027's kill-switch ON — a STATED set (#1125),
@@ -677,12 +676,12 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #: Django engine every run. A row still in the set must keep TODAY's recorded
 #: bytes, so "wrong in a new way" fails too.
 #:
-#: Measured, not predicted. 29 of the 37 wrong in-process cells move to
-#: Django's bytes; these are the residue, and each has a NAMED reason:
+#: The remaining disagreements are measured against Django below; each
+#: retained row has a named reason:
 #:
-#: * ``O`` — an object whose ``__str__`` returns a ``SafeString`` renders
-#:   escaped. Needs a SafeData bit on ``Encoded``, which is a TWELFTH msgpack
-#:   slot; deferred with the wire widening (ADR-027 §Security 5).
+#: Row O now agrees on both paths and both flag settings: Encoded keeps
+#: string-conversion safety as runtime-only metadata, without a wire grant.
+#:
 #: * ``V`` — a generator. ``opaque_gate`` declines a ONE-SHOT iterator
 #:   deliberately, and lifting that decline without the ``{% for %}`` sink
 #:   materialising through the handle would enumerate a caller's generator at
@@ -695,15 +694,9 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #:   Component arm #2513 turns on, and deferred with it: lifting it changes
 #:   the LiveView STATE channel, not the resolution sink.
 #:
-#: **Tracked at #2621** (the movement-3 follow-on). Movement 3 flipped the
-#: default and left these six held; #2621 carries the two mechanisms that
-#: close five of them — a transient ``Encoded.safe`` bit (O) and gating
-#: ``normalize_django_value``'s callable arm on the flag (J, J2, Q, and the
-#: ``P``-liveview crash cell below). V needs the ``{% for %}``-sink accessor
-#: and may outlive them. Filed rather than left as a comment because an
-#: unfiled prerequisite is how a hold reason quietly becomes permanent.
-PLAIN_WRONG_UNDER_LAZY = frozenset("O V".split())
-LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 O Q V".split())
+#: Remaining callable and iterator differences are tracked at #2621.
+PLAIN_WRONG_UNDER_LAZY = frozenset("V".split())
+LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 Q V".split())
 
 
 def recorded(row: Row, path: str) -> Any:
@@ -948,7 +941,7 @@ class TestTheDifferentialTable:
         assert held == expected_held, (
             f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
         )
-        assert len(moved) == 29, f"expected 29 cells to move, got {len(moved)}: {sorted(moved)}"
+        assert len(moved) == 27, f"expected 27 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
@@ -1085,10 +1078,10 @@ class TestTheTableIsLoadBearing:
         assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
         with pytest.raises(AssertionError, match="does not answer Django's bytes"):
             assert_lazy_column(claimed, "plain", claimed.plain)
-        # A HELD row (row O) that starts matching Django must fail loudly, so
+        # A HELD row (row V) that starts matching Django must fail loudly, so
         # the residue set cannot rot into a floor.
-        held = ROW_BY_ID["O"]
-        assert "O" in PLAIN_WRONG_UNDER_LAZY
+        held = ROW_BY_ID["V"]
+        assert "V" in PLAIN_WRONG_UNDER_LAZY
         assert_lazy_column(held, "plain", held.plain)
         with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
             assert_lazy_column(held, "plain", held.django)
@@ -1472,19 +1465,22 @@ class TestFilteredAndDictViewOperands2504:
 
 
 @pytest.mark.django_db
-class TestShadowingResolvesAgainstTheOuterObject2505:
-    """#2505: the wrong bytes are the OUTER object's, not empty — on both djust
-    paths, for the filtered loop (M2), the unfiltered loop (M3; the premise
-    correction) and `{% with %}` (M6). Django never answers `OUTER`."""
+class TestShadowingNeverResolvesAgainstTheOuterObject2505:
+    """Local bindings cannot resolve attributes on a shadowed outer object.
+
+    The eager hatch still misses filtered/LiveView object attributes, while
+    supported source aliases and the default lazy path match Django.
+    """
 
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
     @pytest.mark.parametrize("path", PATHS)
-    def test_the_outer_object_answers(self, row_id: str, path: str) -> None:
-        """#2505's bug, pinned on the HATCH axis where it still lives."""
+    def test_the_hatch_never_uses_the_shadowed_object(self, row_id: str, path: str) -> None:
+        """Pin the hatch's remaining misses without restoring stale lookups."""
         row = ROW_BY_ID[row_id]
         with resolve_lazy(False):
             actual = RENDER[path](row.source, row.make_ctx())
-        assert "OUTER" in actual and actual == recorded(row, path)
+        assert "OUTER" not in actual
+        assert actual == recorded(row, path)
         assert "OUTER" not in django_render(row.source, row.make_ctx())
 
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
@@ -1977,15 +1973,19 @@ class TestTheHandleNeverReachesTheWire2539:
         )
         assert "self.clone().into_pyobject(py)" in borrowed
 
-    def test_a_handle_bearing_value_is_only_built_behind_the_flag(self) -> None:
-        """The carriage's own gate. `opaque_value` is the ONE producer, and it
-        attaches nothing unless `resolve_lazy()`."""
+    def test_opaque_handles_are_gated_and_temporal_handles_are_type_checked(self) -> None:
         core = self._core()
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
         assert "resolve_lazy()" in body
-        assert core.count("Some(std::sync::Arc::new(ob.clone().unbind()))") == 1, (
-            "a second producer of the handle appeared — the ONE producer is opaque_value"
-        )
+        producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
+        assert core.count(producer) == 2
+        assert producer in body
+        temporal = core.split("pub fn django_json_encoded", 1)[1].split(
+            "\nfn is_public_attr_name", 1
+        )[0]
+        assert producer in temporal
+        crossing = core.split("pub fn temporal_object", 1)[1].split("impl<'py> IntoPyObject", 1)[0]
+        assert "is_instance(&module.getattr(kind)?)" in crossing
 
     def test_the_teardown_clears_every_nested_handle(self) -> None:
         """P7. `RustLiveView.state` is the one place a `Value` outlives a

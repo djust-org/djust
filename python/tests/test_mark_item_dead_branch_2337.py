@@ -98,6 +98,7 @@ sinks — see the comment in ``TestAConvertingProducerLeavesNoNonStrElement``.
 from __future__ import annotations
 
 import itertools
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -592,22 +593,23 @@ class TestTheProducerEnumerationIsComplete:
             "String — that narrowing is what makes mark_item's deleted "
             "non-str guard unreachable (#2337)"
         )
-        assert "Some(Value::List(items)) | Some(Value::Tuple(items)) => items," in body
+        arms = body.split("let items = match self.get(key) {", 1)[1].split("=> items,", 1)[0]
+        assert set(re.findall(r"Value::(\w+)", arms)) == {"List", "Tuple", "NamedTuple"}
         assert "_ => return false," in body
 
     def test_both_item_safe_output_filters_construct_string_elements(self) -> None:
         """``safeseq`` since #2324, ``escapeseq`` always."""
         src = (self.CRATES / "djust_templates" / "src" / "filters.rs").read_text()
         for name, builder in (
-            ("safeseq", "Value::String(item.py_str())"),
-            ("escapeseq", "Value::String(conditional_escape(item, input_safety.items))"),
+            ("safeseq", "Value::SafeString(item.py_str())"),
+            ("escapeseq", "Value::SafeString(conditional_escape(item, input_safety.items))"),
         ):
             # `python_iter` since #2451 — the same sink, wrapped so its `None`
             # can name the exception Python raises there.
             start = src.index('"%s" => match python_iter(value)' % name)
             body = src[start : start + 700]
             assert builder in body, (
-                f"{name} no longer constructs Value::String elements — it can "
+                f"{name} no longer constructs Value::SafeString elements — it can "
                 "hand mark_item a non-str, and #2337's deletion is unsafe"
             )
 

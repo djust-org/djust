@@ -142,27 +142,12 @@ PATHS = [
     pytest.param(djust_backend_render, id="DjustTemplateBackend"),
 ]
 
-#: The reporter's four spellings. Every one is documented.
-#:
-#: The two bare ones are marked because they are the ESCAPED half — cause 1 —
-#: and this PR closes the EMPTY half, cause 2. They are independent: before it
-#: ``{{ c.render }}`` rendered NOTHING, and now it renders the component's HTML
-#: with the ``SafeString`` marker lost crossing into the renderer, which is the
-#: same escape ``{{ c }}`` has. ``strict=True`` so the PR that closes cause 1
-#: has to delete these marks rather than leave them standing (#1859).
-_ESCAPED_HALF = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#2501 cause 1 (ESCAPED), not closed here: `Component.__str__` returns a "
-        "marked SafeString and the marker is lost at the carrier. Tracked as PR 2 "
-        "of #2501."
-    ),
-)
-
+#: All four component spellings now preserve SafeString conversion and
+#: resolved-method safety, so each must pass the live Django comparison.
 COMPONENT_SPELLINGS = [
-    pytest.param("{{ c }}", marks=_ESCAPED_HALF, id="{{ c }}"),
+    pytest.param("{{ c }}", id="{{ c }}"),
     pytest.param("{{ c|safe }}", id="{{ c|safe }}"),
-    pytest.param("{{ c.render }}", marks=_ESCAPED_HALF, id="{{ c.render }}"),
+    pytest.param("{{ c.render }}", id="{{ c.render }}"),
     pytest.param("{{ c.render|safe }}", id="{{ c.render|safe }}"),
 ]
 

@@ -1,0 +1,1 @@
+- **Backend context types:** Preserve tuples, exact decimals, UUIDs, and temporal values when preparing context for native rendering, and materialize lazy translation strings. Keep JSON-oriented serialization unchanged. Django conformance improves from 947 to 950 of 1,047 engine tests with no status regressions.

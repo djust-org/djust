@@ -1229,6 +1229,10 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
         ),
         "known_list": "#2366 — a resolved argument whose `int()` is a TypeError",
         "known_tuple": "#2366 — the same, at the tuple shape",
+        "known_safe_string": "SafeString — a nonempty safe argument",
+        "known_empty_safe_string": "SafeString — the empty safe argument truthiness case",
+        "known_named_tuple": "NamedTuple — a nonempty typed tuple argument",
+        "known_empty_named_tuple": "NamedTuple — the empty typed tuple truthiness case",
         "known_dict": "#2366 — the same, at the mapping shape",
         "known_dt": (
             "#2366 — the COUNTER-example: a `datetime` is already a string by "
@@ -1577,3 +1581,43 @@ class TestRenderBothSurvivesAPanic:
         assert body.count("except (KeyboardInterrupt, SystemExit):") == 2, body
         for arm in ("except Exception as exc:", "except BaseException as exc:"):
             assert body.index("except (KeyboardInterrupt, SystemExit):") < body.index(arm), arm
+
+
+class TestNamedTupleCorpusReachability:
+    def test_named_tuple_shapes_are_required_and_swept(self, manifest):
+        axes = rows(manifest)
+        for channel in ("value", "arg"):
+            for answer in ("falsy", "truthy"):
+                member = f"{channel}:NamedTuple:{answer}"
+                assert member in axes["value-truthiness"]["required"]
+                assert member not in axes["value-truthiness"]["missing"]
+        assert "NamedTuple" in axes["grant-shape"]["required"]
+        assert "NamedTuple" not in axes["grant-shape"]["missing"]
+
+    def test_missing_named_tuple_rows_are_reported(self, tmp_path):
+        script = mutated_script(
+            tmp_path,
+            ('"nt-empty": namedtuple("Empty", [])(),', ""),
+            ('"known_empty_named_tuple": namedtuple("Empty", [])(),', ""),
+        )
+        missing = rows(run_manifest(script))["value-truthiness"]["missing"]
+        assert set(missing) == {"value:NamedTuple:falsy", "arg:NamedTuple:falsy"}
+
+
+class TestSafeStringCorpusReachability:
+    def test_safe_strings_are_required_and_swept(self, manifest):
+        axis = rows(manifest)["value-truthiness"]
+        for channel in ("value", "arg"):
+            for answer in ("falsy", "truthy"):
+                member = f"{channel}:SafeString:{answer}"
+                assert member in axis["required"]
+                assert member not in axis["missing"]
+
+    def test_missing_safe_string_rows_are_reported(self, tmp_path):
+        script = mutated_script(
+            tmp_path,
+            ('"s-marked-empty": mark_safe(""),', ""),
+            ('"known_empty_safe_string": mark_safe(""),', ""),
+        )
+        missing = rows(run_manifest(script))["value-truthiness"]["missing"]
+        assert set(missing) == {"value:SafeString:falsy", "arg:SafeString:falsy"}

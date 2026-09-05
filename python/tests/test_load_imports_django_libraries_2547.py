@@ -524,7 +524,8 @@ def test_reassert_restores_bridged_tags_after_a_registry_clear():
     `CustomTag` nodes resolve to nothing and its `{% load %}` never re-runs."""
     source = L + "{% no_params2547 %}{% div2547 %}b{% enddiv2547 %}!reassert"
     expected = django_render(source, {})
-    assert plain_render(source, {}) == expected  # parsed + cached now
+    template = DJUST.from_string(source)
+    assert template.render({}) == expected  # parsed + cached now
     owned = template_libraries.owned_tags()
     assert owned["no_params2547"] == "lib2547_tags" and owned["div2547"] == "lib2547_tags"
     _rust.clear_tag_handlers()
@@ -532,11 +533,11 @@ def test_reassert_restores_bridged_tags_after_a_registry_clear():
     assert not _rust.has_tag_handler("no_params2547")
     assert not _rust.has_block_tag_handler("div2547")
     with pytest.raises(Exception, match="No handler registered"):
-        plain_render(source, {})
+        template.render({})
     template_libraries.reassert()
     assert _rust.has_tag_handler("no_params2547")
     assert _rust.has_block_tag_handler("div2547")
-    assert plain_render(source, {}) == expected
+    assert template.render({}) == expected
     from djust.template_tags import reregister_builtins
 
     reregister_builtins()  # restore djust's own built-ins for the tests that follow

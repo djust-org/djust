@@ -1,0 +1,1 @@
+- **Template context scopes**: Preserve assignments through control-flow bodies, restore local bindings and safety metadata when leaving lexical scopes, and let named cycles update the nearest enclosing binding as Django does.

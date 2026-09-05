@@ -94,6 +94,10 @@ impl<'a> Cursor<'a> {
         it.next(); // the second opener character is not part of a closer
         let mut prev = None;
         for (_, c) in it {
+            // Django's tag regex does not use DOTALL.
+            if c == '\n' {
+                return false;
+            }
             if prev == Some(a) && c == b {
                 return true;
             }
@@ -342,6 +346,7 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
     // Byte offset where the run of literal text in `current` began. Only
     // meaningful while `current` is non-empty.
     let mut text_start = 0usize;
+    let mut verbatim_end: Option<String> = None;
 
     macro_rules! flush_text {
         ($end:expr) => {
@@ -357,6 +362,44 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
         let Some(ch) = chars.next() else { break };
         if current.is_empty() {
             text_start = tok_start;
+        }
+        // Django's lexer treats every token inside verbatim as literal text
+        // until the complete named closing tag matches. Consume whole tokens
+        // so a closer inside a comment or variable cannot end the block.
+        if let Some(expected) = verbatim_end.as_ref() {
+            if ch == '{' {
+                if let Some(opener @ ('{' | '%' | '#')) = chars.peek() {
+                    let closer = if opener == '{' { '}' } else { opener };
+                    if chars.has_closer(closer, '}') {
+                        chars.next();
+                        while let Some(c) = chars.next() {
+                            if c == closer && chars.peek() == Some('}') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                        let end = chars.pos();
+                        let inner = &source[tok_start + 2..end - 2];
+                        if opener == '%' && inner.trim() == expected {
+                            flush_text!(tok_start);
+                            out.push(
+                                Token::Tag(
+                                    "endverbatim".into(),
+                                    split_tag_args(inner)[1..].to_vec(),
+                                ),
+                                tok_start,
+                                end,
+                            );
+                            verbatim_end = None;
+                        } else {
+                            current.push_str(&source[tok_start..end]);
+                        }
+                        continue;
+                    }
+                }
+            }
+            current.push(ch);
+            continue;
         }
         if ch == '<' {
             // Check if this is a JSX component (starts with uppercase)
@@ -452,6 +495,9 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
                                 } else {
                                     parts[1..].to_vec()
                                 };
+                                if tag_name == "verbatim" {
+                                    verbatim_end = Some(format!("end{}", tag_content.trim()));
+                                }
                                 out.push(Token::Tag(tag_name, args), tok_start, chars.pos());
                                 break;
                             } else {

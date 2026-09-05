@@ -1,0 +1,1 @@
+- **Template parser diagnostics:** Match Django's missing-include, malformed-else, and duplicate-extends messages. Preserve the original malformed clause text and highlight its source span. Discard inline comments during parsing so they do not invalidate `extends` placement. Django conformance reaches 955 of 1,047 engine tests.

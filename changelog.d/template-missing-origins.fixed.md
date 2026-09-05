@@ -1,0 +1,1 @@
+- **Missing-template origins**: Preserve searched filesystem origins for missing parent templates and return Django-compatible tried entries from backend lookups, while retaining Engine.select_template behavior for missing includes.

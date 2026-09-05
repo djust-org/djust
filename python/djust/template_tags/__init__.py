@@ -472,6 +472,7 @@ def _register_builtins() -> None:
     try:
         from . import url  # noqa: F401
         from . import static  # noqa: F401
+        from . import now  # noqa: F401
         from . import pwa  # noqa: F401
         from . import templatetag  # noqa: F401
         from . import flash  # noqa: F401

@@ -66,6 +66,8 @@ macro_rules! int_arg {
 /// have taken `apply_builtin_filter` past clippy's argument limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArgType {
+    /// Whether the argument is a quoted literal or a context-marked safe value.
+    pub is_safe: bool,
     /// `int(arg)` would be a **TypeError** rather than a ValueError (#2366).
     /// See [`int_arg_is_type_error`] for how the line is drawn and for the half
     /// the PyO3 extraction boundary has already erased.
@@ -224,8 +226,8 @@ pub struct InputSafety {
 /// grapheme-cluster count would be a different, wronger one.
 pub fn python_len(value: &Value) -> Option<usize> {
     match value {
-        Value::String(s) => Some(s.chars().count()),
-        Value::List(l) | Value::Tuple(l) => Some(l.len()),
+        Value::String(s) | Value::SafeString(s) => Some(s.chars().count()),
+        Value::List(l) | Value::Tuple(l) | Value::NamedTuple { items: l, .. } => Some(l.len()),
         // `len(d.keys())` is the entry count, not the repr's length.
         Value::DictView { items, .. } => Some(items.len()),
         // A `dict` answers `len(dict)`; a serialized model RAISES, because
@@ -279,8 +281,12 @@ pub fn python_len(value: &Value) -> Option<usize> {
 
 pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
-        Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
-        Value::List(items) | Value::Tuple(items) => Some(items.clone()),
+        Value::String(s) | Value::SafeString(s) => {
+            Some(s.chars().map(|c| Value::String(c.to_string())).collect())
+        }
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            Some(items.clone())
+        }
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
         Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
@@ -348,14 +354,14 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
 /// behaviour: making it `value.clone()` would silently discard `items`.
 fn rebuild_like(input: &Value, items: Vec<Value>) -> Value {
     match input {
-        Value::Tuple(_) => Value::Tuple(items),
+        Value::Tuple(_) | Value::NamedTuple { .. } => Value::Tuple(items),
         _ => Value::List(items),
     }
 }
 
 /// Django's `django.utils.html.conditional_escape`: escape unless already safe.
 fn conditional_escape(value: &Value, already_safe: bool) -> String {
-    if already_safe {
+    if already_safe || value.is_safe_string() {
         value.to_string()
     } else {
         html_escape(&value.to_string())
@@ -474,7 +480,11 @@ fn builtin_produced_safe(
                 input_safety.container
             }
         }
-        "add" => input_safety.container && arg_was_quoted && matches!(result, Value::String(_)),
+        "add" => {
+            input_safety.container
+                && (arg_was_quoted || arg_type.is_safe)
+                && matches!(result, Value::String(_) | Value::SafeString(_))
+        }
         // The three EXTRACTORS, and the THIRD consumer of the item grant
         // (#2299). Django's bodies are `value[0]`, `value[-1]` and
         // `random.choice(value)` — each hands back the ELEMENT OBJECT, so when
@@ -839,6 +849,9 @@ pub fn apply_filter_full_safe(
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
     let arg_type = ArgType {
+        is_safe: arg_was_quoted
+            || resolved_type.as_ref().is_some_and(Value::is_safe_string)
+            || context.is_some_and(|ctx| arg.is_some_and(|name| ctx.is_safe(name))),
         int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
         is_none: arg_is_python_none(resolved_type.as_ref()),
         // `arg`, not `builtin_arg`: on the resolved channel the `Value` above
@@ -878,10 +891,11 @@ pub fn apply_filter_full_safe(
         };
         if fires {
             // The fallback is the argument's own value, so its safety is the
-            // argument's — never the input's. `false` matches what the string
-            // path reported for these two names (`builtin_produced_safe`
-            // answers `true` for four names, and neither of these is one).
-            return Ok((resolved.clone(), false));
+            // argument's — never the input's. Only actual string values can
+            // carry a string safety grant; a marked container is not SafeData.
+            let safe = resolved.is_safe_string()
+                || (matches!(resolved, Value::String(_)) && arg_type.is_safe);
+            return Ok((resolved.clone(), safe));
         }
     }
 
@@ -891,10 +905,56 @@ pub fn apply_filter_full_safe(
     // `arg_was_quoted` reaches the dispatch table because `add` needs it: a
     // quoted "1.5" is a STRING to Python's int() (which raises), while an
     // unquoted 1.5 is a float literal (which truncates). See that arm (#2203).
+    // Django's stringfilter wrapper converts the object before invoking the
+    // body. This marker belongs to str(o), not to o passed to conditional_escape.
+    const STRING_FILTERS: &[&str] = &[
+        "addslashes",
+        "capfirst",
+        "escapejs",
+        "iriencode",
+        "linenumbers",
+        "lower",
+        "make_list",
+        "slugify",
+        "title",
+        "truncatechars",
+        "truncatechars_html",
+        "truncatewords",
+        "truncatewords_html",
+        "upper",
+        "urlencode",
+        "urlize",
+        "urlizetrunc",
+        "wordcount",
+        "wordwrap",
+        "ljust",
+        "rjust",
+        "center",
+        "cut",
+        "escape",
+        "force_escape",
+        "linebreaks",
+        "linebreaksbr",
+        "safe",
+        "striptags",
+    ];
+    let converted = if STRING_FILTERS.contains(&filter_name)
+        && matches!(value, Value::Encoded(e) if e.display_safe)
+    {
+        Some(Value::SafeString(value.to_string()))
+    } else {
+        None
+    };
+    let value = converted.as_ref().unwrap_or(value);
+    let input_safety = InputSafety {
+        container: input_safety.container || converted.is_some(),
+        items: input_safety.items,
+    };
     if let Some(builtin) = apply_builtin_filter(
         filter_name,
         value,
         builtin_arg,
+        resolved_type.as_ref(),
         context,
         arg_was_quoted,
         arg_type,
@@ -911,6 +971,10 @@ pub fn apply_filter_full_safe(
                 &v,
                 input_safety,
             );
+            let safe = safe
+                || v.is_safe_string()
+                || (converted.is_some()
+                    && crate::renderer::filter_output_is_safe(filter_name, false, true));
             (v, safe)
         });
     }
@@ -1054,7 +1118,7 @@ pub fn is_known_filter(name: &str) -> bool {
 /// single source of truth, with no parallel built-in-name list that could
 /// drift (#1660; cf. the #1640 parallel-path-drift class).
 ///
-/// Eight parameters since #2556 added `autoescape`: it is kept a separate
+/// `autoescape` is kept a separate
 /// `bool` rather than folded into [`InputSafety`] on purpose — that struct is
 /// Django's `SafeData` term, and the block policy must stay visibly distinct
 /// from it (the plan's §2.3: an emit-time term, never a grant).
@@ -1063,10 +1127,11 @@ fn apply_builtin_filter(
     filter_name: &str,
     value: &Value,
     arg: Option<&str>,
+    resolved_arg: Option<&Value>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    // What the argument's resolved Python TYPE says, which the `&str` above no
-    // longer carries. See [`ArgType`].
+    // Compact argument metadata for filters that only need scalar facts.
+    // `add` uses resolved_arg directly to retain the full operand type.
     arg_type: ArgType,
     input_safety: InputSafety,
     autoescape: bool,
@@ -1258,11 +1323,12 @@ fn apply_builtin_filter(
         // escape here to land on the same bytes (#2274).
         "join" => {
             let raw_sep = arg.unwrap_or(", ");
-            // `conditional_escape(arg)`: a template LITERAL is already safe.
+            // `conditional_escape(arg)`: literals and marked context values
+            // both retain the separator's own safety.
             // Under `{% autoescape off %}` Django takes the other branch —
             // `arg.join(value)` — and neither the items nor the separator
             // are escaped (#2556, `test_join_autoescape_off`).
-            let separator = if arg_was_quoted || !autoescape {
+            let separator = if arg_type.is_safe || !autoescape {
                 raw_sep.to_string()
             } else {
                 html_escape(raw_sep)
@@ -1348,136 +1414,29 @@ fn apply_builtin_filter(
             )
         }
         "add" => {
-            // Django's `add` is a three-branch chain (#2203):
-            //
-            //     try:    return int(value) + int(arg)
-            //     except: try:    return value + arg
-            //             except: return ""
-            //
-            // The previous implementation was only a partial first branch: it
-            // parsed the argument as `i64` and **defaulted to 0** on failure,
-            // so `{{ n|add:1.5 }}` silently added nothing, and it had no
-            // concatenation branch at all, so `{{ "a"|add:"b" }}` returned "a".
-            //
-            // Branch order is load-bearing: the int branch runs FIRST, so
-            // `{{ "4"|add:"3" }}` is 7, not "43".
-            //
-            // But `int()` is stricter than "looks numeric", and the difference
-            // decides which branch wins. `int("1.5")` RAISES in Python, so
-            // Django falls through and CONCATENATES: `{{ "1.5"|add:"1.5" }}` is
-            // "1.51.5", not 3. A first pass here accepted "1.5" via an `f64`
-            // fallback and returned **2** — not merely a different answer but a
-            // fabricated number where Django produces text, which is worse than
-            // the bug it replaced.
-            //
-            // A float LITERAL is different: `{{ n|add:1.5 }}` passes Python a
-            // float, and `int(1.5)` is 1. The template layer distinguishes the
-            // two by quoting, so `arg_was_quoted` is what separates them —
-            // `float_ok` is false for a quoted argument, mirroring `int(str)`.
-            // DIGIT STRINGS, not a machine integer. `int()` is unbounded in
-            // Python, and every fixed width tried here has been the wrong shape:
-            // `as_f64()` on a `Value::Decimal` is a binary double, so `int()`
-            // was off by one from 2^53 up (`Decimal('9007199254740993')|add:1`
-            // gave back 9007199254740993); `as i64` saturated from 2^63 up, so
-            // the add overflowed and the filter returned its input UNCHANGED
-            // (#2253); and the `i128` that replaced it does the same thing at 39
-            // digits (#2260). `9`×60 `|add:1` was CORRECT on main only by
-            // coincidence — it had arrived as the double `1e60`, whose expansion
-            // is exactly the sum the filter was declining to compute.
-            //
-            // So the width is gone: `add_int_digits` is arbitrary-precision, and
-            // the only way to reach the fail-soft below is an operand `int()`
-            // itself would refuse.
-            //
-            // Non-finite floats are refused rather than saturated. `int(inf)`
-            // raises `OverflowError` in Python — uncaught by Django's
-            // `except (ValueError, TypeError)` — so there is no answer to
-            // agree with, and `i64::MAX` was a fabricated number where the
-            // fail-soft below at least returns the value it was given.
-            let arg_value = arg.map(|s| Value::String(s.to_string()));
-            // The VALUE goes through the `int(value)` chokepoint (#2435), which
-            // is `int()` and nothing else. It used to pass `string_float_ok`
-            // here, so a `Value::String("100.6")` became 100 — but Django calls
-            // `int(value)` on the resolved object and `int("100.6")` is a
-            // ValueError, which drops it to the CONCATENATION branch:
-            // `{{ "100.6"|add:"1" }}` is `"100.61"`, not `101`. A Python float
-            // still truncates, because it arrives as `Value::Float` and never
-            // took that branch. Only the ARGUMENT's quoting decides whether a
-            // float SPELLING is a float, which is why the flag stays there.
-            //
-            // `OverflowError` — `int(±inf)` — escapes Django's
-            // `except (ValueError, TypeError)` and 500s the page; the other two
-            // fall through to the branches below exactly as before.
-            let lhs = match python_int_value(value) {
-                Ok(digits) => Some(digits),
-                Err(IntValueError::Overflow) => {
-                    return Some(Err(int_value_error(filter_name, IntValueError::Overflow)));
+            // Keep the resolved operand's type: stringifying here changes
+            // numeric conversion, concatenation, and every downstream filter.
+            let literal = arg.map(|text| {
+                if !arg_was_quoted {
+                    if let Some(value) = djust_core::context::template_builtin(text) {
+                        return value;
+                    }
+                    if let Some(digits) = int_digits_of(&Value::String(text.to_string()), false) {
+                        return match digits.parse::<i64>() {
+                            Ok(n) => Value::Integer(n),
+                            Err(_) => Value::BigInt(digits),
+                        };
+                    }
+                    if let Some(number) = python_float(text) {
+                        return Value::Float(number);
+                    }
                 }
-                Err(_) => None,
-            };
-            // A bare `True`/`False` first, through the ONE helper that states
-            // that rule (#2347/#1646). `int_digits_of` is `int()` for a
-            // NUMERIC spelling and answers `None` for the text `"True"` — which
-            // is what a resolved builtin arrives as, since the argument channel
-            // is `Option<&str>`. Without this arm `{{ p|add:True }}` fell to
-            // the concatenation branch and rendered its input unchanged (5)
-            // where Django computes `int(5) + int(True)` = 6, while
-            // `{{ p|center:True }}` was already right because `center` reads
-            // its argument through #2328's `python_int_arg`, the helper's other
-            // caller. Two `int()`s, one of which knew the rule: #1646.
-            //
-            // `add` cannot simply use `python_int_arg`: that returns an `i64`
-            // and `add` carries exact DIGITS, because a sum past `i64`
-            // saturated and silently returned the input unchanged (#2253,
-            // #2260). The shared piece is the rule, not the parse.
-            let rhs = arg
-                .and_then(|a| bare_bool_arg_as_int(a, arg_was_quoted))
-                .map(|n| n.to_string())
-                .or_else(|| {
-                    arg_value
-                        .as_ref()
-                        .and_then(|a| int_digits_of(a, !arg_was_quoted))
-                });
-            match lhs.zip(rhs) {
-                // A sum outside `i64` is carried as its exact digits rather than
-                // being thrown away: `Value::Integer` is an i64 and Python's is
-                // not, so `{{ p|add:1 }}` on a 20-digit `DecimalField` had no
-                // Integer to return and silently returned its input (#2253).
-                //
-                // `BigInt`, not `Decimal` (#2260). Django's first branch is
-                // `int(value) + int(arg)` and an `int` is what it returns, so a
-                // `Decimal` here was the nearest exact-digit variant available
-                // rather than the right type: it rendered identically but
-                // spelled itself `Decimal('...')` under `pprint`, quoted itself
-                // under `json_script`, and left the process as a
-                // `decimal.Decimal`.
-                Some((a, b)) => {
-                    let sum = djust_core::decimal::add_int_digits(&a, &b);
-                    Ok(match sum.parse::<i64>() {
-                        Ok(n) => Value::Integer(n),
-                        Err(_) => Value::BigInt(sum),
-                    })
-                }
-                None => match (value, arg) {
-                    // Concatenation branch.
-                    (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
-                    // Django's third branch: `except Exception: return ""`.
-                    //
-                    // This returned the value UNCHANGED until #2359, on the
-                    // argument that "turning a rendered value into silent
-                    // emptiness on upgrade is the silent-wrong-output class
-                    // this engine keeps having to fix". Measuring the class
-                    // inverted the argument: echoing is the MORE PERMISSIVE
-                    // direction — it puts the unfiltered input on the page
-                    // where Django puts nothing — and the values that reach
-                    // here are exactly the ones Django decided have no sum
-                    // and no concatenation (`None`, a list, a dict, a tuple).
-                    // Rendering them is not "preserving" anything; it is
-                    // rendering a Python repr into a page that asked for a
-                    // number.
-                    _ => Ok(Value::String(String::new())),
-                },
-            }
+                Value::String(text.to_string())
+            });
+            add_values(
+                value,
+                resolved_arg.or(literal.as_ref()).unwrap_or(&Value::Missing),
+            )
         }
         "pluralize" => Ok(Value::String(pluralize(value, arg.unwrap_or("s")))),
         "slugify" => {
@@ -1732,15 +1691,36 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("DATE_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
                         _ => None,
                     })
             } else {
                 None
             };
-            let format_str = arg.or(default_format).unwrap_or("N j, Y"); // Default: "Nov. 13, 2025"
+            let requested = arg
+                .filter(|s| !s.is_empty())
+                .or(default_format)
+                .unwrap_or("DATE_FORMAT");
+            let resolved_format = crate::registry::resolve_format(requested).unwrap_or_else(|| {
+                if requested == "DATE_FORMAT" {
+                    "N j, Y"
+                } else {
+                    requested
+                }
+                .to_string()
+            });
+            let format_str = resolved_format.as_str();
+            if matches!(value, Value::Encoded(encoded) if encoded.type_name == "datetime.date") {
+                if let Some(code) = first_time_code(format_str) {
+                    return Some(Err(DjangoRustError::PythonException(
+                        pyo3::exceptions::PyTypeError::new_err(format!(
+                            "The format for date objects may not contain time-related format specifiers (found '{code}')."
+                        )),
+                    )));
+                }
+            }
             let datetime_str = value.to_string();
-            match format_date(&datetime_str, format_str) {
+            match format_date(&datetime_str, format_str, value) {
                 Ok(formatted) => Ok(Value::String(formatted)),
                 Err(e) => {
                     // #1090: surface silent parse failures so template authors
@@ -1761,9 +1741,8 @@ fn apply_builtin_filter(
                     // int, a list or a dict. Django's answer is usually `""`
                     // and is not ALWAYS: see `django_literal_only_format`.
                     // The djust EXTENSION is untouched — a value that parses
-                    // still formats, which is not optional, because a Python
-                    // `date` reaches this renderer as its ISO string
-                    // (`Value` has no date variant).
+                    // still formats. Encoded Python temporal values additionally
+                    // retain their type and timezone metadata.
                     Ok(Value::String(django_literal_only_format(value, format_str)))
                 }
             }
@@ -1777,15 +1756,27 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("TIME_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
                         _ => None,
                     })
             } else {
                 None
             };
-            let format_str = arg.or(default_format).unwrap_or("P"); // Default: "2:30 p.m."
+            let requested = arg
+                .filter(|s| !s.is_empty())
+                .or(default_format)
+                .unwrap_or("TIME_FORMAT");
+            let resolved_format = crate::registry::resolve_format(requested).unwrap_or_else(|| {
+                if requested == "TIME_FORMAT" {
+                    "P"
+                } else {
+                    requested
+                }
+                .to_string()
+            });
+            let format_str = resolved_format.as_str();
             let datetime_str = value.to_string();
-            match format_time(&datetime_str, format_str) {
+            match format_time(&datetime_str, format_str, value) {
                 Ok(formatted) => Ok(Value::String(formatted)),
                 Err(e) => {
                     // #1090: see |date filter — same parse-failure surface,
@@ -1851,12 +1842,13 @@ fn apply_builtin_filter(
                 // every arg that resolves. The exhaustive filter sweep missed
                 // it for the same reason: `FILTER_ARGS` carries ONE arg per
                 // filter, which is a curated sample wearing a sweep's clothes.
-                Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
-                    match index {
-                        Some(n) => dictsort_by_index(items, n),
-                        None => dictsort_by_key(items, sort_key),
-                    }
-                }
+                Value::List(items)
+                | Value::Tuple(items)
+                | Value::NamedTuple { items, .. }
+                | Value::DictView { items, .. } => match index {
+                    Some(n) => dictsort_by_index(items, n),
+                    None => dictsort_by_key(items, sort_key),
+                },
                 // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };
@@ -2286,7 +2278,7 @@ fn apply_builtin_filter(
                 Value::List(
                     items
                         .iter()
-                        .map(|item| Value::String(item.py_str()))
+                        .map(|item| Value::SafeString(item.py_str()))
                         .collect(),
                 ),
                 input_safety.container,
@@ -2312,7 +2304,7 @@ fn apply_builtin_filter(
                 Value::List(
                     items
                         .iter()
-                        .map(|item| Value::String(conditional_escape(item, input_safety.items)))
+                        .map(|item| Value::SafeString(conditional_escape(item, input_safety.items)))
                         .collect(),
                 ),
                 input_safety.container,
@@ -2565,6 +2557,72 @@ pub(crate) fn filter_int_arg(
     }
 }
 
+/// Django tries integer conversion first, then Python addition, then "".
+fn add_values(value: &Value, arg: &Value) -> Result<Value> {
+    match python_int_value(value) {
+        Ok(lhs) => match python_int_value(arg) {
+            Ok(rhs) => {
+                let sum = djust_core::decimal::add_int_digits(&lhs, &rhs);
+                return Ok(match sum.parse::<i64>() {
+                    Ok(n) => Value::Integer(n),
+                    Err(_) => Value::BigInt(sum),
+                });
+            }
+            Err(IntValueError::Overflow) => {
+                return Err(int_value_error("add", IntValueError::Overflow))
+            }
+            Err(_) => {}
+        },
+        Err(IntValueError::Overflow) => {
+            return Err(int_value_error("add", IntValueError::Overflow))
+        }
+        Err(_) => {}
+    }
+    if matches!(value, Value::Encoded(_)) || matches!(arg, Value::Encoded(_)) {
+        use pyo3::prelude::*;
+        let sum = Python::attach(|py| -> PyResult<Value> {
+            let temporal = |v: &Value| -> PyResult<bool> {
+                match v {
+                    Value::Encoded(e) => Ok(e.temporal_object(py)?.is_some()),
+                    _ => Ok(false),
+                }
+            };
+            if !temporal(value)? && !temporal(arg)? {
+                return Ok(Value::String(String::new()));
+            }
+            py.import("operator")?
+                .call_method1("add", (value.clone(), arg.clone()))?
+                .extract()
+        });
+        // Django's addition fallback catches all ordinary Python exceptions,
+        // including incompatible types and overflow at date.min/date.max.
+        return Python::attach(|py| match sum {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
+                Ok(Value::String(String::new()))
+            }
+            Err(error) => Err(DjangoRustError::PythonException(error)),
+        });
+    }
+    Ok(match (value, arg) {
+        (Value::SafeString(lhs), Value::SafeString(rhs)) => {
+            Value::SafeString(format!("{lhs}{rhs}"))
+        }
+        (
+            Value::String(lhs) | Value::SafeString(lhs),
+            Value::String(rhs) | Value::SafeString(rhs),
+        ) => Value::String(format!("{lhs}{rhs}")),
+        (Value::List(lhs), Value::List(rhs)) => {
+            Value::List(lhs.iter().chain(rhs).cloned().collect())
+        }
+        (
+            Value::Tuple(lhs) | Value::NamedTuple { items: lhs, .. },
+            Value::Tuple(rhs) | Value::NamedTuple { items: rhs, .. },
+        ) => Value::Tuple(lhs.iter().chain(rhs).cloned().collect()),
+        _ => Value::String(String::new()),
+    })
+}
+
 /// Is this bare filter argument something Django resolves WITHOUT a context
 /// lookup — so a lookup miss is not a `VariableDoesNotExist` (#2328)?
 ///
@@ -2674,6 +2732,7 @@ pub(crate) fn int_arg_is_type_error(resolved: Option<&Value>) -> bool {
         Some(value) => !matches!(
             value,
             Value::String(_)
+                | Value::SafeString(_)
                 | Value::Integer(_)
                 | Value::Float(_)
                 | Value::Bool(_)
@@ -2859,7 +2918,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
     };
 
     match value {
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             let chars: Vec<char> = s.chars().collect();
             let picked: String = slice_positions(start, stop, step, chars.len())
                 .into_iter()
@@ -2867,7 +2926,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
                 .collect();
             Ok(Value::String(picked))
         }
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let picked: Vec<Value> = slice_positions(start, stop, step, items.len())
                 .into_iter()
                 .map(|i| items[i].clone())
@@ -3076,6 +3135,10 @@ fn parse_serialized_datetime(
         ));
     }
     if allow_time_only {
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("1970-01-01T{}", datetime_str.trim()))
+        {
+            return Some((dt, true, true));
+        }
         // Time-only (#2216). Anchored on an arbitrary epoch date so the
         // `Timelike` accessors work unchanged; `time_only` is what stops that
         // borrowed date from ever being rendered -- and why the duration
@@ -3630,7 +3693,7 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
                 .ok()
                 .and_then(|f| filesize_to_int(&Value::Float(f)))
         }),
-        Value::String(s) => python_int_from_str(s),
+        Value::String(s) | Value::SafeString(s) => python_int_from_str(s),
         // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
         _ => None,
     }
@@ -3729,7 +3792,7 @@ struct Stamped {
 /// | input | wall clock | `T`/`O`/`Z` | `e` |
 /// |---|---|---|---|
 /// | aware  | converted to the active zone | that zone at that instant | same |
-/// | naive  | **unchanged** | the active zone at that local time | `""` |
+/// | naive  | **unchanged** | the default zone at that local time | `""` |
 ///
 /// The naive row is the one that is easy to get wrong. Django does not shift a
 /// naive datetime — it is already understood to be local — but it still reports
@@ -3755,15 +3818,33 @@ fn apply_active_timezone(
 ) -> Stamped {
     use chrono::TimeZone;
 
-    let Some(tz) = crate::timezone::active_timezone() else {
+    // A time has no date on which to determine timezone offsets or DST.
+    // Django leaves its wall clock unchanged and its zone fields empty.
+    if time_only {
+        return Stamped {
+            dt,
+            abbrev: None,
+            aware: false,
+            timestamp: dt.timestamp(),
+            time_only,
+        };
+    }
+
+    let zone = if aware {
+        crate::timezone::active_timezone()
+    } else {
+        crate::registry::resolve_default_timezone()
+            .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+            .or_else(crate::timezone::active_timezone)
+    };
+    let Some(tz) = zone else {
         // No active zone: `USE_TZ = False`, `{% localtime off %}` (#2558), or
         // this crate embedded without Django settings. The wall clock is
         // formatted as it arrived (pre-#2209 behaviour). An AWARE value still
         // names its own zone for `T`/`e`, as Django's `tzname()` does when no
-        // conversion happens: the wire carries only the offset (#2216), so
-        // the name is the one `datetime.timezone` gives that offset — `UTC`,
-        // or `UTC+02:00` — and a `ZoneInfo` value's `CEST` is the documented
-        // residue. A naive value keeps reporting nothing, as before.
+        // conversion happens. Serialized strings use the fixed-offset name;
+        // format_date restores an encoded Python object's original tzname.
+        // A naive value keeps reporting nothing, as before.
         return Stamped {
             dt,
             abbrev: if aware {
@@ -3789,7 +3870,7 @@ fn apply_active_timezone(
     }
 
     // Naive: keep the wall clock, and read the zone metadata off that same wall
-    // clock interpreted in the active zone. `from_local_datetime` is not total —
+    // clock interpreted in the default zone. `from_local_datetime` is not total —
     // a local time inside a DST gap does not exist, and one inside a fold is
     // ambiguous. `.earliest()` picks the pre-transition offset for a fold, which
     // is what Django's `_datetime_ambiguous_or_imaginary` guard effectively
@@ -3992,7 +4073,7 @@ fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
 /// is the filter's first line — so they answer `""` whatever the format says.
 fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     if matches!(value, Value::None | Value::Missing)
-        || matches!(value, Value::String(s) if s.is_empty())
+        || matches!(value, Value::String(s) | Value::SafeString(s) if s.is_empty())
     {
         return String::new();
     }
@@ -4019,10 +4100,20 @@ fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     out
 }
 
+fn first_time_code(format_str: &str) -> Option<char> {
+    const TIME_CODES: &str = "aAefgGhHiOPsTuZ";
+    let mut previous = None;
+    format_str.chars().find(|&ch| {
+        let is_code = previous != Some('\\') && TIME_CODES.contains(ch);
+        previous = Some(ch);
+        is_code
+    })
+}
+
 fn format_has_date_code(format_str: &str) -> bool {
     const DATE_ONLY: &[char] = &[
-        'b', 'd', 'D', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W', 'y',
-        'Y', 'z',
+        'b', 'd', 'D', 'E', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W',
+        'y', 'Y', 'z',
     ];
     let mut chars = format_str.chars();
     while let Some(ch) = chars.next() {
@@ -4037,7 +4128,14 @@ fn format_has_date_code(format_str: &str) -> bool {
     false
 }
 
-fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
+fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result<String> {
+    // Date objects have no time fields. Keep support for serialized date
+    // strings, but retain Python's refusal for a real datetime.date value.
+    if matches!(original, Value::Encoded(encoded) if encoded.type_name == "datetime.date")
+        && first_time_code(format_str).is_some()
+    {
+        return Ok(String::new());
+    }
     // Tracks whether the input carried a UTC offset. Set by the naive branches
     // below; the RFC3339 branch leaves it true. The distinction survives all
     // the way to `apply_active_timezone` because Django applies `localtime` to
@@ -4053,7 +4151,18 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
 
     // #2209: everything above produced a wall clock in whatever offset arrived.
     // Django would have run `timezone.localtime()` by now.
-    let stamped = apply_active_timezone(dt, aware, time_only);
+    let mut stamped = apply_active_timezone(dt, aware, time_only);
+    // No conversion occurred: use the object's real name instead of
+    // inventing datetime.timezone's default name from its numeric offset.
+    if aware && !time_only && crate::timezone::active_timezone().is_none() {
+        if let Value::Encoded(encoded) = original {
+            if let Some(Value::String(name)) =
+                encoded.attrs.get(&djust_core::ObjectKey::from("tzname"))
+            {
+                stamped.abbrev = Some(name.clone());
+            }
+        }
+    }
     let dt = stamped.dt;
 
     // #2216: a bare time has no date, so Django's `TimeFormat` has no attribute
@@ -4069,6 +4178,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
         return Ok(String::new());
     }
 
+    let translate =
+        |text: &str| crate::registry::translate_msgid(text).unwrap_or_else(|| text.to_string());
+
     // Convert common Django format codes to output
     // This is a simplified implementation - Django has many more format codes
     let mut result = String::new();
@@ -4083,11 +4195,23 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'n' => result.push_str(&dt.month().to_string()), // 1-12
             'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
             'j' => result.push_str(&dt.day().to_string()),  // 1-31
-            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
-            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
-            'F' => result.push_str(&dt.format("%B").to_string()), // January
-            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-            'N' => result.push_str(MONTHS_AP[(dt.month() - 1) as usize]),
+            'b' | 'D' | 'l' | 'F' | 'E' | 'M' | 'N' => {
+                let index = if matches!(ch, 'D' | 'l') {
+                    dt.weekday().num_days_from_monday()
+                } else {
+                    dt.month()
+                };
+                let localized = crate::registry::resolve_date_part(&ch.to_string(), index)
+                    .unwrap_or_else(|| match ch {
+                        'b' => dt.format("%b").to_string().to_lowercase(),
+                        'D' => translate(&dt.format("%a").to_string()),
+                        'l' => translate(&dt.format("%A").to_string()),
+                        'F' | 'E' => translate(&dt.format("%B").to_string()),
+                        'M' => translate(&dt.format("%b").to_string()),
+                        _ => translate(MONTHS_AP[(dt.month() - 1) as usize]),
+                    });
+                result.push_str(&localized);
+            }
             // Time format codes
             'G' => result.push_str(&dt.hour().to_string()), // 0-23 (24-hour, no leading zero)
             'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
@@ -4120,9 +4244,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'A' => {
                 // AM/PM
                 if dt.hour() < 12 {
-                    result.push_str("AM");
+                    result.push_str(&translate("AM"));
                 } else {
-                    result.push_str("PM");
+                    result.push_str(&translate("PM"));
                 }
             }
             'a' => {
@@ -4137,9 +4261,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 // now match Django" alongside a wrong `a` in the same match arm
                 // would be odd.
                 if dt.hour() < 12 {
-                    result.push_str("a.m.");
+                    result.push_str(&translate("a.m."));
                 } else {
-                    result.push_str("p.m.");
+                    result.push_str(&translate("p.m."));
                 }
             }
             'P' => {
@@ -4147,9 +4271,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 let hour = dt.hour();
                 let minute = dt.minute();
                 if hour == 0 && minute == 0 {
-                    result.push_str("midnight");
+                    result.push_str(&translate("midnight"));
                 } else if hour == 12 && minute == 0 {
-                    result.push_str("noon");
+                    result.push_str(&translate("noon"));
                 } else {
                     let display_hour = if hour == 0 {
                         12
@@ -4158,7 +4282,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                     } else {
                         hour
                     };
-                    let ampm = if hour < 12 { "a.m." } else { "p.m." };
+                    let ampm = translate(if hour < 12 { "a.m." } else { "p.m." });
                     if minute == 0 {
                         result.push_str(&format!("{display_hour} {ampm}"));
                     } else {
@@ -4175,8 +4299,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             // unimplemented code is indistinguishable from an intentional one
             // without a differential against Django. Every expectation below
             // came from running all 38 characters through Django's own engine.
-            'b' => result.push_str(&dt.format("%b").to_string().to_lowercase()), // aug
-            'S' => result.push_str(ordinal_suffix(dt.day())),                    // nd
+            'S' => result.push_str(ordinal_suffix(dt.day())), // nd
             'w' => result.push_str(&dt.weekday().num_days_from_sunday().to_string()), // 0=Sun
             'z' => result.push_str(&dt.ordinal().to_string()), // day of year, 1-based
             't' => result.push_str(&days_in_month(dt.year(), dt.month()).to_string()),
@@ -4202,7 +4325,24 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                     result.push_str(&format!("{}:{:02}", hour, dt.minute()));
                 }
             }
-            'c' => result.push_str(&iso_8601(&dt, stamped.time_only)),
+            'c' => {
+                let domain = match original {
+                    Value::Encoded(e) => e.cmp_key.map(|key| key.domain),
+                    _ => None,
+                };
+                if domain == Some(djust_core::CMP_DOMAIN_DATE) {
+                    result.push_str(&dt.format("%Y-%m-%d").to_string());
+                } else if domain == Some(djust_core::CMP_DOMAIN_DATETIME_NAIVE) {
+                    let pattern = if dt.timestamp_subsec_micros() == 0 {
+                        "%Y-%m-%dT%H:%M:%S"
+                    } else {
+                        "%Y-%m-%dT%H:%M:%S%.6f"
+                    };
+                    result.push_str(&dt.format(pattern).to_string());
+                } else {
+                    result.push_str(&iso_8601(&dt, stamped.time_only));
+                }
+            }
             'r' => {
                 // RFC 5322, e.g. `Sat, 22 Aug 2026 19:30:45 -0400`.
                 result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string());
@@ -4270,9 +4410,8 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     Ok(result)
 }
 
-fn format_time(datetime_str: &str, format_str: &str) -> Result<String> {
-    // Reuse format_date but focused on time formatting
-    format_date(datetime_str, format_str)
+fn format_time(datetime_str: &str, format_str: &str, original: &Value) -> Result<String> {
+    format_date(datetime_str, format_str, original)
 }
 
 fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
@@ -4292,7 +4431,10 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
 fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
     {
         match (&a_val, &b_val) {
-            (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str),
+            (
+                Value::String(a_str) | Value::SafeString(a_str),
+                Value::String(b_str) | Value::SafeString(b_str),
+            ) => a_str.cmp(b_str),
             (Value::Integer(a_int), Value::Integer(b_int)) => a_int.cmp(b_int),
             (Value::Float(a_float), Value::Float(b_float)) => a_float
                 .partial_cmp(b_float)
@@ -4388,8 +4530,12 @@ fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
     let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(items.len());
     for item in items {
         let k = match item {
-            Value::String(s) => s.chars().nth(n).map(|c| Value::String(c.to_string())),
-            Value::List(v) | Value::Tuple(v) => v.get(n).cloned(),
+            Value::String(s) | Value::SafeString(s) => {
+                s.chars().nth(n).map(|c| Value::String(c.to_string()))
+            }
+            Value::List(v) | Value::Tuple(v) | Value::NamedTuple { items: v, .. } => {
+                v.get(n).cloned()
+            }
             // `itemgetter(0)` on a str-keyed dict is a `KeyError`, and on a
             // scalar a `TypeError`. Both are Django's raise.
             _ => None,
@@ -4851,7 +4997,7 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) if is_json_int_literal(d) => d.clone(),
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
-        Value::String(s) => format!("\"{}\"", json_string_body(s)),
+        Value::String(s) | Value::SafeString(s) => format!("\"{}\"", json_string_body(s)),
         // THE #2448 fix, and the only place in the engine that reads the
         // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
         // `isoformat()` with the microseconds truncated to milliseconds and a
@@ -4869,7 +5015,7 @@ fn value_to_json(value: &Value) -> String {
         // for exactly the reason the `Decimal` arm above documents.
         Value::Encoded(e) => format!("\"{}\"", json_string_body(&e.json)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
             format!("[{}]", parts.join(", "))
         }
@@ -6018,7 +6164,7 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // A STRING is `float(s)`, and on failure it is the `ValueError` arm —
         // which does NOT fall through to `len()`. `float` accepts surrounding
         // whitespace, `inf` and `nan`, and so does Rust's parse.
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             return match s.trim().parse::<f64>() {
                 Ok(f) => pick(f == 1.0),
                 Err(_) => String::new(),
@@ -6027,9 +6173,10 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // `len(value)`, the `TypeError` arm. A dict VIEW answers `len()` in
         // Python, so it counts its entries like any other sized value
         // (#2340).
-        Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
-            return pick(l.len() == 1)
-        }
+        Value::List(l)
+        | Value::Tuple(l)
+        | Value::NamedTuple { items: l, .. }
+        | Value::DictView { items: l, .. } => return pick(l.len() == 1),
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
@@ -6059,7 +6206,7 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         Value::BigInt(d) => Some(d.clone()),
         // `int(True)` is 1 in Python.
         Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-        Value::String(s) => python_int_str(s).or_else(|| {
+        Value::String(s) | Value::SafeString(s) => python_int_str(s).or_else(|| {
             string_float_ok
                 .then(|| s.trim().parse::<f64>().ok())
                 .flatten()
@@ -6184,7 +6331,7 @@ pub(crate) fn python_int_value(value: &Value) -> std::result::Result<String, Int
         // asks of every `Value::List` match (#2317/#2321): a bare `List` arm
         // here would refuse a list and silently accept the tuple `int()`
         // refuses just as loudly.
-        Value::List(_) | Value::Tuple(_) => Err(IntValueError::Type),
+        Value::List(_) | Value::Tuple(_) | Value::NamedTuple { .. } => Err(IntValueError::Type),
         Value::Float(f) if f.is_nan() => Err(IntValueError::Value),
         Value::Float(f) if f.is_infinite() => Err(IntValueError::Overflow),
         // A `Decimal` carries its EXACT digit string (#2214), so its two
@@ -6247,9 +6394,10 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::Decimal(_) => "decimal.Decimal",
         Value::None => "NoneType",
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
-        Value::String(_) | Value::Missing => "str",
+        Value::String(_) | Value::SafeString(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
+        Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
                 match map.get(&djust_core::object_key::ObjectKey::Str("__model__".into())) {
@@ -6405,13 +6553,15 @@ pub(crate) fn python_getitem(
         items.get(usize::try_from(at).ok()?).cloned()
     }
     match value {
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             let chars: Vec<char> = s.chars().collect();
             Ok(nth(&chars, index).map(|c| Value::String(c.to_string())))
         }
         // `string_if_invalid` is `""`, and `""[0]` is an IndexError.
         Value::Missing => Ok(None),
-        Value::List(items) | Value::Tuple(items) => Ok(nth(items, index)),
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+            Ok(nth(items, index))
+        }
         // A mapping does NOT index positionally: `d[0]` is a key lookup, and
         // an absent key is a `KeyError` rather than an `IndexError` — which is
         // why `first` and `last` disagree about the corpus's dicts. `ObjectKey`
@@ -6458,7 +6608,7 @@ fn index_error_answer() -> Value {
 /// keypad spelling of the word "None".
 pub(crate) fn python_lower(value: &Value) -> std::result::Result<String, ValueOpError> {
     match value {
-        Value::String(s) => Ok(s.to_lowercase()),
+        Value::String(s) | Value::SafeString(s) => Ok(s.to_lowercase()),
         // `string_if_invalid` is a `str`; `"".lower()` is `""`.
         Value::Missing => Ok(String::new()),
         _ => Err(ValueOpError::NoAttribute("lower")),
@@ -6671,6 +6821,24 @@ fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
 
         let matched = m.as_str();
 
+        // Django's simple_url_re requires a word character after the scheme
+        // and optional '['. In particular, http://[::1] remains plain text.
+        if let Some(host) = matched
+            .strip_prefix("http://")
+            .or_else(|| matched.strip_prefix("https://"))
+        {
+            let host = host.strip_prefix('[').unwrap_or(host);
+            if !host
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                result.push_str(&maybe_escape(matched));
+                last_end = m.end();
+                continue;
+            }
+        }
+
         // Determine if this is an email or a URL
         if matched.contains('@') && !matched.starts_with("http") {
             // Email — the href is ALWAYS escaped (attribute context); the
@@ -6688,7 +6856,9 @@ fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
             // Strip trailing punctuation from href/display that's not part of URL
             let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
             // ALWAYS escaped — attribute context, as Django does.
-            let safe_href = html_escape(&href_clean);
+            let decoded_href = crate::htmlparser::unescape(&href_clean);
+            let quoted_href = crate::urlquote::smart_urlquote(&decoded_href);
+            let safe_href = html_escape(&quoted_href);
             let display = maybe_escape(&truncate_url_display(&display_raw, trunc_limit));
             let safe_trailing = maybe_escape(&trailing);
             result.push_str(&format!(
@@ -6713,6 +6883,17 @@ fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, S
     let mut trailing = String::new();
 
     loop {
+        // A semicolon that terminates an HTML entity belongs to the URL.
+        // Strip extra punctuation first, then stop at the entity boundary.
+        if href_s.ends_with(';') {
+            if let Some(amp) = href_s.rfind('&') {
+                let candidate = &href_s[amp..];
+                let decoded = crate::htmlparser::unescape(candidate);
+                if decoded != candidate && !decoded.ends_with(';') {
+                    break;
+                }
+            }
+        }
         if href_s.ends_with(trailing_chars) {
             let c = href_s.pop().unwrap();
             display_s.pop();
@@ -6793,7 +6974,7 @@ fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String
         // there is no third variant to match.
         let sublist = if i + 1 < items.len() {
             match &items[i + 1] {
-                Value::List(sub) | Value::Tuple(sub) => {
+                Value::List(sub) | Value::Tuple(sub) | Value::NamedTuple { items: sub, .. } => {
                     i += 1; // consume the sublist
                     Some(sub)
                 }
@@ -7006,6 +7187,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -7020,6 +7202,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -7041,6 +7224,7 @@ mod tests {
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
                 live: None,
+                display_safe: false,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -7059,6 +7243,7 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -7078,6 +7263,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ]
     }
@@ -7131,6 +7317,7 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
+            display_safe: false,
         }));
         assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7527,8 +7714,10 @@ mod tests {
             Value::Integer(_) => "Integer",
             Value::Float(_) => "Float",
             Value::String(_) => "String",
+            Value::SafeString(_) => "SafeString",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
+            Value::NamedTuple { .. } => "NamedTuple",
             Value::Object(_) => "Object",
             Value::DictView { .. } => "DictView",
             Value::Decimal(_) => "Decimal",
@@ -7549,6 +7738,7 @@ mod tests {
             Value::Integer(-42),
             Value::Float(1.5),
             Value::String("<b>".to_string()),
+            Value::SafeString("<b>".to_string()),
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
             Value::Object(Default::default()),
@@ -7585,6 +7775,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7613,6 +7804,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7632,6 +7824,7 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
+            display_safe: false,
         }));
         assert!(
             iter_values(&hostile).is_none(),
@@ -7661,8 +7854,8 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 7,
-            "the iterating set is exactly String / List / Tuple / Object / \
+            iterating, 8,
+            "the iterating set is exactly String / SafeString / List / Tuple / Object / \
              Missing / DictView, plus an iterating Encoded (#2466) — a \
              change here is a change to what #2283 and #2466 fixed",
         );
@@ -7673,7 +7866,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            13,
+            14,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }

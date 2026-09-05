@@ -33,12 +33,12 @@ pub mod tags;
 pub mod textwrap;
 pub mod timezone;
 pub mod truncate;
+mod urlquote;
 
 pub use markdown::render_markdown;
 
 use inheritance::{build_inheritance_chain, build_inheritance_chain_from, TemplateLoader};
 use parser::Node;
-use renderer::render_nodes_with_loader;
 
 // Re-export for JIT auto-serialization
 pub use parser::extract_template_variables;
@@ -68,24 +68,45 @@ struct FlattenedNodes {
     node_deps: Vec<HashSet<String>>,
 }
 
-/// Flatten `Node::Block` children into their parent level.
-/// When Django's template engine resolves `{% extends %}`, it leaves
-/// `{% block content %}...{% endblock %}` intact but they render identically
-/// to just rendering their children. Flattening exposes each child as a
-/// separate node for partial rendering.
+/// Expose pure block children as separate nodes for partial rendering.
+/// Blocks containing context-mutating or opaque nodes must retain their
+/// lexical scope so assignments cannot escape into following siblings.
 fn flatten_blocks(nodes: Vec<Node>) -> Vec<Node> {
     let mut result = Vec::new();
     for node in nodes {
         match node {
             Node::Block {
-                nodes: children, ..
+                name,
+                nodes: children,
             } => {
-                result.extend(flatten_blocks(children));
+                if parser::extract_per_node_deps(&children)
+                    .iter()
+                    .any(|deps| deps.contains("*"))
+                {
+                    result.push(Node::Block {
+                        name,
+                        nodes: children,
+                    });
+                } else {
+                    result.extend(flatten_blocks(children));
+                }
             }
             other => result.push(other),
         }
     }
     result
+}
+
+/// An immutable compiled template retained by a Python backend template.
+#[pyclass(frozen)]
+pub struct CompiledTemplate {
+    pub template: std::sync::Arc<Template>,
+}
+
+impl CompiledTemplate {
+    pub fn nodes(&self) -> Vec<Node> {
+        self.template.nodes.clone()
+    }
 }
 
 /// A compiled Django template
@@ -124,6 +145,11 @@ impl Template {
             resolved: OnceLock::new(),
             flattened: OnceLock::new(),
         })
+    }
+
+    /// Validate syntax that depends on the defining template's origin.
+    pub fn validate_relative_references(&self, name: &str) -> Result<()> {
+        inheritance::validate_relative_references(&self.nodes, name)
     }
 
     /// Per-node dependency sets (top-level context variable names each node uses).
@@ -180,7 +206,7 @@ impl Template {
             return;
         }
         // Only flatten when blocks exist and extends is NOT used
-        // (Django resolved extends, blocks are semantic no-ops)
+        // (inheritance keeps its own resolved node tree)
         let has_blocks = self.nodes.iter().any(|n| matches!(n, Node::Block { .. }));
         if has_blocks && !self.uses_extends() {
             let flat = flatten_blocks(self.nodes.clone());
@@ -276,12 +302,26 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<String> {
+        self.render_with_loader_named_mut(&mut context.clone(), loader, template_name)
+    }
+
+    /// Render into a caller-owned context so surviving assignments can be exported.
+    pub fn render_with_loader_named_mut<L: TemplateLoader>(
+        &self,
+        context: &mut Context,
+        loader: &L,
+        template_name: Option<&str>,
+    ) -> Result<String> {
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
         // the cache is keyed by source (#2517).
-        if !self.extends_is_relative() {
+        if template_name.is_none() && !self.extends_is_relative() {
             if let Some(resolved) = self.resolved.get() {
-                return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
+                return renderer::render_nodes_with_loader_mut(
+                    &resolved.final_nodes,
+                    context,
+                    Some(loader),
+                );
             }
         }
 
@@ -297,9 +337,21 @@ impl Template {
             )?;
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
-            render_nodes_with_loader(&final_nodes, context, Some(loader))
+            renderer::render_nodes_with_loader_mut(&final_nodes, context, Some(loader))
         } else {
-            render_nodes_with_loader(&self.nodes, context, Some(loader))
+            if let Some(name) = template_name {
+                let mut nodes = self.nodes.clone();
+                inheritance::set_include_origins(&mut nodes, name)?;
+                inheritance::set_ifchanged_origins(
+                    &mut nodes,
+                    &loader
+                        .template_origin(name)
+                        .unwrap_or_else(|| name.to_string()),
+                );
+                renderer::render_nodes_with_loader_mut(&nodes, context, Some(loader))
+            } else {
+                renderer::render_nodes_with_loader_mut(&self.nodes, context, Some(loader))
+            }
         }
     }
 }

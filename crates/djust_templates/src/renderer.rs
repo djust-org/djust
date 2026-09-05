@@ -9,7 +9,8 @@ use djust_components::Component;
 use djust_core::decimal::python_float_repr;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
-use pyo3::{Py, PyAny};
+use pyo3::types::PyAnyMethods;
+use pyo3::{Py, PyAny, Python};
 use regex::Regex;
 use std::collections::HashSet;
 
@@ -288,7 +289,11 @@ const IS_SAFE_FILTERS: [&str; 36] = [
 /// widened the same divergence to a fourth name instead of leaving it where it
 /// was. One helper, three callers, no room to drift again (#1646).
 ///
-fn filter_output_is_safe(filter_name: &str, produced_safe: bool, input_was_safe: bool) -> bool {
+pub(crate) fn filter_output_is_safe(
+    filter_name: &str,
+    produced_safe: bool,
+    input_was_safe: bool,
+) -> bool {
     // `produced_safe` is a genuine runtime `SafeString` — a custom filter that
     // `mark_safe()`d its result without the static `is_safe=True` flag (#1660).
     produced_safe
@@ -464,6 +469,7 @@ fn nodes_contain_elements(nodes: &[Node]) -> bool {
 
 fn node_is_element_bearing(node: &Node) -> bool {
     match node {
+        Node::Located { nodes, .. } => nodes_contain_elements(nodes),
         // Text nodes only contribute elements when their literal
         // content includes a `<`. A `<` strongly implies an HTML
         // tag; a `<` inside textual prose like "if 3 < 4" would
@@ -545,66 +551,79 @@ pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
 
 /// Render nodes with an optional template loader for {% include %} support.
 ///
-/// Supports `Node::AssignTag` by lazily cloning the incoming
-/// `&Context` into an owned, mutable context the first time an
-/// assign tag is encountered. All subsequent sibling nodes see the
-/// assigned variables. Siblings preceding the assign tag are
-/// rendered with the original (unmutated) context.
+/// Assignment effects remain visible to following siblings and recursive
+/// control-flow bodies. Nodes that introduce a lexical scope push a frame;
+/// their local bindings disappear when that frame is popped.
+pub fn render_nodes_with_loader_mut<L: TemplateLoader>(
+    nodes: &[Node],
+    context: &mut Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    let mut output = String::new();
+    for node in nodes {
+        output.push_str(&render_effectful_node(node, context, loader)?);
+    }
+    Ok(output)
+}
+
+fn render_effectful_node<L: TemplateLoader>(
+    node: &Node,
+    context: &mut Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    if let Node::Located {
+        nodes,
+        span,
+        source,
+        origin,
+    } = node
+    {
+        let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
+        let rendered = render_effectful_node(&nodes[0], context, loader);
+        context.replace_node_identity(previous);
+        return rendered.map_err(|error| {
+            error
+                .at(Some(*span))
+                .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
+        });
+    }
+    match sibling_updates(node, context, loader)? {
+        Some(effect) => {
+            for binding in effect.bindings {
+                if binding.upward {
+                    context.bind_upward(binding.name, binding.value, binding.safe);
+                } else {
+                    context.bind(binding.name, binding.value, binding.safe);
+                }
+            }
+            Ok(effect.html)
+        }
+        None => render_node_with_loader_mut(node, context, loader),
+    }
+}
+
+/// Render with one owned context for the complete recursive render.
 pub fn render_nodes_with_loader<L: TemplateLoader>(
     nodes: &[Node],
     context: &Context,
     loader: Option<&L>,
 ) -> Result<String> {
-    let mut output = String::new();
-    // Lazily materialised mutable copy of the context for assign-tag
-    // effects. `None` until an assign tag forces a clone.
-    let mut mutated: Option<Context> = None;
+    render_nodes_with_loader_mut(nodes, &mut context.clone(), loader)
+}
 
-    for node in nodes {
-        // Pick which context this node renders against.
-        let active_ctx: &Context = match &mutated {
-            Some(c) => c,
-            None => context,
-        };
-
-        match sibling_updates(node, active_ctx, loader)? {
-            Some(effect) => {
-                // Promote to owned context if we haven't already, then merge.
-                if mutated.is_none() {
-                    mutated = Some(active_ctx.clone());
-                }
-                if let Some(ctx) = mutated.as_mut() {
-                    for binding in effect.bindings {
-                        // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
-                        // stale grant on the name first, so a `{% … as x %}`
-                        // landing on a name the context had marked cannot
-                        // inherit that grant and emit its value RAW (#2361).
-                        // The flag is per binding rather than a constant
-                        // `false`: an assign handler's `Value` crosses PyO3
-                        // with no safety channel and is honestly unsafe, while
-                        // `{% firstof … as v %}` binds what Django binds —
-                        // `render_value_in_context(...)`, a `SafeString`
-                        // (#2355).
-                        ctx.bind(binding.name, binding.value, binding.safe);
-                    }
-                }
-                // A context-mutating tag emits no HTML — except a bridged
-                // library tag, which may emit AND bind (#2547).
-                output.push_str(&effect.html);
-            }
-            None => {
-                output.push_str(&render_node_with_loader(node, active_ctx, loader)?);
-            }
-        }
-    }
-
-    Ok(output)
+/// Preserve the public immutable-context entry point.
+pub fn render_node_with_loader<L: TemplateLoader>(
+    node: &Node,
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    render_node_with_loader_mut(node, &mut context.clone(), loader)
 }
 
 /// The context updates a node contributes to the siblings that FOLLOW it, or
 /// `None` for a node that renders normally.
 ///
-/// One definition for all three sibling-aware loops — `render_nodes_with_loader`,
+/// One definition for all three sibling-aware loops — `render_nodes_with_loader_mut`,
 /// `render_nodes_collecting`, `render_nodes_partial` — which carried three
 /// hand-copied `Node::AssignTag` arms before #2355. Adding a second kind of
 /// context-mutating node would have made that four copies of two arms each, so
@@ -621,13 +640,13 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
 /// happens ONCE per render and the bound value is the emitted value.
 fn sibling_updates<L: TemplateLoader>(
     node: &Node,
-    context: &Context,
+    context: &mut Context,
     loader: Option<&L>,
 ) -> Result<Option<SiblingEffect>> {
     match node {
         // A bridged Django library tag that declared `RETURNS_BINDINGS`
         // (#2547). Both arms below call the SAME helper the standalone
-        // `render_node_with_loader` arms call — the helper decides between
+        // `render_node_with_loader_mut` arms call — the helper decides between
         // the bindings-returning and the plain registry call, so a
         // library tag renders identically whether or not it has a sibling
         // to hand its bindings to.
@@ -664,18 +683,19 @@ fn sibling_updates<L: TemplateLoader>(
             // Forward the raw-Python sidecar so assign handlers can reach
             // Python-only context (request, view) the same way
             // `Node::CustomTag` handlers do (#1167).
-            let raw_py = context.raw_py_objects();
+            let raw_py = context.render_raw_py_objects();
             let updates = crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,
                 &context_map,
-                raw_py,
+                raw_py.as_deref(),
             )
             .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(Some(SiblingEffect::silent(
                 updates
                     .into_iter()
                     .map(|(name, value)| SiblingBinding {
+                        upward: false,
                         name,
                         value,
                         safe: false,
@@ -694,6 +714,7 @@ fn sibling_updates<L: TemplateLoader>(
             max_width,
             asvar: Some(name),
         } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
+            upward: false,
             name: name.clone(),
             value: Value::String(width_ratio(value, max_value, max_width, context)?),
             // Django binds `str(round(...))` — a PLAIN `str`, not a
@@ -703,15 +724,16 @@ fn sibling_updates<L: TemplateLoader>(
         Node::FirstOf {
             args,
             asvar: Some(name),
-        } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
-            name: name.clone(),
-            value: Value::String(first_of(args, context)?.unwrap_or_default()),
-            // `FirstOfNode` binds `render_value_in_context(...)`, which is a
-            // `SafeString` — measured, not assumed. Without the grant
-            // `{{ v }}` escapes an already-escaped string and renders
-            // `&amp;lt;b&amp;gt;` where Django renders `&lt;b&gt;`.
-            safe: true,
-        }]))),
+        } => {
+            let value = first_of(args, context)?.unwrap_or_else(|| Value::String(String::new()));
+            let safe = value.is_safe_string();
+            Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
+                upward: false,
+                name: name.clone(),
+                value,
+                safe,
+            }])))
+        }
         // `{% cycle … as name [silent] %}` (#2556): `CycleNode.render` does
         // `context.set_upward(name, value)` and then returns either `""`
         // (`silent`) or `render_value_in_context(value)`. One advance serves
@@ -741,6 +763,7 @@ fn sibling_updates<L: TemplateLoader>(
             Ok(Some(SiblingEffect {
                 html,
                 bindings: vec![SiblingBinding {
+                    upward: true,
                     name: name.clone(),
                     value: bound,
                     safe: runtime_safe,
@@ -768,17 +791,78 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
     get_value_safe_ignoring_failures(values[idx].trim(), context)
 }
 
-/// Resolve an unquoted `{% extends %}` operand against the render context.
+/// Resolve an `{% extends %}` filter expression against the render context.
 ///
-/// Lives here rather than in `inheritance` because the resolver and its
-/// `ignore_failures` policy belong to the renderer; `inheritance` has no other
-/// reason to reach into context resolution.
-pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Option<String> {
-    let (value, _) = get_value_safe_ignoring_failures(token, context).ok()?;
-    match value {
-        Value::Missing | Value::None => None,
-        other => Some(other.to_string()),
+/// Parent selection uses strict FilterExpression resolution and rejects falsy
+/// results before invoking the loader, as Django's ExtendsNode does.
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<Value> {
+    let (mut value, _) = get_value_safe(token, context)?;
+    if matches!(value, Value::Missing) {
+        value = Value::String(context.string_if_invalid_for(token).unwrap_or_default());
     }
+    if !value.is_truthy() {
+        let mut message = format!(
+            "Invalid template name in 'extends' tag: {}.",
+            value.py_repr()
+        );
+        let parts = crate::filter_lexer::split_pipes(token);
+        let head = parts[0].trim();
+        let constant = is_quoted_literal(head) || (head.starts_with("_(") && head.ends_with(')'));
+        if parts.len() > 1 || !constant {
+            message.push_str(&format!(" Got this from the '{}' variable.", token));
+        }
+        return Err(crate::registry::library_syntax_error(&message));
+    }
+    Ok(value)
+}
+
+/// Retain only live render-capable objects; strings still use the loader.
+fn template_object(value: &Value) -> Result<Option<std::sync::Arc<Py<PyAny>>>> {
+    let Value::Encoded(encoded) = value else {
+        return Ok(None);
+    };
+    let Some(handle) = &encoded.live else {
+        return Ok(None);
+    };
+    Python::attach(|py| match handle.bind(py).getattr("render") {
+        Ok(render) if render.is_callable() => Ok(Some(handle.clone())),
+        Ok(_) => Ok(None),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => Ok(None),
+        Err(error) => Err(DjangoRustError::PythonException(error)),
+    })
+}
+
+type CompiledOperand = (
+    String,
+    Option<String>,
+    String,
+    Option<Py<crate::CompiledTemplate>>,
+);
+
+pub(crate) fn compiled_template_operand(value: &Value) -> Result<Option<CompiledOperand>> {
+    let Some(handle) = template_object(value)? else {
+        return Ok(None);
+    };
+    Python::attach(|py| {
+        py.import("djust.template.operands")?
+            .getattr("template_source")?
+            .call1((handle.bind(py),))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
+}
+
+fn render_template_object(handle: &Py<PyAny>, context: &Context) -> Result<String> {
+    Python::attach(|py| {
+        let raw = context.render_raw_py_objects();
+        let data = crate::registry::build_py_context(py, &context.to_hashmap(), raw.as_deref())
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        py.import("djust.template.operands")?
+            .getattr("render_template_object")?
+            .call1((handle.bind(py), data, context.autoescape()))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
 }
 
 /// Is this template-name token a QUOTED literal rather than a variable?
@@ -850,7 +934,7 @@ fn ifchanged_key(value: &Value) -> String {
             Ok(f) => numeric_key(f),
             Err(_) => format!("d{text}"),
         },
-        Value::String(s) => format!("s{s}"),
+        Value::String(s) | Value::SafeString(s) => format!("s{s}"),
         other => format!("o{other:?}"),
     }
 }
@@ -915,7 +999,7 @@ fn format_filter_chain(filters: &[(String, Option<String>)]) -> String {
 fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
     if matches!(value, Value::Missing) {
         String::new()
-    } else if runtime_safe || !autoescape {
+    } else if runtime_safe || value.string_conversion_is_safe() || !autoescape {
         value.to_string()
     } else {
         filters::html_escape(&value.to_string())
@@ -924,6 +1008,7 @@ fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
 
 /// One name a context-mutating node binds for the siblings that follow it.
 struct SiblingBinding {
+    upward: bool,
     name: String,
     value: Value,
     /// Django bound a `SafeString` here, so `{{ name }}` must not re-escape.
@@ -953,7 +1038,7 @@ impl SiblingEffect {
 /// A handler that declared `RETURNS_BINDINGS` (a bridged Django library tag)
 /// is called through the bindings-returning entry, whose Python exceptions
 /// cross WHOLE; every other handler takes the historical path, bytes
-/// unchanged. Both `render_node_with_loader`'s standalone arm and
+/// unchanged. Both `render_node_with_loader_mut`'s standalone arm and
 /// `sibling_updates`' binding arm come through here, so the two cannot
 /// resolve an argument differently (#1646).
 fn call_custom_tag(
@@ -974,13 +1059,13 @@ fn call_custom_tag(
     // The optional raw-Python sidecar (``request``, ``view``, …) so handlers
     // like ``live_render`` (#1145) can reach Python objects from the parent's
     // render context. Existing handlers ignore extra keys.
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     if crate::registry::tag_handler_returns_bindings(name) {
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
             &resolved_args,
             &context_map,
-            raw_py,
+            raw_py.as_deref(),
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
@@ -990,7 +1075,7 @@ fn call_custom_tag(
         name,
         &resolved_args,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Custom tag", name, e))?;
@@ -1050,24 +1135,24 @@ fn call_block_custom_tag<L: TemplateLoader>(
     name: &str,
     args: &[String],
     children: &[Node],
-    context: &Context,
+    context: &mut Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<SiblingBinding>)> {
     // Render children first to get block content
-    let content = render_nodes_with_loader(children, context, loader)?;
+    let content = render_nodes_with_loader_mut(children, context, loader)?;
     let resolved_args = resolve_block_tag_args(name, args, context);
     let context_map = context.to_hashmap();
     // Forward raw-Python sidecar so block handlers can reach Python-only
     // context (request, view) the same way ``Node::CustomTag`` handlers do
     // (#1167).
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     if crate::registry::block_handler_returns_bindings(name) {
         let (html, bindings) = crate::registry::call_block_handler_with_bindings(
             name,
             &resolved_args,
             &content,
             &context_map,
-            raw_py,
+            raw_py.as_deref(),
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
@@ -1078,7 +1163,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
         &resolved_args,
         &content,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
@@ -1099,13 +1184,13 @@ fn call_raw_block_tag(
 ) -> Result<(String, Vec<SiblingBinding>)> {
     let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
     let context_map = context.to_hashmap();
-    let raw_py = context.raw_py_objects();
+    let raw_py = context.render_raw_py_objects();
     let (html, bindings) = crate::registry::call_raw_block_handler_with_bindings(
         name,
         &plain,
         body,
         &context_map,
-        raw_py,
+        raw_py.as_deref(),
         &context.safe_key_paths(),
         context.autoescape(),
     )?;
@@ -1213,14 +1298,14 @@ impl Drop for ScopeExitGuard {
 fn render_language_scope<L: TemplateLoader>(
     expr: &str,
     children: &[Node],
-    context: &Context,
+    context: &mut Context,
     loader: Option<&L>,
 ) -> Result<String> {
     let lang = scope_operand_string(expr, context);
     let token = crate::registry::language_scope_enter(lang.as_deref())
         .map_err(|e| scope_hook_error("language scope enter", e))?;
     let guard = ScopeExitGuard::new(token, crate::registry::language_scope_exit);
-    let result = render_nodes_with_loader(children, context, loader);
+    let result = render_nodes_with_loader_mut(children, context, loader);
     if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("language scope exit", exit_err));
@@ -1234,14 +1319,14 @@ fn render_language_scope<L: TemplateLoader>(
 fn render_timezone_scope<L: TemplateLoader>(
     expr: &str,
     children: &[Node],
-    context: &Context,
+    context: &mut Context,
     loader: Option<&L>,
 ) -> Result<String> {
     let zone = scope_operand_string(expr, context);
     let token = crate::registry::timezone_scope_enter(zone.as_deref())
         .map_err(|e| scope_hook_error("timezone scope enter", e))?;
     let guard = ScopeExitGuard::new(token, crate::registry::timezone_scope_exit);
-    let result = render_nodes_with_loader(children, context, loader);
+    let result = render_nodes_with_loader_mut(children, context, loader);
     if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("timezone scope exit", exit_err));
@@ -1253,6 +1338,7 @@ fn render_timezone_scope<L: TemplateLoader>(
 /// A registry [`crate::registry::HandlerBinding`] as a [`SiblingBinding`].
 fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
     SiblingBinding {
+        upward: false,
         name: binding.name,
         value: binding.value,
         safe: binding.safe,
@@ -1287,9 +1373,11 @@ fn value_to_arg_string(v: &Value) -> String {
         // and the handler received the text `dict_items([…])` instead of the
         // rows. That is the #2042 collapse with a different placeholder — and
         // the compiler could not ask about it, because this match has a `_`.
-        Value::List(_) | Value::Tuple(_) | Value::Object(_) | Value::DictView { .. } => {
-            serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
-        }
+        Value::List(_)
+        | Value::Tuple(_)
+        | Value::NamedTuple { .. }
+        | Value::Object(_)
+        | Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
         _ => v.to_string(),
     }
 }
@@ -1490,7 +1578,7 @@ fn resolve_custom_tag_arg(arg: &str, context: &Context) -> TagArg {
 /// anyone vouched for.
 fn tag_arg(value: &Value, safe: bool) -> TagArg {
     let text = value_to_arg_string(value);
-    if safe && matches!(value, Value::String(_)) {
+    if safe && matches!(value, Value::String(_) | Value::SafeString(_)) {
         TagArg::marked(text)
     } else {
         TagArg::plain(text)
@@ -1682,7 +1770,9 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// that declares no policy is untouched.
 fn value_channel_arg_string(v: &Value) -> String {
     match v {
-        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| s.clone()),
+        Value::String(s) | Value::SafeString(s) => {
+            serde_json::to_string(s).unwrap_or_else(|_| s.clone())
+        }
         // JSON `true` / `false`, not Python's `True` / `False` (#2463).
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
         // A carried COLLECTION, as its ITEMS (#2477/#2489).
@@ -1795,8 +1885,28 @@ fn use_l10n_forced_off() -> bool {
 
 /// One function rather than the expression inlined twice, so the two
 /// variable-output sites cannot drift (#1646).
-fn localize_if_number(value: &Value) -> String {
-    match value {
+fn localize_if_number(value: &Value) -> Result<String> {
+    Ok(match value {
+        Value::Encoded(encoded) => {
+            use pyo3::prelude::*;
+            return Python::attach(|py| -> PyResult<String> {
+                let Some(value) = encoded.temporal_object(py)? else {
+                    return Ok(encoded.display.clone());
+                };
+                let use_l10n = USE_L10N_STACK.with(|stack| stack.borrow().last().copied());
+                match py.import("djust.template_libraries") {
+                    Ok(module) => module
+                        .call_method1("localize_temporal", (value, use_l10n))?
+                        .extract(),
+                    Err(error) if error.is_instance_of::<pyo3::exceptions::PyImportError>(py) => {
+                        Ok(encoded.display.clone())
+                    }
+                    Err(error) => Err(error),
+                }
+            })
+            .map_err(DjangoRustError::PythonException);
+        }
+
         // Decimal included: a German site must localize it the same way it
         // localizes a float — which it did before #2214, when a Decimal simply
         // WAS a float (#2221).
@@ -1863,7 +1973,7 @@ fn localize_if_number(value: &Value) -> String {
             }
         }
         _ => value.to_string(),
-    }
+    })
 }
 
 /// The token/value channels of the ASSIGN and BLOCK paths, unchanged by
@@ -1908,8 +2018,8 @@ fn plain_args(texts: Vec<String>) -> Vec<TagArg> {
 /// for any future assign tag that doesn't opt in.
 ///
 /// This is the single arg-resolution entry point for ALL FOUR assign-tag
-/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
-/// `render_nodes_partial`, and the individual `render_node_with_loader`
+/// dispatch sites (`render_nodes_with_loader_mut`, `render_nodes_collecting`,
+/// `render_nodes_partial`, and the individual `render_node_with_loader_mut`
 /// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
 /// between them.
 fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
@@ -1935,51 +2045,22 @@ fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Ve
 /// Render all nodes and return full HTML plus per-node fragments.
 ///
 /// Used on the first render to populate the per-node HTML cache.
-/// Like [`render_nodes_with_loader`], supports context-mutating
+/// Like [`render_nodes_with_loader_mut`], supports context-mutating
 /// [`Node::AssignTag`] siblings.
 pub fn render_nodes_collecting<L: TemplateLoader>(
     nodes: &[Node],
     context: &Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<String>)> {
-    let mut full_output = String::new();
+    let mut context = context.clone();
+    let mut output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
-    let mut mutated: Option<Context> = None;
-
     for node in nodes {
-        let active_ctx: &Context = match &mutated {
-            Some(c) => c,
-            None => context,
-        };
-
-        let frag = match sibling_updates(node, active_ctx, loader)? {
-            Some(effect) => {
-                if mutated.is_none() {
-                    mutated = Some(active_ctx.clone());
-                }
-                if let Some(ctx) = mutated.as_mut() {
-                    for binding in effect.bindings {
-                        // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
-                        // stale grant on the name first, so a `{% … as x %}`
-                        // landing on a name the context had marked cannot
-                        // inherit that grant and emit its value RAW (#2361).
-                        // The flag is per binding rather than a constant
-                        // `false`: an assign handler's `Value` crosses PyO3
-                        // with no safety channel and is honestly unsafe, while
-                        // `{% firstof … as v %}` binds what Django binds —
-                        // `render_value_in_context(...)`, a `SafeString`
-                        // (#2355).
-                        ctx.bind(binding.name, binding.value, binding.safe);
-                    }
-                }
-                effect.html
-            }
-            None => render_node_with_loader(node, active_ctx, loader)?,
-        };
-        full_output.push_str(&frag);
-        fragments.push(frag);
+        let fragment = render_effectful_node(node, &mut context, loader)?;
+        output.push_str(&fragment);
+        fragments.push(fragment);
     }
-    Ok((full_output, fragments))
+    Ok((output, fragments))
 }
 
 /// Partial render: only re-render nodes whose deps overlap `changed_keys`.
@@ -1994,56 +2075,33 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     changed_keys: &HashSet<String>,
     node_html_cache: &[String],
 ) -> Result<(String, Vec<String>, Vec<usize>)> {
-    let mut full_output = String::new();
+    let mut context = context.clone();
+    let mut output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
-    let mut changed_indices = Vec::new();
-    // AssignTag produces `"*"` in its dep set (see extract_from_nodes)
-    // so it always re-renders on any change; mutations propagate to
-    // subsequent siblings via this optional cloned context.
-    let mut mutated: Option<Context> = None;
-
+    let mut changed = Vec::new();
+    let mut context_may_have_changed = false;
     for (i, node) in nodes.iter().enumerate() {
-        let active_ctx: &Context = match &mutated {
-            Some(c) => c,
-            None => context,
-        };
-
-        let needs_render = if let Some(deps) = node_deps.get(i) {
-            deps.contains("*")
+        // Wildcard nodes may bind names used by later siblings, including
+        // through nested control flow or custom tags. Their effects cannot
+        // be inferred from the caller's changed input keys. Re-evaluate
+        // following dynamic nodes; literal text remains reusable.
+        context_may_have_changed |= node_deps.get(i).is_none_or(|deps| deps.contains("*"));
+        let needs_render = node_deps.get(i).is_none_or(|deps| {
+            (context_may_have_changed && !deps.is_empty())
+                || deps.contains("*")
                 || i >= node_html_cache.len()
                 || deps.iter().any(|dep| changed_keys.contains(dep))
+        });
+        let html = if needs_render {
+            changed.push(i);
+            render_effectful_node(node, &mut context, loader)?
         } else {
-            true
+            node_html_cache[i].clone()
         };
-
-        if needs_render {
-            let html = match sibling_updates(node, active_ctx, loader)? {
-                Some(effect) => {
-                    if mutated.is_none() {
-                        mutated = Some(active_ctx.clone());
-                    }
-                    if let Some(ctx) = mutated.as_mut() {
-                        for binding in effect.bindings {
-                            // See the sibling loop above: `bind` revokes a
-                            // stale grant on the name first, and the flag is
-                            // per binding (#2361 + #2355).
-                            ctx.bind(binding.name, binding.value, binding.safe);
-                        }
-                    }
-                    effect.html
-                }
-                None => render_node_with_loader(node, active_ctx, loader)?,
-            };
-            full_output.push_str(&html);
-            fragments.push(html);
-            changed_indices.push(i);
-        } else {
-            full_output.push_str(&node_html_cache[i]);
-            fragments.push(node_html_cache[i].clone());
-        }
+        output.push_str(&html);
+        fragments.push(html);
     }
-
-    Ok((full_output, fragments, changed_indices))
+    Ok((output, fragments, changed))
 }
 
 /// No-op loader for when no loader is provided
@@ -2057,12 +2115,13 @@ impl TemplateLoader for NoOpLoader {
     }
 }
 
-pub fn render_node_with_loader<L: TemplateLoader>(
+pub fn render_node_with_loader_mut<L: TemplateLoader>(
     node: &Node,
-    context: &Context,
+    context: &mut Context,
     loader: Option<&L>,
 ) -> Result<String> {
     match node {
+        Node::Located { .. } => render_effectful_node(node, context, loader),
         Node::Text(text) => Ok(text.clone()),
 
         Node::Variable(var_name, filter_specs, in_attr) => {
@@ -2139,7 +2198,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // and OR-ing the two would be a second mechanism shadowing the
             // first. `literal_safe` is false for a NUMBER — Django marks only
             // the quoted branch.
-            let mut runtime_safe = if literal_safe {
+            let mut runtime_safe = if literal_safe || value.is_safe_string() {
                 true
             } else {
                 context.is_safe(var_name)
@@ -2217,7 +2276,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
-            let text = localize_if_number(&value);
+            let text = localize_if_number(&value)?;
 
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
@@ -2241,7 +2300,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Row 1 of #2556: `{% autoescape off %}` is an EMIT-time term, OR-ed
             // in HERE and nowhere upstream — `runtime_safe` is exactly what it
             // was, so the flag never becomes a grant a later filter could read.
-            let is_safe = runtime_safe;
+            let is_safe = runtime_safe || value.string_conversion_is_safe();
             if is_safe || !context.autoescape() {
                 Ok(text)
             } else if *in_attr {
@@ -2340,10 +2399,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
-            let text = localize_if_number(&value);
+            let text = localize_if_number(&value)?;
             // Same shape as the Variable arm — see `filter_output_is_safe`.
             // Seeded, not OR-ed — see the Variable arm (#2274).
-            let is_safe = runtime_safe;
+            let is_safe = runtime_safe || value.string_conversion_is_safe();
             // Row 2 of #2556 — same shape as the Variable arm.
             if is_safe || !context.autoescape() {
                 Ok(text)
@@ -2367,7 +2426,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             // Render the body that fires (truthy/falsy branch).
             let body = if condition_result {
-                render_nodes_with_loader(true_nodes, context, loader)?
+                render_nodes_with_loader_mut(true_nodes, context, loader)?
             } else if false_nodes.is_empty() {
                 if *in_tag_context || !markers {
                     // Inside an HTML attribute value: a comment node would produce
@@ -2390,7 +2449,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     String::new()
                 }
             } else {
-                render_nodes_with_loader(false_nodes, context, loader)?
+                render_nodes_with_loader_mut(false_nodes, context, loader)?
             };
 
             // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
@@ -2498,7 +2557,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // closed. Empty for a non-normalised operand, where the loop
             // mapping is the (legitimate) channel.
             let (iterable_value, normalised, derived_grants) = match iterable_value {
-                Value::String(s) => (
+                Value::String(s) | Value::SafeString(s) => (
                     Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
                     true,
                     Vec::new(),
@@ -2569,515 +2628,531 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             };
 
             match iterable_value {
-                Value::List(items) | Value::Tuple(items) => {
+                Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
-                        return render_nodes_with_loader(empty_nodes, context, loader);
+                        return render_nodes_with_loader_mut(empty_nodes, context, loader);
                     }
 
-                    let mut output = String::new();
-                    let mut ctx = context.clone();
-                    // ONE fresh `{% ifchanged %}` frame per EXECUTION of this
-                    // loop, hoisted out of the iteration exactly as Django
-                    // binds one `forloop` dict before iterating. Inside the
-                    // iteration it would reset every item and the tag would
-                    // report "changed" forever; outside the loop entirely, an
-                    // inner loop re-entered by an outer one would wrongly keep
-                    // the previous pass's comparison.
-                    ctx.begin_loop_scope();
+                    let parent_context = context.clone();
+                    context.with_scope(|ctx| {
+                        let context = &parent_context;
+                        let mut output = String::new();
+                        // ONE fresh `{% ifchanged %}` frame per EXECUTION of this
+                        // loop, hoisted out of the iteration exactly as Django
+                        // binds one `forloop` dict before iterating. Inside the
+                        // iteration it would reset every item and the tag would
+                        // report "changed" forever; outside the loop entirely, an
+                        // inner loop re-entered by an outer one would wrongly keep
+                        // the previous pass's comparison.
+                        ctx.begin_loop_scope();
 
-                    // The SUBTREE half of `Context::bind`, hoisted out of the
-                    // iteration (#2361/#2363). Every iteration binds the same
-                    // names, so the shadowed OUTER grants each would clear are
-                    // the same ones — clearing them once is identical in
-                    // effect and turns an O(N·len(safe_keys)) scan into one.
-                    // The per-item `set_safety` below is the O(1) half.
-                    //
-                    // Without this, `{% for p in hostile %}{{ p }}{% endfor %}`
-                    // with `p` marked in the context emitted the hostile items
-                    // RAW: the loop bound the value and inherited the stale
-                    // by-name grant.
-                    for var_name in var_names {
-                        ctx.revoke_safe_subtree(var_name);
-                    }
+                        // The SUBTREE half of `Context::bind`, hoisted out of the
+                        // iteration (#2361/#2363). Every iteration binds the same
+                        // names, so the shadowed OUTER grants each would clear are
+                        // the same ones — clearing them once is identical in
+                        // effect and turns an O(N·len(safe_keys)) scan into one.
+                        // The per-item `set_safety` below is the O(1) half.
+                        //
+                        // Without this, `{% for p in hostile %}{{ p }}{% endfor %}`
+                        // with `p` marked in the context emitted the hostile items
+                        // RAW: the loop bound the value and inherited the stale
+                        // by-name grant.
+                        for var_name in var_names {
+                            ctx.revoke_safe_subtree(var_name);
+                        }
 
-                    // `forloop` is about to become this loop's own dict, so
-                    // whatever a context variable of that name was granted
-                    // goes with it — the same argument, and the same call,
-                    // that binding a loop variable makes one line up (#2402).
-                    // `{% for a in p %}{{ forloop }}{% endfor %}` over a
-                    // context carrying a marked `forloop` would otherwise
-                    // answer `is_safe("forloop")` from the shadowed grant and
-                    // emit this dict unescaped; the dict is engine-built, but
-                    // the ALIAS half of the revoke is what additionally keeps
-                    // `{% with q=forloop %}` from resolving through a stale
-                    // `forloop -> <marked path>`. Over-escaping is the
-                    // direction to fail in.
-                    ctx.revoke_safe_subtree("forloop");
+                        // `forloop` is about to become this loop's own dict, so
+                        // whatever a context variable of that name was granted
+                        // goes with it — the same argument, and the same call,
+                        // that binding a loop variable makes one line up (#2402).
+                        // `{% for a in p %}{{ forloop }}{% endfor %}` over a
+                        // context carrying a marked `forloop` would otherwise
+                        // answer `is_safe("forloop")` from the shadowed grant and
+                        // emit this dict unescaped; the dict is engine-built, but
+                        // the ALIAS half of the revoke is what additionally keeps
+                        // `{% with q=forloop %}` from resolving through a stale
+                        // `forloop -> <marked path>`. Over-escaping is the
+                        // direction to fail in.
+                        ctx.revoke_safe_subtree("forloop");
 
-                    // Create an iterator with indices, reversing if needed
-                    let items_vec = items;
-                    let indices_and_items: Vec<(usize, Value)> = if *reversed {
-                        items_vec.into_iter().enumerate().rev().collect()
-                    } else {
-                        items_vec.into_iter().enumerate().collect()
-                    };
-
-                    // Django's `forloop` (#2402). `ForNode.render` opens with
-                    //
-                    //     if "forloop" in context: parentloop = context["forloop"]
-                    //     else: parentloop = {}
-                    //
-                    // and then, once the sequence is known non-empty, writes
-                    // `context["forloop"] = {"parentloop": parentloop}` and
-                    // updates six counters per iteration. Every one of those
-                    // seven names was UNBOUND here, so `{{ forloop.counter }}`
-                    // missed and rendered `string_if_invalid` — a numbered
-                    // list with no numbers, `{% if forloop.first %}` never
-                    // true, `{% if not forloop.last %},{% endif %}` a comma
-                    // after every element. Silent under-render, the shape this
-                    // area keeps producing (#2325, #2334, #2377).
-                    //
-                    // Read out of `context`, not `ctx`: Django captures the
-                    // parent BEFORE `context.push()`, and for a nested loop
-                    // that parent is the enclosing loop's own dict (the outer
-                    // `Node::For` rendered this body against its `ctx`).
-                    // Absent at the outermost level, where Django's
-                    // `parentloop` is an empty dict — NOT missing, so
-                    // `{{ forloop.parentloop }}` renders `{}` and
-                    // `{{ forloop.parentloop.counter }}` renders nothing.
-                    let parentloop = match context.get("forloop") {
-                        Some(value) => value.clone(),
-                        None => Value::Object(Default::default()),
-                    };
-                    // Built once and mutated in place per iteration.
-                    // `IndexMap::insert` on a present key keeps its POSITION,
-                    // so the insertion order below is the render order of
-                    // `{{ forloop }}` itself — which Django spells
-                    // `{'parentloop': …, 'counter0': …, 'counter': …,
-                    // 'revcounter': …, 'revcounter0': …, 'first': …,
-                    // 'last': …}` and is a comparable output, not an internal
-                    // detail.
-                    let len_values = indices_and_items.len() as i64;
-                    let mut loop_dict: indexmap::IndexMap<djust_core::ObjectKey, Value> =
-                        indexmap::IndexMap::with_capacity(7);
-                    loop_dict.insert("parentloop".into(), parentloop);
-
-                    // Save outer dj-if loop path for nested-loop composition
-                    // and per-iteration uniqueness of `{% if %}` marker ids
-                    // (#1832). The parent path (empty outside any loop) is
-                    // read once; each iteration appends `-<index>` so a
-                    // `{% if %}` rendered inside this loop gets a UNIQUE id
-                    // per iteration that is also STABLE across re-renders
-                    // that don't change loop structure. Uses the ORIGINAL
-                    // item index (not the enumerate counter) so ids stay
-                    // stable under `{% for ... reversed %}`. Mirrors the
-                    // cycle-counter save/restore pattern above/below.
-                    let parent_if_loop_path = match ctx.get("__djust_if_loop_path") {
-                        Some(Value::String(s)) => s.clone(),
-                        _ => String::new(),
-                    };
-                    let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
-
-                    // Per-item render cache (#1967). Enabled only when:
-                    //   (a) a `LoopRenderCache` is installed for this render
-                    //       (via `LoopCacheGuard`) AND it is enabled (the
-                    //       Python `loop_render_cache_enabled` flag), and
-                    //   (b) the loop body is CACHEABLE — i.e. it is NOT
-                    //       position-dependent (no `{% if %}` / `{% cycle %}` /
-                    //       nested loop / forloop reference / opaque Python tag)
-                    //       AND it reads NOTHING but the loop variable(s). A body
-                    //       that reads any OUTER-context var (`{{ prefix }}`,
-                    //       `{% with l=flag %}`, `{% firstof flag x %}`) is NOT
-                    //       cacheable: outer context is constant within a render
-                    //       but not across renders, and the cache is persistent
-                    //       across renders, so a reorder after an outer-var
-                    //       change would serve stale fragments (#1967 review 🔴).
-                    //       See `loop_cache::body_is_cacheable`.
-                    // When disabled, `loop_caching_enabled` is `false` and the
-                    // render path below is byte-identical to before #1967.
-                    let loop_caching_enabled = crate::loop_cache::with_active_cache(|cache| {
-                        cache.body_cacheable(nodes, var_names)
-                    })
-                    .unwrap_or(false);
-
-                    // No per-iteration `{% cycle %}` counter here any more (#2556):
-                    // cycle state is per NODE per RENDER on the `Context`'s
-                    // shared store, which the `ctx` clone above already
-                    // shares, so a cycle inside the body advances on every
-                    // render of the node — Django's model — and a
-                    // `{% resetcycle %}` in the body can reach it.
-                    for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
-                        // Set the per-iteration dj-if loop path (#1832).
-                        // Composes for nested loops: an inner For reads this
-                        // (non-empty) path and appends its own `-<index>`,
-                        // yielding e.g. `-3-2`.
-                        ctx.set(
-                            "__djust_if_loop_path".to_string(),
-                            Value::String(format!("{parent_if_loop_path}-{index}")),
-                        );
-
-                        // The six per-iteration counters, in Django's own
-                        // arithmetic (#2402). `counter` is the ITERATION
-                        // ordinal, not the item's original index: Django
-                        // reverses `values` and THEN enumerates, so under
-                        // `{% for x in p reversed %}` the first item rendered
-                        // is `counter == 1` / `first == True` while its
-                        // `index` — which `__djust_if_loop_path` uses, and
-                        // deliberately — is the LAST one. Using `index` here
-                        // would agree on every forward loop and silently
-                        // reverse the numbering on a reversed one.
-                        loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
-                        loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
-                        loop_dict.insert(
-                            "revcounter".into(),
-                            Value::Integer(len_values - counter as i64),
-                        );
-                        loop_dict.insert(
-                            "revcounter0".into(),
-                            Value::Integer(len_values - counter as i64 - 1),
-                        );
-                        loop_dict.insert("first".into(), Value::Bool(counter == 0));
-                        loop_dict
-                            .insert("last".into(), Value::Bool(counter as i64 == len_values - 1));
-                        // BEFORE the loop-variable binding below, so a loop
-                        // whose variable is literally named `forloop`
-                        // (`{% for forloop in p %}`) binds the ITEM and wins —
-                        // which is Django's order: `loop_dict` is written at
-                        // the top of the iteration and `context[loopvar]` at
-                        // the bottom.
-                        ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
-
-                        // The grant this item carries (#2361). Non-empty only
-                        // for a NORMALISED operand, where the positional
-                        // mapping below is refused and this by-key lookup is
-                        // the only channel. The two are mutually exclusive by
-                        // construction — `derived_grants` is populated only
-                        // when `normalised`, the mapping registered only when
-                        // `!normalised` — so they can never disagree about one
-                        // item, which is what keeps this from being two
-                        // mechanisms shadowing each other.
-                        let grant = derived_grants.get(index).copied().unwrap_or_default();
-
-                        // Handle tuple unpacking: {% for a, b in items %}
-                        if var_names.len() == 1 {
-                            // Single variable: {% for item in items %}
-                            ctx.set(var_names[0].clone(), item);
-                            // The O(1) half of `Context::bind` (the subtree
-                            // half is hoisted above the loop). `false` REVOKES,
-                            // so an unmarked item after a marked one is
-                            // escaped rather than inheriting its neighbour's
-                            // grant.
-                            ctx.set_safety(&var_names[0], grant.whole);
-                            // Track loop mapping for safe key resolution —
-                            // but ONLY for a bare variable path. The mapping
-                            // asserts `item` IS `<iterable>.<index>`, which
-                            // `Context::is_safe` then looks up in `safe_keys`;
-                            // once a filter is in play that correspondence is
-                            // false (`slice` shifts indices, `dictsort`
-                            // reorders), so establishing it could resolve a
-                            // safety mark belonging to a DIFFERENT element
-                            // (#2325). Registering nothing costs only
-                            // over-escaping, which is the direction to fail in.
-                            //
-                            // `!normalised` is the same argument for the same
-                            // reason, and for a dict it is a LIVE XSS rather
-                            // than a theoretical one (#2334). `_collect_safe_keys`
-                            // writes a dict's paths BY KEY NAME (`d.<key>`),
-                            // while this mapping asserts `k` is `d.<index>`.
-                            // Give a dict a key spelled `"1"` whose value is
-                            // `mark_safe(...)` and `safe_keys` holds `d.1`; the
-                            // loop's SECOND key — an entirely different string,
-                            // and attacker-controlled if keys are user data —
-                            // then resolves that mark and is emitted UNESCAPED.
-                            // A string operand cannot collide the same way
-                            // (`_collect_safe_keys` never descends into a str)
-                            // but the correspondence is just as false, so both
-                            // normalised shapes are excluded by one condition.
-                            if !normalised && !iterable.contains('|') {
-                                ctx.set_loop_mapping(var_names[0].clone(), iterable.clone(), index);
-                            }
+                        // Create an iterator with indices, reversing if needed
+                        let items_vec = items;
+                        let indices_and_items: Vec<(usize, Value)> = if *reversed {
+                            items_vec.into_iter().enumerate().rev().collect()
                         } else {
-                            // Multiple variables: {% for key, value in items %}
-                            //
-                            // Django's `ForNode.render` checks ARITY before it
-                            // unpacks anything, and RAISES on a mismatch:
-                            //
-                            //     try:               len_item = len(item)
-                            //     except TypeError:  len_item = 1
-                            //     if num_loopvars != len_item:
-                            //         raise ValueError("Need %d values to unpack
-                            //             in for loop; got %d. " % (...))
-                            //     unpacked_vars = dict(zip(self.loopvars, item))
-                            //
-                            // djust padded the extra names with `Value::Missing`
-                            // and rendered — so `{% for a, b in p %}` over
-                            // `"abc"` rendered three iterations of `[a=][b=]`
-                            // where Django refuses the template outright (#2387).
-                            // That is MORE permissive than Django, and silently:
-                            // the region rendered, with the variables empty.
-                            let len_item = filters::python_len(&item).unwrap_or(1);
-                            if len_item != var_names.len() {
-                                // Django's message verbatim, trailing space and
-                                // all. It crosses to Python as a `RuntimeError`
-                                // rather than Django's `ValueError`, as EVERY
-                                // djust render error does (see
-                                // `DjangoRustError`); what matters is that the
-                                // render is refused rather than silently padded.
-                                return Err(DjangoRustError::TemplateError(format!(
-                                    "Need {} values to unpack in for loop; got {}. ",
-                                    var_names.len(),
-                                    len_item
-                                )));
-                            }
-                            match &item {
-                                Value::List(tuple_items) | Value::Tuple(tuple_items) => {
-                                    // `zip(self.loopvars, item)`, and the arity
-                                    // check above is what makes it total: the
-                                    // two lengths are now equal by construction,
-                                    // so there is no short-item branch to pad.
-                                    for (i, (var_name, part)) in
-                                        var_names.iter().zip(tuple_items.iter()).enumerate()
-                                    {
-                                        // The grant for THIS component
-                                        // (#2361). Two provenances, and the
-                                        // same mutual exclusion as the
-                                        // single-variable branch:
+                            items_vec.into_iter().enumerate().collect()
+                        };
+
+                        // Django's `forloop` (#2402). `ForNode.render` opens with
+                        //
+                        //     if "forloop" in context: parentloop = context["forloop"]
+                        //     else: parentloop = {}
+                        //
+                        // and then, once the sequence is known non-empty, writes
+                        // `context["forloop"] = {"parentloop": parentloop}` and
+                        // updates six counters per iteration. Every one of those
+                        // seven names was UNBOUND here, so `{{ forloop.counter }}`
+                        // missed and rendered `string_if_invalid` — a numbered
+                        // list with no numbers, `{% if forloop.first %}` never
+                        // true, `{% if not forloop.last %},{% endif %}` a comma
+                        // after every element. Silent under-render, the shape this
+                        // area keeps producing (#2325, #2334, #2377).
+                        //
+                        // Read out of `context`, not `ctx`: Django captures the
+                        // parent BEFORE `context.push()`, and for a nested loop
+                        // that parent is the enclosing loop's own dict (the outer
+                        // `Node::For` rendered this body against its `ctx`).
+                        // Absent at the outermost level, where Django's
+                        // `parentloop` is an empty dict — NOT missing, so
+                        // `{{ forloop.parentloop }}` renders `{}` and
+                        // `{{ forloop.parentloop.counter }}` renders nothing.
+                        let parentloop = match context.get("forloop") {
+                            Some(value) => value.clone(),
+                            None => Value::Object(Default::default()),
+                        };
+                        // Built once and mutated in place per iteration.
+                        // `IndexMap::insert` on a present key keeps its POSITION,
+                        // so the insertion order below is the render order of
+                        // `{{ forloop }}` itself — which Django spells
+                        // `{'parentloop': …, 'counter0': …, 'counter': …,
+                        // 'revcounter': …, 'revcounter0': …, 'first': …,
+                        // 'last': …}` and is a comparable output, not an internal
+                        // detail.
+                        let len_values = indices_and_items.len() as i64;
+                        let mut loop_dict: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+                            indexmap::IndexMap::with_capacity(7);
+                        loop_dict.insert("parentloop".into(), parentloop);
+
+                        // Save outer dj-if loop path for nested-loop composition
+                        // and per-iteration uniqueness of `{% if %}` marker ids
+                        // (#1832). The parent path (empty outside any loop) is
+                        // read once; each iteration appends `-<index>` so a
+                        // `{% if %}` rendered inside this loop gets a UNIQUE id
+                        // per iteration that is also STABLE across re-renders
+                        // that don't change loop structure. Uses the ORIGINAL
+                        // item index (not the enumerate counter) so ids stay
+                        // stable under `{% for ... reversed %}`. Mirrors the
+                        // cycle-counter save/restore pattern above/below.
+                        let parent_if_loop_path = match ctx.get("__djust_if_loop_path") {
+                            Some(Value::String(s)) => s.clone(),
+                            _ => String::new(),
+                        };
+                        let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
+
+                        // Per-item render cache (#1967). Enabled only when:
+                        //   (a) a `LoopRenderCache` is installed for this render
+                        //       (via `LoopCacheGuard`) AND it is enabled (the
+                        //       Python `loop_render_cache_enabled` flag), and
+                        //   (b) the loop body is CACHEABLE — i.e. it is NOT
+                        //       position-dependent (no `{% if %}` / `{% cycle %}` /
+                        //       nested loop / forloop reference / opaque Python tag)
+                        //       AND it reads NOTHING but the loop variable(s). A body
+                        //       that reads any OUTER-context var (`{{ prefix }}`,
+                        //       `{% with l=flag %}`, `{% firstof flag x %}`) is NOT
+                        //       cacheable: outer context is constant within a render
+                        //       but not across renders, and the cache is persistent
+                        //       across renders, so a reorder after an outer-var
+                        //       change would serve stale fragments (#1967 review 🔴).
+                        //       See `loop_cache::body_is_cacheable`.
+                        // When disabled, `loop_caching_enabled` is `false` and the
+                        // render path below is byte-identical to before #1967.
+                        let loop_caching_enabled = crate::loop_cache::with_active_cache(|cache| {
+                            cache.body_cacheable(nodes, var_names)
+                        })
+                        .unwrap_or(false);
+
+                        // No per-iteration `{% cycle %}` counter here any more (#2556):
+                        // cycle state is per NODE per RENDER on the `Context`'s
+                        // shared store, which the `ctx` clone above already
+                        // shares, so a cycle inside the body advances on every
+                        // render of the node — Django's model — and a
+                        // `{% resetcycle %}` in the body can reach it.
+                        for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
+                            // Set the per-iteration dj-if loop path (#1832).
+                            // Composes for nested loops: an inner For reads this
+                            // (non-empty) path and appends its own `-<index>`,
+                            // yielding e.g. `-3-2`.
+                            ctx.set(
+                                "__djust_if_loop_path".to_string(),
+                                Value::String(format!("{parent_if_loop_path}-{index}")),
+                            );
+
+                            // The six per-iteration counters, in Django's own
+                            // arithmetic (#2402). `counter` is the ITERATION
+                            // ordinal, not the item's original index: Django
+                            // reverses `values` and THEN enumerates, so under
+                            // `{% for x in p reversed %}` the first item rendered
+                            // is `counter == 1` / `first == True` while its
+                            // `index` — which `__djust_if_loop_path` uses, and
+                            // deliberately — is the LAST one. Using `index` here
+                            // would agree on every forward loop and silently
+                            // reverse the numbering on a reversed one.
+                            loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
+                            loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
+                            loop_dict.insert(
+                                "revcounter".into(),
+                                Value::Integer(len_values - counter as i64),
+                            );
+                            loop_dict.insert(
+                                "revcounter0".into(),
+                                Value::Integer(len_values - counter as i64 - 1),
+                            );
+                            loop_dict.insert("first".into(), Value::Bool(counter == 0));
+                            loop_dict.insert(
+                                "last".into(),
+                                Value::Bool(counter as i64 == len_values - 1),
+                            );
+                            // BEFORE the loop-variable binding below, so a loop
+                            // whose variable is literally named `forloop`
+                            // (`{% for forloop in p %}`) binds the ITEM and wins —
+                            // which is Django's order: `loop_dict` is written at
+                            // the top of the iteration and `context[loopvar]` at
+                            // the bottom.
+                            ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+
+                            // The grant this item carries (#2361). Non-empty only
+                            // for a NORMALISED operand, where the positional
+                            // mapping below is refused and this by-key lookup is
+                            // the only channel. The two are mutually exclusive by
+                            // construction — `derived_grants` is populated only
+                            // when `normalised`, the mapping registered only when
+                            // `!normalised` — so they can never disagree about one
+                            // item, which is what keeps this from being two
+                            // mechanisms shadowing each other.
+                            let grant = derived_grants.get(index).copied().unwrap_or_default();
+
+                            // Handle tuple unpacking: {% for a, b in items %}
+                            if var_names.len() == 1 {
+                                // Single variable: {% for item in items %}
+                                ctx.set(var_names[0].clone(), item);
+                                // The O(1) half of `Context::bind` (the subtree
+                                // half is hoisted above the loop). `false` REVOKES,
+                                // so an unmarked item after a marked one is
+                                // escaped rather than inheriting its neighbour's
+                                // grant.
+                                ctx.set_safety(&var_names[0], grant.whole);
+                                // Track loop mapping for safe key resolution —
+                                // but ONLY for a bare variable path. The mapping
+                                // asserts `item` IS `<iterable>.<index>`, which
+                                // `Context::is_safe` then looks up in `safe_keys`;
+                                // once a filter is in play that correspondence is
+                                // false (`slice` shifts indices, `dictsort`
+                                // reorders), so establishing it could resolve a
+                                // safety mark belonging to a DIFFERENT element
+                                // (#2325). Registering nothing costs only
+                                // over-escaping, which is the direction to fail in.
+                                //
+                                // `!normalised` is the same argument for the same
+                                // reason, and for a dict it is a LIVE XSS rather
+                                // than a theoretical one (#2334). `_collect_safe_keys`
+                                // writes a dict's paths BY KEY NAME (`d.<key>`),
+                                // while this mapping asserts `k` is `d.<index>`.
+                                // Give a dict a key spelled `"1"` whose value is
+                                // `mark_safe(...)` and `safe_keys` holds `d.1`; the
+                                // loop's SECOND key — an entirely different string,
+                                // and attacker-controlled if keys are user data —
+                                // then resolves that mark and is emitted UNESCAPED.
+                                // A string operand cannot collide the same way
+                                // (`_collect_safe_keys` never descends into a str)
+                                // but the correspondence is just as false, so both
+                                // normalised shapes are excluded by one condition.
+                                if !normalised && !iterable.contains('|') {
+                                    ctx.set_loop_mapping(
+                                        var_names[0].clone(),
+                                        iterable.clone(),
+                                        index,
+                                    );
+                                }
+                            } else {
+                                // Multiple variables: {% for key, value in items %}
+                                //
+                                // Django's `ForNode.render` checks ARITY before it
+                                // unpacks anything, and RAISES on a mismatch:
+                                //
+                                //     try:               len_item = len(item)
+                                //     except TypeError:  len_item = 1
+                                //     if num_loopvars != len_item:
+                                //         raise ValueError("Need %d values to unpack
+                                //             in for loop; got %d. " % (...))
+                                //     unpacked_vars = dict(zip(self.loopvars, item))
+                                //
+                                // djust padded the extra names with `Value::Missing`
+                                // and rendered — so `{% for a, b in p %}` over
+                                // `"abc"` rendered three iterations of `[a=][b=]`
+                                // where Django refuses the template outright (#2387).
+                                // That is MORE permissive than Django, and silently:
+                                // the region rendered, with the variables empty.
+                                let len_item = filters::python_len(&item).unwrap_or(1);
+                                if len_item != var_names.len() {
+                                    // Preserve Django's exception class as well
+                                    // as its message at the Python boundary.
+                                    return Err(DjangoRustError::PythonException(
+                                        pyo3::exceptions::PyValueError::new_err(format!(
+                                            "Need {} values to unpack in for loop; got {}. ",
+                                            var_names.len(),
+                                            len_item
+                                        )),
+                                    ));
+                                }
+                                match &item {
+                                    Value::List(tuple_items)
+                                    | Value::Tuple(tuple_items)
+                                    | Value::NamedTuple {
+                                        items: tuple_items, ..
+                                    } => {
+                                        // `zip(self.loopvars, item)`, and the arity
+                                        // check above is what makes it total: the
+                                        // two lengths are now equal by construction,
+                                        // so there is no short-item branch to pad.
+                                        for (i, (var_name, part)) in
+                                            var_names.iter().zip(tuple_items.iter()).enumerate()
+                                        {
+                                            // The grant for THIS component
+                                            // (#2361). Two provenances, and the
+                                            // same mutual exclusion as the
+                                            // single-variable branch:
+                                            //
+                                            // * NORMALISED — a `d.items` pair,
+                                            //   whose second half is the dict
+                                            //   VALUE. `derived_grants` looked
+                                            //   it up by key name.
+                                            // * NOT normalised — a genuine
+                                            //   sequence of tuples, where
+                                            //   `_collect_safe_keys` wrote the
+                                            //   component's own positional path
+                                            //   `<expr>.<index>.<i>`. The
+                                            //   correspondence is real here
+                                            //   (both sides positional), which
+                                            //   is exactly what it is not for a
+                                            //   dict, so no #2334 collision:
+                                            //   this is the tuple-unpacking
+                                            //   twin of the loop mapping the
+                                            //   single-variable branch
+                                            //   registers.
+                                            //
+                                            // A filtered operand gets nothing,
+                                            // for the reason the loop mapping
+                                            // is refused one (`slice` shifts
+                                            // indices, `dictsort` reorders).
+                                            let part_safe = if normalised {
+                                                i == 1 && grant.second
+                                            } else if iterable.contains('|') {
+                                                false
+                                            } else {
+                                                matches!(part, Value::String(_))
+                                                    && context
+                                                        .is_safe(&format!("{iterable}.{index}.{i}"))
+                                            };
+                                            ctx.set(var_name.clone(), part.clone());
+                                            ctx.set_safety(var_name, part_safe);
+                                            // The alias for the paths BENEATH
+                                            // this component (#2375).
+                                            // `set_safety` above grants the
+                                            // component ITSELF; `{{ b.z }}`
+                                            // needs `b.z -> <expr>.<index>.<i>.z`,
+                                            // which only an alias can express.
+                                            //
+                                            // Registered under EXACTLY the
+                                            // condition `part_safe`'s own
+                                            // positional lookup uses, and for
+                                            // exactly the same reason: the
+                                            // correspondence is real only when
+                                            // both sides are positional. A
+                                            // NORMALISED source (a dict view)
+                                            // is refused because
+                                            // `_collect_safe_keys` spells a
+                                            // dict BY KEY NAME and this
+                                            // asserts an INDEX — the #2334
+                                            // collision, which is a live XSS
+                                            // for attacker-controlled keys —
+                                            // and a FILTERED one because
+                                            // `slice` shifts and `dictsort`
+                                            // reorders.
+                                            if !normalised && !iterable.contains('|') {
+                                                // Against `ctx`: the loop body
+                                                // renders there, so an outer
+                                                // loop's alias on the iterable
+                                                // name is the one that applies
+                                                // — the same context
+                                                // `set_loop_mapping` uses one
+                                                // branch over.
+                                                let base = ctx.alias_path(iterable);
+                                                ctx.set_alias(
+                                                    var_name.clone(),
+                                                    format!("{base}.{index}.{i}"),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    other => {
+                                        // Not a sequence, but its `len()` matched —
+                                        // so Django unpacks it too, because `zip`
+                                        // ITERATES the item rather than indexing it.
+                                        // `{% for a, b in p %}` over `[{"x": 1,
+                                        // "y": 2}]` binds `a="x"`, `b="y"` (a dict
+                                        // iterates its keys) and over `["ab"]` binds
+                                        // `a="a"`, `b="b"`. djust bound the whole
+                                        // item to the first name and `Missing` to
+                                        // the rest, so the dict case rendered its
+                                        // own repr into `{{ a }}`.
                                         //
-                                        // * NORMALISED — a `d.items` pair,
-                                        //   whose second half is the dict
-                                        //   VALUE. `derived_grants` looked
-                                        //   it up by key name.
-                                        // * NOT normalised — a genuine
-                                        //   sequence of tuples, where
-                                        //   `_collect_safe_keys` wrote the
-                                        //   component's own positional path
-                                        //   `<expr>.<index>.<i>`. The
-                                        //   correspondence is real here
-                                        //   (both sides positional), which
-                                        //   is exactly what it is not for a
-                                        //   dict, so no #2334 collision:
-                                        //   this is the tuple-unpacking
-                                        //   twin of the loop mapping the
-                                        //   single-variable branch
-                                        //   registers.
+                                        // Total by construction: every variant
+                                        // `python_len` answers `Some` for is one
+                                        // `iter_values` answers `Some` for, with the
+                                        // same count — the pair is pinned by
+                                        // `python_len_agrees_with_iter_values`.
                                         //
-                                        // A filtered operand gets nothing,
-                                        // for the reason the loop mapping
-                                        // is refused one (`slice` shifts
-                                        // indices, `dictsort` reorders).
-                                        let part_safe = if normalised {
-                                            i == 1 && grant.second
-                                        } else if iterable.contains('|') {
-                                            false
-                                        } else {
-                                            matches!(part, Value::String(_))
-                                                && context
-                                                    .is_safe(&format!("{iterable}.{index}.{i}"))
-                                        };
-                                        ctx.set(var_name.clone(), part.clone());
-                                        ctx.set_safety(var_name, part_safe);
-                                        // The alias for the paths BENEATH
-                                        // this component (#2375).
-                                        // `set_safety` above grants the
-                                        // component ITSELF; `{{ b.z }}`
-                                        // needs `b.z -> <expr>.<index>.<i>.z`,
-                                        // which only an alias can express.
+                                        // One shape is exempt there and cannot
+                                        // reach here (#2466): a Python class with
+                                        // only `__len__` has a length and is not
+                                        // iterable, but `falsy_opaque` only ever
+                                        // builds it with length 0, and the arity
+                                        // check above refuses any item whose length
+                                        // is not `var_names.len()` — which is never
+                                        // 0. So the `unwrap_or_default()` below
+                                        // still cannot silently pad.
                                         //
-                                        // Registered under EXACTLY the
-                                        // condition `part_safe`'s own
-                                        // positional lookup uses, and for
-                                        // exactly the same reason: the
-                                        // correspondence is real only when
-                                        // both sides are positional. A
-                                        // NORMALISED source (a dict view)
-                                        // is refused because
-                                        // `_collect_safe_keys` spells a
-                                        // dict BY KEY NAME and this
-                                        // asserts an INDEX — the #2334
-                                        // collision, which is a live XSS
-                                        // for attacker-controlled keys —
-                                        // and a FILTERED one because
-                                        // `slice` shifts and `dictsort`
-                                        // reorders.
-                                        if !normalised && !iterable.contains('|') {
-                                            // Against `ctx`: the loop body
-                                            // renders there, so an outer
-                                            // loop's alias on the iterable
-                                            // name is the one that applies
-                                            // — the same context
-                                            // `set_loop_mapping` uses one
-                                            // branch over.
-                                            let base = ctx.alias_path(iterable);
-                                            ctx.set_alias(
-                                                var_name.clone(),
-                                                format!("{base}.{index}.{i}"),
-                                            );
+                                        // NO safety grant on any component, and that
+                                        // is deliberate rather than an omission.
+                                        // `_collect_safe_keys` spells a dict BY KEY
+                                        // NAME, so the positional `<expr>.<index>.<i>`
+                                        // lookup the sequence arm uses would be the
+                                        // #2334 collision — live XSS for
+                                        // attacker-controlled keys — and it never
+                                        // descends into a `str` at all. Over-escaping
+                                        // is the direction to fail in.
+                                        let parts = filters::iter_values(other).unwrap_or_default();
+                                        for (var_name, part) in var_names.iter().zip(parts) {
+                                            ctx.set(var_name.clone(), part);
+                                            ctx.set_safety(var_name, false);
                                         }
                                     }
                                 }
-                                other => {
-                                    // Not a sequence, but its `len()` matched —
-                                    // so Django unpacks it too, because `zip`
-                                    // ITERATES the item rather than indexing it.
-                                    // `{% for a, b in p %}` over `[{"x": 1,
-                                    // "y": 2}]` binds `a="x"`, `b="y"` (a dict
-                                    // iterates its keys) and over `["ab"]` binds
-                                    // `a="a"`, `b="b"`. djust bound the whole
-                                    // item to the first name and `Missing` to
-                                    // the rest, so the dict case rendered its
-                                    // own repr into `{{ a }}`.
-                                    //
-                                    // Total by construction: every variant
-                                    // `python_len` answers `Some` for is one
-                                    // `iter_values` answers `Some` for, with the
-                                    // same count — the pair is pinned by
-                                    // `python_len_agrees_with_iter_values`.
-                                    //
-                                    // One shape is exempt there and cannot
-                                    // reach here (#2466): a Python class with
-                                    // only `__len__` has a length and is not
-                                    // iterable, but `falsy_opaque` only ever
-                                    // builds it with length 0, and the arity
-                                    // check above refuses any item whose length
-                                    // is not `var_names.len()` — which is never
-                                    // 0. So the `unwrap_or_default()` below
-                                    // still cannot silently pad.
-                                    //
-                                    // NO safety grant on any component, and that
-                                    // is deliberate rather than an omission.
-                                    // `_collect_safe_keys` spells a dict BY KEY
-                                    // NAME, so the positional `<expr>.<index>.<i>`
-                                    // lookup the sequence arm uses would be the
-                                    // #2334 collision — live XSS for
-                                    // attacker-controlled keys — and it never
-                                    // descends into a `str` at all. Over-escaping
-                                    // is the direction to fail in.
-                                    let parts = filters::iter_values(other).unwrap_or_default();
-                                    for (var_name, part) in var_names.iter().zip(parts) {
-                                        ctx.set(var_name.clone(), part);
-                                        ctx.set_safety(var_name, false);
+                            }
+                            if loop_caching_enabled {
+                                // Build a content hash from the loop-variable
+                                // bindings the body reads (the item value). The
+                                // body is position-INDEPENDENT (checked above), so
+                                // its output is fully determined by these bindings
+                                // plus the constant-across-iterations outer context.
+                                let bindings: Vec<(&str, &Value)> = var_names
+                                    .iter()
+                                    .filter_map(|name| ctx.get(name).map(|v| (name.as_str(), v)))
+                                    .collect();
+                                // Fold the For-node body identity into the key so
+                                // sibling loops sharing a loop-var name over
+                                // equal-content items can't cross-render (#2067).
+                                let hash = crate::loop_cache::content_hash(
+                                    (nodes.as_ptr() as usize, nodes.len()),
+                                    &bindings,
+                                );
+
+                                // Cache HIT → reuse the previously rendered
+                                // fragment (a reorder is all hits). MISS → render
+                                // via the AST and insert.
+                                let cached =
+                                    crate::loop_cache::with_active_cache(|cache| cache.get(hash))
+                                        .flatten();
+                                // The item's full rendered HTML (from the render
+                                // cache on a hit, freshly rendered on a miss). This
+                                // is what the PARSE cache (#1970) records in its
+                                // per-render manifest as `item_html` — used by
+                                // `render_with_diff` both to populate the parse cache
+                                // (on a parse-miss) and to reconstruct the full HTML
+                                // for the fallback / `last_html`.
+                                let item_html = match cached {
+                                    Some(html) => html,
+                                    None => {
+                                        let html =
+                                            render_nodes_with_loader_mut(nodes, ctx, loader)?;
+                                        crate::loop_cache::with_active_cache(|cache| {
+                                            cache.insert(hash, html.clone())
+                                        });
+                                        html
                                     }
-                                }
-                            }
-                        }
-                        if loop_caching_enabled {
-                            // Build a content hash from the loop-variable
-                            // bindings the body reads (the item value). The
-                            // body is position-INDEPENDENT (checked above), so
-                            // its output is fully determined by these bindings
-                            // plus the constant-across-iterations outer context.
-                            let bindings: Vec<(&str, &Value)> = var_names
-                                .iter()
-                                .filter_map(|name| ctx.get(name).map(|v| (name.as_str(), v)))
-                                .collect();
-                            // Fold the For-node body identity into the key so
-                            // sibling loops sharing a loop-var name over
-                            // equal-content items can't cross-render (#2067).
-                            let hash = crate::loop_cache::content_hash(
-                                (nodes.as_ptr() as usize, nodes.len()),
-                                &bindings,
-                            );
+                                };
 
-                            // Cache HIT → reuse the previously rendered
-                            // fragment (a reorder is all hits). MISS → render
-                            // via the AST and insert.
-                            let cached =
-                                crate::loop_cache::with_active_cache(|cache| cache.get(hash))
-                                    .flatten();
-                            // The item's full rendered HTML (from the render
-                            // cache on a hit, freshly rendered on a miss). This
-                            // is what the PARSE cache (#1970) records in its
-                            // per-render manifest as `item_html` — used by
-                            // `render_with_diff` both to populate the parse cache
-                            // (on a parse-miss) and to reconstruct the full HTML
-                            // for the fallback / `last_html`.
-                            let item_html = match cached {
-                                Some(html) => html,
-                                None => {
-                                    let html = render_nodes_with_loader(nodes, &ctx, loader)?;
-                                    crate::loop_cache::with_active_cache(|cache| {
-                                        cache.insert(hash, html.clone())
-                                    });
-                                    html
+                                // Parse cache (#1970): a SECOND cache keyed by the
+                                // SAME content hash, holding the item's PARSED VNode
+                                // subtree so a reorder skips html5ever-parse too. We
+                                // gate on the item's rendered root tag being
+                                // foster-parenting-SAFE (not a `<tr>`/`<option>`/…),
+                                // because the placeholder we emit (`<dj-pc>`) would
+                                // be relocated/dropped by html5ever inside a
+                                // table/select container, corrupting structure. When
+                                // eligible AND the parse cache already holds this
+                                // item's subtree, emit a tiny `<dj-pc h=..>`
+                                // PLACEHOLDER instead of the full item HTML — the
+                                // assembled string `output` becomes a REDUCED HTML
+                                // that html5ever parses cheaply; `render_with_diff`
+                                // then splices the cached subtree back in. Otherwise
+                                // emit the real item HTML (a parse MISS that
+                                // `render_with_diff` parses + caches). Either way the
+                                // manifest records the item so `render_with_diff` can
+                                // reconstruct the full HTML and validate the splice.
+                                let foster_safe =
+                                    crate::loop_cache::item_html_is_foster_safe(&item_html);
+                                let parse_hit = foster_safe
+                                    && crate::loop_cache::with_active_cache(|cache| {
+                                        cache.has_parsed(hash)
+                                    })
+                                    .unwrap_or(false);
+                                let mut recorded = false;
+                                if foster_safe {
+                                    recorded = crate::loop_cache::with_active_cache(|cache| {
+                                        cache.record_manifest_item(
+                                            hash,
+                                            parse_hit,
+                                            item_html.clone(),
+                                        );
+                                    })
+                                    .is_some();
                                 }
-                            };
-
-                            // Parse cache (#1970): a SECOND cache keyed by the
-                            // SAME content hash, holding the item's PARSED VNode
-                            // subtree so a reorder skips html5ever-parse too. We
-                            // gate on the item's rendered root tag being
-                            // foster-parenting-SAFE (not a `<tr>`/`<option>`/…),
-                            // because the placeholder we emit (`<dj-pc>`) would
-                            // be relocated/dropped by html5ever inside a
-                            // table/select container, corrupting structure. When
-                            // eligible AND the parse cache already holds this
-                            // item's subtree, emit a tiny `<dj-pc h=..>`
-                            // PLACEHOLDER instead of the full item HTML — the
-                            // assembled string `output` becomes a REDUCED HTML
-                            // that html5ever parses cheaply; `render_with_diff`
-                            // then splices the cached subtree back in. Otherwise
-                            // emit the real item HTML (a parse MISS that
-                            // `render_with_diff` parses + caches). Either way the
-                            // manifest records the item so `render_with_diff` can
-                            // reconstruct the full HTML and validate the splice.
-                            let foster_safe =
-                                crate::loop_cache::item_html_is_foster_safe(&item_html);
-                            let parse_hit = foster_safe
-                                && crate::loop_cache::with_active_cache(|cache| {
-                                    cache.has_parsed(hash)
-                                })
-                                .unwrap_or(false);
-                            let mut recorded = false;
-                            if foster_safe {
-                                recorded = crate::loop_cache::with_active_cache(|cache| {
-                                    cache.record_manifest_item(hash, parse_hit, item_html.clone());
-                                })
-                                .is_some();
-                            }
-                            if recorded && parse_hit {
-                                // Parse-cache HIT: emit the lightweight
-                                // placeholder tagged with THIS render's nonce
-                                // (`<dj-pc-<nonce> h=..>`) so it is unforgeable
-                                // by `|safe` item content; the full item HTML
-                                // lives in the manifest for reconstruction.
-                                let nonce =
-                                    crate::loop_cache::with_active_cache(|cache| cache.nonce())
-                                        .unwrap_or(0);
-                                output.push_str(&crate::loop_cache::render_loop_placeholder(
-                                    hash, nonce,
-                                ));
+                                if recorded && parse_hit {
+                                    // Parse-cache HIT: emit the lightweight
+                                    // placeholder tagged with THIS render's nonce
+                                    // (`<dj-pc-<nonce> h=..>`) so it is unforgeable
+                                    // by `|safe` item content; the full item HTML
+                                    // lives in the manifest for reconstruction.
+                                    let nonce =
+                                        crate::loop_cache::with_active_cache(|cache| cache.nonce())
+                                            .unwrap_or(0);
+                                    output.push_str(&crate::loop_cache::render_loop_placeholder(
+                                        hash, nonce,
+                                    ));
+                                } else {
+                                    // Parse-cache MISS (or non-eligible item): emit
+                                    // the real item HTML. `render_with_diff` parses
+                                    // it and (for recorded eligible items) caches the
+                                    // resulting subtree.
+                                    output.push_str(&item_html);
+                                }
                             } else {
-                                // Parse-cache MISS (or non-eligible item): emit
-                                // the real item HTML. `render_with_diff` parses
-                                // it and (for recorded eligible items) caches the
-                                // resulting subtree.
-                                output.push_str(&item_html);
+                                output.push_str(&render_nodes_with_loader_mut(nodes, ctx, loader)?);
                             }
-                        } else {
-                            output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
                         }
-                    }
 
-                    // Restore outer dj-if loop path (#1832). There is no
-                    // public Context::remove for an arbitrary key, so when
-                    // there was no parent path we reset to the empty string,
-                    // which Node::If treats as "no path" (it appends only a
-                    // non-empty path). Otherwise restore the saved value.
-                    match saved_if_loop_path {
-                        Some(saved) => ctx.set("__djust_if_loop_path".to_string(), saved),
-                        None => ctx.set(
-                            "__djust_if_loop_path".to_string(),
-                            Value::String(String::new()),
-                        ),
-                    }
+                        // Restore outer dj-if loop path (#1832). There is no
+                        // public Context::remove for an arbitrary key, so when
+                        // there was no parent path we reset to the empty string,
+                        // which Node::If treats as "no path" (it appends only a
+                        // non-empty path). Otherwise restore the saved value.
+                        match saved_if_loop_path {
+                            Some(saved) => ctx.set("__djust_if_loop_path".to_string(), saved),
+                            None => ctx.set(
+                                "__djust_if_loop_path".to_string(),
+                                Value::String(String::new()),
+                            ),
+                        }
 
-                    // Clear loop mappings after the loop
-                    for var_name in var_names {
-                        ctx.clear_loop_mapping(var_name);
-                    }
+                        // Clear loop mappings after the loop
+                        for var_name in var_names {
+                            ctx.clear_loop_mapping(var_name);
+                        }
 
-                    Ok(output)
+                        Ok(output)
+                    })
                 }
                 // Django REFUSES a non-iterable operand, and this arm used to
                 // render the `{% empty %}` block for every one of them (#2382).
@@ -3116,7 +3191,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // folded into the raise below: these two are the reason
                     // this class is about non-iterables rather than falsiness,
                     // and they AGREE today.
-                    render_nodes_with_loader(empty_nodes, context, loader)
+                    render_nodes_with_loader_mut(empty_nodes, context, loader)
                 }
                 other => Err(DjangoRustError::TemplateError(format!(
                     "'{}' object is not iterable",
@@ -3125,13 +3200,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             }
         }
 
-        Node::Block { name: _, nodes } => {
-            // For now, just render the block content
-            // In a full implementation, this would handle template inheritance
-            render_nodes_with_loader(nodes, context, loader)
-        }
+        Node::Block { name: _, nodes } => context.with_scope(|inner| {
+            inner.enter_base_block();
+            render_nodes_with_loader_mut(nodes, inner, loader)
+        }),
 
         Node::Include {
+            origin,
             template,
             with_vars,
             only,
@@ -3145,34 +3220,85 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // form reported `Template not found: template_name` — the
                 // variable's own spelling, which is the tell.
                 //
-                // A missing/blank resolution falls back to the raw token so
-                // the error still names what the author wrote rather than an
-                // empty string.
-                let resolved;
-                let name = if is_quoted_literal(template) {
-                    template.trim_matches(|c| c == '"' || c == '\'')
-                } else {
-                    let (value, _) = get_value_safe_ignoring_failures(template.trim(), context)?;
-                    resolved = match value {
-                        Value::Missing | Value::None => String::new(),
-                        other => other.to_string(),
-                    };
-                    if resolved.is_empty() {
-                        template.trim_matches(|c| c == '"' || c == '\'')
-                    } else {
-                        resolved.as_str()
+                let literal = is_quoted_literal(template)
+                    && !crate::filter_lexer::has_unquoted_pipe(template);
+                let (mut value, _) = get_value_safe(template.trim(), context)?;
+                if matches!(value, Value::Missing) {
+                    value =
+                        Value::String(context.string_if_invalid_for(template).unwrap_or_default());
+                }
+                let object = template_object(&value)?;
+                let candidates: Vec<Value> = if object.is_some() || !value.is_truthy() {
+                    Vec::new()
+                } else if let Value::String(name) | Value::SafeString(name) = &value {
+                    if literal {
+                        crate::inheritance::construct_relative_path_allow_recursion(
+                            origin.as_deref(),
+                            template,
+                            true,
+                        )?;
                     }
+                    vec![Value::String(
+                        crate::inheritance::construct_relative_path_allow_recursion(
+                            origin.as_deref(),
+                            name,
+                            literal,
+                        )?,
+                    )]
+                } else {
+                    // Django consumes iterable candidates once. Unlike a
+                    // string operand, their names are not made relative.
+                    filters::iter_values(&value).ok_or_else(|| {
+                        DjangoRustError::PythonException(pyo3::exceptions::PyTypeError::new_err(
+                            format!(
+                                "'{}' object is not iterable",
+                                filters::python_type_name(&value)
+                            ),
+                        ))
+                    })?
                 };
-                // Use the CACHED loader method (#2074) so the parsed body's
-                // allocation is STABLE across renders — the `{% for %}`
-                // loop-render cache (#2067) keys each For-node's body by
-                // identity (`nodes.as_ptr()`), which only matches across
-                // renders when the same allocation is reused. The
-                // `{% extends %}` inheritance path (`build_inheritance_chain`)
-                // intentionally stays on `load_template` — it needs an
-                // owned, mutable `Vec<Node>` for block-merging and has no
-                // per-render identity requirement.
-                let nodes = loader.load_template_cached(name)?;
+                let empty_candidates = candidates.is_empty();
+                let mut not_found = Vec::new();
+                let mut selected = None;
+                for candidate in candidates {
+                    // Validate each candidate only when it is reached; a later
+                    // invalid name cannot invalidate an earlier successful one.
+                    let name = match candidate {
+                        Value::String(name) | Value::SafeString(name) => name,
+                        other => return Err(DjangoRustError::PythonException(
+                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                "join() argument must be str, bytes, or os.PathLike object, not '{}'",
+                                filters::python_type_name(&other),
+                            )),
+                        )),
+                    };
+                    // Preserve cached node allocation identity for loop caches.
+                    match loader.load_template_cached(&name) {
+                        Ok(nodes) => {
+                            selected = Some((name, nodes));
+                            break;
+                        }
+                        Err(DjangoRustError::TemplateNotFound { name, .. })
+                        | Err(DjangoRustError::TemplateSelectionNotFound { name }) => {
+                            if !not_found.contains(&name) {
+                                not_found.push(name);
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                let (name, nodes) = if object.is_some() {
+                    (String::new(), std::sync::Arc::from(Vec::<Node>::new()))
+                } else {
+                    selected.ok_or_else(|| DjangoRustError::TemplateSelectionNotFound {
+                        name: if empty_candidates {
+                            "No template names provided".to_string()
+                        } else {
+                            not_found.join(", ")
+                        },
+                    })?
+                };
+                let name = name.as_str();
 
                 // An included template may itself `{% extends %}` — Django
                 // renders it as a template in its own right, so its inheritance
@@ -3184,91 +3310,92 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // Resolved here rather than in the loader: the chain needs the
                 // render context (a variable parent name) and the loader is
                 // also the parse cache, which is shared across renders.
-                let resolved_nodes;
-                let nodes: std::sync::Arc<[Node]> =
-                    if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
-                        let chain = crate::inheritance::build_inheritance_chain_from(
-                            nodes.to_vec(),
-                            loader,
-                            10,
-                            Some(name),
-                            Some(context),
-                        )?;
-                        let root = chain.get_root_nodes().to_vec();
-                        resolved_nodes = chain.apply_block_overrides(&root);
-                        std::sync::Arc::from(resolved_nodes.as_slice())
-                    } else {
-                        nodes
-                    };
-
                 // Create context for included template
-                let mut include_context = if *only {
-                    // Only use with_vars, not parent context. The render-time
-                    // switches are not "context", they are the render's: the
-                    // fresh Context must carry the parent's dj-if marker
-                    // setting or a plain page with an `only` include leaks
-                    // the markers again (#2519). (`auto_call` is not carried
-                    // here either — pre-existing, tracked in the #2519
-                    // follow-up issue.)
-                    let mut fresh = Context::new();
-                    fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
-                    // Django's `context.new()` is `copy(self)`, so the
-                    // `{% autoescape %}` policy crosses an `only` include
-                    // (#2556, `include14`).
-                    fresh.set_autoescape(context.autoescape());
-                    // Django's `context.new()` keeps the parent's
-                    // `render_context`, so a `{% cycle %}` in an `only`
-                    // include advances the parent render's iterator (#2556).
-                    fresh.share_cycle_state_from(context);
-                    // `{% ifchanged %}` state is deliberately NOT shared here.
-                    // A first pass shared it "for symmetry with `{% cycle %}`";
-                    // measured against Django, an `{% ifchanged %}` in an
-                    // `only` include starts CLEAN each render (`CCC`, where a
-                    // shared frame gives `Css`) because `Template.render`
-                    // pushes a fresh `render_context` state for the included
-                    // template. The fresh `Context` built here already has an
-                    // empty store, so the parity is the absence of a call.
-                    // (A PLAIN include shares, via the `context.clone()` in the
-                    // other branch — and Django agrees there. Both measured.)
-                    fresh
+                let mut fresh_context = if *only {
+                    Some({
+                        // Only use with_vars, not parent context. The render-time
+                        // switches are not "context", they are the render's: the
+                        // fresh Context must carry the parent's dj-if marker
+                        // setting or a plain page with an `only` include leaks
+                        // the markers again (#2519). (`auto_call` is not carried
+                        // here either — pre-existing, tracked in the #2519
+                        // follow-up issue.)
+                        let mut fresh = Context::new();
+                        fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                        // Django's `context.new()` is `copy(self)`, so the
+                        // `{% autoescape %}` policy crosses an `only` include
+                        // (#2556, `include14`).
+                        fresh.set_autoescape(context.autoescape());
+                        fresh.set_string_if_invalid(context.string_if_invalid());
+                        // Django's `context.new()` keeps the parent's
+                        // `render_context`, so a `{% cycle %}` in an `only`
+                        // include advances the parent render's iterator (#2556).
+                        fresh.share_cycle_state_from(context);
+                        // `{% ifchanged %}` state is deliberately NOT shared here.
+                        // A first pass shared it "for symmetry with `{% cycle %}`";
+                        // measured against Django, an `{% ifchanged %}` in an
+                        // `only` include starts CLEAN each render (`CCC`, where a
+                        // shared frame gives `Css`) because `Template.render`
+                        // pushes a fresh `render_context` state for the included
+                        // template. The fresh `Context` built here already has an
+                        // empty store, so the parity is the absence of a call.
+                        // (A PLAIN include shares, via the lexical context scope in the
+                        // other branch — and Django agrees there. Both measured.)
+                        fresh
+                    })
                 } else {
-                    // Start with parent context
-                    context.clone()
+                    None
                 };
-
-                // Apply with_vars assignments through the same filter-aware
-                // resolver as `{% with %}` and the `{% for %}` operand — this
-                // is the third spelling of one bare-variable lookup, and it
-                // carried the same raw-text fallback, so
-                // `{% include "x" with q=p|upper %}` passed the literal string
-                // `p|upper` into the included template (#2325). `get_value`
-                // handles the quoted-literal case this arm open-coded.
-                //
-                // The grant travels with the value here too (#2363): this is
-                // the third spelling of one binding, and a fix that reached
-                // only `{% with %}` would be the parallel-path drift the
-                // resolution fix already had to repair once (CLAUDE.md #1646).
-                // With `only`, `include_context` is fresh and carries no
-                // grants, so `bind`'s revoke half is a no-op there and its
-                // grant half is the whole of the work.
-                // The sub-path alias, by the same rule and through the same
-                // door as `{% with %}` (#2375). Deciding this site EXPLICITLY
-                // rather than by omission is the #1646 discipline: it is the
-                // same operation under a third spelling. Under `only` the
-                // fresh context carries no grants, so every alias resolves
-                // against an empty set and costs nothing.
-                let mut pending: Vec<(String, String)> = Vec::new();
-                for (key, value_expr) in with_vars {
-                    let (value, runtime_safe) = get_value_safe(value_expr, context)?;
-                    include_context.bind(key.clone(), value, runtime_safe);
-                    if let Some(path) = bare_dotted_path(value_expr) {
+                let mut bindings = Vec::new();
+                let mut pending = Vec::new();
+                for (key, expression) in with_vars {
+                    let (value, safe) = get_value_safe(expression, context)?;
+                    bindings.push((key.clone(), value, safe));
+                    if let Some(path) = bare_dotted_path(expression) {
                         pending.push((key.clone(), context.alias_path(path)));
                     }
                 }
-                let bound: Vec<&str> = with_vars.iter().map(|(k, _)| k.as_str()).collect();
-                register_binding_aliases(&mut include_context, pending, &bound);
+                let bound: Vec<&str> = with_vars.iter().map(|(name, _)| name.as_str()).collect();
+                let shared = loader.shares_include_nodes(name);
+                let identity = context
+                    .node_identity()
+                    .unwrap_or((node as *const Node as usize, 0));
+                let render_include = |include_context: &mut Context| {
+                    include_context.enter_include_instance(shared, identity);
+                    include_context.begin_template_render();
+                    for (name, value, safe) in bindings {
+                        include_context.bind(name, value, safe);
+                    }
+                    register_binding_aliases(include_context, pending, &bound);
+                    if let Some(object) = &object {
+                        return render_template_object(object, include_context);
+                    }
+                    // Resolve the parent only after `with` and `only` establish
+                    // the context in which the included template renders.
+                    let resolved_nodes;
+                    let nodes: std::sync::Arc<[Node]> =
+                        if nodes.iter().any(|n| matches!(n, Node::Extends(_))) {
+                            let chain = crate::inheritance::build_inheritance_chain_from(
+                                nodes.to_vec(),
+                                loader,
+                                10,
+                                Some(name),
+                                Some(include_context),
+                            )?;
+                            let root = chain.get_root_nodes().to_vec();
+                            resolved_nodes = chain.apply_block_overrides(&root);
+                            std::sync::Arc::from(resolved_nodes.as_slice())
+                        } else {
+                            nodes
+                        };
 
-                render_nodes_with_loader(&nodes, &include_context, Some(loader))
+                    render_nodes_with_loader_mut(&nodes, include_context, Some(loader))
+                };
+                if let Some(fresh) = fresh_context.as_mut() {
+                    render_include(fresh)
+                } else {
+                    context.with_scope(render_include)
+                }
             } else {
                 // No loader available — silently omit ({% include %} without a loader
                 // is valid in tests where only a fragment is rendered)
@@ -3320,7 +3447,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             // Render children
             for child in children {
-                output.push_str(&render_node_with_loader(child, context, loader)?);
+                output.push_str(&render_node_with_loader_mut(child, context, loader)?);
             }
 
             output.push_str("</div>");
@@ -3373,74 +3500,24 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::With { assignments, nodes } => {
-            // Create new context with assigned variables
-            let mut new_context = context.clone();
-
-            // Process assignments through the same filter-aware resolver the
-            // `{% for %}` operand uses (#2325). Django's `{% with %}` resolves
-            // each assignment with a `FilterExpression`; the bare
-            // `context.get(expression)` here was wrong three ways at once, and
-            // its fallback made the failure LOUDER than an empty region:
-            //
-            //   {% with q=p|upper %}   rendered the literal text `p|upper`
-            //   {% with q="lit" %}     rendered `&quot;lit&quot;`, quotes and all
-            //   {% with q=nope %}      rendered the variable NAME `nope`
-            //
-            // — because a miss fell back to `Value::String(expression)`, i.e.
-            // it echoed the template's own source into the page. `get_value`
-            // returns `Value::Missing` for a genuine miss, which renders
-            // empty, as Django's `string_if_invalid` default does.
-            //
-            // The runtime-safe flag TRAVELS with the value (#2363). It used to
-            // be discarded here, which meant `{% with q=p|linebreaks %}` bound
-            // the `Value` and dropped the `bool` beside it — so `{{ q }}`
-            // escaped exactly what `{{ p|linebreaks }}` emits live, for every
-            // safe-output filter including `|safe` itself. The grant is the
-            // one `filter_output_is_safe` already computes for the EMIT path,
-            // so binding it is parity rather than a new capability: this arm
-            // now grants precisely what `{{ p|f }}` one line over already did.
-            //
-            // `Context::bind` REPLACES the grant rather than adding to it,
-            // which is what closes the opposite-direction defect measuring
-            // this one turned up: with `p` marked in the context,
-            // `{% with p=hostile %}{{ p }}{% endwith %}` inherited the stale
-            // by-name grant and emitted the hostile value RAW.
-            // The grant on the paths BENEATH each bound name (#2375).
-            // `bind` moves it at the NAME granularity, and
-            // `_collect_safe_keys` writes a dict's marks at `p.<key>` — so
-            // `{{ q.a }}` asked `is_safe("q.a")`, which nothing had ever
-            // written, and the marked value came out escaped.
-            //
-            // An ALIAS rather than a copy: `q -> p` makes `is_safe` rewrite the
-            // whole dotted path in `O(1)`, where copying every `p.…` entry to
-            // `q.…` is `O(len(safe_keys))` per bind and still would not survive
-            // a third level.
-            //
-            // Collected here and registered AFTER every bind, by
-            // `register_binding_aliases` — read its docs before touching the
-            // order. Two things depend on it: `bind` REVOKES the alias on the
-            // name it binds, so registering inside the loop would be undone by
-            // a later assignment to the same name; and an alias may not target
-            // a name this same tag rebinds.
-            //
-            // The path is expanded against `context`, the OUTER one. Django
-            // resolves every assignment in a `{% with %}` against the outer
-            // context (`WithNode.render` builds the whole `values` dict before
-            // `context.update`), so `b` in `{% with a=p b=a %}` binds the OUTER
-            // `a`.
-            let mut pending: Vec<(String, String)> = Vec::new();
-            for (var_name, expression) in assignments {
-                let (value, runtime_safe) = get_value_safe(expression, context)?;
-                new_context.bind(var_name.clone(), value, runtime_safe);
+            // Resolve all operands before introducing any of the new names.
+            let mut bindings = Vec::new();
+            let mut pending = Vec::new();
+            for (name, expression) in assignments {
+                let (value, safe) = get_value_safe(expression, context)?;
+                bindings.push((name.clone(), value, safe));
                 if let Some(path) = bare_dotted_path(expression) {
-                    pending.push((var_name.clone(), context.alias_path(path)));
+                    pending.push((name.clone(), context.alias_path(path)));
                 }
             }
-            let bound: Vec<&str> = assignments.iter().map(|(n, _)| n.as_str()).collect();
-            register_binding_aliases(&mut new_context, pending, &bound);
-
-            // Render children with new context
-            render_nodes_with_loader(nodes, &new_context, loader)
+            let bound: Vec<&str> = assignments.iter().map(|(name, _)| name.as_str()).collect();
+            context.with_scope(|inner| {
+                for (name, value, safe) in bindings {
+                    inner.bind(name, value, safe);
+                }
+                register_binding_aliases(inner, pending, &bound);
+                render_nodes_with_loader_mut(nodes, inner, loader)
+            })
         }
 
         Node::Extends(_) => {
@@ -3480,7 +3557,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             if asvar.is_some() {
                 return Ok(String::new());
             }
-            Ok(first_of(args, context)?.unwrap_or_default())
+            Ok(first_of(args, context)?
+                .map(|value| value.to_string())
+                .unwrap_or_default())
         }
 
         Node::TemplateTag(name) => {
@@ -3504,23 +3583,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::AutoEscape { on, nodes } => {
-            // {% autoescape on|off %}…{% endautoescape %} (#2556): Django's
-            // `AutoEscapeControlNode` saves, sets and restores
-            // `context.autoescape` around the body. A per-block clone is the
-            // same thing — the outer context is untouched, so nesting
-            // (`autoescape-tag04`) restores the outer setting for free. This
-            // arm and the `{% include … only %}` copy are the ONLY production
-            // writers of `set_autoescape`; the flag is never read from data.
-            let mut inner = context.clone();
-            inner.set_autoescape(*on);
-            render_nodes_with_loader(nodes, &inner, loader)
+            // Escaping policy has lexical extent, but assignments in this
+            // body belong to the surrounding variable scope.
+            let previous = context.autoescape();
+            context.set_autoescape(*on);
+            let result = render_nodes_with_loader_mut(nodes, context, loader);
+            context.set_autoescape(previous);
+            result
         }
 
         Node::Spaceless { nodes } => {
             // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
-            let content = render_nodes_with_loader(nodes, context, loader)?;
+            let content = render_nodes_with_loader_mut(nodes, context, loader)?;
             // Remove whitespace between > and <
-            Ok(SPACELESS_RE.replace_all(&content, "><").to_string())
+            Ok(SPACELESS_RE.replace_all(content.trim(), "><").to_string())
         }
 
         Node::Filter { filters, nodes } => {
@@ -3534,9 +3610,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // that go through `upper` or `cut` are not a VDOM boundary the
             // client could match, so a `{% if %}` inside a `{% filter %}`
             // block is text, not a keyed subtree (documented limitation).
-            let mut body_ctx = context.clone();
-            body_ctx.set_emit_dj_if_markers(false);
-            let body = render_nodes_with_loader(nodes, &body_ctx, loader)?;
+            let previous_markers = context.emit_dj_if_markers();
+            context.set_emit_dj_if_markers(false);
+            let body = render_nodes_with_loader_mut(nodes, context, loader);
+            context.set_emit_dj_if_markers(previous_markers);
+            let body = body?;
             // `bind`, SAFE: `NodeList.render` returns `SafeString`, which is
             // what the chain's `needs_autoescape` / `is_safe` filters read as
             // their input term — `cycle21`'s `force_escape` re-escapes the
@@ -3604,19 +3682,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // `mark_safe`'d (it is rendered template output, already escaped
             // by whatever produced it), so the binding is marked safe here;
             // escaping it again would double-escape every parent block.
-            let parent_html = render_nodes_with_loader(super_nodes, context, loader)?;
-            let mut scoped = context.clone();
-            let mut block_obj = indexmap::IndexMap::new();
-            block_obj.insert(
-                djust_core::ObjectKey::from("super"),
-                Value::String(parent_html),
-            );
-            scoped.set("block".to_string(), Value::Object(block_obj));
-            scoped.mark_safe("block.super".to_string());
-            render_nodes_with_loader(nodes, &scoped, loader)
+            let parent_html =
+                context.with_scope(|ctx| render_nodes_with_loader_mut(super_nodes, ctx, loader))?;
+            context.with_scope(|scoped| {
+                let mut block_obj = indexmap::IndexMap::new();
+                block_obj.insert(
+                    djust_core::ObjectKey::from("super"),
+                    Value::String(parent_html),
+                );
+                scoped.bind("block".to_string(), Value::Object(block_obj), false);
+                scoped.mark_safe("block.super".to_string());
+                render_nodes_with_loader_mut(nodes, scoped, loader)
+            })
         }
 
         Node::IfChanged {
+            origin,
             vars,
             id,
             nodes,
@@ -3634,7 +3715,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // a side effect (`{% cycle %}`, a custom tag) would otherwise
             // fire twice per iteration.
             let (compare_to, rendered) = if vars.is_empty() {
-                let body = render_nodes_with_loader(nodes, context, loader)?;
+                let body = render_nodes_with_loader_mut(nodes, context, loader)?;
                 (body.clone(), Some(body))
             } else {
                 // Django resolves with `ignore_failures=True`, so a missing
@@ -3649,15 +3730,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 (parts.join("\u{1f}"), None)
             };
 
-            if context.ifchanged_step(id, &compare_to) {
+            if context.ifchanged_step_in_template(id, origin.as_deref(), &compare_to) {
                 match rendered {
                     Some(body) => Ok(body),
-                    None => render_nodes_with_loader(nodes, context, loader),
+                    None => render_nodes_with_loader_mut(nodes, context, loader),
                 }
             } else if else_nodes.is_empty() {
                 Ok(String::new())
             } else {
-                render_nodes_with_loader(else_nodes, context, loader)
+                render_nodes_with_loader_mut(else_nodes, context, loader)
             }
         }
 
@@ -3697,22 +3778,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
         Node::AssignTag { name, args } => {
             // When an AssignTag is rendered individually (outside of
-            // render_nodes_with_loader's sibling-aware loop) we still
+            // render_nodes_with_loader_mut's sibling-aware loop) we still
             // invoke the handler for its side-effects but discard the
             // result — there's no way to propagate context mutations
             // without a sibling to pass them to. Emits empty string.
             //
             // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
-            // as in render_nodes_with_loader (#2041).
+            // as in render_nodes_with_loader_mut (#2041).
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
             let context_map = context.to_hashmap();
             // Forward raw-Python sidecar (#1167).
-            let raw_py = context.raw_py_objects();
+            let raw_py = context.render_raw_py_objects();
             crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,
                 &context_map,
-                raw_py,
+                raw_py.as_deref(),
             )
             .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(String::new())
@@ -3775,7 +3856,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // would inherit a stale `localize` state.
             USE_L10N_STACK.with(|s| s.borrow_mut().push(*use_l10n));
             let _guard = UseL10nGuard;
-            render_nodes_with_loader(children, context, loader)
+            render_nodes_with_loader_mut(children, context, loader)
         }
 
         Node::LocalTime { use_tz, children } => {
@@ -3792,7 +3873,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 crate::timezone::set_active_timezone(None);
                 Some(ActiveTimezoneGuard { prev })
             };
-            render_nodes_with_loader(children, context, loader)
+            render_nodes_with_loader_mut(children, context, loader)
         }
     }
 }
@@ -3808,7 +3889,7 @@ fn render_rust_component(
     let framework = context
         .get("_framework")
         .and_then(|v| {
-            if let Value::String(s) = v {
+            if let Value::String(s) | Value::SafeString(s) = v {
                 Some(s.as_str())
             } else {
                 None
@@ -4455,13 +4536,18 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     }
 
     // Handle "in" operator: {% if item in list %}
-    if condition.contains(" in ") {
-        let parts: Vec<&str> = condition.splitn(2, " in ").map(|s| s.trim()).collect();
+    let membership = if condition.contains(" not in ") {
+        " not in "
+    } else {
+        " in "
+    };
+    if condition.contains(membership) {
+        let parts: Vec<&str> = condition.splitn(2, membership).map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let needle = get_value_ignoring_failures(parts[0], context)?;
             let haystack = get_value_ignoring_failures(parts[1], context)?;
-            return match haystack {
-                Value::List(items) | Value::Tuple(items) => {
+            let result: Result<bool> = match haystack {
+                Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
                 }
                 // `'a' in d.keys()` / `1 in d.values()` / `('a', 1) in
@@ -4487,11 +4573,11 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     .items
                     .as_ref()
                     .is_some_and(|items| items.iter().any(|item| values_equal(&needle, item)))),
-                Value::String(s) => {
-                    if let Value::String(n) = &needle {
+                Value::String(s) | Value::SafeString(s) => {
+                    if let Value::String(n) | Value::SafeString(n) = &needle {
                         Ok(s.contains(n.as_str()))
                     } else {
-                        Ok(false)
+                        return Ok(false);
                     }
                 }
                 Value::Object(map) => {
@@ -4517,11 +4603,21 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     // A needle Python could not hash either (a list, a dict)
                     // yields `None` and misses, rather than matching
                     // something by its text.
-                    Ok(djust_core::ObjectKey::from_value(&needle)
-                        .is_some_and(|k| map.contains_key(&k)))
+                    let Some(key) = djust_core::ObjectKey::from_value(&needle) else {
+                        // Python raises for an unhashable needle. Django's
+                        // smart-if makes both in and not-in false on errors.
+                        return Ok(false);
+                    };
+                    Ok(map.contains_key(&key))
                 }
-                _ => Ok(false),
+                _ => return Ok(false),
             };
+            let contains = result?;
+            return Ok(if membership == " not in " {
+                !contains
+            } else {
+                contains
+            });
         }
     }
 
@@ -4955,6 +5051,13 @@ fn get_value_safe_inner(
         if ignore_failures && djust_core::resolve_lazy() && matches!(value, Value::Missing) {
             value = Value::None;
         }
+        // Django skips the entire filter chain when a missing strict operand
+        // has a nonempty string_if_invalid; a fallback filter must not hide it.
+        if !ignore_failures && matches!(value, Value::Missing) {
+            if let Some(marker) = context.string_if_invalid_for(var_name) {
+                return Ok((Value::String(marker), false));
+            }
+        }
         // See the Variable arm: item-level safety, seeded from the context
         // (#2283, #2287) — the third of the three sites, kept in step with the
         // other two by construction (#1646).
@@ -5074,7 +5177,8 @@ fn get_value_safe_inner(
     // changes, and so the GIL round-trip it costs is paid only on a genuine
     // miss rather than on every `{% if a == 5 %}` operand.
     if let Some(value) = context.resolve(expr)? {
-        return Ok((value, context.is_safe(expr)));
+        let safe = value.is_safe_string() || context.is_safe(expr);
+        return Ok((value, safe));
     }
 
     Ok((Value::Missing, false))
@@ -5211,7 +5315,9 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // one. `(Float, Float)` keeps its epsilon — a separate question (#1079).
         (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
         (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
+            a == b
+        }
         // Two sequences of the SAME kind: same length, pairwise equal (#2335).
         // Without this arm two lists fell to `_ => false` and were never equal
         // — not even to themselves — so `{% if a == b %}` silently took the
@@ -5228,9 +5334,11 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // randomised differential in
         // `test_dict_iteration_and_sequence_equality_2334_2335.py` samples the
         // cross-type case explicitly.
-        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
-        }
+        (Value::List(a), Value::List(b))
+        | (
+            Value::Tuple(a) | Value::NamedTuple { items: a, .. },
+            Value::Tuple(b) | Value::NamedTuple { items: b, .. },
+        ) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y)),
         // Python compares dicts by key/value pairs, ORDER-INDEPENDENTLY:
         // `{"a": 1, "b": 2} == {"b": 2, "a": 1}` is true. `IndexMap`'s own
         // `PartialEq` agrees, but is spelled out here so the element
@@ -5593,7 +5701,9 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // Allow comparing integers and floats
         (Value::Integer(a), Value::Float(b)) => order_floats(*a as f64, *b),
         (Value::Float(a), Value::Integer(b)) => order_floats(*a, *b as f64),
-        (Value::String(a), Value::String(b)) => Some(a.cmp(b) as i32),
+        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
+            Some(a.cmp(b) as i32)
+        }
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
         // of the other the shorter is smaller. The mirror of the `values_equal`
@@ -5626,7 +5736,11 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // 28,500 cells; no curated case here had the shape. Returning `None`
         // rather than 0 is what keeps that closed on the `>=` / `<=` side too,
         // where a 0 would have re-opened it as "equal" (#2338).
-        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+        (Value::List(a), Value::List(b))
+        | (
+            Value::Tuple(a) | Value::NamedTuple { items: a, .. },
+            Value::Tuple(b) | Value::NamedTuple { items: b, .. },
+        ) => {
             for (x, y) in a.iter().zip(b.iter()) {
                 if values_equal(x, y) {
                     continue;
@@ -5679,19 +5793,26 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 /// at runtime (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
 /// `Variable` / `InlineIf` arms (#1660). `runtime_safe` is true ONLY when the
 /// LAST filter produced a genuine `SafeString` → fail-safe.
-fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
+fn first_of(args: &[String], context: &Context) -> Result<Option<Value>> {
     for arg in args {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         if val.is_truthy() {
+            let safe = runtime_safe || val.string_conversion_is_safe();
             let text = val.to_string();
-            // Row 4 of #2556 (`firstof13`).
-            return Ok(Some(if runtime_safe || !context.autoescape() {
-                text
+            return Ok(Some(if context.autoescape() {
+                Value::SafeString(if safe {
+                    text
+                } else {
+                    filters::html_escape(&text)
+                })
+            } else if safe {
+                Value::SafeString(text)
             } else {
-                filters::html_escape(&text)
+                Value::String(text)
             }));
         }
     }
+    // Django binds the initial plain empty string when no operand is truthy.
     Ok(None)
 }
 
@@ -5717,7 +5838,7 @@ fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
 ///   `round(nan)` raises `ValueError`, and Django catches both.
 fn width_ratio(value: &str, max_value: &str, max_width: &str, context: &Context) -> Result<String> {
     let max_w = py_int(&get_value(max_width, context)?).ok_or_else(|| {
-        DjangoRustError::TemplateError("widthratio final argument must be a number".to_string())
+        crate::registry::library_syntax_error("widthratio final argument must be a number")
     })?;
     let (Some(val), Some(max_val)) = (
         get_value(value, context)?.to_f64(),
@@ -5923,8 +6044,10 @@ impl ToF64 for Value {
             // accepts `_` between digits, so `{% widthratio "1_0" 2 100 %}` is
             // 500 in Django, and a bare `parse::<f64>()` refused it and
             // rendered nothing.
-            Value::String(s) => crate::filters::strip_python_underscores(s.trim())
-                .and_then(|cleaned| cleaned.parse::<f64>().ok()),
+            Value::String(s) | Value::SafeString(s) => {
+                crate::filters::strip_python_underscores(s.trim())
+                    .and_then(|cleaned| cleaned.parse::<f64>().ok())
+            }
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             // Delegates rather than re-parsing: `Value::as_f64` is the one
             // definition of what a Decimal is worth numerically (#1646).
@@ -6128,7 +6251,8 @@ mod tests {
 
     fn panicking_child() -> Node {
         Node::Include {
-            template: "boom.html".to_string(),
+            origin: None,
+            template: "\"boom.html\"".to_string(),
             with_vars: Vec::new(),
             only: false,
         }
@@ -7431,6 +7555,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -7447,6 +7572,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -7465,6 +7591,7 @@ mod tests {
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -7483,6 +7610,7 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -7500,6 +7628,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`

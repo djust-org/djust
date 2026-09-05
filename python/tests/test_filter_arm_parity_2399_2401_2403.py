@@ -192,42 +192,13 @@ def _yesno_source(arg: str | None) -> str:
     return "{{ p|yesno }}" if arg is None else "{{ p|yesno:%s }}" % arg
 
 
-def yesno_bits(arg: str | None) -> int:
-    """``len(arg.split(","))`` as Django computes it, from the SOURCE spelling."""
-    if arg is None:
-        return 3  # the `gettext("yes,no,maybe")` default
-    return len(arg.strip('"').split(","))
-
-
-#: The one value shape a return-the-input branch cannot agree on, and not for
-#: any reason belonging to these arms: a `datetime` is a `Value::String` of its
-#: ISO spelling by the time any filter sees it, so handing the INPUT back hands
-#: back that spelling rather than Django's localized `Jan. 1, 2020, noon`.
-#: `TestTheDatetimeRowMeasuresTheBOUNDARY` proves that mechanically rather than
-#: asserting it, so this exclusion cannot quietly grow to cover a real defect.
-BOUNDARY_RESIDUE = "datetime"
-
-
 class TestYesnoIsDjangosBody:
     @pytest.mark.parametrize("arg", YESNO_ARGS)
-    @pytest.mark.parametrize("key", sorted(set(VALUES) - {BOUNDARY_RESIDUE}))
+    @pytest.mark.parametrize("key", sorted(VALUES))
     def test_every_value_by_every_argument_shape(self, arg, key) -> None:
         source = _yesno_source(arg)
         expected, got = _both(source, {"p": VALUES[key]})
         assert got == expected, f"{source} over {key}: django={expected!r} djust={got!r}"
-
-    @pytest.mark.parametrize("arg", YESNO_ARGS)
-    def test_the_datetime_row_agrees_wherever_the_argument_is_VALID(self, arg) -> None:
-        """The exclusion above is the return-the-input branch only.
-
-        Every argument with two or more parts builds its answer from the parts,
-        so the boundary spelling never reaches the page and the row agrees.
-        """
-        if yesno_bits(arg) < 2:
-            pytest.skip("the return-the-input branch — covered by the boundary test")
-        source = _yesno_source(arg)
-        expected, got = _both(source, {"p": VALUES[BOUNDARY_RESIDUE]})
-        assert got == expected
 
     def test_an_absent_variable_takes_the_FALSE_arm_not_the_none_arm(self) -> None:
         """``string_if_invalid`` substitutes ``""`` BEFORE the filter runs.
@@ -288,14 +259,9 @@ class TestAnArgumentThatIsPythonNone:
         expected, got = _both("{{ p|yesno:q }}", {"p": VALUES[key], "q": None})
         assert got == expected, f"over {key}: django={expected!r} djust={got!r}"
 
-    @pytest.mark.parametrize("key", sorted(set(VALUES) - {BOUNDARY_RESIDUE}))
+    @pytest.mark.parametrize("key", sorted(VALUES))
     def test_the_STRING_None_is_a_one_part_argument_and_returns_the_value(self, key) -> None:
-        """The row a spelling fallback gets wrong, in both directions.
-
-        ``datetime`` is excluded for the reason ``BOUNDARY_RESIDUE`` names: this
-        is a return-the-input branch, and ``{{ p }}`` alone already diverges
-        there.
-        """
+        """A one-part argument returns the original, localized value."""
         expected, got = _both("{{ p|yesno:q }}", {"p": VALUES[key], "q": "None"})
         assert got == expected, f"over {key}: django={expected!r} djust={got!r}"
 
@@ -510,7 +476,7 @@ class TestNoArmIsMorePermissiveThanDjango:
         """
         offenders = []
         readable = sorted(
-            set(VALUES) - {"none", "list", "empty-list", "dict", "empty-dict", BOUNDARY_RESIDUE}
+            set(VALUES) - {"none", "list", "empty-list", "dict", "empty-dict", "datetime"}
         )
         for source, key in itertools.product(self._sources(), readable):
             expected, got = _both(source, {"p": VALUES[key]})
@@ -522,22 +488,12 @@ class TestNoArmIsMorePermissiveThanDjango:
 class TestTheResiduesThisPRDoesNotTouch:
     """Two divergences these arms sit next to, named rather than left silent."""
 
-    def test_the_datetime_row_measures_the_extraction_BOUNDARY(self) -> None:
-        """``{{ p }}`` ALONE already diverges for a datetime.
-
-        So a return-the-input branch handing back a datetime cannot agree, and
-        the exclusion in ``BOUNDARY_RESIDUE`` is about the boundary rather than
-        about these arms. Proved by measuring the no-filter cell and a second
-        return-the-input filter that predates this PR, not asserted.
-        """
-        dt = VALUES[BOUNDARY_RESIDUE]
+    def test_datetime_returned_by_a_filter_keeps_localized_rendering(self) -> None:
+        dt = VALUES["datetime"]
         bare_expected, bare_got = _both("{{ p }}", {"p": dt})
-        assert bare_got != bare_expected
-        # `default`'s truthy branch is the same return-the-input shape, and it
-        # diverges identically — with no change from this PR.
+        assert bare_got == bare_expected
         other_expected, other_got = _both('{{ p|default:"z" }}', {"p": dt})
-        assert other_got != other_expected
-        assert other_got == bare_got
+        assert other_got == other_expected == bare_expected
 
     @pytest.mark.parametrize("key", ["none", "list", "dict"])
     def test_get_digit_over_a_value_int_refuses_now_raises_too(self, key) -> None:
@@ -568,13 +524,9 @@ class TestTheResiduesThisPRDoesNotTouch:
         what it was for — the same shape as
         `test_get_digit_over_a_value_int_refuses_now_raises_too` above.
 
-        The `BOUNDARY_RESIDUE` exclusion itself is NOT closed and stays: the
-        return-the-input branches of `yesno` / `default` still hand back
-        djust's `str(o)` where Django hands back its LOCALIZED spelling, which
-        is a rendering divergence rather than a typing one
-        (`test_the_datetime_row_measures_the_extraction_BOUNDARY` above).
+        Bare datetime rendering also now agrees with Django localization.
         """
-        expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES[BOUNDARY_RESIDUE]})
+        expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES["datetime"]})
         assert expected.startswith("<<EXC TypeError:"), expected
         assert _raised(got), got
         assert "calls int() on its value" in got, got

@@ -1,0 +1,1 @@
+- **Temporal template values**: Preserve date, datetime, time, and timedelta types across Python filters and standard-type state restoration. The add filter now supports temporal arithmetic, bare results use Django localization and context flags, and ISO formatting keeps dates and naive datetimes distinct. Django 5.2 conformance is 990/1047 (94.56%).

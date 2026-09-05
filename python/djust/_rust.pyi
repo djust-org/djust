@@ -19,6 +19,8 @@ def render_template(
     context: Dict[str, Any],
     auto_call: Optional[bool] = None,
     string_if_invalid: Optional[str] = None,
+    *,
+    autoescape: bool = True,
 ) -> str:
     """
     Render a template string with the given context.
@@ -41,6 +43,8 @@ def render_template(
             MISSING variable renders. ``None``/absent means the empty string
             (render nothing). A non-empty value also SKIPS the filter chain,
             which is Django's own control flow.
+        autoescape: Explicit render policy, defaulting to True. Dictionary
+            keys cannot override it; lexical autoescape tags can.
 
     Returns:
         The rendered HTML string
@@ -54,7 +58,14 @@ def render_template(
     """
     ...
 
-def compile_template(template_source: str) -> None:
+class CompiledTemplate:
+    """Immutable native template handle returned on request by compile_template."""
+
+    ...
+
+def compile_template(
+    template_source: str, template_name: str | None = None, *, return_template: bool = False
+) -> CompiledTemplate | None:
     """
     Parse a template without rendering it (#2549).
 
@@ -63,7 +74,8 @@ def compile_template(template_source: str) -> None:
     parse — an unregistered tag, an unknown filter, a bad arity, an unclosed
     block — and returns ``None`` otherwise. A successful parse is stored in
     the engine's template cache, so the render that follows does not parse
-    again; a failed parse is never cached.
+    again; a failed parse is never cached. Set ``return_template=True`` to
+    retain the immutable compiled handle for subsequent rendering.
     """
     ...
 
@@ -82,6 +94,12 @@ def render_template_with_dirs(
     auto_call: Optional[bool] = None,
     string_if_invalid: Optional[str] = None,
     template_name: Optional[str] = None,
+    raw_context: Optional[Dict[str, Any]] = None,
+    *,
+    autoescape: bool = True,
+    compiled_template: CompiledTemplate | None = None,
+    assignments: Dict[str, Any] | None = None,
+    uncached_template_dirs: List[str] | None = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
@@ -100,6 +118,9 @@ def render_template_with_dirs(
             ``{% extends "./parent.html" %}`` resolves against (Django's
             ``construct_relative_path``). ``None`` leaves such a target
             unchanged.
+        raw_context: Optional original objects before snapshot conversion.
+            Used only for protected runtime lookups; model field filtering
+            still applies. Defaults to ``context``.
 
     Returns:
         The rendered HTML string
@@ -559,7 +580,11 @@ def register_raw_block_tag_handler(tag_name: str, end_tag: str, handler: Any) ->
 def unregister_raw_block_tag_handler(tag_name: str) -> bool: ...
 def has_raw_block_tag_handler(tag_name: str) -> bool: ...
 def clear_raw_block_tag_handlers() -> None: ...
-def register_translator(callable: Callable[[str], str]) -> None: ...
+def register_translator(
+    callable: Callable[[str], str],
+    format_resolver: Optional[Callable[..., str]] = None,
+    default_timezone_resolver: Optional[Callable[[], str]] = None,
+) -> None: ...
 def clear_translator() -> None: ...
 def arm_scope_tags(names: List[str]) -> None: ...
 def clear_scope_tags() -> None: ...
@@ -596,6 +621,12 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
             ``args`` holds the tag's arguments ALREADY RESOLVED against the
             context -- ``{% custom p %}`` with ``p="<b>hi</b>"`` arrives as
             ``args == ['<b>hi</b>']``, not as ``['p']``.
+
+    Inline and block handlers may optionally implement
+    ``validate_at_parse(args)``. It receives the original argument tokens at
+    template compilation, before any context resolution or rendering, and
+    may raise to reject invalid syntax. It must not render application code.
+    Django library bridges use this hook to run Django's argument validation.
 
     The return value is ESCAPED unless it is already HTML (#2379), mirroring
     Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
@@ -1238,6 +1269,7 @@ __all__ = [
     "render_template",
     "render_template_with_dirs",
     "compile_template",
+    "CompiledTemplate",
     "template_cache_contains",
     "render_markdown",
     "diff_html",

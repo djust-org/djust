@@ -1,0 +1,1 @@
+- **Include inheritance context:** Apply an include's `with` bindings and `only` isolation before resolving the included template's parent. Dynamic parent selection now uses the same context as the included template body.

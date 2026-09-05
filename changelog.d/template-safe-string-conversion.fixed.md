@@ -1,0 +1,1 @@
+- **Safe string conversion**: Honor SafeString returned by an object's `__str__` during rendering and built-in string filters, while preserving Django's escaping of the original object in joins and nested lists. The marker stays in memory, invalidates cached HTML when it changes, and cannot be restored from serialized state. Django 5.2 conformance reaches 995/1047 (95.03%).

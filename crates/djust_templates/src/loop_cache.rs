@@ -671,6 +671,7 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             11u8.hash(hasher);
             e.type_name.hash(hasher);
             e.display.hash(hasher);
+            e.display_safe.hash(hasher);
             e.json.hash(hasher);
         }
         Value::Bool(b) => {
@@ -693,6 +694,10 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             };
             bits.hash(hasher);
         }
+        Value::SafeString(s) => {
+            13u8.hash(hasher);
+            s.hash(hasher);
+        }
         Value::String(s) => {
             4u8.hash(hasher);
             s.hash(hasher);
@@ -701,6 +706,19 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             // Distinct from List: a tuple renders "(1, 2)" where a list renders
             // "[1, 2]", so they must not share a cache key (#2203).
             8u8.hash(hasher);
+            items.len().hash(hasher);
+            for item in items {
+                hash_value(item, hasher);
+            }
+        }
+        Value::NamedTuple {
+            name,
+            fields,
+            items,
+        } => {
+            12u8.hash(hasher);
+            name.hash(hasher);
+            fields.hash(hasher);
             items.len().hash(hasher);
             for item in items {
                 hash_value(item, hasher);
@@ -767,6 +785,7 @@ pub fn body_is_position_dependent(nodes: &[Node]) -> bool {
 
 fn node_is_position_dependent(node: &Node) -> bool {
     match node {
+        Node::Located { nodes, .. } => body_is_position_dependent(nodes),
         // Direct position-dependent constructs.
         Node::If { .. } => true,
         Node::Cycle { .. } | Node::ResetCycle { .. } => true,

@@ -10,12 +10,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from os.path import abspath
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from django.db import models
 from django.db.models import QuerySet
-from django.template import TemplateDoesNotExist, Origin
+from django.template import Context, TemplateDoesNotExist, Origin
 from django.template.backends.utils import csrf_input_lazy, csrf_token_lazy
 from django.utils.safestring import SafeString
 
@@ -91,10 +92,8 @@ _MISSING_TEMPLATE_RE = re.compile(r"Template not found: (?P<name>[^\n]+)")
 def _missing_template_name(message: str) -> str | None:
     """The template name from the engine's "Template not found" error, or None.
 
-    Matched on the message because that is the only channel the Rust error
-    carries today; the engine has ONE producer for this text
-    (`inheritance.rs`), so the coupling is to a single site rather than to a
-    format that varies.
+    Compatibility fallback for older extensions and custom loaders. Current
+    filesystem errors carry the name and searched paths as structured data.
     """
     match = _MISSING_TEMPLATE_RE.search(message)
     if match is None:
@@ -102,7 +101,28 @@ def _missing_template_name(message: str) -> str | None:
     return match.group("name").strip()
 
 
+def _missing_template_exception(error: Exception, backend: Any) -> TemplateDoesNotExist | None:
+    """Reconstruct Django's lookup failure without parsing origin paths."""
+    name = getattr(error, "djust_missing_template_name", None)
+    if name is None:
+        name = _missing_template_name(str(error))
+    if name is None:
+        return None
+    skipped = set(getattr(error, "djust_skipped_template_paths", ()))
+    tried = [
+        (
+            Origin(name=abspath(path), template_name=name, loader=backend),
+            "Skipped to avoid recursion" if path in skipped else "Source does not exist",
+        )
+        for path in getattr(error, "djust_tried_template_paths", ())
+    ]
+    return TemplateDoesNotExist(name, tried=tried, backend=backend)
+
+
 def _is_user_raised(exc: BaseException) -> bool:
+    if getattr(exc, "_djust_python_exception", False):
+        return True
+
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
@@ -164,19 +184,6 @@ class DjustTemplate:
     _BLOCK_END_RE = re.compile(r"{%\s*endblock\s*(?:\w+\s*)?%}")
     _EXTENDS_RE = re.compile(r'{%\s*extends\s+["\']([^"\']+)["\']\s*%}')
 
-    # Regex pattern for {% url %} tag
-    # Matches: {% url 'name' %}, {% url 'name' arg1 %}, {% url 'name' key=val %},
-    #          {% url 'name' as var %}, etc.
-    # The negative lookahead (?!as\s) prevents 'as' from being captured as an argument
-    _URL_TAG_RE = re.compile(
-        r"{%\s*url\s+"
-        r"['\"]([^'\"]+)['\"]"  # URL name (required, in quotes)
-        r"((?:\s+(?!as\s)(?:[a-zA-Z_][a-zA-Z0-9_.]*(?:=[^\s%}]+)?|['\"][^'\"]*['\"]|\d+))*)"  # args/kwargs (excluding 'as')
-        r"(?:\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*))?"  # optional 'as variable'
-        r"\s*%}",
-        re.DOTALL,
-    )
-
     def __init__(
         self,
         template_string: str,
@@ -191,9 +198,13 @@ class DjustTemplate:
             backend: DjustTemplateBackend instance
             origin: Template origin (for debugging)
         """
+        from .exceptions import UNKNOWN_SOURCE
+
         self.template_string = template_string
+        self.source = template_string
         self.backend = backend
-        self.origin = origin
+        self.engine = backend
+        self.origin = origin if origin is not None else Origin(name=UNKNOWN_SOURCE)
 
         # Add .template.source for LiveView compatibility
         # LiveView expects: template.template.source
@@ -227,24 +238,82 @@ class DjustTemplate:
         """
         from .._rust import compile_template
         from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+        from ..template_libraries import rendering_with_backend
         from .exceptions import DjustTemplateSyntaxError, build_template_debug
 
-        _ensure_custom_filters_bridged()
         try:
-            compile_template(self.template_string)
-        except RuntimeError as e:
+            # Library lookup and tag compilation belong to this engine, just
+            # as library rendering does. Restore the enclosing engine on exit.
+            with rendering_with_backend(self.backend):
+                _ensure_custom_filters_bridged()
+                self._compiled_template = compile_template(
+                    self.template_string,
+                    getattr(self.origin, "template_name", None),
+                    return_template=True,
+                )
+        except Exception as e:
             message = str(e)
-            exc = DjustTemplateSyntaxError(message, origin=self.origin)
+            user_raised = _is_user_raised(e)
+            syntax_message = getattr(e, "djust_template_syntax_message", None)
+            if not user_raised and isinstance(syntax_message, str):
+                message = syntax_message
+            if not user_raised and not isinstance(e, RuntimeError):
+                raise
+            # The parser does not know the loader's template name. Complete
+            # Django's must-be-first diagnostic here, at the origin boundary.
+            first_tag_suffix = " must be the first tag in the template."
+            template_name = getattr(self.origin, "template_name", None)
+            if (
+                not user_raised
+                and template_name
+                and message.startswith("Template error: {% extends")
+                and message.endswith(first_tag_suffix)
+            ):
+                message = message[: -len(first_tag_suffix)] + (
+                    f" must be the first tag in {template_name!r}."
+                )
+            exc = e if user_raised else DjustTemplateSyntaxError(message, origin=self.origin)
             span = getattr(e, "djust_token_span", None)
             if span is not None:
-                exc.template_debug = build_template_debug(
-                    self.template_string,
-                    getattr(self.origin, "name", None),
-                    span[0],
-                    span[1],
-                    message,
+                setattr(
+                    exc,
+                    "template_debug",
+                    build_template_debug(
+                        self.template_string,
+                        getattr(self.origin, "name", None),
+                        span[0],
+                        span[1],
+                        message,
+                    ),
                 )
+            if user_raised:
+                raise
             raise exc from e
+
+    def _annotate_loaded_error(self, error: Exception, original: Exception) -> None:
+        """Attach the loaded source's location without replacing a user exception."""
+        if not getattr(self.backend, "debug", False):
+            return
+        if getattr(error, "template_debug", None) is not None:
+            return
+        source = getattr(original, "djust_template_source", None)
+        span = getattr(original, "djust_token_span", None)
+        if not isinstance(source, str) or span is None:
+            return
+        from .exceptions import build_template_debug
+
+        error.template_debug = build_template_debug(  # type: ignore[attr-defined]
+            source,
+            (
+                self.origin.name
+                if getattr(original, "djust_template_origin", None) == "<unknown source>"
+                and source == self.template_string
+                else getattr(original, "djust_template_origin", None)
+            ),
+            span[0],
+            span[1],
+            str(error),
+        )
 
     def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
         """
@@ -648,177 +717,6 @@ class DjustTemplate:
 
         return blocks
 
-    def _resolve_url_tags(self, template_source: str, context_dict: Dict[str, Any]) -> str:
-        """
-        Resolve {% url %} tags by replacing them with actual URLs.
-
-        This preprocessing step allows the Rust rendering engine to work with
-        resolved URLs since it doesn't have access to Django's URL resolver.
-
-        Supports:
-        - Basic: {% url 'name' %}
-        - With args: {% url 'name' arg1 arg2 %}
-        - With kwargs: {% url 'name' key=value %}
-        - With context variables: {% url 'name' post.slug %}
-        - As variable: {% url 'name' as var_name %}
-
-        Args:
-            template_source: Template string containing {% url %} tags
-            context_dict: Context dictionary for resolving variable arguments
-
-        Returns:
-            Template string with {% url %} tags replaced by resolved URLs
-        """
-        from django.urls import NoReverseMatch, reverse
-
-        def resolve_value(value_str: str, context: Dict[str, Any]) -> Any:
-            """Resolve a value from the context or return the literal value."""
-            value_str = value_str.strip()
-
-            # String literal (single or double quotes)
-            if (value_str.startswith("'") and value_str.endswith("'")) or (
-                value_str.startswith('"') and value_str.endswith('"')
-            ):
-                return value_str[1:-1]
-
-            # Integer literal
-            if value_str.isdigit():
-                return int(value_str)
-
-            # Context variable (possibly with dot notation)
-            if "." in value_str:
-                parts = value_str.split(".")
-                value = context.get(parts[0])
-                for part in parts[1:]:
-                    if value is None:
-                        return None
-                    if isinstance(value, dict):
-                        value = value.get(part)
-                    else:
-                        value = getattr(value, part, None)
-                return value
-            else:
-                return context.get(value_str)
-
-        def replace_url_tag(match: re.Match[str]) -> str:
-            """Replace a single {% url %} tag with its resolved URL."""
-            url_name = match.group(1)
-            args_string = match.group(2) or ""
-            as_variable = match.group(3)
-
-            # Parse arguments and keyword arguments
-            args = []
-            kwargs = {}
-
-            # Tokenize the arguments string
-            if args_string.strip():
-                # Simple tokenization - handle quoted strings and key=value pairs
-                tokens = []
-                current_token = ""
-                in_quotes = False
-                quote_char = None
-
-                for char in args_string:
-                    if char in "\"'" and not in_quotes:
-                        in_quotes = True
-                        quote_char = char
-                        current_token += char
-                    elif char == quote_char and in_quotes:
-                        in_quotes = False
-                        quote_char = None
-                        current_token += char
-                    elif char.isspace() and not in_quotes:
-                        if current_token:
-                            tokens.append(current_token)
-                            current_token = ""
-                    else:
-                        current_token += char
-
-                if current_token:
-                    tokens.append(current_token)
-
-                # Process tokens into args and kwargs
-                for token in tokens:
-                    if "=" in token and not token.startswith("'") and not token.startswith('"'):
-                        # Keyword argument
-                        key, value = token.split("=", 1)
-                        resolved_value = resolve_value(value, context_dict)
-                        if resolved_value is not None:
-                            kwargs[key] = resolved_value
-                    else:
-                        # Positional argument
-                        resolved_value = resolve_value(token, context_dict)
-                        if resolved_value is not None:
-                            args.append(resolved_value)
-
-            # Check if any args/kwargs couldn't be resolved (value is None)
-            # This happens when the URL references loop variables like post.slug
-            # In this case, leave the original tag - it can't be resolved yet
-            has_unresolved = False
-            if args_string.strip():
-                for token in tokens:
-                    if "=" in token and not token.startswith("'") and not token.startswith('"'):
-                        # Keyword argument
-                        _, value = token.split("=", 1)
-                        if resolve_value(value, context_dict) is None and not (
-                            (value.startswith("'") and value.endswith("'"))
-                            or (value.startswith('"') and value.endswith('"'))
-                            or value.isdigit()
-                        ):
-                            has_unresolved = True
-                            break
-                    else:
-                        # Positional argument
-                        if resolve_value(token, context_dict) is None and not (
-                            (token.startswith("'") and token.endswith("'"))
-                            or (token.startswith('"') and token.endswith('"'))
-                            or token.isdigit()
-                        ):
-                            has_unresolved = True
-                            break
-
-            if has_unresolved:
-                # Leave the original tag in place - it references variables
-                # that don't exist in the context yet (e.g., loop variables).
-                # The Rust engine's CustomTag handler will resolve these via
-                # dot-notation context lookup during rendering (e.g., inside
-                # {% for %} loops where the variable becomes available).
-                logger.debug(
-                    "URL tag with unresolved variables (likely loop variable): %s",
-                    match.group(0),
-                )
-                return match.group(0)
-
-            # Resolve the URL — Django's `URLNode.render` shape (#2563):
-            # `url = ""`, reverse, and on `NoReverseMatch` re-raise UNLESS
-            # `as var` was given, in which case the variable holds the empty
-            # string. Until #2563 this raised even under `as var` (Django's
-            # `test_url_asvar03` was an ERROR) and re-wrapped the message,
-            # losing Django's "with no arguments not found. N pattern(s)
-            # tried: […]" text. A bare `raise` keeps Django's exception and
-            # Django's message.
-            url = ""
-            try:
-                url = cast(
-                    str,
-                    reverse(
-                        url_name, args=args if args else None, kwargs=kwargs if kwargs else None
-                    ),
-                )
-            except NoReverseMatch:
-                if as_variable is None:
-                    raise
-
-            if as_variable:
-                # Store in context and return empty string
-                # We'll handle this by adding to context_dict
-                context_dict[as_variable] = url
-                return ""
-            return url
-
-        # Replace all {% url %} tags
-        return self._URL_TAG_RE.sub(replace_url_tag, template_source)
-
     def render(self, context: Any = None, request: Any = None) -> SafeString:
         """
         Render the template with the given context.
@@ -850,6 +748,7 @@ class DjustTemplate:
         # tested (`python/djust/tests/test_template_inheritance_resolution.py`)
         # — it is simply no longer on the render path.
         resolved_template = self.template_string
+        assignments: dict[str, Any] = {}
 
         # Convert context to dict
         if context is None:
@@ -884,6 +783,11 @@ class DjustTemplate:
                 processor = self._get_context_processor(processor_path)
                 context_dict.update(processor(request))
 
+        # Retain objects for the protected lookup sidecar before JIT replaces
+        # models/querysets with dictionaries. Rust applies the same sidecar
+        # protection as its direct render entry points.
+        raw_context = dict(context_dict)
+
         # JIT auto-serialization for QuerySets and Models
         # This prevents N+1 queries and makes context compatible with Rust
         jit_serialized_keys = set()
@@ -912,16 +816,12 @@ class DjustTemplate:
                 if count_key not in context_dict:
                     context_dict[count_key] = len(value)
 
-        # Resolve {% url %} tags (must be done after context is fully prepared)
-        # This replaces {% url 'name' args %} with the actual resolved URL
-        resolved_template = self._resolve_url_tags(resolved_template, context_dict)
-
-        # Serialize remaining context values (datetime, Decimal, UUID, FieldFile,
-        # Form/BoundField, etc.) so all values are JSON-compatible for Rust.
+        # Prepare file fields and forms for rendering while retaining the
+        # Python types accepted directly by the native render API.
         # Form/BoundField objects are converted to SafeString dicts here, so
         # safe-key detection must run AFTER serialization to catch nested paths
         # like "form.first_name".
-        context_dict = serialize_context(context_dict)
+        context_dict = serialize_context(context_dict, for_render=True)
 
         # Detect SafeString values after serialization so that SafeStrings
         # produced by Form/BoundField rendering (above) are included.
@@ -997,7 +897,11 @@ class DjustTemplate:
             # render, which never comes through here, sees the fallback.
             from ..template_libraries import rendering_with_backend
 
-            with rendering_with_backend(self.backend):
+            with rendering_with_backend(
+                self.backend,
+                use_l10n=getattr(context, "use_l10n", None),
+                use_tz=getattr(context, "use_tz", None),
+            ):
                 html = self.backend._render_fn_with_dirs(
                     resolved_template,
                     context_dict,
@@ -1009,6 +913,17 @@ class DjustTemplate:
                     # (#2517). `Origin.template_name` is what Django's
                     # `construct_relative_path` reads.
                     getattr(self.origin, "template_name", None) if self.origin else None,
+                    raw_context=raw_context,
+                    compiled_template=self._compiled_template,
+                    assignments=assignments,
+                    uncached_template_dirs=[
+                        str(path) for path in getattr(self.backend, "uncached_template_dirs", [])
+                    ],
+                    autoescape=bool(
+                        context.autoescape
+                        if isinstance(context, Context)
+                        else getattr(self.backend, "autoescape", True)
+                    ),
                 )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.
@@ -1033,6 +948,7 @@ class DjustTemplate:
             # ENGINE failure (unsupported tag, parse error) still gets the
             # hint, which is what it was written for.
             if _is_user_raised(e):
+                self._annotate_loaded_error(e, e)
                 raise
 
             # A missing `{% extends %}` / `{% include %}` target is Django's
@@ -1042,18 +958,31 @@ class DjustTemplate:
             # catches it to try the next loader — so re-wrapping it lost both
             # behaviours. The engine reports the name it could not resolve;
             # that name is what Django puts on the exception.
-            missing = _missing_template_name(str(e))
-            if missing is not None:
-                from django.template import TemplateDoesNotExist
+            syntax_message = getattr(e, "djust_template_syntax_message", None)
+            if isinstance(syntax_message, str):
+                from .exceptions import DjustTemplateSyntaxError
 
-                raise TemplateDoesNotExist(missing) from e
+                origin_path = getattr(e, "djust_template_origin", None)
+                origin = Origin(name=origin_path) if origin_path else self.origin
+                error = DjustTemplateSyntaxError(syntax_message, origin=origin)
+                self._annotate_loaded_error(error, e)
+                raise error from e
+
+            missing = _missing_template_exception(e, self.backend)
+            if missing is not None:
+                self._annotate_loaded_error(missing, e)
+                raise missing from e
 
             # Provide helpful error message with template location
             origin_info = f" (from {self.origin.name})" if self.origin else ""
 
             # Check if error might be due to unsupported template tag/filter
             error_msg = str(e)
-            if "Unsupported tag" in error_msg or "Unknown filter" in error_msg:
+            if (
+                "Unsupported tag" in error_msg
+                or "Unknown filter" in error_msg
+                or "Invalid filter:" in error_msg
+            ):
                 suggestion = (
                     "\n\nHint: This template uses features not yet supported by djust's Rust engine. "
                     "Consider using workarounds (see docs/TEMPLATE_BACKEND.md) or use Django's "
@@ -1063,7 +992,15 @@ class DjustTemplate:
                     f"Error rendering template{origin_info}: {error_msg}{suggestion}"
                 ) from e
 
-            raise Exception(f"Error rendering template{origin_info}: {error_msg}") from e
+            # Native runtime failures remain catchable as RuntimeError while
+            # gaining the same debug metadata as exceptions from user code.
+            runtime_error = RuntimeError(f"Error rendering template{origin_info}: {error_msg}")
+            self._annotate_loaded_error(runtime_error, e)
+            raise runtime_error from e
+        finally:
+            if isinstance(context, (dict, Context)):
+                for name, value in assignments.items():
+                    context[name] = value
 
     # Regex to match opening HTML element tags (not comments, not closing tags, not doctypes)
     _OPENING_TAG_RE = re.compile(

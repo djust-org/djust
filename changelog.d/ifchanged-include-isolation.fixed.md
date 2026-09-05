@@ -1,0 +1,1 @@
+- **Ifchanged include isolation**: Keep state separate for identical template bodies loaded from different origins, reset non-loop state for each include render, and retain cached-template state sharing within the same loop.

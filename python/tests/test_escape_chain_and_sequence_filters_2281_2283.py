@@ -42,6 +42,7 @@ import ast
 import datetime
 import inspect
 import re
+from collections import namedtuple
 from decimal import Decimal
 from pathlib import Path
 
@@ -589,7 +590,12 @@ def _differential_literal(name: str):
         # `datetime` joined both when it grew a `timedelta` (#2469) — the only
         # member of the `Value::Encoded` family with a falsy inhabitant, and
         # the third CALL form in a corpus this reader evaluates by hand.
-        {"mark_safe": mark_safe, "Decimal": Decimal, "datetime": datetime},
+        {
+            "mark_safe": mark_safe,
+            "Decimal": Decimal,
+            "datetime": datetime,
+            "namedtuple": namedtuple,
+        },
     )
 
 

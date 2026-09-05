@@ -67,7 +67,6 @@ from django.template import Template as DjangoTemplate
 from djust import _rust
 from djust.mixins.rust_bridge import _collect_safe_keys
 from djust.template_tags import _registered_handlers as _LIVE_HANDLERS
-from djust.template_tags.regroup import RegroupTagHandler
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 RENDERER = REPO / "crates" / "djust_templates" / "src" / "renderer.rs"
@@ -294,44 +293,17 @@ class TestTheDivergenceThatWasNotClosedHere:
             _rust.render_template_with_dirs(tpl, ctx, [], None)
 
 
-class TestBothMechanismsAreReachable:
-    """One test per mechanism, at the seam it owns (#1468, #2129/#2135).
+class TestRawRegroupBridge:
+    def test_source_name_and_typed_context_reach_the_live_handler(self):
+        handler = _LIVE_HANDLERS["regroup"]
+        original = handler.render
+        seen = []
 
-    The fix has two halves in series, and each is separately load-bearing:
+        def spy(args, context, autoescape=True):
+            seen.append((args[0], context.get("s")))
+            return original(args, context, autoescape)
 
-    * the RENDERER half — a resolved `Value::String` is JSON-encoded at a
-      declared `RESOLVE_ARG_POSITIONS` position, so the handler can tell it
-      from an unresolved raw token;
-    * the HANDLER half — the decoded value is iterated with `list()` rather
-      than matched against `list`/`tuple`.
-
-    Exercised here below the template layer so a failure names which half
-    moved, rather than only reporting that a cell diverged.
-    """
-
-    def test_the_renderer_hands_a_string_source_over_quoted(self) -> None:
-        """The renderer half, observed at the handler's own boundary.
-
-        `RegroupTagHandler` is registered with `RESOLVE_ARG_POSITIONS = {0}`,
-        so the engine resolves position 0 and — since #2385 — JSON-encodes a
-        string there. Asserted through a real render by giving the handler's
-        `by` operand no match: what reaches `_decode_source` is what the
-        grouping is built from.
-
-        The spy goes on `live_regroup_class()`, not on the `RegroupTagHandler`
-        this module imported — see that helper for the CI flake it closes
-        (#2427).
-        """
-        handler_cls = live_regroup_class()
-        captured: list[str] = []
-        original = handler_cls._decode_source
-
-        @classmethod  # type: ignore[misc]
-        def spy(cls, expr, context):  # type: ignore[no-untyped-def]
-            captured.append(expr)
-            return original.__func__(cls, expr, context)  # type: ignore[attr-defined]
-
-        handler_cls._decode_source = spy  # type: ignore[assignment]
+        handler.render = spy
         try:
             _rust.render_template_with_dirs(
                 "{% regroup s by k as g %}[{{ g|length }}]", {"s": "ab"}, [], None
@@ -340,81 +312,26 @@ class TestBothMechanismsAreReachable:
                 "{% regroup nope by k as g %}[{{ g|length }}]", {"s": "ab"}, [], None
             )
         finally:
-            handler_cls._decode_source = original  # type: ignore[assignment]
-
-        assert captured == ['"ab"', "nope"], (
-            "the resolved string must arrive JSON-quoted and the unresolved "
-            f"token bare — that difference IS the fix's renderer half: {captured!r}"
-        )
-
-    def test_the_spy_reaches_a_RE_REGISTERED_handler(self) -> None:
-        """#2427 as a test rather than as a comment.
-
-        The polluter is a real `importlib.reload`, which cannot be undone — a
-        test that performed one would become the next polluter for everything
-        scheduled after it on the same worker. So the shape is simulated by
-        registering an INDEPENDENT class object under `regroup`: same code, own
-        `_decode_source`, and deliberately NOT a subclass, because a subclass
-        would inherit a patch of `RegroupTagHandler` and hide the entire effect
-        — the simulation would then pass while measuring nothing.
-
-        This is the only test that can tell the fix from the bug: in a clean
-        process the imported class and the registered one are the same object,
-        so the method above passes either way. Gating `live_regroup_class` back
-        to `return RegroupTagHandler` reddens THIS one alone.
-        """
-        saved = _LIVE_HANDLERS["regroup"]
-        namespace = {
-            k: v for k, v in vars(RegroupTagHandler).items() if k not in ("__dict__", "__weakref__")
-        }
-        reloaded_cls = type("RegroupTagHandler", RegroupTagHandler.__bases__, namespace)
-        assert reloaded_cls is not RegroupTagHandler
-        assert not issubclass(reloaded_cls, RegroupTagHandler), (
-            "a subclass inherits a patch of the original and would make this "
-            "simulation vacuous — a reload produces a SIBLING"
-        )
-        assert "_decode_source" in vars(reloaded_cls), (
-            "the copy must own `_decode_source`, or patching the original still reaches it"
-        )
-
-        handler = reloaded_cls()
-        _rust.register_assign_tag_handler("regroup", handler)
-        _LIVE_HANDLERS["regroup"] = handler
-        try:
-            assert live_regroup_class() is reloaded_cls
-            # Every assertion of the method above, against the class the
-            # registry now holds.
-            self.test_the_renderer_hands_a_string_source_over_quoted()
-        finally:
-            _rust.register_assign_tag_handler("regroup", saved)
-            _LIVE_HANDLERS["regroup"] = saved
-        assert live_regroup_class() is type(saved), "the registry was not restored"
+            handler.render = original
+        assert seen == [("s", "ab"), ("nope", "ab")]
 
     @pytest.mark.parametrize(
-        "expr,expected",
+        "value,expected",
         [
-            ('"ab"', ["a", "b"]),  # a string iterates as characters
-            ('{"a": 1, "b": 2}', ["a", "b"]),  # a dict iterates as keys
-            ("[1, 2]", [1, 2]),  # a list is unchanged
-            ("null", []),  # Django's `if obj_list is None` arm
-            ("nope", []),  # …which an unresolved name reaches too
+            ("ab", ["a", "b"]),
+            ({"a": 1, "b": 2}, ["a", "b"]),
+            ([1, 2], [1, 2]),
+            (None, []),
         ],
     )
-    def test_the_handler_iterates_with_pythons_own_semantics(
-        self, expr: str, expected: list
-    ) -> None:
-        """The handler half, called directly."""
-        assert RegroupTagHandler._decode_source(expr, {}) == expected
+    def test_django_bridge_iterates_the_original_value(self, value, expected):
+        html, bindings = _LIVE_HANDLERS["regroup"].render(["p", "by", "k", "as", "g"], {"p": value})
+        assert html == ""
+        assert [item for group in bindings["g"] for item in group.list] == expected
 
-    def test_and_a_non_iterable_raises_pythons_own_TypeError(self) -> None:
-        """``"5"`` used to be a sixth row of the table above, answering ``[]``.
-
-        It answers a raise since #2463: ``None`` is the only value Django's
-        ``RegroupNode`` guards, and the handler now defers to ``list()``
-        instead of catching its ``TypeError``.
-        """
+    def test_non_iterable_raises_pythons_own_type_error(self):
         with pytest.raises(TypeError, match="'int' object is not iterable"):
-            RegroupTagHandler._decode_source("5", {})
+            _LIVE_HANDLERS["regroup"].render(["p", "by", "k", "as", "g"], {"p": 5})
 
 
 class TestTheWiringIsLoadBearing:
@@ -440,12 +357,13 @@ class TestTheWiringIsLoadBearing:
 
         Routing them through the string arm would tell the handler a `Decimal`
         is a sequence of characters, where Python raises. The arm is written
-        against `Value::String` alone and this pins that it stays that way.
+        against the two string variants and this pins that it stays that way.
         """
         src = RENDERER.read_text()
         start = src.index("fn value_channel_arg_string(")
         body = src[start : src.index("\n}\n", start)]
-        assert "Value::String(s) => serde_json::to_string(s)" in body, body
+        assert "Value::String(s) | Value::SafeString(s) => {" in body, body
+        assert "serde_json::to_string(s)" in body, body
         for never in ("Value::Decimal", "Value::BigInt"):
             assert never not in body, (
                 f"{never} must fall through to value_to_arg_string — its "

@@ -165,3 +165,25 @@ class TestUpdateTemplateInvalidatesCache:
 
         assert "section" in html
         assert "Hi" in html
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "{% firstof value as x %}<p>{{ x }}</p>",
+        "{% if yes %}{% firstof value as x %}{% endif %}<p>{{ x }}</p>",
+        "{% widthratio value 1 1 as x %}<p>{{ x }}</p>",
+        "{% firstof value as x %}{% firstof x as y %}<p>{{ y }}</p>",
+    ],
+)
+def test_assignment_invalidates_later_cached_output(source):
+    view = RustLiveView(source)
+    view.update_state({"value": 1, "yes": True})
+    view.render_with_diff()
+    view.update_state({"value": 2, "yes": True})
+    view.set_changed_keys(["value"])
+    partial, _, _ = view.render_with_diff()
+    fresh = RustLiveView(source)
+    fresh.update_state({"value": 2, "yes": True})
+    full, _, _ = fresh.render_with_diff()
+    assert partial == full

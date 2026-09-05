@@ -202,7 +202,7 @@ impl From<ObjectKey> for crate::Value {
 impl ObjectKey {
     pub fn from_value(value: &crate::Value) -> Option<ObjectKey> {
         Some(match value {
-            crate::Value::String(s) => ObjectKey::Str(s.clone()),
+            crate::Value::String(s) | crate::Value::SafeString(s) => ObjectKey::Str(s.clone()),
             crate::Value::Integer(n) => ObjectKey::Int(*n),
             crate::Value::Bool(b) => ObjectKey::Bool(*b),
             crate::Value::None => ObjectKey::None,
@@ -217,12 +217,14 @@ impl ObjectKey {
             // display keeps a match against a genuine `str()` key working, and
             // changing either side is #2429's typed-key question, not this one.
             crate::Value::Encoded(e) => ObjectKey::Str(e.display.clone()),
-            crate::Value::Tuple(items) => ObjectKey::Tuple(
-                items
-                    .iter()
-                    .map(ObjectKey::from_value)
-                    .collect::<Option<_>>()?,
-            ),
+            crate::Value::Tuple(items) | crate::Value::NamedTuple { items, .. } => {
+                ObjectKey::Tuple(
+                    items
+                        .iter()
+                        .map(ObjectKey::from_value)
+                        .collect::<Option<_>>()?,
+                )
+            }
             // `Missing` is an ABSENT key, not a value: an unresolved variable
             // must miss the lookup, never match a key that happens to hold
             // the empty string.

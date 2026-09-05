@@ -445,21 +445,12 @@ CANARY_MODULE = textwrap.dedent(
             out = Engine().from_string("{{ x }}").render(Context({"x": "hi"}))
             self.assertEqual(out, "hi")
 
-        def test_2_block_super_outside_a_child_must_raise(self):
-            # Django raises TemplateSyntaxError at RENDER time — `block`
-            # resolves to the raw `BlockNode`, which has no `.context`
-            # attribute outside an active `{% extends %}` chain, and
-            # `.super`'s property getter raises on that; djust renders "".
-            # (`{% if foo == %}` was the canary until #2576 ported smartif's
-            # operator grammar; `{% with %}` with no assignment was the
-            # canary until #2580's grammar-gaps drain; `{{ block.super }}`
-            # used outside a child template is the next still-open gap —
-            # it needs real render-time `block.super` support, tracked on
-            # #2531/#2580.)
-            with self.assertRaises(TemplateSyntaxError):
-                Engine().from_string(
-                    "{% block first %}{{ block.super }}{% endblock %}"
-                ).render(Context({}))
+        def test_2_django_node_inspection(self):
+            # The previous block.super canary now passes. This unsupported
+            # Django AST interface remains a real observable difference. Keep a FAIL
+            # canary without fabricating a rendering bug or changing the runner.
+            template = Engine().from_string("{{ x }}")
+            self.assertTrue(hasattr(template, "nodelist"))
 
         def test_3_refused_tz_filter(self):
             # Django renders `Jan. 1, 2020, noon`; djust REFUSES.
@@ -535,14 +526,11 @@ class TestEmpiricalCanary:
         text, _ = djust_run
         lines = parsed_lines(text)
         assert lines["canary_tests.Canary.test_1_variable_renders_the_same"].startswith("OK    ")
-        assert lines[
-            "canary_tests.Canary.test_2_block_super_outside_a_child_must_raise"
-        ].startswith(
-            "FAIL  canary_tests.Canary.test_2_block_super_outside_a_child_must_raise | AssertionError: "
-            "TemplateSyntaxError not raised"
+        assert lines["canary_tests.Canary.test_2_django_node_inspection"].startswith(
+            "FAIL  canary_tests.Canary.test_2_django_node_inspection | AssertionError: "
         )
         assert lines["canary_tests.Canary.test_3_refused_tz_filter"].startswith(
-            "ERROR canary_tests.Canary.test_3_refused_tz_filter | Exception: "
+            "ERROR canary_tests.Canary.test_3_refused_tz_filter | RuntimeError: "
         )
 
         assert "utc" in lines["canary_tests.Canary.test_3_refused_tz_filter"]
@@ -1160,7 +1148,7 @@ class TestAgainstRealDjangoCheckout:
     def test_if_module_through_djust(self, tmp_path: pathlib.Path) -> None:
         data = self._run(tmp_path)
         assert len(data["tests"]) == 115
-        assert data["fail"] >= 1
+        assert all(t["status"] == "OK" for t in data["tests"])
         assert sum(1 for t in data["tests"] if t["touched"]) >= 100
 
     def test_if_module_gate_off(self, tmp_path: pathlib.Path) -> None:

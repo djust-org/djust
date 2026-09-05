@@ -4,7 +4,7 @@ Django's ``AutoEscapeControlNode`` saves ``context.autoescape``, sets it for
 the body and restores it. djust mirrors that with a ``Context::autoescape``
 flag (mirroring ``emit_dj_if_markers``: render-time, per-context, never on the
 cached ``Template``) that a ``Node::AutoEscape`` render arm flips on a
-per-block clone.
+lexical body and restores on exit.
 
 The flag is an EMIT-time term and the ``needs_autoescape`` argument — it is
 **not** a safety grant. It reaches the sink at exactly the sites in the plan's
@@ -130,13 +130,12 @@ def tpl_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def engines(tpl_dir: Path):
     django_engine = Engine(dirs=[str(tpl_dir)], libraries=LIBRARIES)
     django_engine.template_builtins.append(_LIB)
-    # No `OPTIONS['libraries']` here on purpose: that registers the name in
-    # the process-global `{% load %}` map, which the #2547 message tests pin
-    # to THEIR library set. `_bridged` scopes the name to this module's
-    # renders through the Engine's own `template_libraries` instead.
+    # Keep this fixture's library names on each engine, without registering
+    # them globally and changing other modules' unknown-library diagnostics.
     backend = DjustTemplateBackend(
         {"NAME": "djust_2556", "DIRS": [str(tpl_dir)], "APP_DIRS": False, "OPTIONS": {}}
     )
+    backend.template_libraries.update(LIBRARIES)
     return django_engine, backend, tpl_dir
 
 
@@ -171,8 +170,7 @@ def djust_raw(engines, source: str, ctx: dict) -> str:
 def djust_backend(engines, source: str, ctx: dict) -> str:
     """``DjustTemplateBackend`` — what a Django ``TEMPLATES`` entry renders."""
     _, backend, _ = engines
-    with _bridged(engines):
-        return str(backend.from_string(source).render(dict(ctx)))
+    return str(backend.from_string(source).render(dict(ctx)))
 
 
 def djust_live(engines, source: str, ctx: dict) -> str:
@@ -523,18 +521,20 @@ def _production_lines(src: str) -> list[str]:
 
 
 class TestSecurityPins:
-    def test_exactly_two_production_writers_of_set_autoescape(self):
-        """The render arm and the `include … only` copy — nothing else. A
-        third writer (a context key, a pyfunction, a request-derived value) is
-        the class of bug this pin refuses (the #1817 single-arming shape)."""
+    def test_only_explicit_render_policy_and_lexical_scopes_write_autoescape(self):
+        """Only explicit API policy, lexical scopes, and include-only copies.
+        Context dictionary keys must never configure the render policy."""
         writers: list[tuple[str, str]] = []
         for rs in sorted(CRATES.glob("*/src/**/*.rs")):
             for line in _production_lines(rs.read_text(encoding="utf-8")):
                 if "set_autoescape(" in line and "pub fn set_autoescape" not in line:
                     writers.append((rs.relative_to(CRATES).as_posix(), line.strip()))
         assert sorted(writers) == [
+            ("djust_live/src/lib.rs", "ctx.set_autoescape(autoescape);"),
+            ("djust_live/src/lib.rs", "ctx.set_autoescape(autoescape);"),
+            ("djust_templates/src/renderer.rs", "context.set_autoescape(*on);"),
+            ("djust_templates/src/renderer.rs", "context.set_autoescape(previous);"),
             ("djust_templates/src/renderer.rs", "fresh.set_autoescape(context.autoescape());"),
-            ("djust_templates/src/renderer.rs", "inner.set_autoescape(*on);"),
         ], writers
 
     def test_the_flag_is_not_a_term_of_the_safety_grant(self):
@@ -549,17 +549,13 @@ class TestSecurityPins:
         # `input_was_safe` is captured from `runtime_safe` alone, at every site.
         assert re.findall(r"let input_was_safe = (\w+);", src) == ["runtime_safe"] * 3
 
-    def test_no_pyfunction_exposes_the_flag(self):
-        for rs in (
-            CRATES / "djust_live" / "src" / "lib.rs",
-            CRATES / "djust_templates" / "src" / "lib.rs",
-        ):
-            src = rs.read_text(encoding="utf-8")
-            assert not re.search(r"signature\s*=\s*\([^)]*autoescape", src), rs
-            assert not re.search(r"fn \w+\([^)]*\bautoescape\b", src), rs
-        assert "set_autoescape" not in (CRATES / "djust_live" / "src" / "lib.rs").read_text(
-            encoding="utf-8"
-        )
+    def test_only_plain_render_pyfunctions_expose_explicit_policy(self):
+        src = (CRATES / "djust_live" / "src" / "lib.rs").read_text(encoding="utf-8")
+        exposed = re.findall(r"fn (\w+)\([^)]*\bautoescape\b[^)]*\)", src)
+        assert sorted(exposed) == ["render_template", "render_template_with_dirs"]
+        signatures = re.findall(r"signature\s*=\s*\(([^)]*autoescape[^)]*)\)", src)
+        assert len(signatures) == 2
+        assert all("*, autoescape=true" in signature for signature in signatures)
         assert not hasattr(_rust.RustLiveView, "set_autoescape")
 
     def test_a_context_key_named_autoescape_has_no_effect(self, engines):
@@ -616,12 +612,8 @@ class TestEveryWalkerKnowsTheNewNode:
             lines = _production_lines(rs.read_text(encoding="utf-8"))
             spaceless = sum("Node::Spaceless" in line for line in lines)
             autoescape = sum("Node::AutoEscape" in line for line in lines)
-            if rs.name == "inheritance.rs":
-                # AutoEscape ALSO joins the two `{% block %}` walkers Spaceless
-                # never did (row 15: a parent's `off` governs the child block).
-                assert autoescape == spaceless + 2, (rs.name, spaceless, autoescape)
-            else:
-                assert autoescape == spaceless, (rs.name, spaceless, autoescape)
+            # The shared inheritance child-list inventory now covers both.
+            assert autoescape == spaceless, (rs.name, spaceless, autoescape)
 
     def test_the_generated_backend_list_names_the_tag(self):
         doc = (REPO / "docs" / "TEMPLATE_BACKEND.md").read_text(encoding="utf-8")

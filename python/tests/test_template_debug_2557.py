@@ -313,7 +313,7 @@ class TestSpanCrossesThePyO3Boundary:
         with pytest.raises(RuntimeError) as info:
             compile_template("{% nosuchtag %}")
         text = str(info.value)
-        assert text.startswith("Template error: Unsupported template tag")
+        assert text.startswith("Template error: Invalid block tag")
         assert "djust_token_span" not in text
         assert "start" not in text
 
@@ -525,26 +525,12 @@ class TestEmptyTagContextAxis:
         assert "Vue:" in out
 
 
-class TestMultiLineTokenSpan:
-    """A token whose span crosses a newline is located, not abandoned.
+class TestHighLineTokenSpan:
+    """The excerpt follows an error far down a multiline template.
 
-    ``build_template_debug`` ports ``get_exception_info`` including its
-    locating condition ``start >= upto and end <= next_break``. Django can
-    rely on that always firing because ``tag_re`` has no ``re.DOTALL`` — a
-    Django token never spans a line. **djust's lexer has no such bound** and
-    the engine accepts a multi-line tag, so the ported condition never fired
-    and the loop fell through with its initial values: ``line: 0``, an empty
-    ``during``, and an excerpt clamped to lines 1..11.
-
-    On a 44-line template with the error at line 40 that rendered
-    ``error at line 0``, no highlight, and the WRONG ten lines — worse than
-    the ``None`` #2557 replaced, because ``None`` at least admits it does not
-    know. Reachable two ordinary ways: any multi-line ``{% … %}`` that errors,
-    and an unterminated ``{%`` (whose ``has_closer`` scan reaches the next
-    ``%}`` anywhere in the file).
-
-    Gate-off: delete the re-locate block in ``build_template_debug`` →
-    ``test_a_high_line_number_is_reported`` fails with ``line == 0``.
+    Tags spanning a newline are literal text, matching Django's lexer.
+    The source must contain a single-line invalid tag to exercise the
+    parser's source locations rather than rely on the old lexer mismatch.
     """
 
     #: Far enough down that the wrong window (lines 1..11) is visibly wrong.
@@ -553,7 +539,7 @@ class TestMultiLineTokenSpan:
     def _long_source(self) -> str:
         head = "\n".join(f"<p>line {i}</p>" for i in range(1, self.ERROR_LINE))
         tail = "\n".join(f"<p>tail {i}</p>" for i in range(1, 4))
-        return head + "\n{% nosuchtag foo\n     bar %}\n" + tail
+        return head + "\n{% nosuchtag foo bar %}\n" + tail
 
     def test_a_high_line_number_is_reported(self, backend):
         source = self._long_source()
@@ -584,8 +570,12 @@ class TestMultiLineTokenSpan:
         # token spanning the whole file.
         source = "{% block content }\n<p>hi</p>\n{% endblock %}"
         debug = _debug_for(source, backend)
-        assert debug["line"] == 1
-        assert debug["during"].startswith("{% block content }")
+        # The malformed opener is literal text; the stray closer is the
+        # actual parse error, as Django's non-DOTALL lexer reports it.
+        with pytest.raises(TemplateSyntaxError) as expected:
+            Engine(debug=True).from_string(source)
+        assert debug["line"] == expected.value.template_debug["line"] == 3
+        assert debug["during"] == "{% endblock %}"
 
     def test_a_single_line_span_is_untouched_by_the_relocate(self, backend):
         """The re-locate must fire ONLY when Django's own loop fell through."""

@@ -866,9 +866,7 @@ def test_localtime_on_under_use_tz_false_is_a_named_divergence():
 
 def test_localtime_off_names_the_values_own_zone():
     """Plan §4.3: inside ``localtime off`` an aware value is NOT converted and
-    ``T`` names its own zone — ``UTC`` / ``UTC+02:00`` for a fixed offset
-    (Python's ``datetime.timezone``); a ``ZoneInfo`` value's ``CEST`` is the
-    #2216 wire residue and is declared, not silent."""
+    ``T`` names its own zone, including names preserved from ZoneInfo."""
     fixed = datetime.datetime(
         2011, 9, 1, 13, 20, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
     )
@@ -877,7 +875,8 @@ def test_localtime_off_names_the_values_own_zone():
         assert plain_render(source, {"d": d}) == django_render(source, {"d": d})
     zone = datetime.datetime(2011, 9, 1, 13, 20, tzinfo=zoneinfo.ZoneInfo("Europe/Paris"))
     assert django_render(source, {"d": zone}) == "13:20 CEST CEST +0200"
-    assert plain_render(source, {"d": zone}) == "13:20 UTC+02:00 UTC+02:00 +0200"
+    assert plain_render(source, {"d": zone}) == django_render(source, {"d": zone})
+    assert liveview_render(source, {"d": zone}) == django_render(source, {"d": zone})
 
 
 def test_localize_off_under_de_with_thousand_separator():
@@ -888,19 +887,13 @@ def test_localize_off_under_de_with_thousand_separator():
         assert liveview_render(source, CTX) == "1455/3.14|1.455/3,14"
 
 
-def test_localize_off_date_half_is_the_declared_residue():
-    """The DATE half of ``{% localize off %}`` (a bare ``{{ date }}``) is the
-    #2221 piece-3 residue: djust renders ISO on both sides of the scope."""
+def test_localize_off_date_uses_unlocalized_format_then_restores_locale():
     d = datetime.date(2011, 9, 1)
     source = LT + "{% localize off %}{{ d }}{% endlocalize %}|{{ d }}"
     with translation.override("de"):
-        # Django: `use_l10n=False` reads the RAW `DATE_FORMAT` setting
-        # (`N j, Y`); outside the block the `de` locale format applies.
-        # djust: a date crosses the wire as its ISO string (#2216), so a BARE
-        # `{{ d }}` is ISO on both sides of the scope — the #2221 piece-3
-        # residue, declared here rather than silently absent.
-        assert django_render(source, {"d": d}) == "Sept. 1, 2011|1. September 2011"
-        assert plain_render(source, {"d": d}) == "2011-09-01|2011-09-01"
+        expected = django_render(source, {"d": d})
+        assert expected == "Sept. 1, 2011|1. September 2011"
+        assert plain_render(source, {"d": d}) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1091,7 +1084,9 @@ def test_install_sites_are_pinned():
     assert "register_language_scope_hooks(language_scope_enter, language_scope_exit)" in env
     assert "register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)" in env
     lib = (REPO / "python" / "djust" / "template_libraries.py").read_text(encoding="utf-8")
-    assert "register_translator(translate_msgid)" in lib
+    assert (
+        "register_translator(translate_msgid, resolve_date_format, resolve_default_timezone)" in lib
+    )
 
 
 def test_collect_raw_source_is_the_one_collector_for_verbatim_and_raw_blocks():
@@ -1349,14 +1344,12 @@ def test_randomized_underscore_sweep(lang):
     _sweep(cases, lang)
 
 
-def test_decimal_formatting_is_a_preexisting_divergence():
-    """`Decimal("2")` renders `2` on Django and `2,0` here under `de` — the
-    engine localizes it as a number. Visible with NO i18n tag in the template,
-    so it is not this row's; the `blocktranslate count` sweep leaves `Decimal`
-    out for that reason rather than silently passing."""
+@pytest.mark.parametrize("number", ["2", "2.0", "2.000", "9007199254740993.125"])
+def test_decimal_formatting_preserves_decimal_type(number):
+    """The backend no longer converts Decimal to float before localization."""
     with translation.override("de"):
-        assert django_render("{{ dec }}", {"dec": Decimal("2")}) == "2"
-        assert plain_render("{{ dec }}", {"dec": Decimal("2")}) == "2,0"
+        context = {"dec": Decimal(number)}
+        assert plain_render("{{ dec }}", context) == django_render("{{ dec }}", context)
 
 
 def test_a_brace_before_a_tag_now_matches_django():

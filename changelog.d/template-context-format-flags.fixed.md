@@ -1,0 +1,1 @@
+- **Template library context flags**: Preserve Django Context `use_l10n` and `use_tz` through custom and nested inclusion tags, restoring the previous flags after each render. Django 5.2 template conformance is now 988/1047 (94.36%).

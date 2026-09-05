@@ -4,7 +4,7 @@ Issue #1121 reported that Django projects registering custom filters via
 ``@register.filter`` in their ``templatetags/`` modules see them work in the
 Python render path but fail in the Rust ``RustLiveView`` render path with::
 
-    RuntimeError: Template error: Unknown filter: lookup
+    RuntimeError: Template error: Invalid filter: lookup
 
 Custom filters are a standard Django extension point. The most common use case
 is ``{{ dict|lookup:var_key }}`` for dynamic dict-key access in partials —
@@ -365,11 +365,11 @@ def test_needs_autoescape_filter_receives_kwarg():
 
 def test_unknown_filter_still_raises_clear_error():
     """The bridge must NOT silently swallow misses — an unknown filter
-    name still produces ``Unknown filter: <name>`` so authors find typos
+    name still produces ``Invalid filter: <name>`` so authors find typos
     and missing imports fast.
 
     Tightened (#1162): assert the canonical message shape
-    ``Unknown filter: <name>`` rather than just substring-matching the
+    ``Invalid filter: <name>`` rather than just substring-matching the
     name. A future regression that, say, reformatted the error to
     ``filter not found`` would slip past the looser check.
     """
@@ -382,8 +382,8 @@ def test_unknown_filter_still_raises_clear_error():
             {"x": "val"},
         )
     msg = str(exc_info.value)
-    # Canonical shape: ``Unknown filter: <name>`` (from filters.rs:510).
-    assert "Unknown filter:" in msg, f"unexpected error shape: {msg!r}"
+    # Canonical shape: ``Invalid filter: <name>`` (from filters.rs:510).
+    assert "Invalid filter:" in msg, f"unexpected error shape: {msg!r}"
     assert "definitely_not_a_filter_xyz" in msg
 
 

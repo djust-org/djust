@@ -1,0 +1,1 @@
+- **Filter syntax errors follow Django's name matching and refusal order.** Invalid names report the matched filter name, and argument validation, lookup, and arity checks precede an unmatched suffix. Both parser and runtime consume the same lexer. Django 5.2.16 conformance rises to 984 of 1047 exercised tests.

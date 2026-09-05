@@ -539,23 +539,17 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert djust_render(source, {"p": value}) == liveview_render(source, {"p": value})
 
     @pytest.mark.parametrize(("value", "attr"), METHODS_RESULT_SPELLS_DIFFERENTLY)
-    def test_the_remaining_divergence_is_the_RESULTs_spelling(
+    def test_temporal_method_results_localize_and_struct_results_remain_distinct(
         self, value: object, attr: str
     ) -> None:
-        """The REASON, measured rather than asserted — the same shape as
-        `test_the_class_attributes_would_not_terminate`.
-
-        Render the call's RESULT through djust and compare it with what Django
-        renders for the lookup. They differ, which is why the name is not in
-        `ENCODED_CALL_NAMES` — and, since #2501 made the cell resolve anyway,
-        this is now the statement of what is LEFT to close: djust's own
-        spelling of a `date` / `time` / `struct_time`, one class of divergence
-        rather than an empty cell.
-        """
+        """Date/time results now localize; struct_time remains a separate gap."""
         result = getattr(value, attr)()
-        assert djust_render("{{ r }}", {"r": result}) != django_render(
-            "{{ p.%s }}" % attr, {"p": value}
-        )
+        actual = djust_render("{{ r }}", {"r": result})
+        expected = django_render("{{ p.%s }}" % attr, {"p": value})
+        if isinstance(result, (datetime.date, datetime.time)):
+            assert actual == expected
+        else:
+            assert actual != expected
 
     @pytest.mark.parametrize("attr", ["real", "imag", "as_tuple", "is_finite", "adjusted"])
     def test_a_decimals_attributes_are_a_DIFFERENT_carrier(self, attr: str) -> None:

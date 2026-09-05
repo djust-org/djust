@@ -529,28 +529,12 @@ class TestKnownRemainingDivergences:
             apply_number_format()
 
     def test_a_string_value_is_no_longer_float_coerced_by_add(self) -> None:
-        """Half CLOSED by #2435; this entry read "is still float coerced".
+        """Both value and argument types now survive add's conversion path.
 
-        `int("34.2")` raises in Python, so Django never sums. djust's `add`
-        allowed a float coercion on the VALUE side regardless of its type and
-        answered `35`; the `int(value)` chokepoint is `int()` and only `int()`,
-        so the string now falls to the same branch Django's does.
-
-        With a QUOTED argument that branch is `str + str`, and the two engines
-        now agree exactly — which is what shows the value stopped being a
-        number rather than the filter having started returning `""`.
-
-        With the BARE literal `1` they still differ, and the residue that
-        remains is a DIFFERENT axis: `Variable` reads `1` as a Python int, so
-        Django's `"34.23234" + 1` is a `TypeError` and the third branch renders
-        `""`, while djust's concatenation branch has only the argument's TEXT.
-        That gap is not about the value at all — `{{ "abc"|add:1 }}` renders
-        `abc1` here and `""` in Django, and did so before #2435 too, since
-        `"abc"` never took the float coercion. Asserted alongside so the
-        remaining divergence is pinned to the argument axis rather than read as
-        a leftover of this one.
+        A numeric string plus an integer cannot concatenate; a quoted string
+        argument can. Neither case coerces a non-integral string to a number.
         """
         django_out, djust_out = render_both("{{ p|add:1 }}", "34.23234")
-        assert (django_out, djust_out) == ("", "34.232341")
-        assert render_both("{{ p|add:1 }}", "abc") == ("", "abc1")
+        assert (django_out, djust_out) == ("", "")
+        assert render_both("{{ p|add:1 }}", "abc") == ("", "")
         assert render_both('{{ p|add:"1" }}', "34.23234") == ("34.232341", "34.232341")

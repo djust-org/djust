@@ -255,6 +255,8 @@ static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
 /// resolved VALUE of `name`). Same readers, same fields, same semantics as
 /// [`TagHandlerEntry`] now.
 struct BlockHandlerEntry {
+    validator: Option<Py<PyAny>>,
+    body_validator: Option<Py<PyAny>>,
     end_tag: String,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
@@ -383,6 +385,7 @@ fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// hostile `{% render_slot p %}` are the same opaque string once the engine
 /// has resolved them, and only the un-resolved path can tell them apart.
 struct TagHandlerEntry {
+    validator: Option<Py<PyAny>>,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
@@ -397,6 +400,73 @@ struct TagHandlerEntry {
     /// refusal is per TAG so the rest of its library still works. Read off
     /// the handler's `REFUSE_AT_PARSE` attribute at registration.
     parse_refusal: Option<String>,
+}
+
+/// Optional compilation hook. Cache the bound method at registration so
+/// handlers without validation don't incur Python attribute lookups per tag.
+fn read_parse_validator(handler: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+    read_named_parse_validator(handler, "validate_at_parse")
+}
+
+fn read_named_parse_validator(
+    handler: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<Py<PyAny>>> {
+    match handler.getattr(name) {
+        Ok(method) if method.is_callable() => Ok(Some(method.unbind())),
+        Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{name} must be callable"
+        ))),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(handler.py()) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Validate original argument tokens, outside the registry lock: a Django
+/// compile function may itself load/register another library.
+pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust_core::Result<()> {
+    let validator = if block {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    } else {
+        let registry = TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    };
+    if let Some(validator) = validator {
+        Python::attach(|py| validator.call1(py, (args.to_vec(),)))
+            .map_err(DjangoRustError::PythonException)?;
+    }
+    Ok(())
+}
+
+/// Run the optional second stage only after the block body parsed successfully.
+pub fn validate_block_after_body(name: &str, args: &[String]) -> djust_core::Result<()> {
+    let validator = {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        registry
+            .get(name)
+            .and_then(|entry| entry.body_validator.as_ref())
+            .map(|method| Python::attach(|py| method.clone_ref(py)))
+    };
+    if let Some(validator) = validator {
+        Python::attach(|py| validator.call1(py, (args.to_vec(),)))
+            .map_err(DjangoRustError::PythonException)?;
+    }
+    Ok(())
 }
 
 /// The handler's opt-in parse-time refusal message (#2547); `None` when the
@@ -485,6 +555,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     }
     let parse_refusal = read_parse_refusal(handler_ref)?;
 
+    let validator = read_parse_validator(handler_ref)?;
+
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -493,6 +565,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         name,
         TagHandlerEntry {
             handler,
+            validator,
             resolve_positions,
             returns_bindings,
             accepts_as_var,
@@ -605,6 +678,10 @@ pub fn register_block_tag_handler(
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
 
+    let validator = read_parse_validator(handler_ref)?;
+
+    let body_validator = read_named_parse_validator(handler_ref, "validate_after_body")?;
+
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -613,6 +690,8 @@ pub fn register_block_tag_handler(
         name,
         BlockHandlerEntry {
             end_tag,
+            validator,
+            body_validator,
             handler,
             resolve_positions,
             returns_bindings,
@@ -1075,7 +1154,7 @@ pub struct HandlerBinding {
 ///
 /// ONE builder for every registry (#1646) — this was spelled inline, three
 /// times, before #2547 added a fourth and fifth caller.
-fn build_py_context<'py>(
+pub(crate) fn build_py_context<'py>(
     py: Python<'py>,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
@@ -1722,19 +1801,35 @@ pub fn call_raw_block_handler_with_bindings(
 /// dict, the GIL already held (~2 µs). `None` (the pure-Rust default) means
 /// "no translation installed" and the caller falls back to the msgid — the
 /// same answer `USE_I18N=False` produces on Django.
-static TRANSLATOR: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::new(None));
+struct LocaleHooks {
+    translator: Py<PyAny>,
+    format_resolver: Option<Py<PyAny>>,
+    default_timezone_resolver: Option<Py<PyAny>>,
+}
+static TRANSLATOR: Lazy<RwLock<Option<LocaleHooks>>> = Lazy::new(|| RwLock::new(None));
 
-/// Install the `_("…")` translator (#2558): `callable(%-doubled_msgid) -> str`.
-#[pyfunction]
-pub fn register_translator(callable: Py<PyAny>) -> PyResult<()> {
+/// Install the `_("…")` translator: `callable(%-doubled_msgid) -> str`.
+/// The optional resolver returns format strings for `(name)` and translated
+/// date parts for `(format_code, index)`, using the active Django language.
+/// The timezone resolver returns the default zone for naive datetime metadata.
+#[pyfunction(signature = (callable, format_resolver=None, default_timezone_resolver=None))]
+pub fn register_translator(
+    callable: Py<PyAny>,
+    format_resolver: Option<Py<PyAny>>,
+    default_timezone_resolver: Option<Py<PyAny>>,
+) -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some(callable);
+    *slot = Some(LocaleHooks {
+        translator: callable,
+        format_resolver,
+        default_timezone_resolver,
+    });
     Ok(())
 }
 
-/// Drop the `_("…")` translator (#2558) — the `djust.test_isolation` reset.
+/// Drop the locale hooks — the `djust.test_isolation` reset.
 #[pyfunction]
 pub fn clear_translator() -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
@@ -1750,15 +1845,74 @@ pub fn clear_translator() -> PyResult<()> {
 /// fall back to the msgid itself, which is Django's `USE_I18N=False`
 /// answer. A failing gettext should not take a page down.
 pub fn translate_msgid(msgid: &str) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
     Python::attach(|py| {
         let slot = TRANSLATOR.read().ok()?;
-        let callable = slot.as_ref()?.clone_ref(py);
+        let callable = slot.as_ref()?.translator.clone_ref(py);
         drop(slot);
         callable
             .bind(py)
             .call1((msgid,))
             .ok()
             .and_then(|v| v.extract::<String>().ok())
+    })
+}
+
+/// Resolve a Django format setting against the active language.
+pub fn resolve_format(name: &str) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot.as_ref()?.format_resolver.as_ref()?.clone_ref(py);
+        drop(slot);
+        callable
+            .bind(py)
+            .call1((name,))
+            .ok()?
+            .extract::<String>()
+            .ok()
+    })
+}
+
+/// Read the project's default timezone independently of the active render zone.
+pub fn resolve_default_timezone() -> Option<String> {
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot
+            .as_ref()?
+            .default_timezone_resolver
+            .as_ref()?
+            .clone_ref(py);
+        drop(slot);
+        callable.bind(py).call0().ok()?.extract::<String>().ok()
+    })
+}
+
+/// Read Django's context-aware month and weekday translations.
+pub fn resolve_date_part(part: &str, index: u32) -> Option<String> {
+    // Standalone Rust rendering needs no Python interpreter.
+    if TRANSLATOR.read().ok()?.is_none() {
+        return None;
+    }
+    Python::attach(|py| {
+        let slot = TRANSLATOR.read().ok()?;
+        let callable = slot.as_ref()?.format_resolver.as_ref()?.clone_ref(py);
+        drop(slot);
+        callable
+            .bind(py)
+            .call1((part, index))
+            .ok()?
+            .extract::<String>()
+            .ok()
     })
 }
 

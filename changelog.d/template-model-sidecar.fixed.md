@@ -1,0 +1,1 @@
+- **Backend model lookups**: Preserve original model and queryset objects in the protected rendering sidecar before JIT serialization, restoring model representations, methods, and properties while retaining field protection.

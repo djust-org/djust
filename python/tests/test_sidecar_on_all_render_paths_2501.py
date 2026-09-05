@@ -58,6 +58,8 @@ Refs #2501, #2506, #2505, #2504, #2502, #2489, #2485, #2481, #2478, #2418,
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 pytest.importorskip("django")
@@ -1274,21 +1276,14 @@ class TestTheLiveViewPathsComponentExclusion:
         assert "card-class-level|card-method|card-property" in html
 
     def test_the_bare_spelling_now_matches_the_dotted_one(self):
-        """#2503 fixed: the wrapper-dict special-case is removed, so a bare
-        component reference no longer renders that dict's Python repr.
-
-        This test previously pinned the BUG in its diverging direction
-        (#1859) — a fix for #2503 was supposed to turn it red, and it did,
-        the moment the special-case was removed. Now it pins the fix: both
-        spellings render the SAME content (escaped, same as the three
-        non-LiveView paths — the escaping half is #2501 PR 2, separate and
-        still open), and NEITHER contains the dict repr anymore.
-        """
+        """Bare components and their safe render methods both emit HTML."""
         bare = self._render("<div>{{ c }}</div>")
         dotted = self._render("<div>{{ c.render }}</div>")
         assert "{&#x27;render&#x27;:" not in bare and "{'render':" not in bare
         assert bare == dotted
-        assert "&lt;b&gt;card&lt;/b&gt;" in bare
+        expected = django_render("<div>{{ c.render }}</div>", {"c": Card()})
+        assert re.sub(r' dj-id="\d+"', "", bare) == expected
+        assert "<b" in bare and ">card</b>" in bare
 
     def test_the_bare_spelling_is_correct_with_safe(self):
         """The escaped-but-correct content, unescaped — matches `.render|safe`.

@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
-use djust_templates::Template;
+use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
     splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, VNode,
@@ -1812,7 +1812,7 @@ fn clear_live_handles_in(value: &mut Value) {
                 }
             }
         }
-        Value::List(items) | Value::Tuple(items) => {
+        Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             for nested in items {
                 clear_live_handles_in(nested);
             }
@@ -2088,12 +2088,13 @@ fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None))]
+#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None, *, autoescape=true))]
 fn render_template(
     template_source: String,
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
     string_if_invalid: Option<String>,
+    autoescape: bool,
 ) -> PyResult<String> {
     guard_panic("render_template", move || {
         // Inside the closure, not before it (PR #2514 review, finding 4):
@@ -2114,6 +2115,7 @@ fn render_template(
         };
 
         let mut ctx = Context::from_dict(state);
+        ctx.set_autoescape(autoescape);
         // ADR-024 kill-switch. `None` keeps `Context::from_dict`'s default of
         // ON, which is Django's behaviour and what a caller reaching this
         // function directly should get; `DjustTemplate.render` passes the
@@ -2167,13 +2169,25 @@ fn render_template(
 pub const SPAN_ATTR: &str = "djust_token_span";
 
 #[pyfunction]
-fn compile_template(template_source: String) -> PyResult<()> {
+#[pyo3(signature = (template_source, template_name=None, *, return_template=false))]
+fn compile_template(
+    template_source: String,
+    template_name: Option<String>,
+    return_template: bool,
+) -> PyResult<Option<CompiledTemplate>> {
     guard_panic("compile_template", move || {
-        if TEMPLATE_CACHE.get(&template_source).is_none() {
-            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
-            TEMPLATE_CACHE.insert(template_source, Arc::new(template));
+        // Compilation must validate against the calling engine's current
+        // libraries, even when another engine compiled the same source.
+        // Rendering can reuse the result after this validation boundary.
+        let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
+        if let Some(name) = template_name.as_deref() {
+            template
+                .validate_relative_references(name)
+                .map_err(span_aware_pyerr)?;
         }
-        Ok(())
+        let template = Arc::new(template);
+        TEMPLATE_CACHE.insert(template_source, template.clone());
+        Ok(return_template.then_some(CompiledTemplate { template }))
     })
 }
 
@@ -2217,8 +2231,11 @@ fn template_cache_contains(template_source: &str) -> bool {
 ///
 /// # Returns
 /// The rendered HTML string
+// Preserve the existing Python positional API while adding an optional
+// original-object sidecar for backend callers.
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None, assignments=None, uncached_template_dirs=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -2227,6 +2244,11 @@ fn render_template_with_dirs(
     auto_call: Option<bool>,
     string_if_invalid: Option<String>,
     template_name: Option<String>,
+    raw_context: Option<&Bound<'_, PyDict>>,
+    autoescape: bool,
+    compiled_template: Option<PyRef<'_, CompiledTemplate>>,
+    assignments: Option<&Bound<'_, PyDict>>,
+    uncached_template_dirs: Option<Vec<String>>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2234,10 +2256,14 @@ fn render_template_with_dirs(
         // See `render_template` for why this is inside the closure.
         let state: HashMap<String, Value> =
             snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
-        let sidecar = entry_sidecar(context);
+        // The backend may JIT-serialize models before this call. Preserve
+        // their original identities only through the protected sidecar.
+        let sidecar = entry_sidecar(raw_context.map(|raw| raw.as_any()).unwrap_or(context));
 
         // Get template from cache or parse and cache it
-        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
+        let template_arc = if let Some(compiled) = compiled_template {
+            compiled.template.clone()
+        } else if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
         } else {
             let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
@@ -2247,6 +2273,7 @@ fn render_template_with_dirs(
         };
 
         let mut ctx = Context::from_dict(state);
+        ctx.set_autoescape(autoescape);
         // See `render_template` for why `None` means ON.
         ctx.set_auto_call(auto_call.unwrap_or(true));
         // Django's `Engine.string_if_invalid` (#2517). `None`/absent keeps the
@@ -2268,12 +2295,25 @@ fn render_template_with_dirs(
 
         // Create filesystem template loader with the provided directories
         let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
-        let loader = FilesystemTemplateLoader::new(dirs);
+        let loader = FilesystemTemplateLoader::new(dirs).with_uncached_dirs(
+            uncached_template_dirs
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+        );
 
         // Render with the loader to support {% include %} tags
         // The template's own name is what a relative `{% extends "./x" %}`
         // resolves against (#2517); `None` leaves such a name unchanged.
-        Ok(template_arc.render_with_loader_named(&ctx, &loader, template_name.as_deref())?)
+        let rendered =
+            template_arc.render_with_loader_named_mut(&mut ctx, &loader, template_name.as_deref());
+        if let Some(assignments) = assignments {
+            for (name, value) in ctx.root_assignments() {
+                assignments.set_item(name, value.into_pyobject(assignments.py())?)?;
+            }
+        }
+        Ok(rendered?)
     })
 }
 
@@ -2789,8 +2829,8 @@ fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, 
 /// Convert Python object to Rust Value
 fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     // String
-    if let Ok(s) = obj.extract::<String>() {
-        return Ok(Value::String(s));
+    if obj.extract::<String>().is_ok() {
+        return obj.extract::<Value>();
     }
 
     // Boolean BEFORE Integer (#2203 review). PyO3 0.29 extracts a Python
@@ -2850,6 +2890,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         let mut vec = Vec::with_capacity(items.len());
         for item in items {
             vec.push(python_to_value(&item)?);
+        }
+        if let Ok(fields) = obj
+            .getattr("_fields")
+            .and_then(|f| f.extract::<Vec<String>>())
+        {
+            if fields.len() == vec.len() {
+                return Ok(Value::NamedTuple {
+                    name: obj.get_type().getattr("__name__")?.extract()?,
+                    fields,
+                    items: vec,
+                });
+            }
         }
         return Ok(Value::Tuple(vec));
     }
@@ -4281,6 +4333,7 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 #[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
+    m.add_class::<CompiledTemplate>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;

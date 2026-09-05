@@ -1,0 +1,1 @@
+- **Template differential coverage**: Exercise empty, nonempty, and marked-safe named tuples in the filter corpus and resolved arguments. Coverage checks now recognize the named-tuple value variant and detect missing truthiness and item-safety cases.

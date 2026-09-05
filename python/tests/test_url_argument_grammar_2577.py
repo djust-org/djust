@@ -21,9 +21,8 @@ parser.rs`` — ``validate_url_args``), which runs inside ``compile_template`` a
 ``DjustTemplate._compile()`` — the shared parse chokepoint for both the
 ``DjustTemplateBackend`` and the LiveView path, and BEFORE render. That is what
 lets the parse-time ``TemplateSyntaxError`` win the race against the render-time
-``NoReverseMatch`` for the ``named_url`` spelling. It does NOT touch the
-render-time ``_resolve_url_tags`` pre-pass, so the check is not duplicated
-across the two url grammars (#1646) and the #2616 escaping bug is untouched.
+``NoReverseMatch`` for the ``named_url`` spelling. The separate URL pre-pass was subsequently removed for #2616; these checks
+remain in the shared native parser.
 
 Every expectation here is LIVE Django, never a transcription: each malformed
 list is compiled on Django and asserted to raise ``TemplateSyntaxError`` in the

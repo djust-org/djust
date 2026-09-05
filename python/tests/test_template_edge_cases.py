@@ -313,7 +313,7 @@ class TestRustEngineGapFixes:
         """
         from djust._rust import render_template
 
-        with pytest.raises(RuntimeError, match="Unsupported template tag.*unknown_custom_tag"):
+        with pytest.raises(RuntimeError, match="Invalid block tag.*unknown_custom_tag"):
             render_template("{% unknown_custom_tag arg1 arg2 %}", {})
 
     def test_supported_tags_still_work(self):

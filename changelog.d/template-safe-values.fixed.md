@@ -1,0 +1,1 @@
+- **Template SafeString values**: Preserve per-element HTML safety through mixed lists, filtering, bindings, and Python callbacks. Plain siblings remain escaped, serialized state drops runtime safety, and loop caches distinguish safe and plain strings with identical text. Django 5.2 conformance rises to 993/1047 (94.84%).
