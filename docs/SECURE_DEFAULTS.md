@@ -133,8 +133,12 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   whether a model attribute ships calls, and the ONLY production reader of
   `_SENSITIVE_MODEL_METHODS`: the eager field loop (`_serialize_model_safely`),
   the eager `get_*` method loop (`_add_safe_model_methods`), the eager
-  `@property` loop (`_add_property_values`) and the sidecar proxy
-  (`_SidecarModelProxy.__getattr__`). Fail-closed precedence, each step can
+  `@property` loop (`_add_property_values`), the sidecar proxy
+  (`_SidecarModelProxy.__getattr__`) and the JIT codegen path — every
+  attribute the generated serializer reads is gated by
+  `python/djust/optimization/codegen.py::_attr_is_emittable`, which calls this
+  and nothing else (#2685; a denied name is omitted from the dict, so the
+  template renders `string_if_invalid`). Fail-closed precedence, each step can
   only deny: (1) a `_`-prefixed name is refused; (2) a sensitive / expensive
   model-method NAME (`_SENSITIVE_MODEL_METHODS` + the `get_next_by_` /
   `get_previous_by_` prefixes) is refused **whatever kind of attribute carries
@@ -153,7 +157,14 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   matrix (every floor name, every sensitive-method name, both prefixes, a
   `_`-prefixed name and the exact-match spelling variants) against both
   channels, each channel independently, a real GET + WS mount/event, and the
-  structural pin that all four sites call the chokepoint.
+  structural pin that all four sites call the chokepoint. The same file's
+  `TestJitCodegenChannel` / `TestJitCodegenParity` / `TestJitRealRenderPaths`
+  pin the codegen channel (#2685 — before it, `{{ m.password }}` on a public
+  `self.m` shipped the field through `mixins/context.py` →
+  `_jit_serialize_model` → codegen, which consulted no floor at all), and
+  `TestStructuralChokepointCodegen` pins codegen as a caller: the helper calls
+  the chokepoint, every emitted `hasattr(` read is guarded by
+  `_djust_attr_ok(`, and `compile_serializer` binds that name to the helper.
 - `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
   (the #1987 **TYPE floor**) — the single authority the eager loop
   (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
