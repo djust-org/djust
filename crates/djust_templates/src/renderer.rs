@@ -288,7 +288,11 @@ const IS_SAFE_FILTERS: [&str; 36] = [
 /// widened the same divergence to a fourth name instead of leaving it where it
 /// was. One helper, three callers, no room to drift again (#1646).
 ///
-fn filter_output_is_safe(filter_name: &str, produced_safe: bool, input_was_safe: bool) -> bool {
+pub(crate) fn filter_output_is_safe(
+    filter_name: &str,
+    produced_safe: bool,
+    input_was_safe: bool,
+) -> bool {
     // `produced_safe` is a genuine runtime `SafeString` — a custom filter that
     // `mark_safe()`d its result without the static `is_safe=True` flag (#1660).
     produced_safe
@@ -927,7 +931,7 @@ fn format_filter_chain(filters: &[(String, Option<String>)]) -> String {
 fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
     if matches!(value, Value::Missing) {
         String::new()
-    } else if runtime_safe || !autoescape {
+    } else if runtime_safe || value.string_conversion_is_safe() || !autoescape {
         value.to_string()
     } else {
         filters::html_escape(&value.to_string())
@@ -2277,7 +2281,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Row 1 of #2556: `{% autoescape off %}` is an EMIT-time term, OR-ed
             // in HERE and nowhere upstream — `runtime_safe` is exactly what it
             // was, so the flag never becomes a grant a later filter could read.
-            let is_safe = runtime_safe;
+            let is_safe = runtime_safe || value.string_conversion_is_safe();
             if is_safe || !context.autoescape() {
                 Ok(text)
             } else if *in_attr {
@@ -2379,7 +2383,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let text = localize_if_number(&value)?;
             // Same shape as the Variable arm — see `filter_output_is_safe`.
             // Seeded, not OR-ed — see the Variable arm (#2274).
-            let is_safe = runtime_safe;
+            let is_safe = runtime_safe || value.string_conversion_is_safe();
             // Row 2 of #2556 — same shape as the Variable arm.
             if is_safe || !context.autoescape() {
                 Ok(text)
@@ -5759,11 +5763,13 @@ fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
         if val.is_truthy() {
             let text = val.to_string();
             // Row 4 of #2556 (`firstof13`).
-            return Ok(Some(if runtime_safe || !context.autoescape() {
-                text
-            } else {
-                filters::html_escape(&text)
-            }));
+            return Ok(Some(
+                if runtime_safe || val.string_conversion_is_safe() || !context.autoescape() {
+                    text
+                } else {
+                    filters::html_escape(&text)
+                },
+            ));
         }
     }
     Ok(None)
@@ -7507,6 +7513,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -7523,6 +7530,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -7541,6 +7549,7 @@ mod tests {
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -7559,6 +7568,7 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -7576,6 +7586,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`

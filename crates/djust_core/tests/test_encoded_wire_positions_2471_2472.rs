@@ -128,6 +128,7 @@ fn sample() -> Encoded {
         eq_class: Some(djust_core::EqClass::Identity),
         // TRANSIENT, never on the wire (#2539).
         live: None,
+        display_safe: false,
     }
 }
 

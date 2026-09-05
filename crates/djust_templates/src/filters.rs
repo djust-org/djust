@@ -905,6 +905,51 @@ pub fn apply_filter_full_safe(
     // `arg_was_quoted` reaches the dispatch table because `add` needs it: a
     // quoted "1.5" is a STRING to Python's int() (which raises), while an
     // unquoted 1.5 is a float literal (which truncates). See that arm (#2203).
+    // Django's stringfilter wrapper converts the object before invoking the
+    // body. This marker belongs to str(o), not to o passed to conditional_escape.
+    const STRING_FILTERS: &[&str] = &[
+        "addslashes",
+        "capfirst",
+        "escapejs",
+        "iriencode",
+        "linenumbers",
+        "lower",
+        "make_list",
+        "slugify",
+        "title",
+        "truncatechars",
+        "truncatechars_html",
+        "truncatewords",
+        "truncatewords_html",
+        "upper",
+        "urlencode",
+        "urlize",
+        "urlizetrunc",
+        "wordcount",
+        "wordwrap",
+        "ljust",
+        "rjust",
+        "center",
+        "cut",
+        "escape",
+        "force_escape",
+        "linebreaks",
+        "linebreaksbr",
+        "safe",
+        "striptags",
+    ];
+    let converted = if STRING_FILTERS.contains(&filter_name)
+        && matches!(value, Value::Encoded(e) if e.display_safe)
+    {
+        Some(Value::SafeString(value.to_string()))
+    } else {
+        None
+    };
+    let value = converted.as_ref().unwrap_or(value);
+    let input_safety = InputSafety {
+        container: input_safety.container || converted.is_some(),
+        items: input_safety.items,
+    };
     if let Some(builtin) = apply_builtin_filter(
         filter_name,
         value,
@@ -926,7 +971,10 @@ pub fn apply_filter_full_safe(
                 &v,
                 input_safety,
             );
-            let safe = safe || v.is_safe_string();
+            let safe = safe
+                || v.is_safe_string()
+                || (converted.is_some()
+                    && crate::renderer::filter_output_is_safe(filter_name, false, true));
             (v, safe)
         });
     }
@@ -7139,6 +7187,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -7153,6 +7202,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -7174,6 +7224,7 @@ mod tests {
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
                 live: None,
+                display_safe: false,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -7192,6 +7243,7 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -7211,6 +7263,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ]
     }
@@ -7264,6 +7317,7 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
+            display_safe: false,
         }));
         assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7721,6 +7775,7 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7749,6 +7804,7 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
+                display_safe: false,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7768,6 +7824,7 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
+            display_safe: false,
         }));
         assert!(
             iter_values(&hostile).is_none(),

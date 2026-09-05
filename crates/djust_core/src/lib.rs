@@ -423,6 +423,8 @@ pub struct Encoded {
     /// `str(o)` — what `{{ p }}` renders, and what this value looked like
     /// before the variant existed.
     pub display: String,
+    /// Runtime safety of str(o), not of o itself. Never restored from wire data.
+    pub display_safe: bool,
     /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
     pub json: String,
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
@@ -894,6 +896,7 @@ impl PartialEq for Encoded {
     fn eq(&self, other: &Self) -> bool {
         self.type_name == other.type_name
             && self.display == other.display
+            && self.display_safe == other.display_safe
             && self.json == other.json
             && self.truthy == other.truthy
             && self.len == other.len
@@ -1628,6 +1631,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1690,6 +1694,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1746,6 +1751,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1804,6 +1810,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1860,6 +1867,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1907,6 +1915,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -1952,6 +1961,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
+                                display_safe: false,
                             })));
                         }
                     }
@@ -2164,6 +2174,7 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Preserve the immutable temporal object across Python filter calls.
         // The wire still carries the measured fields; live handles are transient.
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
+        display_safe: false,
     })
 }
 
@@ -2620,6 +2631,17 @@ impl Value {
             // changes answer; only rendering and transport gain the digits.
             Value::BigInt(d) => d.parse::<f64>().ok(),
             _ => None,
+        }
+    }
+
+    /// Safety after Python str() conversion, for final rendering and stringfilter.
+    /// This is not the original object's SafeData status: join must still escape
+    /// an opaque object whose __str__ returns SafeString.
+    pub fn string_conversion_is_safe(&self) -> bool {
+        match self {
+            Value::SafeString(_) => true,
+            Value::Encoded(e) => e.display_safe,
+            _ => false,
         }
     }
 
@@ -3327,6 +3349,16 @@ pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
     }
 }
 
+/// Called only after the caller has established that the value is a Python string.
+fn python_string_is_safe(value: &Bound<'_, PyAny>) -> bool {
+    value
+        .py()
+        .import("django.utils.safestring")
+        .and_then(|m| m.getattr("SafeData"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
+}
+
 impl<'py> FromPyObject<'_, 'py> for Value {
     // PyO3 0.29 reshaped FromPyObject: it now carries an associated `Error`
     // type and a single `extract(Borrowed<...>)` method (the old single-lifetime
@@ -3360,12 +3392,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
-            let safe = ob
-                .py()
-                .import("django.utils.safestring")
-                .and_then(|m| m.getattr("SafeData"))
-                .and_then(|cls| ob.is_instance(&cls))
-                .unwrap_or(false);
+            let safe = python_string_is_safe(&ob.to_owned());
             Ok(if safe {
                 Value::SafeString(s)
             } else {
@@ -3893,7 +3920,9 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         .ok()?
         .extract::<String>()
         .ok()?;
-    let display = ob.str().ok()?.extract::<String>().ok()?;
+    let text = ob.str().ok()?;
+    let display_safe = python_string_is_safe(text.as_any());
+    let display = text.extract::<String>().ok()?;
     // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
     // `complex(0)` the two spellings coincide, which is exactly why copying
     // `display` here would look correct on every builtin this function was
@@ -3937,6 +3966,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
         live,
+        display_safe,
         // The object's PUBLIC `__dict__` (#2478) — the same map, built by the
         // same function, that the `__dict__` bulk-dump arm below would have
         // built. That IS the fix: this arm now claims a falsy object WITH

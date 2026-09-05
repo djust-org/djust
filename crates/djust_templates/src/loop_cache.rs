@@ -671,6 +671,7 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             11u8.hash(hasher);
             e.type_name.hash(hasher);
             e.display.hash(hasher);
+            e.display_safe.hash(hasher);
             e.json.hash(hasher);
         }
         Value::Bool(b) => {
