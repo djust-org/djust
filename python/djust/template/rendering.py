@@ -245,7 +245,11 @@ class DjustTemplate:
             # as library rendering does. Restore the enclosing engine on exit.
             with rendering_with_backend(self.backend):
                 _ensure_custom_filters_bridged()
-                compile_template(self.template_string, getattr(self.origin, "template_name", None))
+                self._compiled_template = compile_template(
+                    self.template_string,
+                    getattr(self.origin, "template_name", None),
+                    return_template=True,
+                )
         except Exception as e:
             message = str(e)
             user_raised = _is_user_raised(e)
@@ -299,7 +303,12 @@ class DjustTemplate:
 
         error.template_debug = build_template_debug(  # type: ignore[attr-defined]
             source,
-            getattr(original, "djust_template_origin", None),
+            (
+                self.origin.name
+                if getattr(original, "djust_template_origin", None) == "<unknown source>"
+                and source == self.template_string
+                else getattr(original, "djust_template_origin", None)
+            ),
             span[0],
             span[1],
             str(error),
@@ -903,6 +912,7 @@ class DjustTemplate:
                     # `construct_relative_path` reads.
                     getattr(self.origin, "template_name", None) if self.origin else None,
                     raw_context=raw_context,
+                    compiled_template=self._compiled_template,
                     autoescape=bool(
                         context.autoescape
                         if isinstance(context, Context)
@@ -954,6 +964,7 @@ class DjustTemplate:
 
             missing = _missing_template_exception(e, self.backend)
             if missing is not None:
+                self._annotate_loaded_error(missing, e)
                 raise missing from e
 
             # Provide helpful error message with template location
@@ -975,7 +986,11 @@ class DjustTemplate:
                     f"Error rendering template{origin_info}: {error_msg}{suggestion}"
                 ) from e
 
-            raise Exception(f"Error rendering template{origin_info}: {error_msg}") from e
+            # Native runtime failures remain catchable as RuntimeError while
+            # gaining the same debug metadata as exceptions from user code.
+            runtime_error = RuntimeError(f"Error rendering template{origin_info}: {error_msg}")
+            self._annotate_loaded_error(runtime_error, e)
+            raise runtime_error from e
 
     # Regex to match opening HTML element tags (not comments, not closing tags, not doctypes)
     _OPENING_TAG_RE = re.compile(

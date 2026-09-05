@@ -9,7 +9,8 @@ use djust_components::Component;
 use djust_core::decimal::python_float_repr;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
-use pyo3::{Py, PyAny};
+use pyo3::types::PyAnyMethods;
+use pyo3::{Py, PyAny, Python};
 use regex::Regex;
 use std::collections::HashSet;
 
@@ -468,6 +469,7 @@ fn nodes_contain_elements(nodes: &[Node]) -> bool {
 
 fn node_is_element_bearing(node: &Node) -> bool {
     match node {
+        Node::Located { nodes, .. } => nodes_contain_elements(nodes),
         // Text nodes only contribute elements when their literal
         // content includes a `<`. A `<` strongly implies an HTML
         // tag; a `<` inside textual prose like "if 3 < 4" would
@@ -569,6 +571,19 @@ fn render_effectful_node<L: TemplateLoader>(
     context: &mut Context,
     loader: Option<&L>,
 ) -> Result<String> {
+    if let Node::Located {
+        nodes,
+        span,
+        source,
+        origin,
+    } = node
+    {
+        return render_effectful_node(&nodes[0], context, loader).map_err(|error| {
+            error
+                .at(Some(*span))
+                .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
+        });
+    }
     match sibling_updates(node, context, loader)? {
         Some(effect) => {
             for binding in effect.bindings {
@@ -777,7 +792,7 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
 ///
 /// Parent selection uses strict FilterExpression resolution and rejects falsy
 /// results before invoking the loader, as Django's ExtendsNode does.
-pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<String> {
+pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<Value> {
     let (mut value, _) = get_value_safe(token, context)?;
     if matches!(value, Value::Missing) {
         value = Value::String(context.string_if_invalid_for(token).unwrap_or_default());
@@ -795,7 +810,56 @@ pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<
         }
         return Err(crate::registry::library_syntax_error(&message));
     }
-    Ok(value.to_string())
+    Ok(value)
+}
+
+/// Retain only live render-capable objects; strings still use the loader.
+fn template_object(value: &Value) -> Result<Option<std::sync::Arc<Py<PyAny>>>> {
+    let Value::Encoded(encoded) = value else {
+        return Ok(None);
+    };
+    let Some(handle) = &encoded.live else {
+        return Ok(None);
+    };
+    Python::attach(|py| match handle.bind(py).getattr("render") {
+        Ok(render) if render.is_callable() => Ok(Some(handle.clone())),
+        Ok(_) => Ok(None),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => Ok(None),
+        Err(error) => Err(DjangoRustError::PythonException(error)),
+    })
+}
+
+type CompiledOperand = (
+    String,
+    Option<String>,
+    String,
+    Option<Py<crate::CompiledTemplate>>,
+);
+
+pub(crate) fn compiled_template_operand(value: &Value) -> Result<Option<CompiledOperand>> {
+    let Some(handle) = template_object(value)? else {
+        return Ok(None);
+    };
+    Python::attach(|py| {
+        py.import("djust.template.operands")?
+            .getattr("template_source")?
+            .call1((handle.bind(py),))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
+}
+
+fn render_template_object(handle: &Py<PyAny>, context: &Context) -> Result<String> {
+    Python::attach(|py| {
+        let raw = context.render_raw_py_objects();
+        let data = crate::registry::build_py_context(py, &context.to_hashmap(), raw.as_deref())
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        py.import("djust.template.operands")?
+            .getattr("render_template_object")?
+            .call1((handle.bind(py), data, context.autoescape()))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
 }
 
 /// Is this template-name token a QUOTED literal rather than a variable?
@@ -2054,6 +2118,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
     loader: Option<&L>,
 ) -> Result<String> {
     match node {
+        Node::Located { .. } => render_effectful_node(node, context, loader),
         Node::Text(text) => Ok(text.clone()),
 
         Node::Variable(var_name, filter_specs, in_attr) => {
@@ -3158,7 +3223,8 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     value =
                         Value::String(context.string_if_invalid_for(template).unwrap_or_default());
                 }
-                let candidates: Vec<Value> = if !value.is_truthy() {
+                let object = template_object(&value)?;
+                let candidates: Vec<Value> = if object.is_some() || !value.is_truthy() {
                     Vec::new()
                 } else if let Value::String(name) | Value::SafeString(name) = &value {
                     if literal {
@@ -3217,14 +3283,17 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         Err(error) => return Err(error),
                     }
                 }
-                let (name, nodes) =
+                let (name, nodes) = if object.is_some() {
+                    (String::new(), std::sync::Arc::from(Vec::<Node>::new()))
+                } else {
                     selected.ok_or_else(|| DjangoRustError::TemplateSelectionNotFound {
                         name: if empty_candidates {
                             "No template names provided".to_string()
                         } else {
                             not_found.join(", ")
                         },
-                    })?;
+                    })?
+                };
                 let name = name.as_str();
 
                 // An included template may itself `{% extends %}` — Django
@@ -3289,6 +3358,9 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         include_context.bind(name, value, safe);
                     }
                     register_binding_aliases(include_context, pending, &bound);
+                    if let Some(object) = &object {
+                        return render_template_object(object, include_context);
+                    }
                     // Resolve the parent only after `with` and `only` establish
                     // the context in which the included template renders.
                     let resolved_nodes;

@@ -8,7 +8,7 @@
 //! - Rendering final templates with block overrides
 
 use crate::parser::Node;
-use djust_core::{Context, DjangoRustError, Result};
+use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,7 +33,8 @@ macro_rules! child_lists {
                 nodes, else_nodes, ..
             } => [Some(nodes), Some(else_nodes)],
             Node::BlockSuperScope { super_nodes, nodes } => [Some(super_nodes), Some(nodes)],
-            Node::Block { nodes, .. }
+            Node::Located { nodes, .. }
+            | Node::Block { nodes, .. }
             | Node::With { nodes, .. }
             | Node::Spaceless { nodes }
             | Node::AutoEscape { nodes, .. }
@@ -127,6 +128,28 @@ pub fn set_ifchanged_origins(nodes: &mut [Node], template_origin: &str) {
         }
         for children in child_lists!(node).into_iter().flatten() {
             set_ifchanged_origins(children, template_origin);
+        }
+    }
+}
+
+/// Fill provenance once; inherited child nodes keep their defining source.
+pub fn set_node_sources(nodes: &mut [Node], source: &Arc<str>, origin: Option<&str>) {
+    for node in nodes {
+        if let Node::Located {
+            source: own,
+            origin: name,
+            ..
+        } = node
+        {
+            if own.is_empty() {
+                *own = source.clone();
+            }
+            if name.is_none() {
+                *name = origin.map(str::to_owned);
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            set_node_sources(children, source, origin);
         }
     }
 }
@@ -272,6 +295,7 @@ fn node_references_block_super(node: &Node) -> bool {
     }
 
     match node {
+        Node::Located { nodes, .. } => nodes.iter().any(node_references_block_super),
         // ---- expression-bearing leaves ------------------------------------
         Node::Variable(name, filters, _) => {
             name.trim() == "block.super"
@@ -573,7 +597,7 @@ pub fn build_inheritance_chain<L: TemplateLoader>(
 /// `resolve_inheritance` pre-pass, which runs before any render) an unquoted
 /// token is returned as-is — the same string the pre-#2517 code used, so that
 /// path is unchanged.
-fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<String> {
+fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<Value> {
     let trimmed = token.trim();
     if let Some(context) = context {
         // Resolve the complete expression, including quoted initial operands.
@@ -585,11 +609,11 @@ fn resolve_extends_target(token: &str, context: Option<&Context>) -> Result<Stri
     let quoted = bytes.len() >= 2
         && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
-    Ok(if quoted {
+    Ok(Value::String(if quoted {
         crate::parser::unescape_filter_arg_literal(trimmed).into_owned()
     } else {
         trimmed.to_string()
-    })
+    }))
 }
 
 /// [`build_inheritance_chain`] that knows the name of the template it starts
@@ -628,7 +652,34 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     while depth < max_depth {
         if let Some(parent_name) = chain.uses_extends() {
             let parent_token = parent_name.to_string();
-            let parent_name = resolve_extends_target(&parent_token, context)?;
+            let parent_value = resolve_extends_target(&parent_token, context)?;
+            if let Some((source, name, origin, compiled)) =
+                crate::renderer::compiled_template_operand(&parent_value)?
+            {
+                let mut parent_nodes = if let Some(compiled) = compiled {
+                    pyo3::Python::attach(|py| compiled.borrow(py).nodes())
+                } else {
+                    let (tokens, spans) = crate::lexer::tokenize_spanned(&source)?;
+                    crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
+                        .map_err(DjangoRustError::into_template_syntax)
+                        .map_err(|error| error.with_template_source(&source, &origin))?
+                };
+                set_node_sources(
+                    &mut parent_nodes,
+                    &Arc::from(source.as_str()),
+                    Some(&origin),
+                );
+                if let Some(name) = &name {
+                    set_include_origins(&mut parent_nodes, name)?;
+                }
+                set_ifchanged_origins(&mut parent_nodes, &origin);
+                chain.add_parent(parent_nodes);
+                history.push(origin);
+                current_name = name;
+                depth += 1;
+                continue;
+            }
+            let parent_name = parent_value.to_string();
             let quoted = parent_token.starts_with(['\'', '"'])
                 && !crate::filter_lexer::has_unquoted_pipe(&parent_token);
             let parent_name = if quoted {
@@ -828,6 +879,11 @@ impl FilesystemTemplateLoader {
         let mut nodes = crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
             .map_err(DjangoRustError::into_template_syntax)
             .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
+        set_node_sources(
+            &mut nodes,
+            &Arc::from(source.as_str()),
+            Some(&path.to_string_lossy()),
+        );
         set_include_origins(&mut nodes, name)?;
         set_ifchanged_origins(&mut nodes, &path.to_string_lossy());
         Ok(nodes)
@@ -905,6 +961,11 @@ impl TemplateLoader for FilesystemTemplateLoader {
         let mut nodes_vec = parser::parse_with_source_spanned(&tokens, &spans, &source)
             .map_err(DjangoRustError::into_template_syntax)
             .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
+        set_node_sources(
+            &mut nodes_vec,
+            &Arc::from(source.as_str()),
+            Some(&path.to_string_lossy()),
+        );
         set_include_origins(&mut nodes_vec, name)?;
         set_ifchanged_origins(&mut nodes_vec, &path.to_string_lossy());
         let arc: Arc<[Node]> = Arc::from(nodes_vec);
@@ -929,6 +990,7 @@ fn nodes_to_template_string(nodes: &[Node]) -> String {
 /// Convert a single node back to template string format
 fn node_to_template_string(node: &Node) -> String {
     match node {
+        Node::Located { nodes, .. } => nodes_to_template_string(nodes),
         Node::Text(text) => text.clone(),
         Node::Variable(var_name, filters, _in_attr) => {
             let mut result = format!("{{{{ {var_name} ");

@@ -22,7 +22,15 @@ pub enum DjangoRustError {
         end: usize,
     },
 
-    /// Source provenance for an error raised while compiling a loaded template.
+    /// Locate a runtime failure without changing its exception category.
+    #[error("{error}")]
+    RuntimeAt {
+        error: Box<DjangoRustError>,
+        start: usize,
+        end: usize,
+    },
+
+    /// Source provenance for an error raised while compiling or rendering a template.
     #[error("{error}")]
     TemplateSource {
         error: Box<DjangoRustError>,
@@ -117,6 +125,16 @@ pub enum DjangoRustError {
 impl From<DjangoRustError> for PyErr {
     fn from(err: DjangoRustError) -> PyErr {
         match err {
+            DjangoRustError::RuntimeAt { error, start, end } => {
+                let error: PyErr = (*error).into();
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    if !value.hasattr("djust_token_span").unwrap_or(false) {
+                        let _ = value.setattr("djust_token_span", (start, end));
+                    }
+                });
+                error
+            }
             DjangoRustError::TemplateSource {
                 error,
                 template_source,
@@ -189,7 +207,15 @@ impl From<DjangoRustError> for PyErr {
                 });
                 error
             }
-            other => PyRuntimeError::new_err(other.to_string()),
+            other => {
+                let error = PyRuntimeError::new_err(other.to_string());
+                if let Some(span) = other.span() {
+                    Python::attach(|py| {
+                        let _ = error.value(py).setattr("djust_token_span", span);
+                    });
+                }
+                error
+            }
         }
     }
 }
@@ -238,14 +264,15 @@ impl DjangoRustError {
     pub fn span(&self) -> Option<(usize, usize)> {
         match self {
             Self::TemplateSource { error, .. } => error.span(),
+            Self::RuntimeAt { start, end, .. } => Some((*start, *end)),
             DjangoRustError::TemplateErrorAt { start, end, .. }
             | DjangoRustError::TemplateSyntaxAt { start, end, .. } => Some((*start, *end)),
             _ => None,
         }
     }
 
-    /// Locate a template error or a carried Python exception, preserving
-    /// an existing location and leaving unrelated error variants untouched.
+    /// Locate an error without replacing an existing location or discarding
+    /// its exception category.
     ///
     /// The "already-located wins" rule is what makes the INNERMOST enclosing
     /// token the one reported: the deepest `parse_token` frame attaches first
@@ -272,6 +299,18 @@ impl DjangoRustError {
                 });
                 DjangoRustError::PythonException(error)
             }
+            (
+                other @ (Self::TemplateSource { .. }
+                | Self::RuntimeAt { .. }
+                | Self::TemplateErrorAt { .. }
+                | Self::TemplateSyntaxAt { .. }),
+                _,
+            ) => other,
+            (other, Some((start, end))) => Self::RuntimeAt {
+                error: Box::new(other),
+                start,
+                end,
+            },
             (other, _) => other,
         }
     }

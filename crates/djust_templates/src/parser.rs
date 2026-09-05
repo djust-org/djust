@@ -8,6 +8,13 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
 pub enum Node {
+    /// Source provenance retained through inheritance and nested rendering.
+    Located {
+        nodes: Vec<Node>,
+        span: Span,
+        source: std::sync::Arc<str>,
+        origin: Option<String>,
+    },
     Text(String),
     /// Variable expression `{{ var|filter:arg }}`.
     ///
@@ -387,6 +394,15 @@ pub const TEMPLATETAG_NAMES: [&str; 8] = [
     "closecomment",
 ];
 
+impl Node {
+    pub fn unlocated(&self) -> &Node {
+        match self {
+            Self::Located { nodes, .. } => nodes[0].unlocated(),
+            other => other,
+        }
+    }
+}
+
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
     parse_internal(tokens, &[], "", hash_tokens(tokens))
 }
@@ -521,6 +537,9 @@ fn parse_internal(
     let mut cycles = CycleResolution::default();
     resolve_cycle_nodes(&mut nodes, &prefix, &mut cycles)?;
 
+    if !spans.is_empty() {
+        crate::inheritance::set_node_sources(&mut nodes, &std::sync::Arc::from(source), None);
+    }
     Ok(nodes)
 }
 
@@ -601,6 +620,7 @@ pub fn template_hash_hex(source: &str) -> String {
 pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
     for node in nodes.iter_mut() {
         match node {
+            Node::Located { nodes, .. } => assign_if_marker_ids(nodes, prefix, counter),
             Node::If {
                 marker_id,
                 true_nodes,
@@ -696,6 +716,7 @@ fn resolve_cycle_nodes(
 ) -> Result<()> {
     for node in nodes.iter_mut() {
         match node {
+            Node::Located { nodes, .. } => resolve_cycle_nodes(nodes, prefix, state)?,
             Node::Cycle {
                 values,
                 name,
@@ -902,6 +923,28 @@ fn parse_token(
 ) -> Result<Option<Node>> {
     let at = *i;
     parse_token_inner(block_names, tokens, spans, source, i, expected)
+        .map(|node| {
+            node.map(|node| {
+                if let Some(span) = spans.get(at) {
+                    if !matches!(
+                        node,
+                        Node::Text(_)
+                            | Node::Extends(_)
+                            | Node::Block { .. }
+                            | Node::Load(_)
+                            | Node::Comment
+                    ) {
+                        return Node::Located {
+                            nodes: vec![node],
+                            span: *span,
+                            source: std::sync::Arc::from(""),
+                            origin: None,
+                        };
+                    }
+                }
+                node
+            })
+        })
         .map_err(|e| e.at(spans.get(at).copied()))
 }
 
@@ -2650,6 +2693,9 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
 ) {
     for node in nodes {
         match node {
+            Node::Located { nodes, .. } => {
+                collect_dj_model_fields_depth(nodes, loader, fields, depth)
+            }
             // The immune source: developer template text literals.
             Node::Text(text) => scan_dj_model_in_text(text, fields),
 
@@ -2817,6 +2863,7 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
     nodes
         .iter()
         .map(|node| {
+            let node = node.unlocated();
             let mut variables: HashMap<String, Vec<String>> = HashMap::new();
             extract_from_nodes(std::slice::from_ref(node), &mut variables);
             let mut deps: HashSet<String> = variables.into_keys().collect();
@@ -2873,6 +2920,7 @@ fn extract_from_nodes(
 ) {
     for node in nodes {
         match node {
+            Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
             Node::Variable(var_expr, filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}
                 extract_from_variable(var_expr, variables);
@@ -5713,6 +5761,7 @@ mod dep_tests {
     /// isn't updated, compilation fails.
     fn sample_for_coverage(n: &Node) -> &'static str {
         match n {
+            Node::Located { .. } => "Located",
             Node::Text(_) => "Text",
             Node::Variable(..) => "Variable",
             Node::If { .. } => "If",
@@ -5757,6 +5806,12 @@ mod dep_tests {
     /// allow-listed variants).
     fn sample_nodes() -> Vec<Node> {
         vec![
+            Node::Located {
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
+                span: (0, 7),
+                source: std::sync::Arc::from("{{ a }}"),
+                origin: None,
+            },
             Node::Text("hi".into()),
             Node::Variable("a".into(), vec![], false),
             Node::If {

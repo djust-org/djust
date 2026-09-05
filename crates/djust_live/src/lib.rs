@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
-use djust_templates::Template;
+use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
     splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, VNode,
@@ -2169,8 +2169,12 @@ fn render_template(
 pub const SPAN_ATTR: &str = "djust_token_span";
 
 #[pyfunction]
-#[pyo3(signature = (template_source, template_name=None))]
-fn compile_template(template_source: String, template_name: Option<String>) -> PyResult<()> {
+#[pyo3(signature = (template_source, template_name=None, *, return_template=false))]
+fn compile_template(
+    template_source: String,
+    template_name: Option<String>,
+    return_template: bool,
+) -> PyResult<Option<CompiledTemplate>> {
     guard_panic("compile_template", move || {
         // Compilation must validate against the calling engine's current
         // libraries, even when another engine compiled the same source.
@@ -2181,8 +2185,9 @@ fn compile_template(template_source: String, template_name: Option<String>) -> P
                 .validate_relative_references(name)
                 .map_err(span_aware_pyerr)?;
         }
-        TEMPLATE_CACHE.insert(template_source, Arc::new(template));
-        Ok(())
+        let template = Arc::new(template);
+        TEMPLATE_CACHE.insert(template_source, template.clone());
+        Ok(return_template.then_some(CompiledTemplate { template }))
     })
 }
 
@@ -2230,7 +2235,7 @@ fn template_cache_contains(template_source: &str) -> bool {
 // original-object sidecar for backend callers.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -2241,6 +2246,7 @@ fn render_template_with_dirs(
     template_name: Option<String>,
     raw_context: Option<&Bound<'_, PyDict>>,
     autoescape: bool,
+    compiled_template: Option<PyRef<'_, CompiledTemplate>>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2253,7 +2259,9 @@ fn render_template_with_dirs(
         let sidecar = entry_sidecar(raw_context.map(|raw| raw.as_any()).unwrap_or(context));
 
         // Get template from cache or parse and cache it
-        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
+        let template_arc = if let Some(compiled) = compiled_template {
+            compiled.template.clone()
+        } else if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
         } else {
             let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
@@ -4310,6 +4318,7 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 #[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
+    m.add_class::<CompiledTemplate>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;

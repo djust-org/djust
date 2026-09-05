@@ -542,7 +542,7 @@ class TestEmpiricalCanary:
             "TemplateSyntaxError not raised"
         )
         assert lines["canary_tests.Canary.test_3_refused_tz_filter"].startswith(
-            "ERROR canary_tests.Canary.test_3_refused_tz_filter | Exception: "
+            "ERROR canary_tests.Canary.test_3_refused_tz_filter | RuntimeError: "
         )
 
         assert "utc" in lines["canary_tests.Canary.test_3_refused_tz_filter"]

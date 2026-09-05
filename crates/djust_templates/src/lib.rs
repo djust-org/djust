@@ -98,6 +98,18 @@ fn flatten_blocks(nodes: Vec<Node>) -> Vec<Node> {
     result
 }
 
+/// An immutable compiled template retained by a Python backend template.
+#[pyclass(frozen)]
+pub struct CompiledTemplate {
+    pub template: std::sync::Arc<Template>,
+}
+
+impl CompiledTemplate {
+    pub fn nodes(&self) -> Vec<Node> {
+        self.template.nodes.clone()
+    }
+}
+
 /// A compiled Django template
 #[pyclass]
 pub struct Template {

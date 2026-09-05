@@ -785,6 +785,7 @@ pub fn body_is_position_dependent(nodes: &[Node]) -> bool {
 
 fn node_is_position_dependent(node: &Node) -> bool {
     match node {
+        Node::Located { nodes, .. } => body_is_position_dependent(nodes),
         // Direct position-dependent constructs.
         Node::If { .. } => true,
         Node::Cycle { .. } | Node::ResetCycle { .. } => true,

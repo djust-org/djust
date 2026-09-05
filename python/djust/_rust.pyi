@@ -58,7 +58,14 @@ def render_template(
     """
     ...
 
-def compile_template(template_source: str, template_name: str | None = None) -> None:
+class CompiledTemplate:
+    """Immutable native template handle returned on request by compile_template."""
+
+    ...
+
+def compile_template(
+    template_source: str, template_name: str | None = None, *, return_template: bool = False
+) -> CompiledTemplate | None:
     """
     Parse a template without rendering it (#2549).
 
@@ -67,7 +74,8 @@ def compile_template(template_source: str, template_name: str | None = None) -> 
     parse — an unregistered tag, an unknown filter, a bad arity, an unclosed
     block — and returns ``None`` otherwise. A successful parse is stored in
     the engine's template cache, so the render that follows does not parse
-    again; a failed parse is never cached.
+    again; a failed parse is never cached. Set ``return_template=True`` to
+    retain the immutable compiled handle for subsequent rendering.
     """
     ...
 
@@ -89,6 +97,7 @@ def render_template_with_dirs(
     raw_context: Optional[Dict[str, Any]] = None,
     *,
     autoescape: bool = True,
+    compiled_template: CompiledTemplate | None = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
@@ -1258,6 +1267,7 @@ __all__ = [
     "render_template",
     "render_template_with_dirs",
     "compile_template",
+    "CompiledTemplate",
     "template_cache_contains",
     "render_markdown",
     "diff_html",

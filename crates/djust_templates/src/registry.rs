@@ -1154,7 +1154,7 @@ pub struct HandlerBinding {
 ///
 /// ONE builder for every registry (#1646) — this was spelled inline, three
 /// times, before #2547 added a fourth and fifth caller.
-fn build_py_context<'py>(
+pub(crate) fn build_py_context<'py>(
     py: Python<'py>,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
