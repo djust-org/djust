@@ -511,28 +511,3 @@ exercise):
 
 This is intended to ride along with the existing release cadence — fold it into
 the pre-release security audit rather than scheduling a separate event.
-
-## `OPTIONS['autoescape']` is accepted (changed in 1.2.0rc1, PR #2665)
-
-Until #2665, `DjustTemplateBackend` refused `OPTIONS = {'autoescape': False}`
-with `ImproperlyConfigured`, and two `TestSecurityPins` cases asserted that no
-`pyfunction` and no config key could switch escaping off engine-wide — an
-escape-off reachable from settings is an XSS shape.
-
-#2665 reverses that for Django parity: Django's own backend accepts the key,
-and the conformance suite exercises it. The reversal is deliberate and is
-stated here so it is not mistaken for drift:
-
-- **Default is unchanged** — escaping is ON unless a project writes
-  `'autoescape': False` into its own `TEMPLATES[...]['OPTIONS']`. Context
-  dictionary keys never configure it (`backend.py`, "Context dictionary keys
-  never configure escaping").
-- **Scope** — the key sets the engine default; `{% autoescape %}` blocks and
-  a render-time `Context(autoescape=…)` still override it per Django.
-- **What to audit** — `grep -rn "autoescape" settings*.py` in a project. A
-  project that turns it off has opted out of the framework's primary XSS
-  defence for every template on that engine, exactly as it would on Django.
-
-The pin was rewritten (`test_exactly_two_production_writers_of_set_autoescape`)
-rather than deleted, so the *set of writers* is still enumerated and a third
-one would fail the suite.
