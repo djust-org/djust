@@ -242,8 +242,12 @@ _SETATTR_WHITELIST = {
     # re-verified sanctioned: still the same two DynamicLiveView
     # developer-dict setattr lines (class at 1328, ``result = func(request,
     # ...)`` at 1339), not a new client-controlled setattr.
-    ("live_view.py", 1343),
-    ("live_view.py", 1345),
+    # shifted +20 (1343/1345 → 1363/1365) by #2664: the lazily-assigned
+    # framework bookkeeping block added to ``_FRAMEWORK_INTERNAL_ATTRS``
+    # (``_prev_context_fingerprints`` etc.) — re-verified sanctioned: still
+    # the same two DynamicLiveView developer-dict setattr lines.
+    ("live_view.py", 1363),
+    ("live_view.py", 1365),
 }
 
 
