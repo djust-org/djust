@@ -82,6 +82,7 @@ def render_template_with_dirs(
     auto_call: Optional[bool] = None,
     string_if_invalid: Optional[str] = None,
     template_name: Optional[str] = None,
+    raw_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
@@ -100,6 +101,9 @@ def render_template_with_dirs(
             ``{% extends "./parent.html" %}`` resolves against (Django's
             ``construct_relative_path``). ``None`` leaves such a target
             unchanged.
+        raw_context: Optional original objects before snapshot conversion.
+            Used only for protected runtime lookups; model field filtering
+            still applies. Defaults to ``context``.
 
     Returns:
         The rendered HTML string

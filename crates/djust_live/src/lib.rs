@@ -2218,8 +2218,11 @@ fn template_cache_contains(template_source: &str) -> bool {
 ///
 /// # Returns
 /// The rendered HTML string
+// Preserve the existing Python positional API while adding an optional
+// original-object sidecar for backend callers.
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -2228,6 +2231,7 @@ fn render_template_with_dirs(
     auto_call: Option<bool>,
     string_if_invalid: Option<String>,
     template_name: Option<String>,
+    raw_context: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2235,7 +2239,9 @@ fn render_template_with_dirs(
         // See `render_template` for why this is inside the closure.
         let state: HashMap<String, Value> =
             snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
-        let sidecar = entry_sidecar(context);
+        // The backend may JIT-serialize models before this call. Preserve
+        // their original identities only through the protected sidecar.
+        let sidecar = entry_sidecar(raw_context.map(|raw| raw.as_any()).unwrap_or(context));
 
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {

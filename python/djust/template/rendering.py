@@ -745,6 +745,11 @@ class DjustTemplate:
                 processor = self._get_context_processor(processor_path)
                 context_dict.update(processor(request))
 
+        # Retain objects for the protected lookup sidecar before JIT replaces
+        # models/querysets with dictionaries. Rust applies the same sidecar
+        # protection as its direct render entry points.
+        raw_context = dict(context_dict)
+
         # JIT auto-serialization for QuerySets and Models
         # This prevents N+1 queries and makes context compatible with Rust
         jit_serialized_keys = set()
@@ -870,6 +875,7 @@ class DjustTemplate:
                     # (#2517). `Origin.template_name` is what Django's
                     # `construct_relative_path` reads.
                     getattr(self.origin, "template_name", None) if self.origin else None,
+                    raw_context=raw_context,
                 )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.
