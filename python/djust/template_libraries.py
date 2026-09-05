@@ -235,6 +235,13 @@ _loaded: Dict[str, Any] = {}
 # allocates a fresh `Library()` on every call, so identity on the subset can
 # never match; identity on the parent can (#2668 re-verification).
 _loaded_subsets: Dict[tuple, Any] = {}
+# Which library LABEL last registered each tag / filter name. Two libraries may
+# register the same name (Django's own suite has two `badtag`s); a name being
+# registered says nothing about WHOSE handler it is, and serving the other
+# library's handler turned `test_compile_tag_error` into a scoreboard ERROR
+# (#2668 ratchet, 1032 → 1031). Ownership + presence is the skip condition.
+_tag_owner: Dict[str, str] = {}
+_filter_owner: Dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +394,7 @@ def load_libraries(args: List[str]) -> None:
                 library = _find_library(name)
                 key = (name, tuple(sorted(bits[1:-2])))
                 if _loaded_subsets.get(key) is library and _still_bridged(
-                    load_from_library(library, name, bits[1:-2]), _library_module(library)
+                    name, load_from_library(library, name, bits[1:-2]), _library_module(library)
                 ):
                     # Same parent, same names: every tag is already bridged.
                     # Re-bridging bumped the registry generation on every
@@ -525,7 +532,7 @@ def _library_module(library: Any) -> str:
     return ""
 
 
-def _still_bridged(library: Any, module: str) -> bool:
+def _still_bridged(label: str, library: Any, module: str) -> bool:
     """Every tag and filter this library bridges is still registered.
 
     Cheap registry probes, one per name. This — not `_loaded` — is the truth
@@ -541,18 +548,24 @@ def _still_bridged(library: Any, module: str) -> bool:
 
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
     for name in library.tags:
+        if name in native:
+            continue
+        if _tag_owner.get(name) != label:
+            return False  # another library registered this name since
         if name in _RAW_BLOCK_TAGS:
             ok = has_raw_block_tag_handler(name)
         elif name in _BESPOKE_BLOCK_TAGS:
             ok = has_block_tag_handler(name)
-        elif name in native:
-            continue
         else:
             ok = has_tag_handler(name) or has_block_tag_handler(name)
         if not ok:
             return False
     refused = refused_filters(module)
-    return all(has_custom_filter(name) for name in library.filters if name not in refused)
+    return all(
+        _filter_owner.get(name) == label and has_custom_filter(name)
+        for name in library.filters
+        if name not in refused
+    )
 
 
 def _bridge_library(label: str, library: Any) -> None:
@@ -564,7 +577,7 @@ def _bridge_library(label: str, library: Any) -> None:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
         return
-    if _loaded.get(label) is library and _still_bridged(library, module):
+    if _loaded.get(label) is library and _still_bridged(label, library, module):
         # Already bridged, same library object, and every registration is
         # still in place: re-registering every tag on every `{% load %}`
         # bumped the registry generation DURING the parse, so a template
@@ -588,6 +601,11 @@ def _bridge_library(label: str, library: Any) -> None:
             continue
         else:
             _bridge_tag(label, name, compile_func)
+        _tag_owner[name] = label
+    refused = refused_filters(module)
+    for name in library.filters:
+        if name not in refused:
+            _filter_owner[name] = label
     _loaded[label] = library
 
 

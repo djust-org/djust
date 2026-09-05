@@ -128,3 +128,41 @@ class TestBridgeSurvivesRegistryClear:
         # Same library object is still in `_loaded`; the guard must notice
         # the registry no longer has `cache`/`endcache` and re-bridge.
         assert "body" in be.from_string(self.SRC + "2").render({})
+
+
+class TestSameTagNameInTwoLibraries:
+    """Django's own suite registers `badtag` in two libraries. A presence-only
+    guard saw "`badtag` is registered", skipped re-bridging, and served the
+    OTHER library's handler — the scoreboard ratchet caught it (1032 → 1031,
+    `test_compile_tag_error`). The guard must check ownership, not presence."""
+
+    def _backend(self, libs):
+        from djust.template import DjustTemplateBackend
+
+        return DjustTemplateBackend(
+            {"NAME": "t", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"libraries": libs}}
+        )
+
+    def test_each_library_gets_its_own_handler_back(self, tmp_path, monkeypatch):
+        import sys
+
+        (tmp_path / "libA.py").write_text(
+            "from django import template\nregister = template.Library()\n"
+            "@register.simple_tag\ndef who(): return 'A'\n"
+        )
+        (tmp_path / "libB.py").write_text(
+            "from django import template\nregister = template.Library()\n"
+            "@register.simple_tag\ndef who(): return 'B'\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        sys.modules.pop("libA", None)
+        sys.modules.pop("libB", None)
+        be = self._backend({"libA": "libA", "libB": "libB"})
+        a = "{% load libA %}{% who %}-2668-A"
+        b = "{% load libB %}{% who %}-2668-B"
+        assert be.from_string(a).render({}).startswith("A")
+        assert be.from_string(b).render({}).startswith("B")
+        # Back to A: `who` is registered (by B) — presence alone would skip
+        # the re-bridge and render 'B' here.
+        assert be.from_string(a + "2").render({}).startswith("A")
+        assert be.from_string(b + "2").render({}).startswith("B")
