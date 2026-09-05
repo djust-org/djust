@@ -1377,7 +1377,6 @@ class WSConsumerTransport:
         consumer.actor_handle = await create_session_actor(consumer.session_id)
         logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
 
-        context_data = await sync_to_async(view.get_context_data)()
         # #2599: hand the actor the view's OWN template + dirs. Without them
         # `ViewActor::new` builds an empty-template backend and the mount
         # frame is `<html><head></head><body></body></html>`.
@@ -1385,6 +1384,7 @@ class WSConsumerTransport:
 
         get_template = getattr(view, "get_template", None)
         template = await sync_to_async(get_template)() if get_template is not None else None
+        context_data = await sync_to_async(view.get_context_data)()
         result = await consumer.actor_handle.mount(
             view_path,
             context_data,

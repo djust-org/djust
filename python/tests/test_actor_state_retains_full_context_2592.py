@@ -135,9 +135,7 @@ class TestActorMergeSitesAreDecided2592:
         actor event lets Rust pull it — the full context crosses on both, which
         is what makes the Rust-side retain the truth."""
         runtime = (_PKG / "runtime.py").read_text()
-        mount = runtime.index(
-            "result = await consumer.actor_handle.mount(view_path, context_data, view)"
-        )
+        mount = runtime.index("result = await consumer.actor_handle.mount(")
         context = runtime.rindex(
             "context_data = await sync_to_async(view.get_context_data)()", 0, mount
         )
