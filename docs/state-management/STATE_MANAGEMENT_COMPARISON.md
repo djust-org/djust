@@ -289,11 +289,14 @@ window.addEventListener("phx:category-changed", e => {
 
 **Analysis:**
 
-- **djust**: Automatic StateBus (no JS)
+- **djust**: coordinate in the view — one handler updates both pieces of state,
+  and the single server render sends both. `@client_state` is NOT this
+  mechanism: it is an inert marker (#2656).
 - **LiveView**: Manual JS or server PubSub
 - **Livewire**: Requires AlpineJS
 
-**Winner**: djust - Built-in client state coordination
+**Winner**: djust — no client-side coordination layer to keep in sync, because
+one server render is the source of both values.
 
 ---
 

@@ -70,7 +70,7 @@ djust's State Management API provides Python-only abstractions for common client
 | `@throttle(interval)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
-| `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
+| `@client_state(keys)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
 | `@background` | Long-running operations | API calls, AI, file processing | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |

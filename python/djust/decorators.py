@@ -945,27 +945,41 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
 
 def client_state(keys: List[str]) -> Callable[[F], F]:
     """
-    Share state via client-side StateBus (pub/sub pattern).
+    MARKER ONLY — this decorator does nothing at runtime.
 
-    When this handler executes, the specified keys are published to
-    the StateBus. Other handlers decorated with @client_state and
-    subscribed to the same keys will be notified of changes.
+    .. warning::
+        Like ``@debounce`` / ``@throttle`` / ``@optimistic`` (#2656), this
+        stamps metadata that **nothing in the shipped client reads**, so a
+        handler decorated with it behaves exactly like an undecorated one.
+        The ``StateBus`` class that was meant to consume it lived at
+        ``static/djust/src/05-state-bus.js`` with zero consumers in the
+        bundle and was deleted as dead code in #2680; whether to implement
+        the client half is tracked in #2656.
 
-    Usage:
+        To coordinate two pieces of state today, update both in ONE handler:
+        the single server render sends both, with no client-side bus to keep
+        in sync.
+
+    The intended semantics, for whoever implements #2656: when this handler
+    executes, the specified keys are published to a client-side bus, and
+    other handlers subscribed to the same keys are notified of changes.
+
+    Usage (the shape the metadata records — not working behaviour):
         class DashboardView(LiveView):
             @client_state(keys=["filter"])
             def update_filter(self, filter: str = "", **kwargs):
-                # Publishes "filter" to StateBus
+                # WOULD publish "filter" — today this comment is the
+                # only thing that happens.
                 self.filter = filter
 
             @client_state(keys=["filter"])
             def on_filter_change(self, filter: str = "", **kwargs):
-                # Automatically called when "filter" changes
+                # WOULD be called when "filter" changes; it is not.
                 self.apply_filter()
 
             @client_state(keys=["filter", "sort"])
             def apply_filters(self, filter: str = "", sort: str = "", **kwargs):
-                # Publishes both "filter" and "sort"
+                # WOULD publish both "filter" and "sort".
                 self.filter = filter
                 self.sort = sort
                 self.update_results()
