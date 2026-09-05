@@ -1132,10 +1132,18 @@ class TestAdjacentDivergencesNotFixedHere:
                 == "1a2b"
             )
 
-    def test_ifchanged_is_an_unsupported_tag(self) -> None:
-        """Not a divergence to fix: djust's system checks flag it as
-        unsupported, so raising is the documented behaviour.
+    def test_ifchanged_is_no_longer_an_unsupported_tag(self) -> None:
+        """Was "not a divergence to fix" while the system check flagged
+        ``{% ifchanged %}``; it shipped in #2650 and the check's set is now
+        pinned to the engine (#2540), so it renders and is not flagged.
         """
         from djust.checks.templates import _UNSUPPORTED_TAGS_RE
 
-        assert _UNSUPPORTED_TAGS_RE.search("{% ifchanged x %}")
+        assert _UNSUPPORTED_TAGS_RE.search("{% ifchanged x %}") is None
+        assert (
+            djust_render(
+                "{% for x in xs %}{% ifchanged x %}{{ x }}{% endifchanged %}{% endfor %}",
+                {"xs": [1, 1, 2]},
+            )
+            == "12"
+        )

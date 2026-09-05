@@ -8,9 +8,9 @@ from pathlib import Path
 _WORKTREE_ROOT = Path(__file__).resolve().parents[2]  # python/tests/../../ == repo root
 
 # Guard against accidental mis-location of this test file.
-assert (
-    _WORKTREE_ROOT / "pyproject.toml"
-).exists(), f"_WORKTREE_ROOT does not look like the djust repo root: {_WORKTREE_ROOT}"
+assert (_WORKTREE_ROOT / "pyproject.toml").exists(), (
+    f"_WORKTREE_ROOT does not look like the djust repo root: {_WORKTREE_ROOT}"
+)
 
 
 def test_flex_between_utility_defined_in_utilities_css():
@@ -33,6 +33,6 @@ def test_flex_between_sets_required_properties():
 
     assert "display" in rule and "flex" in rule, ".flex-between must set display: flex"
     assert "flex-direction" in rule and "row" in rule, ".flex-between must set flex-direction: row"
-    assert (
-        "justify-content" in rule and "space-between" in rule
-    ), ".flex-between must set justify-content: space-between"
+    assert "justify-content" in rule and "space-between" in rule, (
+        ".flex-between must set justify-content: space-between"
+    )

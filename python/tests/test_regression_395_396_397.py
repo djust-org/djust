@@ -149,12 +149,12 @@ def test_websocket_py_uses_getattr_not_hasattr():
     """
     src = (_WORKTREE_ROOT / "python/djust/websocket.py").read_text()
 
-    assert (
-        'getattr(scope_session, "session_key", None)' in src
-    ), "websocket.py must use getattr() with sentinel for LazyObject safety"
-    assert (
-        'hasattr(scope_session, "session_key")' not in src
-    ), "websocket.py must not use hasattr() on scope_session"
+    assert 'getattr(scope_session, "session_key", None)' in src, (
+        "websocket.py must use getattr() with sentinel for LazyObject safety"
+    )
+    assert 'hasattr(scope_session, "session_key")' not in src, (
+        "websocket.py must not use hasattr() on scope_session"
+    )
 
 
 # ===========================================================================
@@ -182,6 +182,6 @@ def test_flex_between_sets_required_properties():
 
     assert "display" in rule and "flex" in rule, ".flex-between must set display: flex"
     assert "flex-direction" in rule and "row" in rule, ".flex-between must set flex-direction: row"
-    assert (
-        "justify-content" in rule and "space-between" in rule
-    ), ".flex-between must set justify-content: space-between"
+    assert "justify-content" in rule and "space-between" in rule, (
+        ".flex-between must set justify-content: space-between"
+    )

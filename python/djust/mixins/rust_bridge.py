@@ -11,6 +11,7 @@ from django.utils.datastructures import MultiValueDict
 
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
+from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
 from .context import _is_json_serializable
@@ -66,14 +67,6 @@ try:
     from .._rust import RustLiveView
 except ImportError:
     RustLiveView = None  # type: ignore[assignment,misc]
-
-
-# Process-level guard for the custom-filter bootstrap (#1121). Set after
-# the first successful walk of Django's filter libraries. Re-bootstrapping
-# is idempotent (re-registering an existing name overwrites in the Rust
-# registry), but the guard skips the walk on every subsequent
-# ``_initialize_rust_view`` call so steady-state cost is one branch.
-_CUSTOM_FILTERS_BRIDGED = False
 
 
 # Maximum recursion depth for ``_normalize_db_values``. Bounded to keep the
@@ -140,31 +133,6 @@ def _normalize_db_values(value: Any, depth: int = 0) -> Any:
             return [_normalize_db_values(item, depth + 1) for item in value]
 
     return value
-
-
-def _ensure_custom_filters_bridged() -> None:
-    """One-shot bootstrap that forwards Django's ``@register.filter``
-    callables to the Rust filter registry. Idempotent and non-fatal on
-    failure — filters still work in the Python render path even if the
-    Rust bridge is unavailable.
-    """
-    global _CUSTOM_FILTERS_BRIDGED
-    if _CUSTOM_FILTERS_BRIDGED:
-        return
-    try:
-        from ..template_filters import bootstrap_django_filters
-
-        bootstrap_django_filters()
-    except Exception:  # noqa: BLE001 — defensive; never block render
-        logger.warning(
-            "Failed to bridge Django custom filters to Rust template engine; "
-            "filters will still work in the Python render path",
-            exc_info=True,
-        )
-    finally:
-        # Set the guard whether bootstrap succeeded or threw — we never
-        # want to re-attempt on every render and re-log the warning.
-        _CUSTOM_FILTERS_BRIDGED = True
 
 
 def _collect_safe_keys(

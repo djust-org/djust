@@ -92,6 +92,43 @@ assert len(ALLOWLIST_BACKEND) == 34
 # The compat shim (``djust/template_backend.py``) is one extra module.
 ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend"}
 
+# After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
+# registers the system checks, applies the differ flags, warms the filter
+# bridge (through ``djust.template_filters`` — NOT ``djust.mixins``, #2565)
+# and installs the ``{% load %}`` hooks. Exact, like the rows above.
+ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
+    {
+        "djust.apps",
+        "djust.checks",
+        "djust.checks.accessibility",
+        "djust.checks.components",
+        "djust.checks.configuration",
+        "djust.checks.integrations",
+        "djust.checks.quality",
+        "djust.checks.security",
+        "djust.checks.templates",
+        "djust.checks.utils",
+        "djust.config",
+        "djust.observability",
+        "djust.observability.log_handler",
+        "djust.observability.registry",
+        "djust.security",
+        "djust.security.attribute_guard",
+        "djust.security.error_handling",
+        "djust.security.event_guard",
+        "djust.security.json_script",
+        "djust.security.log_sanitizer",
+        "djust.security.mount",
+        "djust.security.state_snapshot",
+        "djust.template_filters",
+    }
+)
+assert len(ALLOWLIST_SETUP) == 57
+
+# ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
+# ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
+ALLOWLIST_SETUP_DEBUG = ALLOWLIST_SETUP | {"djust.dev_server"}
+
 # Each asserted absent by name so the failure names the leak (#1104).
 FORBIDDEN = (
     "channels",
@@ -227,6 +264,42 @@ class TestImportFootprint:
         for name in ("channels", "djust.live_view", "djust.websocket", "djust.presence"):
             assert name not in report["present"], f"django.setup() imported {name!r}"
         assert "djust.apps" in report["djust"], "ready() did not run — harness not exercising it"
+
+    def test_django_setup_loads_exactly_the_allowlist(self):
+        """#2565: ``ready()`` warms the filter bridge through
+        ``djust.template_filters``; the whole ``djust.mixins`` package (every
+        LiveView mixin, ``djust.streaming``) stays out. Exact set."""
+        stmt = "import djust.template.backend; django.setup()"
+        report = _fresh_import(stmt)
+        assert set(report["djust"]) == ALLOWLIST_SETUP, (
+            f"extra={sorted(set(report['djust']) - ALLOWLIST_SETUP)} "
+            f"missing={sorted(ALLOWLIST_SETUP - set(report['djust']))}"
+        )
+        _assert_none_forbidden(report, stmt)
+
+    def test_django_setup_under_debug_true_never_loads_channels(self, tmp_path):
+        """#2566: ``DEBUG=True`` auto-enables hot reload. The watcher starts
+        (asserted, so the gate is exercised and not skipped by an early
+        return) but ``djust.websocket`` / ``channels`` are imported only on a
+        change event, and only when channels is installed."""
+        pytest.importorskip("watchdog")
+        stmt = (
+            "from django.conf import settings; settings.DEBUG = True; "
+            f"settings.BASE_DIR = {str(tmp_path)!r}; "
+            "import djust.template.backend; django.setup(); "
+            "from djust.dev_server import hot_reload_server; "
+            "EXTRA = {'running': hot_reload_server.is_running()}; "
+            "hot_reload_server.stop()"
+        )
+        report = _fresh_import(stmt)
+        assert report["extra"]["running"] is True, (
+            "hot reload never started — the websocket-import gate was not exercised"
+        )
+        assert set(report["djust"]) == ALLOWLIST_SETUP_DEBUG, (
+            f"extra={sorted(set(report['djust']) - ALLOWLIST_SETUP_DEBUG)} "
+            f"missing={sorted(ALLOWLIST_SETUP_DEBUG - set(report['djust']))}"
+        )
+        _assert_none_forbidden(report, stmt)
 
     def test_harness_detects_a_forbidden_module(self):
         """In-suite canary (#1459/#2135): the harness REPORTS a leak when there is one."""

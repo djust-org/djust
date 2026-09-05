@@ -633,16 +633,25 @@ def _check_view_root_same_element(
         )
 
 
-# Tags still unsupported by the Rust renderer (after implementing widthratio,
-# firstof, templatetag, spaceless, cycle, now in v0.3.3; `autoescape`,
-# `filter`, `resetcycle`, `lorem`, `debug` and `querystring` in #2556).
-# Only opening tags are matched — end tags always accompany their openers.
-#
-# NOTE: {% extends %} and {% block %} are FULLY SUPPORTED since template
-# inheritance was implemented (PR #272). {% regroup %} is FULLY SUPPORTED
-# since the built-in assign-tag handler was added (djust.template_tags.regroup).
-# Do not add either here.
-_UNSUPPORTED_TAGS_RE = re.compile(r"\{%\s*(ifchanged)\b")
+# Django built-in tags the Rust renderer does not implement. Empty since
+# `{% ifchanged %}` landed (#2650): every tag Django registers is either a
+# native parser arm or a Python handler in djust.template_tags. This set is
+# pinned equal to the generated unsupported-tag set the #2533 generator
+# derives from the engine (tests/test_generate_template_backend_lists.py,
+# ``TestHandWrittenCopiesAgreeWithTheEngine``), so it cannot drift from the
+# parser the way the old hand-written regex did (#2540). Only opening tags
+# are matched — end tags always accompany their openers.
+_UNSUPPORTED_TAGS: frozenset[str] = frozenset()
+
+
+def _unsupported_tags_re(tags: "frozenset[str] | set[str]") -> "re.Pattern[str]":
+    """Build the T011 opening-tag regex for ``tags``; never matches when empty."""
+    if not tags:
+        return re.compile(r"(?!x)x")
+    return re.compile(r"\{%\s*(" + "|".join(sorted(re.escape(t) for t in tags)) + r")\b")
+
+
+_UNSUPPORTED_TAGS_RE = _unsupported_tags_re(_UNSUPPORTED_TAGS)
 
 
 def _check_unsupported_tags(

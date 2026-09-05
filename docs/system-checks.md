@@ -487,7 +487,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: Regex (template scan)
 - **What it detects**: Django template tags not yet implemented in the Rust renderer — these are **silently ignored** at render time, producing no output
-- **Currently flagged tags**: `{% ifchanged %}`, `{% regroup %}`, `{% resetcycle %}`, `{% lorem %}`, `{% debug %}`, `{% filter %}`, `{% autoescape %}`
+- **Currently flagged tags**: none — every Django built-in tag is implemented (`{% ifchanged %}` was the last, #2650). The set is derived from the engine's generated support lists (`docs/TEMPLATE_BACKEND.md`) and pinned by test, so this check goes live again only if a future Django tag is not yet implemented
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T011"]` or `{# noqa: T011 #}` in the template
 - **False positives**: Base templates processed by Django's Python renderer rather than the Rust renderer
 - **Note**: `{% extends %}` and `{% block %}` are **fully supported** by the Rust renderer since template inheritance was implemented; T011 does not flag them

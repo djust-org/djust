@@ -28,9 +28,9 @@ class TestDocFilesExist:
     def test_css_frameworks_guide_exists(self):
         """docs/website/guides/css-frameworks.md must exist (README links to it)."""
         path = os.path.join(DOCS_ROOT, "guides", "css-frameworks.md")
-        assert os.path.isfile(
-            path
-        ), "docs/website/guides/css-frameworks.md is missing. README line 454 links to it."
+        assert os.path.isfile(path), (
+            "docs/website/guides/css-frameworks.md is missing. README line 454 links to it."
+        )
 
     def test_template_cheatsheet_exists(self):
         """docs/website/guides/template-cheatsheet.md must exist."""
@@ -61,9 +61,9 @@ class TestReadmeContent:
     def test_readme_documents_dj_key(self):
         """README must document keyed list diffing."""
         content = _read(README_PATH)
-        assert (
-            "dj-key" in content or "data-key" in content
-        ), "README must document keyed list diffing (dj-key or data-key)"
+        assert "dj-key" in content or "data-key" in content, (
+            "README must document keyed list diffing (dj-key or data-key)"
+        )
 
     def test_readme_has_installed_apps_setup(self):
         """README must show INSTALLED_APPS setup step."""
@@ -98,23 +98,23 @@ class TestReadmeContent:
             and "class=" in content
             and "{% endif" in content
         )
-        assert (
-            has_pitfall
-        ), "README should document the one-sided {%% if %%} in class attribute pitfall"
+        assert has_pitfall, (
+            "README should document the one-sided {%% if %%} in class attribute pitfall"
+        )
 
     def test_readme_links_to_template_cheatsheet(self):
         """README must link to the template cheat sheet."""
         content = _read(README_PATH)
-        assert (
-            "template-cheatsheet" in content.lower() or "cheat sheet" in content.lower()
-        ), "README must link to template cheat sheet"
+        assert "template-cheatsheet" in content.lower() or "cheat sheet" in content.lower(), (
+            "README must link to template cheat sheet"
+        )
 
     def test_readme_links_to_vdom_architecture(self):
         """README must link to the VDOM architecture guide."""
         content = _read(README_PATH)
-        assert (
-            "vdom-architecture" in content.lower() or "vdom architecture" in content.lower()
-        ), "README must link to VDOM architecture guide"
+        assert "vdom-architecture" in content.lower() or "vdom architecture" in content.lower(), (
+            "README must link to VDOM architecture guide"
+        )
 
     def test_readme_links_to_deployment_guide(self):
         """README must link to the deployment guide."""
@@ -124,16 +124,16 @@ class TestReadmeContent:
     def test_readme_references_phoenix_liveview(self):
         """README must reference Phoenix LiveView for context."""
         content = _read(README_PATH)
-        assert (
-            "phoenix" in content.lower() or "liveview" in content.lower()
-        ), "README must reference Phoenix LiveView"
+        assert "phoenix" in content.lower() or "liveview" in content.lower(), (
+            "README must reference Phoenix LiveView"
+        )
 
     def test_readme_has_getting_started_section(self):
         """README must have a Getting Started section with step-by-step guide."""
         content = _read(README_PATH)
-        assert (
-            "getting started" in content.lower() or "step 1" in content.lower()
-        ), "README must have a getting started walkthrough"
+        assert "getting started" in content.lower() or "step 1" in content.lower(), (
+            "README must have a getting started walkthrough"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +180,9 @@ class TestTemplateCheatsheet:
         assert has_warning, "Template cheatsheet must include a pitfall/warning section"
 
     def test_has_title(self):
-        assert self._content().startswith("---") or self._content().startswith(
-            "#"
-        ), "Template cheatsheet must have a title"
+        assert self._content().startswith("---") or self._content().startswith("#"), (
+            "Template cheatsheet must have a title"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +264,9 @@ class TestComponentsGuide:
 
     def test_documents_theming(self):
         content = self._content().lower()
-        assert (
-            "css" in content or "theme" in content or "styling" in content
-        ), "Components guide must cover theming/styling"
+        assert "css" in content or "theme" in content or "styling" in content, (
+            "Components guide must cover theming/styling"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -281,15 +281,15 @@ class TestDeploymentGuide:
 
     def test_documents_uvicorn_or_daphne(self):
         content = self._content().lower()
-        assert (
-            "uvicorn" in content or "daphne" in content
-        ), "Deployment guide must mention ASGI server"
+        assert "uvicorn" in content or "daphne" in content, (
+            "Deployment guide must mention ASGI server"
+        )
 
     def test_documents_nginx_or_load_balancer(self):
         content = self._content().lower()
-        assert (
-            "nginx" in content or "load balanc" in content
-        ), "Deployment guide must cover load balancing"
+        assert "nginx" in content or "load balanc" in content, (
+            "Deployment guide must cover load balancing"
+        )
 
     def test_documents_websocket_configuration(self):
         content = self._content().lower()

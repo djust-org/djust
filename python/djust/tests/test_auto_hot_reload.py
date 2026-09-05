@@ -194,7 +194,7 @@ def test_ready_warms_filter_bridge_when_pytest_env_cleared():
     with (
         _no_pytest_env(),
         mock.patch("djust.enable_hot_reload"),
-        mock.patch("djust.mixins.rust_bridge._ensure_custom_filters_bridged") as mock_warm,
+        mock.patch("djust.template_filters._ensure_custom_filters_bridged") as mock_warm,
     ):
         app.ready()
     assert mock_warm.call_count == 1
@@ -204,7 +204,7 @@ def test_ready_skips_filter_bridge_warm_under_pytest_env():
     """The pytest env var skips the startup warm (same isolation guard as HVR)."""
     assert "PYTEST_CURRENT_TEST" in os.environ
     app = _make_app_config()
-    with mock.patch("djust.mixins.rust_bridge._ensure_custom_filters_bridged") as mock_warm:
+    with mock.patch("djust.template_filters._ensure_custom_filters_bridged") as mock_warm:
         app.ready()
     assert mock_warm.call_count == 0
 
@@ -216,31 +216,31 @@ def test_warm_filter_bridge_sets_the_bridge_guard():
     Resets the guard to False FIRST so the assertion is non-tautological
     (#1200): a no-op warm would leave it False and fail.
     """
-    from djust.mixins import rust_bridge
+    from djust import template_filters
 
-    saved = rust_bridge._CUSTOM_FILTERS_BRIDGED
-    rust_bridge._CUSTOM_FILTERS_BRIDGED = False
+    saved = template_filters._CUSTOM_FILTERS_BRIDGED
+    template_filters._CUSTOM_FILTERS_BRIDGED = False
     try:
         app = _make_app_config()
         ran = app._warm_filter_bridge()
         assert ran is True
-        assert rust_bridge._CUSTOM_FILTERS_BRIDGED is True
+        assert template_filters._CUSTOM_FILTERS_BRIDGED is True
     finally:
-        rust_bridge._CUSTOM_FILTERS_BRIDGED = saved
+        template_filters._CUSTOM_FILTERS_BRIDGED = saved
 
 
 def test_warm_filter_bridge_opt_out(fresh_config):
     """``LIVEVIEW_CONFIG['filter_bridge_warm'] = False`` skips the warm (gate-off):
     the bridge guard is NOT flipped and the method reports it didn't run."""
-    from djust.mixins import rust_bridge
+    from djust import template_filters
 
     fresh_config.set("filter_bridge_warm", False)
-    saved = rust_bridge._CUSTOM_FILTERS_BRIDGED
-    rust_bridge._CUSTOM_FILTERS_BRIDGED = False
+    saved = template_filters._CUSTOM_FILTERS_BRIDGED
+    template_filters._CUSTOM_FILTERS_BRIDGED = False
     try:
         app = _make_app_config()
         ran = app._warm_filter_bridge()
         assert ran is False
-        assert rust_bridge._CUSTOM_FILTERS_BRIDGED is False
+        assert template_filters._CUSTOM_FILTERS_BRIDGED is False
     finally:
-        rust_bridge._CUSTOM_FILTERS_BRIDGED = saved
+        template_filters._CUSTOM_FILTERS_BRIDGED = saved

@@ -88,9 +88,9 @@ def test_torture_deep_nesting():
 
     assert "SetText" in types, f"Should have SetText patch. Got: {types}"
     # Should be very few patches (just the text change)
-    assert (
-        len(patches) <= 3
-    ), f"Deep nesting should produce few patches, got {len(patches)}: {types}"
+    assert len(patches) <= 3, (
+        f"Deep nesting should produce few patches, got {len(patches)}: {types}"
+    )
 
 
 # ============================================================================
@@ -311,9 +311,9 @@ def test_torture_replace_with_siblings():
             parent_key = (p.get("d"), tuple(p.get("path", [])))
             child_op_parents.add(parent_key)
 
-    assert (
-        len(child_op_parents) == 1
-    ), f"All child ops should target same parent. Found {len(child_op_parents)}: {child_op_parents}"
+    assert len(child_op_parents) == 1, (
+        f"All child ops should target same parent. Found {len(child_op_parents)}: {child_op_parents}"
+    )
 
 
 # ============================================================================
@@ -538,9 +538,9 @@ def test_torture_no_change_produces_no_patches():
         meaningful = [
             p for p in patches if p.get("type") != "SetAttr" or p.get("key") != "data-dj-id"
         ]
-        assert (
-            len(meaningful) == 0
-        ), f"No-change event should produce 0 meaningful patches, got {len(meaningful)}: {meaningful}"
+        assert len(meaningful) == 0, (
+            f"No-change event should produce 0 meaningful patches, got {len(meaningful)}: {meaningful}"
+        )
 
 
 # ============================================================================

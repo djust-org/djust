@@ -99,9 +99,9 @@ def test_rapid_input_events_return_patches():
         assert str(new_value) in html, f"HTML should contain value {new_value}"
 
     # This is the key assertion - ALL events should return patches
-    assert (
-        all_patches_returned
-    ), "All rapid input events should return patches, not require full HTML updates"
+    assert all_patches_returned, (
+        "All rapid input events should return patches, not require full HTML updates"
+    )
 
 
 @pytest.mark.django_db
@@ -153,15 +153,15 @@ def test_consecutive_events_maintain_vdom_state():
 
     # Each change should generate a small number of patches (not a full re-render)
     MAX_EXPECTED_PATCHES = 5  # value display + input value should be ~2 patches
-    assert (
-        len(patches2_list) <= MAX_EXPECTED_PATCHES
-    ), f"Too many patches for simple value change: {len(patches2_list)}"
-    assert (
-        len(patches3_list) <= MAX_EXPECTED_PATCHES
-    ), f"Too many patches for simple value change: {len(patches3_list)}"
-    assert (
-        len(patches4_list) <= MAX_EXPECTED_PATCHES
-    ), f"Too many patches for simple value change: {len(patches4_list)}"
+    assert len(patches2_list) <= MAX_EXPECTED_PATCHES, (
+        f"Too many patches for simple value change: {len(patches2_list)}"
+    )
+    assert len(patches3_list) <= MAX_EXPECTED_PATCHES, (
+        f"Too many patches for simple value change: {len(patches3_list)}"
+    )
+    assert len(patches4_list) <= MAX_EXPECTED_PATCHES, (
+        f"Too many patches for simple value change: {len(patches4_list)}"
+    )
 
 
 @pytest.mark.django_db
@@ -193,9 +193,9 @@ def test_patches_target_correct_elements():
 
     # We expect SetText for the display span and SetAttr for the input value
     # NOT Replace which would indicate the entire container is being replaced
-    assert (
-        "Replace" not in patch_types or len(patches) <= 2
-    ), f"Should not replace entire elements for a value change. Got: {patch_types}"
+    assert "Replace" not in patch_types or len(patches) <= 2, (
+        f"Should not replace entire elements for a value change. Got: {patch_types}"
+    )
 
     # Should have a SetText for the value display
     has_set_text = any(

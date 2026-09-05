@@ -165,7 +165,7 @@ class DjustConfig(AppConfig):
 
             if not config.get("filter_bridge_warm", True):
                 return False
-            from djust.mixins.rust_bridge import _ensure_custom_filters_bridged
+            from djust.template_filters import _ensure_custom_filters_bridged
 
             _ensure_custom_filters_bridged()
             return True

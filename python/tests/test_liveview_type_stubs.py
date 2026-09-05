@@ -224,9 +224,9 @@ class TestLiveViewTypeStubs:
                 # Should have parameter annotations
                 for arg in item.args.args:
                     if arg.arg not in ["self", "kwargs"]:
-                        assert (
-                            arg.annotation is not None
-                        ), f"Parameter {arg.arg} missing type annotation"
+                        assert arg.annotation is not None, (
+                            f"Parameter {arg.arg} missing type annotation"
+                        )
                 break
 
         assert live_redirect_found, "live_redirect method not found in LiveView stub"
