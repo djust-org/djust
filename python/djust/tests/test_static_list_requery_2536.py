@@ -150,8 +150,12 @@ async def _drive(cls_name: str, events: List[str]) -> Dict[str, Any]:
     await comm.receive_json_from(timeout=5)
     out: Dict[str, Any] = {"queries": {}, "frames": {}}
     try:
+        SQL_LOG.clear()
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": "/x/"})
         out["mount"] = await _recv_until(comm, "mount")
+        # The log is installed from mount(), BEFORE the view's own list(qs) —
+        # so this holds the user's fetch plus any JIT re-fetch of the render.
+        out["queries"]["mount"] = list(SQL_LOG)
         for i, event in enumerate(events):
             ref = 100 + i
             SQL_LOG.clear()
@@ -193,6 +197,9 @@ def _frame_text(frame: Dict[str, Any]) -> str:
 class TestStaticListIsNotRequeried:
     def test_relation_path_list_costs_no_query_on_an_unrelated_event(self) -> None:
         out = _run(REL_VIEW, ["text_change", "text_change"])
+        table = Post2536._meta.db_table
+        # select_related in mount(): the user's ONE fetch, no JIT re-fetch.
+        assert len([q for q in out["queries"]["mount"] if table in q]) == 1
         post_sql = [q for q in out["queries"]["text_change"] if Post2536._meta.db_table in q]
         assert post_sql == [], (
             "a static list[Model] was re-queried on an event that never touched it:\n"
@@ -204,11 +211,12 @@ class TestStaticListIsNotRequeried:
         # No select_related in mount(): the JIT may re-query ONCE to avoid the
         # N+1, grafting the caches onto the rows; the next event costs nothing.
         out = _run(NOSEL_VIEW, ["text_change", "text_change", "text_change"])
-        counts = [
-            len([q for q in out["queries"][e] if Post2536._meta.db_table in q])
-            for e in ["text_change"]
-        ]
-        assert counts == [0], counts
+        table = Post2536._meta.db_table
+        mount_fetches = [q for q in out["queries"]["mount"] if table in q]
+        # The view's own list(qs) + exactly one JIT re-fetch for the caches.
+        assert len(mount_fetches) == 2, mount_fetches
+        # ``queries[event]`` holds the LAST occurrence of that event: 0 here.
+        assert [q for q in out["queries"]["text_change"] if table in q] == []
 
     def test_plain_list_costs_no_query_on_an_unrelated_event(self) -> None:
         out = _run(PLAIN_VIEW, ["text_change"])

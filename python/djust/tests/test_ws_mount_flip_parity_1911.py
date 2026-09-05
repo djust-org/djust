@@ -433,17 +433,14 @@ class TestActorMount:
                 f"mount is verbatim, not the SSE 'use_actors not supported' refusal); "
                 f"got {mount_frame!r}"
             )
-            # The actor mount path renders via actor_handle.mount and returns
-            # ID-tagged HTML (the exact shape differs from the non-actor extract,
-            # but it is a real render — never a None/error). Assert HTML present +
-            # ID-tagged for VDOM patching, which proves the actor mount produced a
-            # client-applicable frame rather than the refusal envelope.
-            assert mount_frame.get("html"), (
-                f"the actor mount frame must carry rendered HTML; got {mount_frame!r}"
+            # #2599: the actor mount renders the view's OWN template and its
+            # html is normalized + dj-root-extracted exactly like the non-actor
+            # frame (the PlainMountView sibling below), so the two frames agree
+            # byte-for-byte on `c=0`; `has_ids` reflects the extracted content.
+            assert "c=0" in mount_frame.get("html", ""), (
+                f"the actor mount frame must carry the rendered template; got {mount_frame!r}"
             )
-            assert mount_frame.get("has_ids") is True, (
-                f"the actor mount HTML must be dj-id-tagged for patching; got {mount_frame!r}"
-            )
+            assert mount_frame.get("has_ids") == ("dj-id=" in mount_frame["html"]), mount_frame
             assert "error" not in mount_frame.get("type", ""), (
                 f"the actor mount must NOT be a refusal/error frame; got {mount_frame!r}"
             )

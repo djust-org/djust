@@ -2440,11 +2440,21 @@ class ViewRuntime:
             if uses_actors_for_mount and uses_actors_for_mount(view_instance):
                 try:
                     result = await self.transport.dispatch_actor_mount(view_instance, data)
-                    # The actor render is authoritative — its HTML is sent verbatim
-                    # (the bespoke WS actor branch does NOT strip/extract, only the
-                    # consumer-owned no-arm version is stamped, websocket.py:2705/2746).
+                    # The actor render is authoritative for its BYTES, but it goes
+                    # through the same normalize + dj-root extraction as the
+                    # non-actor frame below (#2599 review): the client does
+                    # `container.innerHTML = html`, so a verbatim `<div dj-root>`
+                    # wrapper nested a second dj-root and put every patch one
+                    # level off. (Pre-#2599 the actor html was an empty document,
+                    # so the mismatch was invisible.)
                     html = result["html"] if isinstance(result, dict) else result.get("html")
                     rust_version = result.get("version", 1) if isinstance(result, dict) else 1
+                    if hasattr(view_instance, "_strip_comments_and_whitespace"):
+                        html = await sync_to_async(view_instance._strip_comments_and_whitespace)(
+                            html
+                        )
+                    if hasattr(view_instance, "_extract_liveview_content"):
+                        html = await sync_to_async(view_instance._extract_liveview_content)(html)
                     actor_mounted = True
                 except Exception as exc:
                     response = handle_exception(

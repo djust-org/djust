@@ -275,7 +275,11 @@ class TestRuntimeActorMountParity:
             )
             mf = mounts[0]
             assert mf.get("html"), f"the actor mount frame must carry rendered HTML; {mf!r}"
-            assert mf.get("has_ids") is True, "the actor mount HTML must be dj-id tagged"
+            # #2599: the actor html is now the SAME extracted dj-root content as
+            # the non-actor frame, so `c=0` carries no nested dj-id and has_ids
+            # reflects that, exactly as the basic-mount case above pins.
+            assert "c=0" in mf["html"], mf
+            assert mf.get("has_ids") == ("dj-id=" in mf["html"]), mf
         finally:
             await communicator.disconnect()
 
