@@ -185,6 +185,10 @@ def search(self, value: str = "", **kwargs):
 
 ## `@client_state`
 
+> **INERT (#2656)** — stamps metadata nothing in the shipped client reads, so a
+> decorated handler behaves exactly like an undecorated one. The `StateBus` it
+> named was deleted in #2680.
+
 Share state via a client-side pub/sub bus. When specified keys change, other components subscribed to those keys update automatically.
 
 ```python

@@ -149,16 +149,48 @@ class TestSubmitFormWithoutMount:
         )
 
     @pytest.mark.parametrize("cls_name", UNMOUNTED)
-    def test_unmounted_view_warns_about_the_missing_super_call(
-        self, cls_name: str, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Self-healing is not silent — the log names the actual mistake."""
+    def test_unmounted_view_warns(self, cls_name: str, caplog: pytest.LogCaptureFixture) -> None:
+        """Self-healing is not silent."""
         with caplog.at_level(logging.WARNING, logger="djust.forms"):
             _run(cls_name)
         warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("FormMixin.mount() never ran" in m and cls_name in m for m in warnings), (
             f"expected a FormMixin.mount warning naming {cls_name}; got {warnings}"
         )
+
+    def test_the_two_shapes_get_DIFFERENT_advice(self, caplog: pytest.LogCaptureFixture) -> None:
+        """One generic sentence is wrong for whichever view is reading it.
+
+        ``ReversedMro2667`` has no ``mount()`` at all, so "call super().mount()
+        from your mount()" sends its author hunting for a method they never
+        wrote. The first version of this fix emitted a byte-identical warning
+        for both shapes and three artifacts claimed it "names the actual
+        mistake" — it did not.
+        """
+        msgs = {}
+        for cls_name in UNMOUNTED:
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="djust.forms"):
+                _instantiate(cls_name).submit_form()
+            msgs[cls_name] = " ".join(
+                r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+            )
+
+        own, mro = msgs["OwnMountNoSuper2667"], msgs["ReversedMro2667"]
+        assert own != mro, f"both shapes got the SAME advice: {own!r}"
+
+        # The class that DOES override mount() is told to call super().
+        assert "super().mount(request, **kwargs)" in own, own
+        assert "OwnMountNoSuper2667 overrides mount()" in own, own
+
+        # The class that does NOT override mount() must NOT be told to edit one,
+        # and the advice must name the bases the author actually TYPED — an
+        # earlier version named ComponentMixin, the MRO winner, which does not
+        # appear anywhere in their source.
+        assert "overrides mount()" not in mro, mro
+        assert "does not define mount()" in mro, mro
+        assert "must come FIRST" in mro, mro
+        assert "(LiveView, FormMixin) to (FormMixin, LiveView)" in mro, mro
 
     @pytest.mark.parametrize("cls_name", ALL_VIEWS)
     def test_every_reactive_attribute_exists_after_submit(self, cls_name: str) -> None:
@@ -205,7 +237,15 @@ class TestSubmitFormWithoutMount:
         """
         view = _instantiate("OwnMountNoSuper2667")
         call(view)  # must not raise AttributeError
-        assert hasattr(view, "form_data")
+
+        # `form_data` alone does NOT cover every row: `reset_form()` assigns
+        # `self.form_data = {}` itself, so that assertion passes whether or not
+        # the chokepoint ran — the review found removing reset_form's call left
+        # this file 14/14 green. `form_choices` is the attribute reset_form
+        # never writes, so it is what actually proves the call happened.
+        for attr in ("form_data", "form_choices", "field_errors", "form_errors"):
+            assert hasattr(view, attr), f"missing {attr}"
+        assert view.form_choices["topic"] == [("a", "A"), ("b", "B")]
 
 
 def _instantiate(cls_name: str) -> Any:
@@ -216,3 +256,29 @@ def _instantiate(cls_name: str) -> Any:
     view = cls()
     view.mount(RequestFactory().get("/x/"))
     return view
+
+
+class TestResetFormChokepoint:
+    """`reset_form()`'s `_ensure_form_state()` call, isolated (#2690 review).
+
+    `reset_form` reassigns every reactive attribute EXCEPT `form_choices`, so it
+    cannot raise on an unmounted view and every "did it not blow up" assertion
+    passes with the chokepoint removed. This is the one thing that goes red.
+    """
+
+    def test_reset_form_on_an_unmounted_view_populates_form_choices(self) -> None:
+        view = _instantiate("OwnMountNoSuper2667")
+        view.reset_form()
+        assert hasattr(view, "form_choices"), (
+            "reset_form() left form_choices missing — it writes every other "
+            "reactive attribute itself, so its _ensure_form_state() call is the "
+            "only thing that can populate this one."
+        )
+        assert view.form_choices["topic"] == [("a", "A"), ("b", "B")]
+
+    def test_reset_form_choices_match_a_correctly_mounted_view(self) -> None:
+        """The repaired value is the real one, not merely present."""
+        healthy = _instantiate("PlainContact2667")
+        repaired = _instantiate("OwnMountNoSuper2667")
+        repaired.reset_form()
+        assert repaired.form_choices == healthy.form_choices

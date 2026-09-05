@@ -118,7 +118,7 @@ These tools return static framework metadata. They work in both modes.
 
 **`get_template_directives()`** — Returns just the `dj-*` template directives with their parameters, DOM events, examples, and modifiers. Covers all 28+ directives: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-model`, `dj-update`, `dj-target`, `dj-loading.*`, `dj-hook`, `dj-patch`, `dj-navigate`, `dj-stream`, `dj-upload`, and more.
 
-**`get_decorators()`** — Returns all djust decorators with import paths, parameters, and usage examples: `@event_handler`, `@debounce`, `@throttle`, `@optimistic`, `@cache`, `@client_state`, `@rate_limit`, `@permission_required`, `@reactive`, `@computed`, and `state()`.
+**`get_decorators()`** — Returns all djust decorators with import paths, parameters, and usage examples: `@event_handler`, `@cache`, `@rate_limit`, `@permission_required`, `@reactive`, `@computed`, `state()`, and the inert markers `@debounce`, `@throttle`, `@optimistic`, `@client_state` (#2656).
 
 **`get_best_practices()`** — Returns comprehensive guidance: setup checklist, lifecycle flow diagram, event handler rules, JIT serialization patterns, form integration, security rules, template directive examples, and the 8 most common pitfalls.
 

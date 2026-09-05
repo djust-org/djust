@@ -358,7 +358,7 @@ def expensive_operation(self, **kwargs):
 | Scroll/resize/mousemove       | `@throttle(interval=0.1)`   | 100-200ms      |
 | Like/toggle/vote              | `@optimistic`               | —              |
 | Autocomplete/repeated lookups | `@cache(ttl=300)`           | 60-300s TTL    |
-| Multi-component coordination  | `@client_state(keys=[...])` | —              |
+| Multi-component coordination  | one handler + the server re-render (`@client_state` is INERT, #2656) | —              |
 | Destructive/admin actions     | `@permission_required(...)` | Django perms   |
 | Abuse prevention              | `@rate_limit(rate=N)`       | 5-10 req/s     |
 | Long-form editing             | `DraftModeMixin`            | auto-save      |

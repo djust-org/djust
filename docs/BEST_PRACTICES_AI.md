@@ -335,7 +335,8 @@ def like_post(self, post_id: int, **kwargs):
 def autocomplete(self, query: str = "", **kwargs):
     return City.objects.filter(name__istartswith=query)[:10]
 
-# Client state sync (multi-component coordination)
+# Client state sync (INERT — no client impl, #2656; coordinates nothing.
+# The tab switch works because the server re-renders.)
 @event_handler()
 @client_state(keys=["active_tab"])
 def switch_tab(self, tab: str = "overview", **kwargs):
@@ -686,12 +687,13 @@ def autocomplete(self, query: str = "", **kwargs):
         name__istartswith=query
     )[:10]
 
-# Cache with StateBus for multi-component sync
+# Cached filter. NOTE: @client_state is INERT (#2656) and the StateBus it
+# named was deleted (#2680) — only @cache does anything here.
 @event_handler()
 @client_state(keys=["filter"])
 @cache(ttl=60)
 def apply_filter(self, filter: str = "all", **kwargs):
-    """Publishes to StateBus + caches response"""
+    """Caches the response. The @client_state publish does NOT happen."""
     self.filter = filter
     self._refresh_results()
 ```
@@ -876,7 +878,8 @@ Search input?          → @debounce(wait=0.5)
 Scroll tracking?       → @throttle(interval=1.0)
 Like button?           → @optimistic
 Autocomplete?          → @cache(ttl=300)
-Multi-component sync?  → @client_state(keys=[...])
+Multi-component sync?  → one handler updating both; the single server
+                         re-render carries both. (@client_state is INERT, #2656.)
 Draft saving?          → DraftModeMixin
 ```
 

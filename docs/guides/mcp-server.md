@@ -102,7 +102,7 @@ Returns all djust decorators with import paths, parameters, and usage examples:
 - `@debounce` / `@throttle` — client-side rate control
 - `@optimistic` — instant UI updates, server corrects
 - `@cache` — client-side response caching
-- `@client_state` — cross-component state sharing
+- `@client_state` — INERT (#2656); stamps metadata nothing in the client reads
 - `@rate_limit` — server-side rate limiting
 - `@permission_required` — handler-level auth
 - `@reactive` / `@computed` / `state()` — reactive state primitives

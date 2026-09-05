@@ -51,7 +51,6 @@ export default [
         CustomEvent: "readonly",
         // djust globals
         globalThis: "readonly",
-        djustSecurity: "readonly",
       },
     },
 

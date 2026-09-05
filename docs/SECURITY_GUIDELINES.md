@@ -349,9 +349,9 @@ The following patterns are **prohibited** in djust code:
 
 | Banned Pattern | Replacement | Reason |
 |----------------|-------------|--------|
-| `element.innerHTML = untrusted` | `djustSecurity.safeSetInnerHTML()` | XSS |
-| `Object.assign(target, untrusted)` | `djustSecurity.safeObjectAssign()` | Prototype pollution |
-| Direct console.log of user data | `djustSecurity.sanitizeForLog()` | Log injection |
+| `element.innerHTML = untrusted` | `element.textContent = untrusted` | XSS |
+| `Object.assign(target, untrusted)` | Skip `UNSAFE_KEYS`, or use a `Map` / `Object.create(null)` | Prototype pollution |
+| Direct console.log of user data | Don't log it; if you must, strip `\r\n` and cap the length | Log injection |
 | `new Function(userCode)` | Never use | Code injection |
 | `console.log`/`console.error` in production JS | `_log()` helper or `window.djust.reportError()` | Debug info leakage |
 
@@ -464,7 +464,7 @@ logger.info("Query: %s", sanitize_for_log(user_query))
 - Server: djust's Rust template engine auto-escapes all `{{ variable }}` output by default (HTML entities)
 - Server: `SafeString` values (from `mark_safe()`, component `.render()`) are auto-detected and skip escaping
 - Server: Template tags use `format_html()` or `escape()`, never `mark_safe(f'...')`
-- Client: Use `djustSecurity.safeSetInnerHTML()` for dynamic content
+- Client: set text with `textContent`; markup must come from a server-escaped or explicitly server-marked-safe value, never from a client-assembled string
 - CSP headers for defense in depth
 
 ### 5. Arbitrary Method Invocation via WebSocket

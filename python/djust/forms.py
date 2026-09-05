@@ -140,14 +140,58 @@ class FormMixin:
             return
         logger.warning(
             "%s reached a FormMixin handler without form state — FormMixin.mount() "
-            "never ran. Call super().mount(request, **kwargs) from your mount(), and "
-            "declare the bases as (FormMixin, LiveView) so FormMixin.mount() wins the "
-            "MRO. Initializing form state now so the request can proceed.",
+            "never ran. %s Initializing form state now so the request can proceed.",
             type(self).__name__,
+            self._diagnose_unrun_mount(),
         )
         self._init_form_state()
 
-    # Keep form_instance as a property for backward compatibility
+    def _diagnose_unrun_mount(self) -> str:
+        """Name the specific mistake that kept ``FormMixin.mount()`` from running.
+
+        The two shapes need OPPOSITE advice, so one generic sentence is wrong for
+        whichever view is reading it: telling a class that has no ``mount()`` at
+        all to "call super().mount() from your mount()" sends the author looking
+        for a method they never wrote.
+
+        The discriminator is whether the class itself defines ``mount`` — not
+        which class wins the MRO. A first pass used the MRO winner's module
+        prefix and got BOTH shapes wrong: a test view living under a ``djust.``
+        package looked like a framework class, and the reversed-bases view
+        resolved to ``ComponentMixin`` rather than the ``LiveView`` the author
+        actually typed, so the advice named a class absent from their source.
+        """
+        cls = type(self)
+        bases = cls.__bases__
+
+        if "mount" in cls.__dict__:
+            return (
+                f"{cls.__name__} overrides mount() without calling "
+                f"super().mount(request, **kwargs) — add that call as the first line."
+            )
+
+        if FormMixin in bases and bases.index(FormMixin) > 0:
+            ordered = ", ".join(b.__name__ for b in sorted(bases, key=lambda b: b is not FormMixin))
+            typed = ", ".join(b.__name__ for b in bases)
+            return (
+                f"{cls.__name__} does not define mount(), and FormMixin is not first "
+                f"in its bases, so another class's mount() wins the MRO. Change "
+                f"({typed}) to ({ordered}) — FormMixin must come FIRST."
+            )
+
+        mro = cls.__mro__
+        owner = next((k for k in mro if "mount" in k.__dict__), None)
+        if owner is None or owner is FormMixin:
+            return (
+                "FormMixin.mount() is the resolved mount() for this class, so the "
+                "state was cleared after mount, or mount() was never called at all."
+            )
+        return (
+            f"{owner.__name__}.mount() resolves ahead of FormMixin.mount(); make sure "
+            f"FormMixin comes first in the bases and that every mount() override "
+            f"calls super().mount(request, **kwargs)."
+        )
+
     @property
     def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""

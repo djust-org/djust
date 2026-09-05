@@ -1,5 +1,7 @@
 # State Management Migration Guide
 
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+
 **Status:** 🚧 Migration guide for proposed API - Not Yet Implemented
 
 **Last Updated:** 2025-01-12
@@ -484,11 +486,11 @@ class DashboardView(LiveView):
     <div id="gauge" data-subscribe="temperature"></div>
     <canvas id="chart" data-subscribe="temperature"></canvas>
 
-    <script>
-    // Only custom chart/gauge rendering (unavoidable)
-    window.StateBus.subscribe('temperature', updateGauge);
-    window.StateBus.subscribe('temperature', updateChart);
-    </script>
+    <!-- NOTE: this block used to call subscribe(...) on a StateBus global.
+         That class had zero consumers and was deleted in #2680, and no
+         shipped bundle ever assigned the global. Drive a chart from the
+         value the server already re-rendered into the DOM instead (a
+         dj-hook on that element, or a MutationObserver). -->
     """
 
     def mount(self, request):

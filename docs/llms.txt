@@ -7,7 +7,7 @@
 - [Getting Started](https://djust.org/docs/getting-started/): Installation, setup, and your first LiveView
 - [Core Concepts](https://djust.org/docs/core-concepts/): LiveView lifecycle, mount/render cycle, event handling
 - [Components](https://djust.org/docs/components/): LiveComponent, stateful and stateless components
-- [State Management](https://djust.org/docs/state/): Decorators (@debounce, @throttle, @cache, @optimistic, @client_state)
+- [State Management](https://djust.org/docs/state/): Decorators (@cache and DraftModeMixin are wired; @debounce, @throttle, @optimistic, @client_state are inert markers — #2656)
 - [Forms](https://djust.org/docs/forms/): FormMixin, real-time validation, form handling patterns
 - [Testing](https://djust.org/docs/testing/): LiveViewTestClient, SnapshotTestMixin, LiveViewSmokeTest
 - [API Reference](https://djust.org/docs/api/): Full API documentation
