@@ -1,15 +1,25 @@
 /**
- * Unit tests for DraftMode (localStorage auto-save)
+ * Unit tests for DraftMode (localStorage auto-save) — ported from the deleted
+ * tests/js/draft_mode.test.js (#2659), which exercised the never-shipped copy
+ * (decorators, since deleted). These run against the bundle modules.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-    DraftManager,
-    globalDraftManager,
-    collectFormData,
-    restoreFormData,
-    clearAllState
-} from '../../python/djust/static/djust/decorators.js';
+import fs from 'fs';
+
+// Evaluate the REAL bundle modules (not a copy): 06-draft-manager.js defines
+// DraftManager/globalDraftManager, 07-form-data.js defines the form helpers.
+// Both are plain scripts inside the client IIFE, so evaluate them in a
+// function scope with the two bundle globals they use shimmed: djLog
+// (00-namespace.js:110) and UNSAFE_KEYS (00-namespace.js:128, same value).
+const DRAFT_SRC = fs.readFileSync('./python/djust/static/djust/src/06-draft-manager.js', 'utf-8');
+const FORM_SRC = fs.readFileSync('./python/djust/static/djust/src/07-form-data.js', 'utf-8');
+// eslint-disable-next-line no-new-func -- evaluates the real bundle modules (test-only)
+const { DraftManager, globalDraftManager, collectFormData, restoreFormData } = new Function(
+    'djLog', 'UNSAFE_KEYS',
+    DRAFT_SRC + '\n' + FORM_SRC +
+    '\nreturn { DraftManager, globalDraftManager, collectFormData: _collectFormData, restoreFormData: _restoreFormData };'
+)(() => {}, ['__proto__', 'constructor', 'prototype']);
 
 describe('DraftManager', () => {
     let manager;

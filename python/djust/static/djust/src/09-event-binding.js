@@ -1179,7 +1179,7 @@ function bindLiveViewEvents(scope) {
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
     // fallback — body persists across TurboNav page swaps, causing duplicate
     // events when navigating away from a LiveView page and back.
-    const liveRoot = document.querySelector('[dj-view]') || document.querySelector('[dj-root]');
+    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]'); // #2632
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -1549,18 +1549,18 @@ function throttle(func, limit) {
     }
 }
 
-// Helper: Get LiveView root element
+// Helper: Get LiveView root element (the PARENT / page container).
 //
-// Sticky LiveViews (Phase B) invariant: the parent view's [dj-view] is
-// stamped in DOM order BEFORE its sticky child (the parent template tag
-// runs before {% live_render %} resolves), so the first matching
-// [dj-view] in document order is the parent. Calling code that needs to
-// operate on the PARENT (mainline patch application, form helpers,
-// etc.) relies on this ordering and MUST NOT be changed to select
-// [dj-sticky-root] subtrees. Sticky targets are reached via the scoped
-// applier in 45-child-view.js, NOT via getLiveViewRoot().
+// Callers that operate on the parent (mainline patch application, form
+// helpers, etc.) must never receive a [dj-sticky-root] / embedded
+// subtree. The old comment here relied on document ORDER ("the first
+// [dj-view] is the parent") — which is exactly the premise #2632 showed
+// to be false (a sticky/embedded root can precede the page container),
+// so selection is by QUALIFIER via the shared helper instead. Sticky
+// targets are reached via the scoped applier in 45-child-view.js, NOT
+// via getLiveViewRoot().
 function getLiveViewRoot() {
-    return document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document.body;
+    return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -1715,7 +1715,7 @@ function _processAutoRecover() {
 function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
-    let root = document.querySelector('[dj-view]');
+    let root = findPageViewContainer(); // #2632
     if (!root) root = document.querySelector('[dj-root]');
     if (!root) return;
 

@@ -10,6 +10,8 @@ Verifies that the script-injection in ``_inject_client_script``:
 
 from __future__ import annotations
 
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -144,3 +146,58 @@ def test_explicit_override_forces_raw_in_production():
     assert src.endswith("client.js") and not src.endswith(".min.js"), (
         f"override should force raw; got {src!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #2662 — a shipped .js file must never reference a file the package does not
+# ship. `client.min.js` carried `//# sourceMappingURL=client.min.js.map` while
+# the .map itself is gitignored (.gitignore: `*.min.js.map`) and so absent
+# from the wheel. Django's `HashedFilesMixin` post-processes every *.js for
+# `sourceMappingURL` and raises `MissingFileError` for an unresolvable target,
+# so `collectstatic` under any ManifestStaticFilesStorage failed outright.
+# ---------------------------------------------------------------------------
+
+_SOURCEMAP_RE = re.compile(r"^\s*//[#@]\s*sourceMappingURL\s*=\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _is_shipped(path: Path) -> bool:
+    """A static file is *shipped* when it exists AND is tracked by git.
+
+    The wheel is built from the tracked tree; a locally-built artifact that
+    `.gitignore` excludes (the .map siblings) is on disk for the developer
+    but is not in the package a user installs.
+    """
+    if not path.exists():
+        return False
+    repo_root = STATIC_DIR.parents[3]
+    if not (repo_root / ".git").exists():
+        return True  # installed package: existence is the only signal
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(path)],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return True
+    return tracked.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "js", sorted(STATIC_DIR.rglob("*.js")), ids=lambda p: str(p.relative_to(STATIC_DIR))
+)
+def test_shipped_js_does_not_reference_an_unshipped_sourcemap(js: Path):
+    """Every `sourceMappingURL` in the static tree must resolve to a SHIPPED
+    file, or the comment must be absent (#2662)."""
+    if "node_modules" in js.parts:
+        pytest.skip("not a djust static asset")
+    text = js.read_text(encoding="utf-8", errors="replace")
+    for m in _SOURCEMAP_RE.finditer(text):
+        target = js.parent / m.group(1)
+        assert _is_shipped(target), (
+            f"{js.relative_to(STATIC_DIR)} references sourcemap {m.group(1)!r} "
+            f"which is not shipped (missing or gitignored) — collectstatic under "
+            f"ManifestStaticFilesStorage raises MissingFileError (#2662). Either "
+            f"ship the map or build without the sourceMappingURL comment."
+        )

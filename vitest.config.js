@@ -77,7 +77,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['python/djust/static/djust/decorators.js'],
+      include: ['python/djust/static/djust/src/**/*.js'],
       exclude: ['node_modules', 'tests', '**/*.test.js'],
       // Coverage thresholds
       thresholds: {

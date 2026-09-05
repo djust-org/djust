@@ -52,14 +52,13 @@ Configuration in settings.py::
 
 Template usage::
 
-    <!-- Offline indicator -->
-    <div dj-offline="show" class="offline-banner">
+    <!-- Offline indicator (bare-name forms, driven by {% djust_offline_styles %}) -->
+    <div dj-offline-show class="offline-banner">
         You're offline. Changes will sync when connected.
     </div>
 
     <!-- Offline-aware actions -->
-    <button dj-offline="disable" dj-click="delete_item">Delete</button>
-    <button dj-offline="queue" dj-click="save_draft">Save Draft</button>
+    <button dj-offline-disable dj-click="delete_item">Delete</button>
 
 Service Worker registration::
 

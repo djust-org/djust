@@ -8,7 +8,14 @@
 #   client.min.js   — terser-minified; default served in production
 #   client.min.js.gz  — gzip-precompressed sibling (whitenoise picks automatically)
 #   client.min.js.br  — brotli-precompressed sibling (when `brotli` command available)
-#   client.min.js.map — terser source map (dev aid; DevTools only)
+#   client.min.js.map — terser source map (dev aid; DevTools only). NOT
+#                     referenced from client.min.js: the .map is gitignored
+#                     (absolute checkout paths in `sources`, see below) and
+#                     so never in the wheel, while a `sourceMappingURL`
+#                     comment pointing at it made Django's
+#                     ManifestStaticFilesStorage / whitenoise fail
+#                     `collectstatic` with MissingFileError (#2662). Load the
+#                     map manually in DevTools ("Add source map…") when needed.
 #
 # Same layout for debug-panel.js. Minification is skipped gracefully if
 # terser isn't installed, so contributors can still iterate on the raw
@@ -65,12 +72,19 @@ minify_and_compress() {
     # (the unminified client.js resolves via the shared outer-IIFE scope).
     # Preserving function names keeps every cross-module reference resolvable.
     # Costs ~2 KB gzipped; correctness > size for a prod-breaking class of bug.
+    #
+    # --source-map WITHOUT `url=` (#2662): still writes <output>.map next to
+    # the bundle for local DevTools use, but appends NO `//# sourceMappingURL`
+    # comment. The map is gitignored and therefore absent from the wheel; a
+    # reference to it broke `collectstatic` under ManifestStaticFilesStorage.
+    # tests/unit/test_client_minified.py pins "no reference to an unshipped
+    # file" so this cannot silently regress.
     "$terser_bin" "$input" \
         --compress \
         --mangle \
         --keep-fnames \
         --comments=false \
-        --source-map "url='$(basename "$output_min").map',includeSources,root='./'" \
+        --source-map "includeSources,root='./'" \
         --output "$output_min" 2>/dev/null || {
         echo "  terser failed on $(basename "$input"); leaving raw file"
         return 0

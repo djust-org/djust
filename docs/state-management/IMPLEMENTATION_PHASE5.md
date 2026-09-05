@@ -32,7 +32,7 @@ Phase 5 completes the state management vision by implementing the remaining deco
 - ✅ `@cache(ttl, key_params)` - Python decorator defined (needs JS client)
 - ✅ `@client_state(keys)` - Python decorator defined (needs JS client)
 
-**JavaScript Client** (`python/djust/static/djust/decorators.js`)
+**JavaScript Client** (`python/djust/static/djust/src/` — `04-cache.js`, `05-state-bus.js`, `06-draft-manager.js`, `09-event-binding.js`; the former `decorators.js` copy was removed in #2659)
 - ✅ `debounceEvent()` - Debouncing logic
 - ✅ `throttleEvent()` - Throttling logic
 - ✅ `optimisticEvent()` - Optimistic update logic
@@ -167,7 +167,7 @@ Phase 5 completes the state management vision by implementing the remaining deco
 
 ### Task 1: Implement @cache JavaScript Client (3 hours)
 
-**Location**: `python/djust/static/djust/decorators.js`
+**Location**: `python/djust/static/djust/src/` (bundle modules; `decorators.js` was removed in #2659)
 
 **Subtasks**:
 - [ ] Add `resultCache` Map for storing cached results
@@ -224,7 +224,7 @@ export function cacheEvent(eventName, eventData, config, sendEvent) {
 
 ### Task 2: Implement @client_state JavaScript Client (4 hours)
 
-**Location**: `python/djust/static/djust/decorators.js`
+**Location**: `python/djust/static/djust/src/` (bundle modules; `decorators.js` was removed in #2659)
 
 **Subtasks**:
 - [ ] Add `StateBus` class for shared state
@@ -425,7 +425,7 @@ export class DraftMode {
 
 ### Task 4: Implement @loading HTML Attributes (2 hours)
 
-**Location**: `python/djust/static/djust/decorators.js`
+**Location**: `python/djust/static/djust/src/` (bundle modules; `decorators.js` was removed in #2659)
 
 **Subtasks**:
 - [ ] Parse `@loading` attribute from HTML

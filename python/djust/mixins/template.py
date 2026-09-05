@@ -52,6 +52,11 @@ _DJ_VIEW_RE = re.compile(
 # Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
 _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
 
+# The extraction helpers' historical (looser) opening-tag patterns — hoisted so
+# they can be searched through ``_search_dj_root_open`` like every other sink.
+_LOOSE_DJ_ROOT_RE = re.compile(r"<div\s+[^>]*dj-root[^>]*>", re.IGNORECASE)
+_LOOSE_DJ_VIEW_RE = re.compile(r"<div\s+[^>]*dj-view[^>]*>", re.IGNORECASE)
+
 # Match a full ``<script>...</script>`` block. Used to mask script contents
 # before searching for ``</body>`` so a literal ``</body>`` in a JS string
 # doesn't become a false split boundary.
@@ -65,6 +70,43 @@ _SCRIPT_BLOCK_RE = re.compile(
     r"<script\b[^>]*>.*?</script[^>]*>",
     re.DOTALL | re.IGNORECASE,
 )
+
+# #2663: regions the HTML tokenizer treats as RAW TEXT — ``<script>`` and
+# ``<style>`` bodies and HTML comments. Anything tag-shaped inside them is
+# text, not markup: a JavaScript comment reading ``<div dj-root>`` must not
+# be found as the root element, nor move the div depth counter. Every
+# dj-root locating sink in this module searches a MASKED copy (see
+# ``_mask_raw_text``) so a phantom tag in a script can never select the
+# wrong element and turn the whole document into the liveview template.
+_RAW_TEXT_RE = re.compile(
+    r"<!--.*?(?:-->|\Z)"
+    r"|<script\b[^>]*>.*?(?:</script[^>]*>|\Z)"
+    r"|<style\b[^>]*>.*?(?:</style[^>]*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _mask_raw_text(html: str) -> str:
+    """Return ``html`` with every raw-text region (script/style body, HTML
+    comment) replaced by NULs of the SAME length, so any match position found
+    in the masked string indexes the original string unchanged (#2663)."""
+    return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
+
+
+def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[re.Match[str]]":
+    """Find the FIRST real dj-root/dj-view opening tag in ``html``.
+
+    Tries ``patterns`` in order against a raw-text-masked copy, so a tag-like
+    string inside ``<script>``/``<style>``/``<!-- -->`` is never selected.
+    The returned match's ``start()``/``end()`` index the ORIGINAL string
+    (the mask is length-preserving); do not read ``group()`` from it.
+    """
+    masked = _mask_raw_text(html)
+    for pattern in patterns:
+        m = pattern.search(masked)
+        if m:
+            return m
+    return None
 
 
 class TemplateMixin:
@@ -222,7 +264,7 @@ class TemplateMixin:
                 # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
                 vdom_source = (
                     template_source
-                    if (_DJ_ROOT_RE.search(template_source) or _DJ_VIEW_RE.search(template_source))
+                    if _search_dj_root_open(template_source, _DJ_ROOT_RE, _DJ_VIEW_RE)
                     else resolved
                 )
                 vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
@@ -524,7 +566,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         from ..http_streaming import ChunkEmitterCancelled
 
         # Find <div dj-root> opening tag start.
-        dj_root_match = _DJ_ROOT_RE.search(full_html)
+        dj_root_match = _search_dj_root_open(full_html, _DJ_ROOT_RE)
         if not dj_root_match:
             # No dj-root wrapper: fragment template. Single-chunk fallback.
             try:
@@ -537,10 +579,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         dj_root_open_end = dj_root_match.end()
 
         # Find the matching </div> for <div dj-root> using shared logic.
-        # _find_closing_div_pos already handles balanced div nesting AND
-        # ignores script-block contents, so the script-mask + </body>
-        # search the Phase-1 splitter does is redundant here — the chunk
-        # boundary is the closing-</div>, not the </body>.
+        # _find_closing_div_pos handles balanced div nesting AND (since
+        # #2663) masks script/style/comment raw text, so the script-mask +
+        # </body> search the Phase-1 splitter does is redundant here — the
+        # chunk boundary is the closing-</div>, not the </body>.
         result = TemplateMixin._find_closing_div_pos(full_html, dj_root_open_end)
         if result[1] is None:
             # Malformed HTML (no closing </div> for dj-root). Fall back to
@@ -772,7 +814,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         :returns: Three-tuple of string chunks that, when concatenated,
             equal ``full_html``.
         """
-        m = _DJ_ROOT_RE.search(full_html)
+        m = _search_dj_root_open(full_html, _DJ_ROOT_RE)
         if not m:
             return full_html, "", ""
 
@@ -808,9 +850,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         is auto-inferred from dj-view (see PR #297).
         """
         # Find the opening tag for [dj-root], falling back to [dj-view]
-        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
-        if not opening_match:
-            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", html, re.IGNORECASE)
+        opening_match = _search_dj_root_open(html, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
 
         if not opening_match:
             return html
@@ -829,9 +869,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
         is auto-inferred from dj-view (see PR #297).
         """
-        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
-        if not opening_match:
-            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", template, re.IGNORECASE)
+        opening_match = _search_dj_root_open(template, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
 
         if not opening_match:
             return template
@@ -850,9 +888,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
-        if not opening_match:
-            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", template, re.IGNORECASE)
+        opening_match = _search_dj_root_open(template, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
 
         if not opening_match:
             return template
@@ -878,6 +914,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         it was at the matching {% if %}, so mutually-exclusive branches that
         each open a <div> are counted only once.
         """
+        # #2663: scan a raw-text-masked copy. ``<script>``/``<style>`` bodies
+        # and HTML comments are text, so a ``<div`` or ``</div>`` inside them
+        # must not move the depth counter. The mask is length-preserving, so
+        # every offset computed below indexes the caller's ``template``.
+        template = _mask_raw_text(template)
+
         # Pre-scan for if/elif/else/endif tags in the region being searched.
         flow_tags = [
             (inner_start + m.start(), inner_start + m.end(), m.group(1))
@@ -942,9 +984,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
-        if not opening_match:
-            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", html, re.IGNORECASE)
+        opening_match = _search_dj_root_open(html, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
 
         if not opening_match:
             return html
@@ -1122,7 +1162,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # normalized ``self._rust_view`` the WS path uses, so the
             # replaced dj-root is structurally identical to the first WS
             # frame (modulo the dj-id attrs the client stamps on, per #1610).
-            dj_root_match = _DJ_ROOT_RE.search(shell_html) or _DJ_VIEW_RE.search(shell_html)
+            dj_root_match = _search_dj_root_open(shell_html, _DJ_ROOT_RE, _DJ_VIEW_RE)
             if dj_root_match:
                 # Start of the <div dj-root...> opening tag
                 tag_start = dj_root_match.start()

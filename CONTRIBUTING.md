@@ -409,7 +409,7 @@ struct RustLiveView {
 }
 ```
 
-**Pattern 3: Client JavaScript — bundled ES modules, plus ~10 unbundled files outside `src/`**
+**Pattern 3: Client JavaScript — bundled ES modules, plus a few documented standalone assets**
 
 The BUNDLED client is built from the ES modules under
 `python/djust/static/djust/src/` (e.g. debounce/throttle logic in
@@ -418,14 +418,17 @@ The BUNDLED client is built from the ES modules under
 minified+gzipped `client.min.js(.gz)` that actually ships. Do not hand-edit
 `client.js` / `client.min.js`; they are build artifacts.
 
-The `live_view.py`-embedded copy is gone, but "one place" is not yet true in
-full: `static/djust/decorators.js` (~34 KB) still exists outside `src/`, still
-carries an "update BOTH files" header, is imported by several test suites, and
-duplicates debounce/throttle logic against `src/09-event-binding.js`. It is NOT
-in the bundle. A handful of other hand-maintained files also live outside
-`src/` (`js/pwa.js` among them, which no template tag loads). Consolidating
-them is open work — until then, check whether the file you are editing is a
-bundle input before assuming an edit ships.
+The `live_view.py`-embedded copy is gone, and so are the two files that used
+to shadow the bundle (#2659): `static/djust/decorators.js` (a tested-but-never-
+shipped duplicate of the `src/` logic) and `static/djust/js/pwa.js` (loaded by
+no template tag). What remains outside `src/` is either a build OUTPUT
+(`client.js`, `client.min.js`, `debug-panel*.js`) or a deliberately standalone
+asset with its own loader (`service-worker.js`, `ext/dj-chart.js`,
+`bug_capture_replay.js`, `client-dev.js`) — plus `security.js`, which is
+documented public API with NO loader yet (#2679).
+`tests/js/non-bundle-importers-2659.test.js` fails when a test imports a
+`static/djust/` file that is neither a `src/` module nor on that documented
+list — so a new never-shipped-but-tested file cannot reappear silently.
 
 **Workflow:**
 - [ ] Update the logic in the relevant `src/<NN>-*.js` module
