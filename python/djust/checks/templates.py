@@ -26,6 +26,12 @@ from djust.checks.utils import (
 logger = logging.getLogger(__name__)
 
 
+# #2631: ``{{ }}`` dj-view values naming a variable djust NEVER injects. These
+# three were documented as framework-provided (README / QUICKSTART / schema.py)
+# for months and copied into real projects; a genuine user-supplied variable
+# (``{{ view_path }}`` set in a shared base template, #395) is not matched.
+_PHANTOM_VIEW_VAR_RE = re.compile(r"^\s*\{\{\s*(dj_view_id|view_name|view_id)\s*\}\}\s*$")
+
 _DJ_VIEW_RE = re.compile(r"dj-view")
 
 
@@ -365,6 +371,30 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         for match in re.finditer(r'dj-view="([^"]*)"', content):
             value = match.group(1)
             # {{ ... }} is a valid dynamic injection pattern (base-template use case)
+            # — the USER sets the variable (#395). But three names were taught by
+            # djust's own docs for months as framework-provided and never were
+            # (#2631): Django resolves them to string_if_invalid, the attribute
+            # renders EMPTY, and the client refuses to mount with only a
+            # console.warn. Flag exactly those; any other variable stays exempt.
+            phantom = _PHANTOM_VIEW_VAR_RE.match(value)
+            if phantom:
+                lineno = content[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        '%s:%d -- dj-view="{{ %s }}" names a context variable djust '
+                        'never provides; it renders as dj-view="" and the page cannot '
+                        "mount." % (relpath, lineno, phantom.group(1)),
+                        hint=(
+                            "Put dj-root on the element and let djust stamp dj-view "
+                            "server-side, or write the literal dotted path "
+                            'dj-view="myapp.views.MyView". (#2631)'
+                        ),
+                        id="djust.T013",
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+                continue
             if re.match(r"^\s*\{\{.*\}\}\s*$", value):
                 continue
             if not value or "." not in value:
