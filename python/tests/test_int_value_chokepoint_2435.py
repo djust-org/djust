@@ -327,7 +327,8 @@ class TestTheChokepointIsTheOnlyIntValueReader:
         """``python_int_value`` is called from exactly the arms Django calls
         ``int(value)`` from, plus the renderer's ``{% widthratio %}``."""
         source = self._source(FILTERS_RS)
-        arms = re.findall(r'"(\w+)" => \{(.*?)\n        \}', source, re.S)
+        dispatch = source.split("fn apply_builtin_filter(", 1)[1].split("\n}\n", 1)[0]
+        arms = re.findall(r'"(\w+)" => \{(.*?)\n        \}', dispatch, re.S)
         found = {name for name, body in arms if "python_int_value(" in body}
         # add preserves both operands and delegates integer conversion to its helper.
         add_body = next(body for name, body in arms if name == "add")

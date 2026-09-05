@@ -1,0 +1,1 @@
+- **Resolved SafeString values**: Preserve HTML safety returned by properties and methods through filters, tag operands, resolved filter arguments, and default fallbacks. Plain strings and filters that remove safety remain escaped. Tighten differential checks now that the former over-escaping cases agree with Django.

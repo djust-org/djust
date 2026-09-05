@@ -728,6 +728,7 @@ class TestTheFalsinessRuleStillHasONEDefinition:
                 "Integer",
                 "Float",
                 "String",
+                "SafeString",
                 "List",
                 "Tuple",
                 "NamedTuple",

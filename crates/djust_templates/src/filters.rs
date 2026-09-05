@@ -850,6 +850,7 @@ pub fn apply_filter_full_safe(
     let builtin_arg = resolved_arg.as_deref().or(arg);
     let arg_type = ArgType {
         is_safe: arg_was_quoted
+            || resolved_type.as_ref().is_some_and(Value::is_safe_string)
             || context.is_some_and(|ctx| arg.is_some_and(|name| ctx.is_safe(name))),
         int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
         is_none: arg_is_python_none(resolved_type.as_ref()),
@@ -890,10 +891,11 @@ pub fn apply_filter_full_safe(
         };
         if fires {
             // The fallback is the argument's own value, so its safety is the
-            // argument's — never the input's. `false` matches what the string
-            // path reported for these two names (`builtin_produced_safe`
-            // answers `true` for four names, and neither of these is one).
-            return Ok((resolved.clone(), false));
+            // argument's — never the input's. Only actual string values can
+            // carry a string safety grant; a marked container is not SafeData.
+            let safe = resolved.is_safe_string()
+                || (matches!(resolved, Value::String(_)) && arg_type.is_safe);
+            return Ok((resolved.clone(), safe));
         }
     }
 

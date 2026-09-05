@@ -357,12 +357,13 @@ class TestTheWiringIsLoadBearing:
 
         Routing them through the string arm would tell the handler a `Decimal`
         is a sequence of characters, where Python raises. The arm is written
-        against `Value::String` alone and this pins that it stays that way.
+        against the two string variants and this pins that it stays that way.
         """
         src = RENDERER.read_text()
         start = src.index("fn value_channel_arg_string(")
         body = src[start : src.index("\n}\n", start)]
-        assert "Value::String(s) => serde_json::to_string(s)" in body, body
+        assert "Value::String(s) | Value::SafeString(s) => {" in body, body
+        assert "serde_json::to_string(s)" in body, body
         for never in ("Value::Decimal", "Value::BigInt"):
             assert never not in body, (
                 f"{never} must fall through to value_to_arg_string — its "

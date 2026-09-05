@@ -2175,7 +2175,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // and OR-ing the two would be a second mechanism shadowing the
             // first. `literal_safe` is false for a NUMBER — Django marks only
             // the quoted branch.
-            let mut runtime_safe = if literal_safe {
+            let mut runtime_safe = if literal_safe || value.is_safe_string() {
                 true
             } else {
                 context.is_safe(var_name)
@@ -5137,7 +5137,8 @@ fn get_value_safe_inner(
     // changes, and so the GIL round-trip it costs is paid only on a genuine
     // miss rather than on every `{% if a == 5 %}` operand.
     if let Some(value) = context.resolve(expr)? {
-        return Ok((value, context.is_safe(expr)));
+        let safe = value.is_safe_string() || context.is_safe(expr);
+        return Ok((value, safe));
     }
 
     Ok((Value::Missing, false))

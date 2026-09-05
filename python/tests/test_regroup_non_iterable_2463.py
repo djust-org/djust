@@ -317,7 +317,8 @@ class TestABoolSourceReachesTheHandlerAsAValue:
         assert "Value::Bool(b) =>" in body, body
         # …and the String arm it was modelled on is still there. Two arms, and
         # #2385's pin asserts Decimal/BigInt stay OUT of both.
-        assert "Value::String(s) => serde_json::to_string(s)" in body, body
+        assert "Value::String(s) | Value::SafeString(s) => {" in body, body
+        assert "serde_json::to_string(s)" in body, body
 
 
 class TestNoSecondIterabilityCheckWasAdded:

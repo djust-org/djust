@@ -601,15 +601,15 @@ class TestTheProducerEnumerationIsComplete:
         """``safeseq`` since #2324, ``escapeseq`` always."""
         src = (self.CRATES / "djust_templates" / "src" / "filters.rs").read_text()
         for name, builder in (
-            ("safeseq", "Value::String(item.py_str())"),
-            ("escapeseq", "Value::String(conditional_escape(item, input_safety.items))"),
+            ("safeseq", "Value::SafeString(item.py_str())"),
+            ("escapeseq", "Value::SafeString(conditional_escape(item, input_safety.items))"),
         ):
             # `python_iter` since #2451 — the same sink, wrapped so its `None`
             # can name the exception Python raises there.
             start = src.index('"%s" => match python_iter(value)' % name)
             body = src[start : start + 700]
             assert builder in body, (
-                f"{name} no longer constructs Value::String elements — it can "
+                f"{name} no longer constructs Value::SafeString elements — it can "
                 "hand mark_item a non-str, and #2337's deletion is unsafe"
             )
 

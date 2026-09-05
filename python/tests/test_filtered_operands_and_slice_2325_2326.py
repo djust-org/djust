@@ -79,7 +79,6 @@ from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 from django.template.defaultfilters import register as django_filter_registry  # noqa: E402
 from django.template.defaultfilters import slice_filter  # noqa: E402
-from django.utils.html import escape as django_escape  # noqa: E402
 
 from djust import _rust  # noqa: E402
 
@@ -276,7 +275,7 @@ class TestFilteredOperandsRandomised:
         "ints": [3, 1, 2],
     }
 
-    #: The two shapes an operand cell may still differ in, each a mechanical
+    #: The refusal shape an operand cell may still differ in, with a mechanical
     #: predicate rather than a name on a list — a name list would need editing
     #: every time a filter's safety changed, and would quietly absorb a real
     #: regression along the way.
@@ -295,17 +294,10 @@ class TestFilteredOperandsRandomised:
     #:    ``_same_reason`` (#2387), which is the same predicate for the same
     #:    reason — each file carries its own ``both``/``render`` pair, which is
     #:    this directory's convention.
-    #: 2. djust's output IS Django's output escaped once more — the exact
-    #:    signature of a discarded runtime-safe flag. That is the direction
-    #:    this fix deliberately fails in, and the predicate proves it rather
-    #:    than asserting it: nothing can reach the page through djust that did
-    #:    not reach it through Django.
     @classmethod
     def _classify(cls, d: str, r: str, src: str, ctx: dict) -> str | None:
         if d.startswith("<<EXC") and r.startswith("<<EXC"):
             return "both-raised" if cls._same_reason(src, ctx) else None
-        if r == django_escape(d):
-            return "djust-escaped-once-more"
         return None
 
     @staticmethod
@@ -385,8 +377,8 @@ class TestFilteredOperandsRandomised:
         assert cells > 300
         assert not bad, f"{len(bad)}/{cells} disagree, first three: {bad[:3]!r}"
 
-    def test_the_residue_is_only_the_two_documented_shapes(self) -> None:
-        """Both shapes must actually OCCUR, or ``_classify`` is dead code.
+    def test_the_residue_is_only_the_documented_refusal_shape(self) -> None:
+        """The refusal shape must actually OCCUR, or ``_classify`` is dead code.
 
         A classifier that never fires is an exemption the sweep is silently
         carrying: it would let a future divergence of that shape through
@@ -402,7 +394,7 @@ class TestFilteredOperandsRandomised:
                 d, r = both(src, {"p": value})
                 if d != r:
                     seen.add(self._classify(d, r, src, {"p": value}))
-        assert seen == {"both-raised", "djust-escaped-once-more"}, (
+        assert seen == {"both-raised"}, (
             f"the documented residue shapes are no longer the ones that occur: {seen}"
         )
 
@@ -437,7 +429,7 @@ class TestFilteredOperandsRandomised:
                 var = resolve("{{ p|%s }}" % spec, value)
                 with_ = resolve("{%% with q=p|%s %%}{{ q }}{%% endwith %%}" % spec, value)
                 refused += var.startswith("<<")
-                if with_ != var and with_ != django_escape(var):
+                if with_ != var:
                     unexplained.append((spec, var, with_))
         assert refused, "no cell refused — the raise-capturing branch is dead code"
         assert cells > 400
