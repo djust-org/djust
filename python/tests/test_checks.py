@@ -3,6 +3,8 @@
 import textwrap
 from unittest.mock import patch
 
+import pytest
+
 from django.test import override_settings
 
 from djust.checks import _DOC_DJUST_EVENT_RE
@@ -3770,6 +3772,32 @@ class TestT013InvalidViewPath:
         errors = check_templates(None)
         t013 = [e for e in errors if e.id == "djust.T013"]
         assert len(t013) == 0
+
+    @pytest.mark.parametrize("name", ["dj_view_id", "view_name", "view_id"])
+    def test_t013_flags_phantom_framework_variable(self, tmp_path, settings, name):
+        """#2631: the three names djust's own docs taught as framework-provided
+        are never injected — the attribute renders empty and the page cannot
+        mount. T013 must name the variable and point at the real spelling."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "phantom.html").write_text(
+            '<div dj-root dj-view="{{ %s }}">{%% block content %%}{%% endblock %%}</div>' % name
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1, [e.msg for e in errors]
+        assert "{{ %s }}" % name in t013[0].msg
+        assert "never provides" in t013[0].msg
+        assert "dj-root" in t013[0].hint and "myapp.views.MyView" in t013[0].hint
 
     def test_t013_passes_template_variable(self, tmp_path, settings):
         """T013 should not fire for {{ view_path }} dynamic injection pattern."""
