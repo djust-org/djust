@@ -401,7 +401,8 @@ def cmd_preview(changelog_path: Path) -> int:
 
 def _load_test_count_checker():
     spec = importlib.util.spec_from_file_location(
-        "check_changelog_test_counts", Path(__file__).resolve().parent / "check-changelog-test-counts.py"
+        "check_changelog_test_counts",
+        Path(__file__).resolve().parent / "check-changelog-test-counts.py",
     )
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -438,6 +439,63 @@ def _show(repo_root: Path, rev: str, rel: str) -> str | None:
     return out if code == 0 else None
 
 
+def _squash_ws(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _body_line_delta(old_body: str, new_body: str) -> tuple[list[str], list[str]]:
+    """(removed, added) non-blank lines between two ``[Unreleased]`` bodies.
+
+    A multiset difference: a line removed from one place and re-added
+    elsewhere is neither. ``###`` headings are excluded — emptying a section
+    legitimately drops its heading.
+    """
+    old_lines = [ln for ln in old_body.splitlines() if ln.strip()]
+    remaining = [ln for ln in new_body.splitlines() if ln.strip()]
+    removed: list[str] = []
+    for ln in old_lines:
+        if ln in remaining:
+            remaining.remove(ln)
+        elif not ln.lstrip().startswith("#"):
+            removed.append(ln)
+    added = [ln for ln in remaining if not ln.lstrip().startswith("#")]
+    return removed, added
+
+
+def _touched_fragment_text(repo_root: Path, diff_args: list[str], new_rev: str) -> str:
+    """The concatenated text of every fragment ADDED or MODIFIED by the change."""
+    code, out = _git(repo_root, *diff_args, "--diff-filter=AM")
+    if code != 0:
+        return ""
+    chunks: list[str] = []
+    for ln in out.splitlines():
+        rel = ln.split("\t", 1)[-1]
+        if rel.startswith(f"{FRAGMENT_DIR_NAME}/") and rel.endswith(".md"):
+            text = _show(repo_root, new_rev, rel)
+            if text:
+                chunks.append(text)
+    return _squash_ws("\n".join(chunks))
+
+
+def is_fragment_migration(
+    repo_root: Path, old: str, new: str, diff_args: list[str], new_rev: str
+) -> bool:
+    """A removal-only ``[Unreleased]`` diff whose every removed line reappears
+    verbatim in a fragment the same change adds or modifies (#2603).
+
+    That is a pre-fragment entry MOVING into ``changelog.d/``, not a direct
+    edit. Any added body line, or a removed line that no touched fragment
+    carries, is still a direct edit.
+    """
+    removed, added = _body_line_delta(unreleased_body(old), unreleased_body(new))
+    if added or not removed:
+        return False
+    corpus = _touched_fragment_text(repo_root, diff_args, new_rev)
+    if not corpus:
+        return False
+    return all(_squash_ws(ln) in corpus for ln in removed)
+
+
 def direct_edit_violation(
     repo_root: Path,
     *,
@@ -449,20 +507,22 @@ def direct_edit_violation(
 
     ``cached``: compare ``HEAD`` to the index. ``rev_range``: ``A..B`` (or a
     single rev, compared to its parent). Allowed: a change that also DELETES
-    fragments (the release-cut compile), or a merge in progress.
+    fragments (the release-cut compile), a merge in progress, or a
+    removal-only diff whose lines reappear in a fragment the change adds
+    (an entry migrating into ``changelog.d/``, #2603).
     """
     if cached:
         if _git(repo_root, "rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0:
             return None  # a merge legitimately brings [Unreleased] lines in
         old_rev, new_rev = "HEAD", ""  # "" == the index for `git show :path`
-        diff_args = ["diff", "--cached", "--name-status", "--diff-filter=D"]
+        diff_args = ["diff", "--cached", "--name-status"]
     else:
         assert rev_range
         if ".." in rev_range:
             old_rev, new_rev = rev_range.split("..", 1)
         else:
             old_rev, new_rev = f"{rev_range}~1", rev_range
-        diff_args = ["diff", "--name-status", "--diff-filter=D", f"{old_rev}..{new_rev}"]
+        diff_args = ["diff", "--name-status", f"{old_rev}..{new_rev}"]
 
     old = _show(repo_root, old_rev, changelog_rel)
     new = _show(repo_root, new_rev, changelog_rel)
@@ -471,11 +531,14 @@ def direct_edit_violation(
     if unreleased_body(old) == unreleased_body(new):
         return None
 
-    code, deleted = _git(repo_root, *diff_args)
+    code, deleted = _git(repo_root, *diff_args, "--diff-filter=D")
     if code == 0 and any(
         ln.split("\t", 1)[-1].startswith(f"{FRAGMENT_DIR_NAME}/") for ln in deleted.splitlines()
     ):
         return None  # fragments are being compiled — the one legitimate editor
+
+    if is_fragment_migration(repo_root, old, new, diff_args, new_rev):
+        return None  # an entry moving INTO changelog.d/ (#2603), not an edit
 
     return (
         f"{changelog_rel}: the `[Unreleased]` body was edited directly. Write a "
@@ -534,7 +597,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_check = sub.add_parser("check", help="validate fragments (+ refuse direct [Unreleased] edits)")
+    p_check = sub.add_parser(
+        "check", help="validate fragments (+ refuse direct [Unreleased] edits)"
+    )
     p_check.add_argument("--cached", action="store_true", help="compare HEAD to the index")
     p_check.add_argument("--range", dest="rev_range", help="git range A..B (or one rev)")
     p_check.add_argument(
