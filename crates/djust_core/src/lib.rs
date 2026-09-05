@@ -5,7 +5,7 @@
 
 use indexmap::IndexMap;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyList};
+use pyo3::types::{PyAnyMethods, PyDict, PyList, PyString};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -3378,6 +3378,189 @@ fn python_string_is_safe(value: &Bound<'_, PyAny>) -> bool {
     value.is_instance(cls.bind(py)).unwrap_or(false)
 }
 
+/// `str(o)` as a Rust `String`, crossing a lone surrogate as U+FFFD (#2555).
+///
+/// A CPython `str` may hold a lone UTF-16 surrogate — `surrogateescape`
+/// decoding of a filename, a header or subprocess output produces one — and
+/// it is a legal `str` that only fails when ENCODED. `extract::<String>()`
+/// is that encode, so it fails; the value then fell through every scalar arm
+/// to the fallback block, where a `str` is a truthy, re-iterable, sized
+/// object whose items are one-character `str`s that fail the same way, and
+/// the conversion recursed into itself until the stack overflowed (SIGSEGV).
+///
+/// Django renders the surrogate str as itself and only its HTTP encoding
+/// raises. Rust cannot hold the code point at all, so this is the choice
+/// Python's own `errors="replace"` makes — the ONE character becomes U+FFFD
+/// and everything around it survives — rather than a raise, which would turn
+/// a filename in a listing into a 500 for the whole page.
+fn py_str_lossy(ob: &Bound<'_, PyAny>) -> PyResult<String> {
+    py_string_lossy(&ob.str()?)
+}
+
+/// A `str` as a Rust `String`, one U+FFFD per lone surrogate (#2555).
+///
+/// The fast path is PyO3's zero-copy UTF-8 view, which every well-formed
+/// string takes; only a string that fails it pays for one Python call:
+/// `encode("utf-8", "surrogatepass")`, which spells each lone surrogate as
+/// its own three-byte sequence (`ED A0..BF xx`), and
+/// [`surrogatepass_bytes_to_string`] folds each such sequence into ONE
+/// U+FFFD. Two spellings were rejected on measurement: PyO3's
+/// `to_string_lossy` replaces each of the three BYTES (`"\udcc0x"` came out
+/// `"���x"`), and `encode("utf-8", "replace")` substitutes `?`. A UTF-16
+/// round trip was the first fix and is ALSO wrong, one axis over: two
+/// adjacent lone surrogates that happen to form a valid pair are JOINED by
+/// UTF-16 decoding into one astral character, so `"😀"` — two
+/// Python code points, `len` 2 — rendered as `'😀'` with `|length` 1 (the
+/// #2673 review). Per-code-point replacement is the rule, and the
+/// `surrogatepass` spelling honours it because CPython never joins there.
+fn py_string_lossy(s: &Bound<'_, PyString>) -> PyResult<String> {
+    if let Ok(text) = s.to_cow() {
+        return Ok(text.into_owned());
+    }
+    let encoded = s.call_method1("encode", ("utf-8", "surrogatepass"))?;
+    let bytes: &[u8] = encoded.extract()?;
+    Ok(surrogatepass_bytes_to_string(bytes))
+}
+
+/// `surrogatepass` UTF-8 bytes to a `String`, one U+FFFD per encoded lone
+/// surrogate (#2555). Every other byte sequence is valid UTF-8 by
+/// construction (CPython produced it), so the only invalid runs are the
+/// three-byte surrogate spellings, and each is replaced as a unit.
+fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(tail) => {
+                out.push_str(tail);
+                return out;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // `valid_up_to` is by definition a valid prefix; the fallback
+                // arm is unreachable and kept only so nothing here can panic.
+                out.push_str(std::str::from_utf8(&rest[..valid]).unwrap_or(""));
+                out.push('\u{FFFD}');
+                // A `surrogatepass` surrogate is exactly three bytes; anything
+                // else that is invalid (which CPython does not emit) skips the
+                // bytes the decoder rejected, or one byte if it rejected none.
+                let skip = if rest.len() >= valid + 3 && rest[valid] == 0xED {
+                    3
+                } else {
+                    e.error_len().unwrap_or(1).max(1)
+                };
+                rest = &rest[(valid + skip).min(rest.len())..];
+            }
+        }
+    }
+}
+
+/// The elements of a Python object that is a BOUNDED sequence, or `None`
+/// (#2572).
+///
+/// The ONE gate for both sequence sinks — the `Value::List` arm of the
+/// conversion and [`crosses_as_encoded`]'s probe of it — so the two cannot
+/// drift (#1646). Both used to call PyO3's `extract::<Vec<_>>()`, which
+/// accepts anything `PySequence_Check` accepts and then drives it through
+/// `iter()`. For a class that defines `__getitem__` and nothing else that is
+/// CPython's legacy sequence protocol: `o[0]`, `o[1]`, … until `IndexError`.
+/// An object whose `__getitem__` never raises is therefore iterated forever,
+/// and the render hung. Django never iterates such an object for `{{ v }}`
+/// — it resolves `{{ v.0 }}` by ONE `__getitem__` call and renders `{{ v }}`
+/// as `str(v)`.
+///
+/// The termination rule is the object's own stated bound: a sequence with no
+/// `__len__` has not stated one and is DECLINED here (it keeps the fallback
+/// block, whose iteration walk is already capped by [`OPAQUE_ITEM_CAP`]);
+/// one that has is read through `iter()` exactly as before and declined the
+/// moment it yields PAST its bound — a decline, not a truncation, so the cap
+/// can never produce a short list (#2129: a rule about the operation, not a
+/// list of shapes). A `list`, `tuple`, `range`, `bytes`, `deque`, `array`,
+/// numpy array and evaluated `QuerySet` all state a length and cross exactly
+/// as they did. The stated bound is trusted as stated: a `__len__` of
+/// `10**7` over a never-raising `__getitem__` is still read in full, as
+/// `range(10**9)` always was — tracked at #2678.
+///
+/// A `str` is refused, as PyO3's `Vec` extraction refuses it: the `str` arm
+/// sits above the sequence arm and claims every string first.
+///
+/// The membership test is `PySequence_Check` — the one PyO3's `Vec`
+/// extraction used — and deliberately NOT `cast::<PySequence>()`, which
+/// PyO3 answers with `isinstance(o, collections.abc.Sequence)`. That
+/// stricter test would silently move every unregistered user class with
+/// `__getitem__` and `__len__` out of the list arm, which is a second
+/// behaviour change this fix has no reason to make.
+fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
+    if ob.is_instance_of::<PyString>() {
+        return None;
+    }
+    // SAFETY: `ob` is a live, GIL-held reference; `PySequence_Check` only
+    // reads the type's slots and cannot fail.
+    if unsafe { pyo3::ffi::PySequence_Check(ob.as_ptr()) } == 0 {
+        return None;
+    }
+    let len = ob.len().ok()?;
+    let mut items = Vec::with_capacity(len.min(OPAQUE_ITEM_CAP));
+    for item in ob.try_iter().ok()? {
+        if items.len() == len {
+            return None;
+        }
+        items.push(item.ok()?);
+    }
+    Some(items)
+}
+
+/// How deep [`Value`]'s conversion may recurse into an object before the
+/// element it is looking at crosses as `str(o)` instead (#2624).
+///
+/// Every container arm converts its elements through the same `extract`,
+/// so an object whose elements are objects like itself recurses without
+/// bound — and NOT only a cycle, which the fallback block's `__dict__` walk
+/// already guards. A `types.GenericAlias` is the shape that found it:
+/// `{{ v.0 }}` over a `list`-subclass CLASS is Django's own
+/// `current[int(bit)]`, which honours `__class_getitem__` and yields
+/// `MyList[0]`; that alias is truthy, re-iterable, has no `__len__`, and
+/// `iter()` yields a starred copy of itself — a FRESH object each level, so
+/// no identity check ends it. The conversion built one carrier per level
+/// until the stack overflowed (SIGSEGV), on both settings of
+/// `template_resolve_lazy`, because both walks end in the same conversion.
+///
+/// Python's own recursion limit (`sys.getrecursionlimit()`, 1000 by default):
+/// the depth at which CPython itself refuses to `repr`, `json.dumps`,
+/// `deepcopy` or `pickle` a nested structure, so no structure Python's own
+/// tooling accepts can observe this ceiling. A first draft said 128 "sized
+/// against a 512 KiB `sync_to_async` worker stack" — that stack does not
+/// exist: every CPython thread is 16 MiB on macOS and 8 MiB under glibc,
+/// `main` converted 5000 nested lists on a real thread, and 128 REGRESSED
+/// `{{ v.0.0…}}` over a 150-deep list from `'leaf'` to `'['` (the #2673
+/// review, which measured all three). The value has to fit the smallest
+/// REAL stack: a 1000-deep chain of the heaviest per-level frame (the
+/// `GenericAlias` case, `opaque_value` + `extract` per level) converts on an
+/// 8 MiB thread with room to spare — `TestTheDepthCeiling` pins that.
+///
+/// Past it the element crosses as `str(o)` — the terminal arm every object
+/// already had — so the top-level value keeps its carrier and renders as
+/// Django does (`str(alias)`).
+pub const MAX_CONVERSION_DEPTH: usize = 1000;
+
+thread_local! {
+    /// The current [`Value`] conversion nesting on this thread. A
+    /// thread-local for the reason [`RESOLVE_LAZY`] is one: `extract` is a
+    /// trait method with no parameter to thread a counter through.
+    static CONVERSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Restores [`CONVERSION_DEPTH`] on every exit path — an early `?`, a Python
+/// exception, a panic unwinding to the PyO3 boundary — so one failed
+/// conversion cannot leave the thread's counter raised for the next render.
+struct DepthGuard(usize);
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        CONVERSION_DEPTH.with(|c| c.set(self.0));
+    }
+}
+
 impl<'py> FromPyObject<'_, 'py> for Value {
     // PyO3 0.29 reshaped FromPyObject: it now carries an associated `Error`
     // type and a single `extract(Borrowed<...>)` method (the old single-lifetime
@@ -3385,6 +3568,18 @@ impl<'py> FromPyObject<'_, 'py> for Value {
     // so the body below is unchanged — method calls on `ob` auto-deref.
     type Error = PyErr;
     fn extract(ob: pyo3::Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        // [`MAX_CONVERSION_DEPTH`]'s guard (#2624), INLINE rather than as a
+        // wrapper around a second function: the structural pins that read
+        // this conversion's body (`TestTheSinkHasExactlyTheCallersItClaims`)
+        // find it by `fn extract(`, and a wrapper would hide the body from
+        // them. `_restore` drops on every exit path below.
+        let depth = CONVERSION_DEPTH.with(|c| c.get());
+        if depth >= MAX_CONVERSION_DEPTH {
+            return Ok(Value::String(py_str_lossy(&ob.to_owned())?));
+        }
+        CONVERSION_DEPTH.with(|c| c.set(depth + 1));
+        let _restore = DepthGuard(depth);
+
         if ob.is_none() {
             // Python `None` — NOT `Missing`. An absent key never reaches this
             // conversion; it arrives as `Option::None` from the resolver (#2203).
@@ -3410,7 +3605,13 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Decimal(ob.str()?.extract::<String>()?))
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
-        } else if let Ok(s) = ob.extract::<String>() {
+        } else if let Ok(s) = ob.cast::<PyString>() {
+            // By TYPE, not by `extract::<String>()` succeeding: a `str`
+            // holding a lone surrogate fails that extraction and used to fall
+            // through to the fallback block, where it recursed into its own
+            // characters until the stack overflowed (#2555). It crosses
+            // lossily instead — see `py_string_lossy`.
+            let s = py_string_lossy(&s)?;
             let safe = python_string_is_safe(&ob.to_owned());
             Ok(if safe {
                 Value::SafeString(s)
@@ -3434,7 +3635,17 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 }
             }
             Ok(Value::Tuple(items))
-        } else if let Ok(list) = ob.extract::<Vec<Value>>() {
+        } else if let Some(list) = bounded_sequence_items(&ob.to_owned()).and_then(|items| {
+            // Through the bounded gate, not `extract::<Vec<Value>>()`: an
+            // object whose `__getitem__` never raises is an endless legacy
+            // sequence to PyO3's iteration and hung the render (#2572). An
+            // element that fails to convert declines the arm, exactly as the
+            // failed `Vec` extraction did.
+            items
+                .iter()
+                .map(|item| item.extract::<Value>().ok())
+                .collect::<Option<Vec<Value>>>()
+        }) {
             Ok(Value::List(list))
         } else if let Some(pairs) = multi_value_dict_pairs(&ob.to_owned()) {
             // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm:
@@ -3576,7 +3787,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     return Ok(Value::Object(map));
                 }
             }
-            Ok(Value::String(ob.str()?.to_string()))
+            Ok(Value::String(py_str_lossy(&ob.to_owned())?))
         }
     }
 }
@@ -3797,7 +4008,10 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
         || big_int_digits(ob).is_some()
         || is_decimal(ob)
         || ob.extract::<f64>().is_ok()
-        || ob.extract::<String>().is_ok()
+        // By type, as the impl's `str` arm is (#2555): a lone surrogate
+        // fails `extract::<String>()` and would answer TRUE here while the
+        // conversion answers `Value::String`.
+        || ob.is_instance_of::<PyString>()
         || ob.cast::<pyo3::types::PyTuple>().is_ok()
     {
         return false;
@@ -3808,11 +4022,13 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
     if django_json_encoded(ob).is_some() {
         return true;
     }
-    // The last two arms above the fallback block: `Vec<Bound<PyAny>>` is every
-    // sequence (`bytes`, a `deque`, a `range`, a class with an integer
-    // `__getitem__`) and collects REFERENCES, converting nothing; `PyDict` is
+    // The last two arms above the fallback block: `bounded_sequence_items` is
+    // every BOUNDED sequence (`bytes`, a `deque`, a `range`, a class with an
+    // integer `__getitem__` AND a `__len__`) and collects REFERENCES,
+    // converting nothing — the same gate the impl's list arm uses, so an
+    // unbounded legacy sequence (#2572) is declined by both; `PyDict` is
     // every real mapping.
-    if ob.extract::<Vec<Bound<'_, PyAny>>>().is_ok() {
+    if bounded_sequence_items(ob).is_some() {
         return false;
     }
     if ob.cast::<PyDict>().is_ok() {
@@ -3927,9 +4143,11 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
 ///
 /// Reached only in the fallback block, after every extraction has already
 /// failed, so it costs a string / int / list / dict / model nothing. A `list`,
-/// a `tuple`, a `dict` and anything with an integer `__getitem__` are extracted
-/// by PyO3 well before this, which is why a `range` / `bytes` / `deque` never
-/// arrives here.
+/// a `tuple`, a `dict` and anything with an integer `__getitem__` AND a
+/// `__len__` are extracted well before this ([`bounded_sequence_items`]),
+/// which is why a `range` / `bytes` / `deque` never arrives here. A legacy
+/// sequence with NO `__len__` does arrive (#2572), and is what the
+/// [`OPAQUE_ITEM_CAP`] walk below is for.
 ///
 /// # An object WITH attributes (#2478)
 ///
@@ -4000,7 +4218,9 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         .ok()?;
     let text = ob.str().ok()?;
     let display_safe = python_string_is_safe(text.as_any());
-    let display = text.extract::<String>().ok()?;
+    // Lossy, like every other `str()` crossing (#2555): a `__str__` that
+    // yields a lone surrogate keeps its carrier rather than declining it.
+    let display = py_string_lossy(&text).ok()?;
     // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
     // `complex(0)` the two spellings coincide, which is exactly why copying
     // `display` here would look correct on every builtin this function was
@@ -4008,7 +4228,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // class may define `__str__` and `__repr__` independently, so
     // `{{ p|pprint }}` over a `__bool__`-False instance renders whichever this
     // field holds. `repr()` is one call and answers it exactly.
-    let repr = ob.repr().ok()?.extract::<String>().ok()?;
+    let repr = py_string_lossy(&ob.repr().ok()?).ok()?;
     // ADR-027's transient handle (#2539). `Bound::unbind` needs no GIL token
     // and makes no Python CALL — it is a refcount bump plus an `Arc`
     // allocation, so attaching one adds no Rust→Python crossing to the

@@ -3141,7 +3141,8 @@ _FALLBACK_ARM_PATTERN = re.compile(
     r"if let Some\(\w+\) = (?P<pred>\w+)\(&ob\.to_owned\(\)\)"
     r'|ob\.getattr\("(?P<dunder>__\w+__)"\)'
     r"|ob\.is_instance\(&(?P<model>model_cls)\)"
-    r"|Ok\(Value::String\(ob\.str\(\)\?"
+    # The terminal arm: `str(o)`, crossed lossily since #2555.
+    r"|Ok\(Value::String\(py_str_lossy\("
 )
 
 #: The two arms of that block that carry an object NO `Value` variant models.
@@ -3160,7 +3161,7 @@ def _fallback_block() -> str:
     """The `else { … }` block of `impl FromPyObject for Value`, CODE only.
 
     Comment lines are dropped, and that is load-bearing rather than tidiness:
-    the block's own prose quotes the terminal `Ok(Value::String(ob.str()?))`
+    the block's own prose quotes the terminal `Ok(Value::String(py_str_lossy(…)))`
     while explaining why the `Decimal` arm sits where it does, so a scan over
     the raw text finds seven arms for six exits — which the count check below
     correctly refuses. Same reason `_rust_value_variants` strips `///`.

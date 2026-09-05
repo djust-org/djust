@@ -342,6 +342,12 @@ def crosses_as_encoded_by_conversion(obj: object) -> bool:
     """
     ...
 
+MAX_CONVERSION_DEPTH: int
+"""How deep the Python-to-``Value`` conversion recurses before an element
+crosses as ``str(o)`` (#2624). Python's own recursion limit, 1000 — the depth
+at which CPython itself refuses to ``repr``/``json.dumps`` a structure, and
+well inside the 8 MiB (glibc) / 16 MiB (macOS) stack every real thread has."""
+
 def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
 
@@ -1298,6 +1304,7 @@ __all__ = [
     "compute_template_hash",
     "crosses_as_encoded",
     "crosses_as_encoded_by_conversion",
+    "MAX_CONVERSION_DEPTH",
     "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",

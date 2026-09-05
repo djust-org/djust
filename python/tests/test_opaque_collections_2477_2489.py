@@ -809,13 +809,18 @@ class TestTheGateHasOneStatement:
         body = CORE_RS.read_text(encoding="utf-8").split("pub fn crosses_as_encoded(", 1)[1]
         body = body.split("\n}\n", 1)[0]
         # It asks the shared GATE, and it probes the two arms above the
-        # fallback block SHALLOWLY — `Vec<Bound<PyAny>>` collects references
+        # fallback block SHALLOWLY — `bounded_sequence_items` (the list arm's
+        # own gate since #2572, so the two cannot drift) collects references
         # and converts nothing.
         assert "opaque_gate(ob).is_some()" in body, body
-        assert "Vec<Bound<'_, PyAny>>" in body, body
+        assert "bounded_sequence_items(ob).is_some()" in body, body
         # ...and it does NOT run the conversion, which is the shape that
         # segfaulted on a presenter's object graph.
         assert "extract::<Value>()" not in body, body
+        gate = CORE_RS.read_text(encoding="utf-8").split("fn bounded_sequence_items<", 1)[1]
+        gate = gate.split("\n}\n", 1)[0]
+        assert "Vec<Bound<'py, PyAny>>" in gate, gate
+        assert "extract::<Value>()" not in gate, gate
         # The gate has exactly two consumers: this predicate and the payload
         # build. A third is a third policy for one question (#1646).
         source = CORE_RS.read_text(encoding="utf-8")
