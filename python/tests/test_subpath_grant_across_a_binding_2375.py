@@ -550,7 +550,7 @@ class TestNoBindingSHAPEEmitsAPayloadRaw:
         assert cells == len(self.WRAPPERS) * len(self.BODIES) * len(self.NAMES_SHAPES) ** 2
         assert leaks == [], leaks[:5]
 
-    def test_the_sweep_is_not_measuring_an_empty_space(self):
+    def test_the_sweep_reaches_live_markup_and_matches_django(self):
         """A sweep that reports zero because it built nothing that could
         discriminate is the same green as one that found nothing
         (#2129/#2135). Two independent things are asserted:
@@ -570,17 +570,18 @@ class TestNoBindingSHAPEEmitsAPayloadRaw:
         # not a leak, and it is what proves the sweep's outputs are not all
         # inert text.
         live = 0
-        empty_pairs = 0
+        mismatches = []
         for tpl, ctx in self._cells():
             try:
                 dj, du = both(tpl, ctx)
             except Exception:  # noqa: BLE001, S112
                 continue
             if dj != du:
-                empty_pairs += 1
+                mismatches.append((tpl, dj, du))
             if "<b>ok</b>" in du:
                 live += 1
         assert live > 0, "no cell emits live markup — the sweep cannot see an over-grant"
-        assert empty_pairs > 0, (
-            "every cell agrees with Django, so the sweep would report clean over any change at all"
-        )
+        # Scope restoration now closes the former over-escaping differences.
+        # Keep the detector/live-markup checks above and require byte parity
+        # for every pair that both engines successfully render.
+        assert not mismatches, mismatches[:5]

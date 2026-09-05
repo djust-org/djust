@@ -636,6 +636,15 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
     #: Every renderer site that resolves a user-written tag OPERAND — an
     #: expression Django would build a ``FilterExpression`` for. Each must go
     #: through one of :attr:`SHARED_RESOLVERS`.
+    WITH_BINDING_SITE = (
+        "for (name, expression) in assignments {\n"
+        "                let (value, safe) = get_value_safe(expression, context)?;"
+    )
+    INCLUDE_BINDING_SITE = (
+        "for (key, expression) in with_vars {\n"
+        "                    let (value, safe) = get_value_safe(expression, context)?;"
+    )
+
     OPERAND_SITES = {
         (
             "let iterable_value = get_value_ignoring_failures(iterable, context)?;"
@@ -646,12 +655,8 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
         # thin wrapper over `get_value_safe` that drops that `bool`, so the
         # #2325 invariant this row pins — the operand goes through the ONE
         # filter-aware resolver rather than a bare `context.get` — is unchanged.
-        (
-            "let (value, runtime_safe) = get_value_safe(expression, context)?;"
-        ): "{% with %} assignment (#2325, #2363)",
-        (
-            "let (value, runtime_safe) = get_value_safe(value_expr, context)?;"
-        ): "{% include ... with %} (#2325, #2363)",
+        WITH_BINDING_SITE: "{% with %} assignment (#2325, #2363)",
+        INCLUDE_BINDING_SITE: "{% include ... with %} (#2325, #2363)",
         (
             "Ok(get_value_ignoring_failures(condition, context)?.is_truthy())\n}"
         ): "{% if %} truthiness (#2325)",
@@ -674,8 +679,8 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
     IGNORE_FAILURES_SPLIT = {
         "get_value_ignoring_failures(iterable, context)": True,
         "get_value_ignoring_failures(condition, context)": True,
-        "get_value_safe(expression, context)": False,
-        "get_value_safe(value_expr, context)": False,
+        WITH_BINDING_SITE: False,
+        INCLUDE_BINDING_SITE: False,
     }
 
     def test_every_operand_site_routes_through_the_shared_resolver(self) -> None:

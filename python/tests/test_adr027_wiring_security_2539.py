@@ -996,10 +996,9 @@ class TestTheSwitch2539:
         """The in-suite gate-off: the SAME template and the SAME context
         answer Django's bytes with the flag on and today's with it off. If
         this ever passes in both states, the flag has stopped gating."""
-        # `{% with %}` over a bound name that SHADOWS a top-level one — the
-        # net's row M6, wrong on every entry today and fixed on every entry by
-        # the handle riding in the bound value.
-        source = "{% with x=p.0 %}{{ x.cls_attr }}{% endwith %}"
+        # A filtered loop cannot use a source-path alias in the eager hatch.
+        # Its elements retain their live handles under the default path.
+        source = "{% for x in p|slice:':1' %}{{ x.cls_attr }}{% endfor %}"
 
         class _Cls:
             cls_attr = "class-level"
@@ -1017,7 +1016,7 @@ class TestTheSwitch2539:
             off = render(source, ctx())
         assert on != off, "the ADR-027 flag changed nothing — it is not wired"
         assert on == "class-level", on
-        assert off == "OUTER", off
+        assert off == "", off
 
 
 # ---------------------------------------------------------------------------

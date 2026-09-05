@@ -42,11 +42,10 @@ What is pinned, per issue
   (rows N, N2), plus the unfiled real-entry instance: a plain object inside a
   TOP-LEVEL list/tuple reaches no attribute on the LiveView path, filter or no
   filter (rows N0, N0b).
-* #2505 — a loop / ``{% with %}`` variable shadowing a top-level name resolves
-  against the OUTER object (rows M2, M3, M6 render ``OUTER``). Premise
-  correction to the issue: the hazard is NOT confined to the alias-less
-  shapes — when the shadowed name is itself a sidecar entry,
-  ``raw.contains_key(head)`` wins before the alias is consulted (M3, M6).
+* #2505 — local bindings no longer read the shadowed OUTER object. The eager
+  hatch resolves unfiltered source aliases on plain entries (M3, M6), while
+  filtered/LiveView cases retain the object-attribute misses recorded below.
+  The default live-handle path matches Django for all three rows.
 * #2513 — the page-shell path wires no sidecar on either branch.
 * #2506 / #2507 — permanent security pins: a lookup exception never fails
   OPEN; ``{{ c.unmount }}`` never runs a mutator.
@@ -549,16 +548,16 @@ ROWS: list[Row] = [
         "{% for x in p|slice:':2' %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        OUTER_2,
-        OUTER_2,
+        ",,",
+        ",,",
     ),
     _r(
         "M3",
         "{% for x in p %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        OUTER_2,
-        OUTER_2,
+        CLASS_LEVEL_2,
+        ",,",
     ),
     _r(
         "M4",
@@ -581,8 +580,8 @@ ROWS: list[Row] = [
         "{% with x=p.0 %}{{ x.cls_attr }}{% endwith %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         "class-level",
-        "OUTER",
-        "OUTER",
+        "class-level",
+        "",
     ),
     _r(
         "N",
@@ -660,7 +659,7 @@ ROW_BY_ID: dict[str, Row] = {row.id: row for row in ROWS}
 #: Rows whose djust cell is NOT Django's answer today, per path — a stated
 #: SET, not a floor (#1125): an unrelated PR that fixes or breaks a cell must
 #: edit the table AND this set. The floor rows (E1–E4) are listed apart.
-PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M3 M5 M6 N N2 P Q T V".split())
+PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M5 N N2 P Q T V".split())
 LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P Q T V".split())
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
@@ -942,7 +941,7 @@ class TestTheDifferentialTable:
         assert held == expected_held, (
             f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
         )
-        assert len(moved) == 29, f"expected 29 cells to move, got {len(moved)}: {sorted(moved)}"
+        assert len(moved) == 27, f"expected 27 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
@@ -1466,19 +1465,22 @@ class TestFilteredAndDictViewOperands2504:
 
 
 @pytest.mark.django_db
-class TestShadowingResolvesAgainstTheOuterObject2505:
-    """#2505: the wrong bytes are the OUTER object's, not empty — on both djust
-    paths, for the filtered loop (M2), the unfiltered loop (M3; the premise
-    correction) and `{% with %}` (M6). Django never answers `OUTER`."""
+class TestShadowingNeverResolvesAgainstTheOuterObject2505:
+    """Local bindings cannot resolve attributes on a shadowed outer object.
+
+    The eager hatch still misses filtered/LiveView object attributes, while
+    supported source aliases and the default lazy path match Django.
+    """
 
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
     @pytest.mark.parametrize("path", PATHS)
-    def test_the_outer_object_answers(self, row_id: str, path: str) -> None:
-        """#2505's bug, pinned on the HATCH axis where it still lives."""
+    def test_the_hatch_never_uses_the_shadowed_object(self, row_id: str, path: str) -> None:
+        """Pin the hatch's remaining misses without restoring stale lookups."""
         row = ROW_BY_ID[row_id]
         with resolve_lazy(False):
             actual = RENDER[path](row.source, row.make_ctx())
-        assert "OUTER" in actual and actual == recorded(row, path)
+        assert "OUTER" not in actual
+        assert actual == recorded(row, path)
         assert "OUTER" not in django_render(row.source, row.make_ctx())
 
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])

@@ -183,125 +183,55 @@ def test_gate_off_clear_without_reset_loses_theme_handler_1928():
     assert has_tag_handler("theme_panel")
 
 
-def test_reset_heals_regroup_cross_registry_pollution_2053():
-    """The reset strips a built-in assign handler from the WRONG registry.
-
-    The #2053 class (the "regroup xdist ordering pollution" bug): a
-    polluter that blindly re-registers EVERY built-in via
-    ``register_tag_handler`` — the plain, non-assign registry — without
-    checking ``isinstance(handler, AssignTagHandler)`` plants ``regroup``
-    (an assign-only built-in) in the WRONG registry. This is exactly what
-    ``tests/unit/test_tag_registry.py`` and
-    ``tests/benchmarks/test_tag_registry.py`` did before their #2053 fix:
-    both had a restore fixture that looped over
-    ``djust.template_tags._registered_handlers`` and called
-    ``register_tag_handler(name, handler)`` for every entry, including
-    ``regroup``.
-
-    Because the Rust parser decides a tag's AST node type at PARSE time by
-    checking the plain registry BEFORE the assign registry
-    (``crates/djust_templates/src/parser.rs`` —
-    ``registry::handler_exists`` is checked before
-    ``registry::assign_handler_exists``), the stray plain-registry entry
-    always wins for ``{% regroup %}`` — even though
-    ``has_assign_tag_handler("regroup")`` simultaneously (and correctly)
-    reports ``True``. The #1928 fix (re-asserting the correct assign
-    registration) does NOT heal this: the plain-registry entry must be
-    actively stripped too, or the Rust parser keeps building the wrong
-    node and every downstream ``{% regroup %}`` render 500s with
-    "Handler 'regroup' render() must return a string"
-    (``python/djust/tests/test_regroup_tag.py``, all 9
-    ``render_template``-driven cases).
-    """
+@pytest.fixture
+def assign_registry_probe(monkeypatch):
+    """Keep the legacy assign-registry regression independent of regroup's bridge."""
     rust = pytest.importorskip("djust._rust")
-    has_tag_handler = rust.has_tag_handler
-    has_assign_tag_handler = rust.has_assign_tag_handler
-    register_tag_handler = rust.register_tag_handler
-    render_template = rust.render_template
+    from djust.template_tags import AssignTagHandler, _registered_handlers
 
-    from djust.template_tags import _registered_handlers
+    class ProbeHandler(AssignTagHandler):
+        def render(self, args, context):
+            return {"probe": "assigned"}
+
+    name = "isolation_assign_probe_2053"
+    handler = ProbeHandler()
+    monkeypatch.setitem(_registered_handlers, name, handler)
+    rust.register_assign_tag_handler(name, handler)
+    try:
+        yield name, handler
+    finally:
+        rust.unregister_tag_handler(name)
+        rust.unregister_assign_tag_handler(name)
+
+
+def test_reset_heals_assign_cross_registry_pollution_2053(assign_registry_probe):
+    """Reset must strip a stray plain entry, not merely restore the assign entry."""
+    rust = pytest.importorskip("djust._rust")
     from djust.test_isolation import reset_djust_globals
 
-    # The polluter: the exact shape the buggy fixtures had — blindly
-    # re-register every built-in (including the assign-only ``regroup``)
-    # via the plain, non-assign registration function.
-    for name, handler in _registered_handlers.items():
-        register_tag_handler(name, handler)
+    name, handler = assign_registry_probe
+    rust.register_tag_handler(name, handler)
+    assert rust.has_tag_handler(name)
+    assert rust.has_assign_tag_handler(name)
 
-    assert has_tag_handler("regroup"), (
-        "precondition: the polluter should have planted 'regroup' in the "
-        "plain TAG_HANDLERS registry"
-    )
-    assert has_assign_tag_handler("regroup"), (
-        "precondition: the polluter never touched the assign registry, so "
-        "it should still (correctly) report 'regroup' as registered there "
-        "too — this is what makes the bug so quiet: registration checks "
-        "look fine, only the actual render breaks"
-    )
-
-    # The cure.
     reset_djust_globals()
-
-    assert not has_tag_handler("regroup"), (
-        "reset_djust_globals must strip 'regroup' from the plain registry, "
-        "not just re-assert the assign registration — the Rust parser "
-        "checks the plain registry FIRST, so a stray entry there always "
-        "wins regardless of the assign registry being correct (#2053)"
-    )
-    assert has_assign_tag_handler("regroup"), (
-        "reset_djust_globals must keep 'regroup' registered in the assign registry"
+    assert not rust.has_tag_handler(name)
+    assert rust.has_assign_tag_handler(name)
+    assert (
+        rust.render_template("{% " + name + " %}{{ probe }}{# 2053-heals-marker #}", {})
+        == "assigned"
     )
 
-    # Close the loop against the REAL render path, not just registry
-    # introspection — a fresh (uncached) template string containing
-    # {% regroup %} must render correctly after the cure.
-    out = render_template(
-        "{% regroup cities by country as gl %}{% for g in gl %}{{ g.grouper }},{% endfor %}"
-        "{# 2053-heals-marker #}",
-        {"cities": [{"name": "Mumbai", "country": "India"}]},
-    )
-    assert out == "India,"
 
-
-def test_gate_off_stale_plain_registration_breaks_regroup_render_2053():
-    """GATE-OFF (#1468): a stray plain-registry entry breaks the real render.
-
-    Proves the #2053 reproduction is real against the REAL render path
-    (not just the registry-introspection assertions in the previous test):
-    with 'regroup' polluted into the plain registry and NOT stripped,
-    ``render_template()`` fails with the exact production symptom, even
-    though the assign registry is simultaneously correct. (The autouse
-    fixture restores cleanly before the next test, so this leaves no
-    cross-test pollution.)
-    """
+def test_gate_off_stale_plain_registration_breaks_assign_render_2053(assign_registry_probe):
+    """Without reset the parser selects the wrong registry and rendering fails."""
     rust = pytest.importorskip("djust._rust")
-    register_tag_handler = rust.register_tag_handler
-    has_assign_tag_handler = rust.has_assign_tag_handler
-    render_template = rust.render_template
-
-    from djust.template_tags import _registered_handlers
-
-    for name, handler in _registered_handlers.items():
-        register_tag_handler(name, handler)
-    assert has_assign_tag_handler("regroup"), (
-        "precondition: the assign registry is untouched by this polluter"
-    )
-
-    # A fresh, distinctive template string so this test's parse can't be
-    # served from a cache entry written by some other test.
-    template = (
-        "{% regroup cities by country as gl %}{% for g in gl %}{{ g.grouper }},{% endfor %}"
-        "{# 2053-gate-off-marker #}"
-    )
+    name, handler = assign_registry_probe
+    rust.register_tag_handler(name, handler)
+    assert rust.has_assign_tag_handler(name)
+    template = "{% " + name + " %}{{ probe }}{# 2053-gate-off-marker #}"
     with pytest.raises(RuntimeError, match="must return a string"):
-        render_template(template, {"cities": []})
-
-    # Restore for the rest of THIS process tick (the autouse fixture also
-    # does this before the next test, but be a good citizen within the
-    # test body).
-    from djust.test_isolation import reset_djust_globals
-
-    reset_djust_globals()
+        rust.render_template(template, {})
 
 
 def test_reset_is_optional_dep_safe(monkeypatch):

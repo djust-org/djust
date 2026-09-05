@@ -521,18 +521,19 @@ def _production_lines(src: str) -> list[str]:
 
 
 class TestSecurityPins:
-    def test_exactly_two_production_writers_of_set_autoescape(self):
-        """The render arm and the `include … only` copy — nothing else. A
-        third writer (a context key, a pyfunction, a request-derived value) is
-        the class of bug this pin refuses (the #1817 single-arming shape)."""
+    def test_only_lexical_policy_and_include_copy_write_autoescape(self):
+        """Only the lexical setting/restoration and the `include … only` copy.
+        Context keys, pyfunctions, and request-derived values must not gain
+        a separate way to alter the policy."""
         writers: list[tuple[str, str]] = []
         for rs in sorted(CRATES.glob("*/src/**/*.rs")):
             for line in _production_lines(rs.read_text(encoding="utf-8")):
                 if "set_autoescape(" in line and "pub fn set_autoescape" not in line:
                     writers.append((rs.relative_to(CRATES).as_posix(), line.strip()))
         assert sorted(writers) == [
+            ("djust_templates/src/renderer.rs", "context.set_autoescape(*on);"),
+            ("djust_templates/src/renderer.rs", "context.set_autoescape(previous);"),
             ("djust_templates/src/renderer.rs", "fresh.set_autoescape(context.autoescape());"),
-            ("djust_templates/src/renderer.rs", "inner.set_autoescape(*on);"),
         ], writers
 
     def test_the_flag_is_not_a_term_of_the_safety_grant(self):

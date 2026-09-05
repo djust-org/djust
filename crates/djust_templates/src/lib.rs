@@ -69,19 +69,28 @@ struct FlattenedNodes {
     node_deps: Vec<HashSet<String>>,
 }
 
-/// Flatten `Node::Block` children into their parent level.
-/// When Django's template engine resolves `{% extends %}`, it leaves
-/// `{% block content %}...{% endblock %}` intact but they render identically
-/// to just rendering their children. Flattening exposes each child as a
-/// separate node for partial rendering.
+/// Expose pure block children as separate nodes for partial rendering.
+/// Blocks containing context-mutating or opaque nodes must retain their
+/// lexical scope so assignments cannot escape into following siblings.
 fn flatten_blocks(nodes: Vec<Node>) -> Vec<Node> {
     let mut result = Vec::new();
     for node in nodes {
         match node {
             Node::Block {
-                nodes: children, ..
+                name,
+                nodes: children,
             } => {
-                result.extend(flatten_blocks(children));
+                if parser::extract_per_node_deps(&children)
+                    .iter()
+                    .any(|deps| deps.contains("*"))
+                {
+                    result.push(Node::Block {
+                        name,
+                        nodes: children,
+                    });
+                } else {
+                    result.extend(flatten_blocks(children));
+                }
             }
             other => result.push(other),
         }
@@ -181,7 +190,7 @@ impl Template {
             return;
         }
         // Only flatten when blocks exist and extends is NOT used
-        // (Django resolved extends, blocks are semantic no-ops)
+        // (inheritance keeps its own resolved node tree)
         let has_blocks = self.nodes.iter().any(|n| matches!(n, Node::Block { .. }));
         if has_blocks && !self.uses_extends() {
             let flat = flatten_blocks(self.nodes.clone());
