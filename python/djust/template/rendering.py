@@ -108,8 +108,12 @@ def _missing_template_exception(error: Exception, backend: Any) -> TemplateDoesN
         name = _missing_template_name(str(error))
     if name is None:
         return None
+    skipped = set(getattr(error, "djust_skipped_template_paths", ()))
     tried = [
-        (Origin(name=abspath(path), template_name=name, loader=backend), "Source does not exist")
+        (
+            Origin(name=abspath(path), template_name=name, loader=backend),
+            "Skipped to avoid recursion" if path in skipped else "Source does not exist",
+        )
         for path in getattr(error, "djust_tried_template_paths", ())
     ]
     return TemplateDoesNotExist(name, tried=tried, backend=backend)

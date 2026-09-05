@@ -1,0 +1,1 @@
+- **Template inheritance history**: Allow same-name parent templates in later directories, keep inheritance history local to each include, preserve skipped-origin diagnostics, and prevent the Django test adapter from overwriting sources from separate in-memory loaders.

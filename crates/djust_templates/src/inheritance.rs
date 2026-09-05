@@ -414,6 +414,21 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
 pub trait TemplateLoader {
     fn load_template(&self, name: &str) -> Result<Vec<Node>>;
 
+    /// Identity of the first source this loader would select, when available.
+    fn template_origin(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    /// Load an ancestor while excluding origins already in this extends chain.
+    /// Loaders without origin support retain their existing depth-limit behavior.
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        _skip: &[String],
+    ) -> Result<(Vec<Node>, Option<String>)> {
+        Ok((self.load_template(name)?, None))
+    }
+
     /// Like [`load_template`](Self::load_template), but returns a
     /// reference-counted, immutable slice whose ALLOCATION is stable across
     /// calls when the underlying source is unchanged (#2074).
@@ -576,6 +591,10 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
     let mut current_name: Option<String> = template_name.map(str::to_string);
+    let mut history: Vec<String> = template_name
+        .and_then(|name| loader.template_origin(name))
+        .into_iter()
+        .collect();
 
     // Follow extends chain up to max_depth
     while depth < max_depth {
@@ -592,7 +611,11 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
             } else {
                 parent_name
             };
-            let mut parent_nodes = loader.load_template(&parent_name)?;
+            let (mut parent_nodes, origin) =
+                loader.load_template_skipping(&parent_name, &history)?;
+            if let Some(origin) = origin {
+                history.push(origin);
+            }
             set_include_origins(&mut parent_nodes, &parent_name)?;
             chain.add_parent(parent_nodes);
             current_name = Some(parent_name);
@@ -714,63 +737,91 @@ impl FilesystemTemplateLoader {
     }
 
     /// Find a template file by searching through template directories
-    fn find_template(&self, name: &str) -> Result<std::path::PathBuf> {
+    fn find_template(&self, name: &str) -> Result<PathBuf> {
+        self.find_template_skipping(name, &[])
+    }
+
+    fn find_template_skipping(&self, name: &str, skip: &[String]) -> Result<PathBuf> {
+        let mut tried = Vec::new();
+        let mut skipped = Vec::new();
         for dir in &self.template_dirs {
-            // Containment FIRST: a name that escapes the search directory is
-            // skipped, never joined. See `template_name_is_contained`.
+            // Check containment before joining or touching the filesystem.
             if !template_name_is_contained(name) {
                 continue;
             }
-            let path = dir.join(name);
-            // `is_file`, not `exists`: a DIRECTORY named `x.html` satisfied
-            // `exists()` and then failed on read (the #1805 is_dir-parity
-            // class). Django's loaders stat for a file.
+            // Django safe_join uses absolute, lexically normalized names.
+            // Do not canonicalize symlinks: distinct loader origins can point
+            // at the same physical file and remain distinct in Django.
+            let absolute = std::path::absolute(dir.join(name))?;
+            let mut path = PathBuf::new();
+            for component in absolute.components() {
+                match component {
+                    std::path::Component::ParentDir => {
+                        path.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    other => path.push(other.as_os_str()),
+                }
+            }
+            let origin = path.to_string_lossy().into_owned();
+            tried.push(origin.clone());
+            if skip.contains(&origin) {
+                skipped.push(origin);
+                continue;
+            }
             if path.is_file() {
                 return Ok(path);
             }
         }
-
-        let tried = self
-            .template_dirs
-            .iter()
-            .filter(|_| template_name_is_contained(name))
-            .map(|dir| dir.join(name).to_string_lossy().into_owned())
-            .collect();
-        Err(DjangoRustError::TemplateNotFound {
-            name: name.to_string(),
-            tried,
-        })
+        if skipped.is_empty() {
+            Err(DjangoRustError::TemplateNotFound {
+                name: name.to_string(),
+                tried,
+            })
+        } else {
+            Err(DjangoRustError::TemplateHistoryNotFound {
+                name: name.to_string(),
+                tried,
+                skipped,
+            })
+        }
     }
-}
 
-impl TemplateLoader for FilesystemTemplateLoader {
-    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
-        use crate::lexer;
-        use crate::parser;
-
-        // Find template file
-        let path = self.find_template(name)?;
-
-        // Read template source
-        let source = std::fs::read_to_string(&path).map_err(|e| {
+    fn parse_template_path(&self, name: &str, path: &std::path::Path) -> Result<Vec<Node>> {
+        let source = std::fs::read_to_string(path).map_err(|e| {
             DjangoRustError::TemplateError(format!(
                 "Failed to read template {}: {}",
                 path.display(),
                 e
             ))
         })?;
-
-        // Parse template. Use `parse_with_source` so each loaded
-        // template gets its own boundary-marker ID prefix derived
-        // from its own source — prevents `if-<prefix>-N` collisions
-        // when a parent + child + included templates are composed
-        // in a single rendered output (Stage 11 finding on PR #1363,
-        // #1358 Iter 1).
-        let tokens = lexer::tokenize(&source)?;
-        let mut nodes = parser::parse_with_source(&tokens, &source)
+        let tokens = crate::lexer::tokenize(&source)?;
+        let mut nodes = crate::parser::parse_with_source(&tokens, &source)
             .map_err(DjangoRustError::into_template_syntax)?;
         set_include_origins(&mut nodes, name)?;
         Ok(nodes)
+    }
+}
+
+impl TemplateLoader for FilesystemTemplateLoader {
+    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+        self.parse_template_path(name, &self.find_template(name)?)
+    }
+
+    fn template_origin(&self, name: &str) -> Option<String> {
+        self.find_template(name)
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        skip: &[String],
+    ) -> Result<(Vec<Node>, Option<String>)> {
+        let path = self.find_template_skipping(name, skip)?;
+        let nodes = self.parse_template_path(name, &path)?;
+        Ok((nodes, Some(path.to_string_lossy().into_owned())))
     }
 
     /// Cached counterpart of [`load_template`](Self::load_template) — see

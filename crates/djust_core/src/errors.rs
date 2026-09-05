@@ -27,6 +27,14 @@ pub enum DjangoRustError {
     #[error("Template error: Template not found: {name}\nSearched in:\n{}", tried.iter().map(|path| format!("  - {path}")).collect::<Vec<_>>().join("\n"))]
     TemplateNotFound { name: String, tried: Vec<String> },
 
+    /// Lookup exhausted after excluding sources already used by inheritance.
+    #[error("Template error: Template not found: {name}")]
+    TemplateHistoryNotFound {
+        name: String,
+        tried: Vec<String>,
+        skipped: Vec<String>,
+    },
+
     /// Django Engine.select_template reports candidate names without origins.
     #[error("Template error: Template not found: {name}")]
     TemplateSelectionNotFound { name: String },
@@ -132,12 +140,20 @@ impl From<DjangoRustError> for PyErr {
             DjangoRustError::TemplateNotFound {
                 ref name,
                 ref tried,
+            }
+            | DjangoRustError::TemplateHistoryNotFound {
+                ref name,
+                ref tried,
+                ..
             } => {
                 let error = PyRuntimeError::new_err(err.to_string());
                 Python::attach(|py| {
                     let value = error.value(py);
                     let _ = value.setattr("djust_missing_template_name", name);
                     let _ = value.setattr("djust_tried_template_paths", tried.clone());
+                    if let DjangoRustError::TemplateHistoryNotFound { ref skipped, .. } = err {
+                        let _ = value.setattr("djust_skipped_template_paths", skipped.clone());
+                    }
                 });
                 error
             }

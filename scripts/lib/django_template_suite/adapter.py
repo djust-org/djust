@@ -99,11 +99,15 @@ class DjustEngine(RealEngine):  # type: ignore[misc, valid-type]
                 # Django's runtests.py, which sets its own TMPDIR) removes it.
                 if self._djust_tmp is None:
                     self._djust_tmp = tempfile.mkdtemp(prefix="djust-suite-")
+                # A loader is a separate origin namespace, even when names
+                # overlap. Sharing one directory silently overwrote overrides.
+                directory = Path(self._djust_tmp) / str(len(dirs))
+                directory.mkdir(parents=True, exist_ok=True)
                 for name, source in loader.templates_dict.items():
-                    path = Path(self._djust_tmp) / name
+                    path = directory / name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(str(source), encoding="utf-8")
-                dirs.append(Path(self._djust_tmp))
+                dirs.append(directory)
             elif isinstance(loader, (FilesystemLoader, AppDirsLoader)) or hasattr(
                 loader, "get_dirs"
             ):
