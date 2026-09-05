@@ -497,6 +497,16 @@ def serialize_queryset(
     Fast Rust-based serialization that prevents N+1 queries by
     pre-fetching related fields.
 
+    Gated by the serialization floor (#2688). Every attribute read goes through
+    ``djust.optimization.codegen.emittable_names`` — the same ONE authority the
+    eager, sidecar and JIT-codegen channels call — so a denied name
+    (``password``, ``is_superuser``, ``get_session_auth_hash``, any
+    ``_``-prefixed name, anything in ``DJUST_SENSITIVE_FIELDS`` or a per-model
+    ``djust_exclude_fields``) is simply ABSENT from the returned dicts even when
+    *field_paths* names it. Callers must fall back to
+    ``djust.serialization.normalize_django_value`` (itself gated) if this
+    raises — never to an ungated read.
+
     Args:
         objects: List of Django model instances
         field_paths: List of field paths to serialize (e.g., ["id", "user.name"])

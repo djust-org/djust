@@ -273,6 +273,14 @@ class JITMixin:
                 # Rust likely can't access some paths (e.g. @property). A nullable FK
                 # on item 0 could cause a false positive, but the codegen fallback is
                 # correct (just slightly slower), so this is an acceptable trade-off.
+                #
+                # Since #2688 a path the serialization floor DENIES also lands here:
+                # Rust now omits it (rather than shipping the value), so the key
+                # count is short and this re-serializes through codegen. That is
+                # wasted work, never a leak — codegen consults the same one gate
+                # (`codegen.emittable_names`) and omits the same names. It only
+                # costs anything for a template that names a denied field, which
+                # is a bug in the template.
 
                 func_name = f"serialize_{variable_name}_{template_hash}"
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)

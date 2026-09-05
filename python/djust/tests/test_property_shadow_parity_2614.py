@@ -29,6 +29,7 @@ authority, ``DjangoJSONEncoder._attr_is_serializable``. This file pins:
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 
@@ -373,7 +374,7 @@ class TestStructuralChokepoint:
 # ``password`` FIELD shipped the value in ``get_context_data()['m']`` and in
 # the rendered html — the floor the eager and sidecar channels enforce was
 # never consulted. The generated code now calls the same ONE chokepoint via
-# ``codegen._attr_is_emittable`` for every attribute it reads; a denied name
+# ``codegen.emittable_names`` for every attribute it reads; a denied name
 # is omitted (renders as ``string_if_invalid``, i.e. empty), never shipped.
 # ---------------------------------------------------------------------------
 
@@ -539,27 +540,397 @@ class TestJitRealRenderPaths:
         assert LEAK_JIT not in wire, wire
 
 
+#: Every path shape the generator can emit: flat, nested object, indexed list,
+#: ``.all()`` iteration, a root ``get_*`` method, a nested ``get_*`` method,
+#: a list of lists and an object nested under ``.all()``. The structural check
+#: below must hold for ALL of them, not a representative few (#1104).
+EVERY_SHAPE = [
+    "a",
+    "b.c",
+    "d.0.e",
+    "f.all.g",
+    "get_h",
+    "i.get_j",
+    "k.0.l.0.m",
+    "n.all.o.p",
+]
+
+
+def _result_writes(code: str):
+    """Every ``<result-dict>[...] = ...`` the generated *code* performs.
+
+    Yields ``(key, guards)`` where *key* is the dict key being written and
+    *guards* is the set of names membership-tested by every enclosing ``if``.
+
+    Walks the AST rather than grepping for ``hasattr(``: the old text check
+    only inspected lines that happened to contain ``hasattr(``, so a
+    ``getattr``-shaped emission — or any new emission site spelled differently
+    — was invisible to it and the pin passed while the site was ungated. The
+    invariant this expresses is about the WRITE, so it cannot be dodged by
+    changing how the read is spelled.
+    """
+    tree = ast.parse(code)
+
+    def root_name(node):
+        while isinstance(node, ast.Subscript):
+            node = node.value
+        return node.id if isinstance(node, ast.Name) else None
+
+    def key_of(node):
+        # Innermost subscript slice: result['a']['b'] emits key 'b'.
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            return node.slice.value
+        return None
+
+    def membership_names(test):
+        """``'x' in _ok_N`` sub-expressions of an ``if`` test."""
+        found = set()
+        for sub in ast.walk(test):
+            if (
+                isinstance(sub, ast.Compare)
+                and len(sub.ops) == 1
+                and isinstance(sub.ops[0], ast.In)
+                and isinstance(sub.left, ast.Constant)
+                and isinstance(sub.comparators[0], ast.Name)
+                and sub.comparators[0].id.startswith("_ok_")
+            ):
+                found.add(sub.left.value)
+        return found
+
+    out = []
+
+    def walk(body, guards):
+        for stmt in body:
+            if isinstance(stmt, ast.If):
+                inner = guards | membership_names(stmt.test)
+                walk(stmt.body, inner)
+                walk(stmt.orelse, guards)
+                continue
+            if isinstance(stmt, (ast.For, ast.While)):
+                walk(stmt.body, guards)
+                walk(stmt.orelse, guards)
+                continue
+            if isinstance(stmt, ast.Try):
+                walk(stmt.body, guards)
+                for h in stmt.handlers:
+                    walk(h.body, guards)
+                walk(stmt.orelse, guards)
+                walk(stmt.finalbody, guards)
+                continue
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(stmt.body, guards)
+                continue
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if not isinstance(target, ast.Subscript):
+                        continue
+                    if root_name(target) is None:
+                        continue
+                    key = key_of(target)
+                    if key is not None:
+                        out.append((key, guards))
+
+    walk(tree.body, frozenset())
+    return out
+
+
+def unguarded_emissions(code: str):
+    """Keys written into a result dict with no enclosing ``'<key>' in _ok_N``."""
+    return [key for key, guards in _result_writes(code) if key not in guards]
+
+
 class TestStructuralChokepointCodegen:
     """Codegen is a pinned caller of the chokepoint (#1125) — three layers, so
     gating any one off (the helper, the emission, the binding) goes red."""
 
     def test_helper_calls_the_chokepoint(self):
-        src = inspect.getsource(_codegen._attr_is_emittable)
+        src = inspect.getsource(_codegen.emittable_names)
         assert "_attr_is_serializable(" in src
         assert "_field_is_serializable(" not in src
         assert "_SENSITIVE_MODEL_METHODS" not in src
 
     def test_every_emission_is_guarded(self):
-        code = _codegen.generate_serializer_code(
-            "M", ["a", "b.c", "d.0.e", "f.all.g", "get_h", "i.get_j"], "s"
+        """Every write into the result dict sits under the gate for its key.
+
+        Mechanical, not textual: `_result_writes` walks the AST of the
+        generated code, so a site that reads via ``getattr`` (or any other
+        spelling) is still caught — the assertion is about the WRITE.
+        """
+        code = _codegen.generate_serializer_code("M", EVERY_SHAPE, "s")
+        writes = _result_writes(code)
+        assert len(writes) >= len(EVERY_SHAPE), (len(writes), code)
+        assert unguarded_emissions(code) == [], code
+
+    def test_the_guard_check_catches_an_unguarded_getattr_site(self):
+        """Empirical canary (#1459): the check must FAIL on a real violation.
+
+        The old text-based pin filtered for lines containing ``hasattr(``, so
+        a ``getattr``-shaped emission was invisible to it. Feed exactly that
+        shape in and assert the AST check reports it — otherwise this whole
+        class is decorative (#1859).
+        """
+        good = _codegen.generate_serializer_code("M", ["a"], "s")
+        assert unguarded_emissions(good) == [], good
+
+        # A getattr-shaped, gate-free emission — the shape the old pin missed.
+        leaked = good.replace(
+            "    return result",
+            "    result['password'] = getattr(obj, 'password', None)\n    return result",
         )
-        reads = [ln for ln in code.splitlines() if "hasattr(" in ln]
-        assert reads, code
-        for ln in reads:
-            assert "_djust_attr_ok(" in ln, ln
-        assert len(re.findall(r"_djust_attr_ok\(", code)) == len(reads), code
+        assert leaked != good
+        assert unguarded_emissions(leaked) == ["password"], leaked
+
+        # ...and it is still reported when it hides under an unrelated guard.
+        nested = good.replace(
+            "    return result",
+            "    if 'a' in _ok_0:\n"
+            "        result['password'] = getattr(obj, 'password', None)\n"
+            "    return result",
+        )
+        assert unguarded_emissions(nested) == ["password"], nested
 
     def test_compiled_namespace_binds_the_helper(self):
         code = _codegen.generate_serializer_code("M", ["a"], "s")
         fn = _codegen.compile_serializer(code, "s")
-        assert fn.__globals__["_djust_attr_ok"] is _codegen._attr_is_emittable
+        assert fn.__globals__["_djust_gate"] is _codegen.emittable_names
+
+    def test_gate_resolves_once_per_object_level_not_per_attribute(self):
+        """The prologue shape the Rust caller shares (#2685 perf).
+
+        Three flat names on one object = ONE gate call and three membership
+        tests; a nested object resolves its own gate because it may be a
+        different model.
+        """
+        flat = _codegen.generate_serializer_code("M", ["a", "b", "c"], "s")
+        assert flat.count("_djust_gate(") == 1, flat
+        assert len(re.findall(r"in _ok_\d+", flat)) == 3, flat
+
+        nested = _codegen.generate_serializer_code("M", ["a", "child.x", "child.y"], "s")
+        assert nested.count("_djust_gate(") == 2, nested
+
+
+# ---------------------------------------------------------------------------
+# Channel 4 — the RUST queryset serializer (#2688, link N+1 of #2685).
+#
+# A QuerySet in the context does NOT go through the Python codegen:
+# ``mixins/jit.py`` routes it to ``djust._rust.serialize_queryset``, whose
+# ``serialize_object_with_paths`` did a bare ``obj.getattr(name)`` with no floor
+# at all. So gating the codegen path (#2685) left ``self.users =
+# User.objects.all()`` + ``{{ u.password }}`` shipping the pbkdf2 hash on the
+# GET response AND in both WS frames. Rust now calls the same ONE Python
+# authority (``codegen.emittable_names``) once per object level.
+# ---------------------------------------------------------------------------
+
+QsModel = type(
+    "QsModel2688",
+    (models.Model,),
+    {
+        "__module__": __name__,
+        "label": models.CharField(max_length=32, default=""),
+        "password": models.CharField(max_length=64, default=""),
+        "get_session_auth_hash": property(lambda self: f"{LEAK_JIT}:get_session_auth_hash"),
+        "_secret": property(lambda self: f"{LEAK_JIT}:_secret"),
+        "__str__": lambda self: f"qs({self.pk})",
+        "Meta": type("Meta", (), {"app_label": "tests"}),
+    },
+)
+
+
+def _qs_rows(n=2):
+    rows = []
+    for i in range(n):
+        obj = QsModel(label=f"visible{i}", password=f"{LEAK_JIT}:password")
+        obj.pk = obj.id = i + 1
+        rows.append(obj)
+    return rows
+
+
+class _QsView(LiveView):
+    """A real QuerySet on a public attr — the #2688 shape."""
+
+    template = (
+        '<div dj-view="djust.tests.test_property_shadow_parity_2614._QsView" dj-id="0">'
+        "n={{ n }}"
+        "{% for u in users %}[{{ u.username }}|{{ u.password }}|{{ u.is_superuser }}"
+        "|{{ u.get_session_auth_hash }}]{% endfor %}</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        from django.contrib.auth.models import User
+
+        self.n = 0
+        self.users = User.objects.all()
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+
+class TestRustQuerySetChannel:
+    """The Rust serializer is gated by the same authority as every other."""
+
+    def test_rust_serialize_queryset_omits_denied_names(self):
+        rust = pytest.importorskip("djust._rust")
+        out = rust.serialize_queryset(
+            _qs_rows(), ["label", "password", "get_session_auth_hash", "_secret"]
+        )
+        assert len(out) == 2, out
+        for row in out:
+            assert row["label"].startswith("visible"), row
+            assert "password" not in row, row
+            assert "get_session_auth_hash" not in row, row
+            assert "_secret" not in row, row
+            assert LEAK_JIT not in repr(row), row
+
+    def test_rust_serialize_queryset_still_emits_benign_names(self):
+        """Gate-off sibling: the fix must not simply drop everything."""
+        rust = pytest.importorskip("djust._rust")
+        out = rust.serialize_queryset(_qs_rows(1), ["label"])
+        assert out == [{"label": "visible0"}], out
+
+    def test_rust_gate_is_the_same_authority_as_the_codegen_channel(self):
+        """Rust and codegen agree name-for-name — no fifth policy (#1646)."""
+        rust = pytest.importorskip("djust._rust")
+        names = ["label", "password", "get_session_auth_hash", "_secret"]
+        obj = _qs_rows(1)[0]
+        via_rust = set(rust.serialize_queryset([obj], names)[0])
+        via_gate = set(_codegen.emittable_names(obj, tuple(names)))
+        assert via_rust == via_gate, (via_rust, via_gate)
+
+    def test_rust_gates_nested_objects_per_level(self):
+        rust = pytest.importorskip("djust._rust")
+        outer = _qs_rows(1)[0]
+        outer.owner = _qs_rows(1)[0]
+        out = rust.serialize_queryset([outer], ["owner.label", "owner.password"])
+        assert out == [{"owner": {"label": "visible0"}}], out
+
+
+@pytest.mark.django_db
+class TestRustQuerySetRealRenderPaths:
+    """The three surfaces #2688 reproduced on: GET html, WS mount, WS event."""
+
+    @staticmethod
+    def _user():
+        from django.contrib.auth.models import User
+
+        u = User.objects.create_user(username="alice", password="hunter2-2688")
+        u.is_superuser = True
+        u.save()
+        return u
+
+    def test_http_get_does_not_ship_the_hash(self):
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        user = self._user()
+        request = RequestFactory().get("/qs/")
+        SessionMiddleware(lambda r: r).process_request(request)
+        request.session.save()
+        response = _QsView.as_view()(request)
+        html = response.content.decode() if hasattr(response, "content") else str(response)
+        assert "alice" in html, html
+        assert user.password not in html, html
+        assert user.get_session_auth_hash() not in html, html
+
+    @pytest.mark.asyncio
+    async def test_ws_mount_and_event_do_not_ship_the_hash(self):
+        pytest.importorskip("channels")
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.sessions.backends.db import SessionStore
+        from django.test import override_settings
+
+        from djust.websocket import LiveViewConsumer
+
+        user = await sync_to_async(self._user)()
+        pw_hash = user.password
+        auth_hash = await sync_to_async(user.get_session_auth_hash)()
+
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
+
+        session_key = await sync_to_async(_create_session)()
+
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
+
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+            comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+            comm.scope["session"] = _ScopeSession(session_key)
+            connected, _ = await comm.connect()
+            assert connected
+            await comm.receive_json_from(timeout=2)
+            await comm.send_json_to({"type": "mount", "view": f"{__name__}._QsView", "url": "/qs/"})
+            mount_frames = []
+            for _ in range(6):
+                f = await comm.receive_json_from(timeout=3)
+                mount_frames.append(f)
+                if f.get("type") == "mount":
+                    break
+            assert mount_frames[-1].get("type") == "mount", mount_frames
+
+            await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
+            event_frames = []
+            for _ in range(6):
+                f = await comm.receive_json_from(timeout=3)
+                event_frames.append(f)
+                if f.get("type") in ("patch", "html_update"):
+                    break
+            assert event_frames, "no frame for the event"
+            await comm.disconnect()
+
+        for label, frames in (("mount", mount_frames), ("event", event_frames)):
+            wire = repr(frames)
+            assert "alice" in wire, (label, wire)
+            assert pw_hash not in wire, (label, wire)
+            assert auth_hash not in wire, (label, wire)
+
+
+class TestRustQuerySetCallerSet:
+    """Pin the SET of ``djust._rust.serialize_queryset`` importers (#1125).
+
+    The gate lives INSIDE Rust, so a new caller is gated automatically — that
+    is the point of putting it there rather than at the call sites (#1646).
+    What stays the caller's own responsibility is the failure path: each must
+    fall back to ``normalize_django_value`` (itself gated), never to a raw
+    read. Grepping for the SINK rather than for the callers one happens to
+    remember is the rule this encodes; a third importer turns this red so its
+    fallback is decided explicitly rather than by omission.
+    """
+
+    EXPECTED_IMPORTERS = {
+        "mixins/jit.py",
+        "template/rendering.py",
+    }
+
+    @staticmethod
+    def _importers():
+        import pathlib
+
+        pkg = pathlib.Path(_codegen.__file__).resolve().parents[1]
+        found = set()
+        for path in pkg.rglob("*.py"):
+            rel = path.relative_to(pkg).as_posix()
+            if rel.startswith("tests/"):
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if re.search(r"from djust\._rust import[^\n]*serialize_queryset", text):
+                found.add(rel)
+        return found
+
+    def test_importer_set_is_exactly_the_expected_two(self):
+        assert self._importers() == self.EXPECTED_IMPORTERS, (
+            "the set of djust._rust.serialize_queryset importers changed; confirm "
+            "the new one falls back to normalize_django_value on failure, then "
+            "update EXPECTED_IMPORTERS"
+        )
+
+    @pytest.mark.parametrize("rel", sorted(EXPECTED_IMPORTERS))
+    def test_each_importer_falls_back_to_the_gated_path(self, rel):
+        import pathlib
+
+        pkg = pathlib.Path(_codegen.__file__).resolve().parents[1]
+        text = (pkg / rel).read_text(encoding="utf-8")
+        assert "normalize_django_value" in text, rel

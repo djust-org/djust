@@ -7,39 +7,105 @@ Generates optimized Python serializer functions for specific variable access pat
 import hashlib
 import inspect
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, fine for typing
+    from ..serialization import DjangoJSONEncoder
 
 logger = logging.getLogger(__name__)
 
+#: Memoized :func:`emittable_names` decisions (#2685 perf).
+#:
+#: Keyed on ``(names, denied, allowed, optout)`` — the COMPLETE argument set of
+#: ``DjangoJSONEncoder._attr_is_serializable``, which is a pure function of
+#: exactly those. The model class is deliberately NOT part of the key: two
+#: models resolving to the same three sets provably reach the same decision, and
+#: any config change (``DJUST_SENSITIVE_FIELDS``, ``djust_exclude_fields``,
+#: ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``) changes
+#: one of the sets and therefore the key. There is no staleness mode to
+#: invalidate — a changed policy simply misses.
+_GATE_CACHE: Dict[
+    Tuple[Tuple[str, ...], FrozenSet[str], Optional[FrozenSet[str]], FrozenSet[str]],
+    FrozenSet[str],
+] = {}
 
-def _attr_is_emittable(obj: Any, name: str) -> bool:
-    """May the generated serializer emit ``obj.<name>``? (#2685)
+#: Bound on :data:`_GATE_CACHE`. Real templates name a small, fixed set of paths
+#: per model, so the live key count is tiny; the cap only stops an unbounded
+#: walk if some caller synthesises path tuples at runtime. Past the cap the gate
+#: keeps working, uncached.
+_GATE_CACHE_MAX = 512
+
+#: The chokepoint class, resolved on first use. Held here rather than imported
+#: at module scope because ``serialization`` imports back into this package, and
+#: rather than imported per call because the gate runs once per serialized
+#: object and a repeated ``from ..serialization import`` is a measurable share
+#: of that (it re-runs ``importlib``'s parent resolution every time).
+_encoder_cls: 'Optional[type["DjangoJSONEncoder"]]' = None
+
+
+def _chokepoint() -> 'type["DjangoJSONEncoder"]':
+    """``DjangoJSONEncoder`` — the ONE per-attribute authority (#2614)."""
+    global _encoder_cls
+    if _encoder_cls is None:
+        from ..serialization import DjangoJSONEncoder
+
+        _encoder_cls = DjangoJSONEncoder
+    return _encoder_cls
+
+
+def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
+    """Which of *names* may the generated serializer emit for *obj*? (#2685)
 
     The JIT codegen path used to emit any attribute the template named —
     ``{{ m.password }}`` shipped the field, bypassing the serialization floor
-    that the eager and sidecar channels enforce (#2614). Every attribute the
-    generated code reads now goes through the same ONE chokepoint,
+    the eager and sidecar channels enforce (#2614). Every attribute the
+    generated code reads, and every attribute the **Rust** queryset serializer
+    reads (``crates/djust_live/src/lib.rs::serialize_object_with_paths`` calls
+    this function), now goes through the same ONE chokepoint,
     ``DjangoJSONEncoder._attr_is_serializable``, with the same per-model
-    denylist / allowlist / opt-out resolution the eager loops use — so the
-    three channels cannot drift (#1646). Called per object at runtime because
-    a nested path (``lease.tenant.password``) crosses model classes.
+    denylist / allowlist / opt-out resolution the eager loops use — so no
+    channel can drift (#1646).
+
+    Set-at-a-time, once per OBJECT, for two reasons. It is the shape the Rust
+    caller needs — one GIL crossing per object level instead of one per
+    attribute, over every row of a QuerySet. And it makes the whole decision
+    memoizable in one lookup (:data:`_GATE_CACHE`): the answer depends only on
+    ``(names, denied, allowed, optout)``, so the per-name ``_attr_is_serializable``
+    loop runs once per distinct policy+path-set and never again. The three
+    per-model sets still resolve per object — they are three ``getattr`` calls
+    over a memoized global — because a nested path (``lease.tenant.password``)
+    crosses model classes and the decision cannot be inherited.
 
     A denied name is simply omitted from the result dict, which the template
     renders as ``string_if_invalid`` (empty) — the same outcome as the eager
-    channel. Fail-closed: any error resolving the per-model sets denies.
+    channel. Fail-closed: any error resolving the sets denies every name.
     """
-    from ..serialization import DjangoJSONEncoder
-
     try:
-        return DjangoJSONEncoder._attr_is_serializable(
-            name,
-            DjangoJSONEncoder._get_denied_fields(obj),
-            DjangoJSONEncoder._get_allowlist_fields(obj),
-            DjangoJSONEncoder._get_sensitive_optout_fields(obj),
+        encoder = _chokepoint()
+        denied = encoder._get_denied_fields(obj)
+        allowed = encoder._get_allowlist_fields(obj)
+        optout = encoder._get_sensitive_optout_fields(obj)
+        # ``tuple()`` is free when *names* is already a tuple, which is what the
+        # generated prologue and the Rust caller both pass.
+        key = (tuple(names), denied, allowed, optout)
+        hit = _GATE_CACHE.get(key)
+        if hit is not None:
+            return hit
+        permitted = frozenset(
+            n for n in key[0] if encoder._attr_is_serializable(n, denied, allowed, optout)
         )
+        if len(_GATE_CACHE) < _GATE_CACHE_MAX:
+            _GATE_CACHE[key] = permitted
+        return permitted
     except Exception:
-        logger.debug("attribute gate failed for %s; refusing it", name)
-        return False
+        logger.debug("attribute gate failed for %s; refusing every name", type(obj).__name__)
+        return frozenset()
+
+
+def _gate_line(indent: int, gate_var: str, obj_expr: str, names: List[str]) -> str:
+    """The per-object prologue line the generated code runs before emitting."""
+    tup = ", ".join(f"'{n}'" for n in names)
+    return f"{'    ' * indent}{gate_var} = _djust_gate({obj_expr}, ({tup},))"
 
 
 def generate_serializer_code(
@@ -74,19 +140,28 @@ def generate_serializer_code(
         func_hash = hashlib.sha256("".join(sorted(variable_paths)).encode()).hexdigest()[:6]
         func_name = f"serialize_{model_name.lower()}_{func_hash}"
 
+    # Build path tree to avoid redundant checks
+    path_tree = _build_path_tree(variable_paths)
+
     lines = [
         f"def {func_name}(obj):",
         "    '''Auto-generated serializer'''",
         "    result = {}",
-        "",
     ]
 
-    # Build path tree to avoid redundant checks
-    path_tree = _build_path_tree(variable_paths)
+    # The serialization gate for the root object (#2685): the per-model sets
+    # resolve ONCE here, and every emission below is a set-membership test.
+    counter = [0]
+    root_gate = "_ok_0"
+    if path_tree:
+        lines.append(_gate_line(1, root_gate, "obj", list(path_tree)))
+    lines.append("")
 
     # Generate code for each path
     for root_attr, nested_paths in path_tree.items():
-        _generate_nested_access(lines, [], nested_paths, "obj", "result", root_attr)
+        _generate_nested_access(
+            lines, [], nested_paths, "obj", "result", root_attr, gate_var=root_gate, counter=counter
+        )
 
     lines.append("    return result")
 
@@ -183,6 +258,8 @@ def _generate_nested_access(
     result_var: str,
     root_attr: Optional[str] = None,
     indent: int = 1,
+    gate_var: str = "_ok_0",
+    counter: Optional[List[int]] = None,
 ) -> None:
     """
     Recursively generate safe nested attribute access code.
@@ -203,12 +280,13 @@ def _generate_nested_access(
         current_path = [root_attr]
         obj_access = f"{obj_var}.{root_attr}"
 
-        # Generate safety check for root
-        # Every emitted attribute consults the ONE serialization chokepoint
-        # (#2685 / #2614): a denied name is omitted from the dict — the
-        # template then renders ``string_if_invalid`` (empty) — never shipped.
+        # Generate safety check for root. Every emitted attribute is gated by
+        # the ONE serialization chokepoint (#2685 / #2614) via the per-object
+        # ``_djust_gate`` prologue: a denied name is omitted from the dict —
+        # the template then renders ``string_if_invalid`` (empty) — never
+        # shipped.
         lines.append(
-            f"{ind}if _djust_attr_ok({obj_var}, '{root_attr}') and "
+            f"{ind}if '{root_attr}' in {gate_var} and "
             f"hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:"
         )
 
@@ -228,6 +306,8 @@ def _generate_nested_access(
                 result_var,
                 None,
                 indent + 2,
+                gate_var="",
+                counter=counter,
             )
         else:
             # Leaf node - direct assignment
@@ -257,6 +337,17 @@ def _generate_nested_access(
         # Should not happen in normal flow
         return
 
+    if counter is None:
+        counter = [0]
+
+    # A fresh object level (``gate_var=""``) resolves its own gate: nested
+    # paths cross model classes, so the decision cannot be inherited (#2685).
+    gateable = [k for k in tree if k != "__list_item__"]
+    if not gate_var and gateable:
+        counter[0] += 1
+        gate_var = f"_ok_{counter[0]}"
+        lines.append(_gate_line(indent, gate_var, obj_var, gateable))
+
     for attr_name, subtree in tree.items():
         # Special handling for list iteration marker
         if attr_name == "__list_item__":
@@ -272,6 +363,15 @@ def _generate_nested_access(
             lines.append(f"{ind}    for {list_var} in {obj_var}:")
             lines.append(f"{ind}        item_result = {{}}")
 
+            # One gate per list ITEM (a heterogeneous list is possible), shared
+            # by every attribute extracted from it.
+            item_names = [k for k in subtree if k != "__list_item__"]
+            item_gate = ""
+            if item_names:
+                counter[0] += 1
+                item_gate = f"_ok_{counter[0]}"
+                lines.append(_gate_line(indent + 2, item_gate, list_var, item_names))
+
             # Generate code to extract fields from each list item
             for nested_attr, nested_subtree in subtree.items():
                 _generate_nested_access(
@@ -282,6 +382,8 @@ def _generate_nested_access(
                     "item_result",
                     None,
                     indent + 2,
+                    gate_var=item_gate,
+                    counter=counter,
                 )
 
             lines.append(f"{ind}        {dict_path}.append(item_result)")
@@ -292,11 +394,11 @@ def _generate_nested_access(
         new_path = current_path + [attr_name]
         obj_access = f"{obj_var}.{attr_name}"
 
-        # Generate safety check
-        # Same chokepoint consult as the root site (#2685) — nested objects may
-        # be a different model, so the decision is made per object at runtime.
+        # Generate safety check, gated by this object level's chokepoint set
+        # (#2685) — a nested object may be a different model, so it resolved
+        # its own gate above.
         lines.append(
-            f"{ind}if _djust_attr_ok({obj_var}, '{attr_name}') and "
+            f"{ind}if '{attr_name}' in {gate_var} and "
             f"hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:"
         )
 
@@ -314,6 +416,8 @@ def _generate_nested_access(
                     result_var,
                     None,
                     indent + 1,
+                    gate_var="",
+                    counter=counter,
                 )
             elif attr_name == "all":
                 # .all() returns an iterable — iterate results
@@ -327,6 +431,13 @@ def _generate_nested_access(
                 lines.append(f"{ind}        for {list_var} in {obj_access}():")
                 lines.append(f"{ind}            {item_result_var} = {{}}")
 
+                all_names = [k for k in subtree if k != "__list_item__"]
+                all_gate = ""
+                if all_names:
+                    counter[0] += 1
+                    all_gate = f"_ok_{counter[0]}"
+                    lines.append(_gate_line(indent + 3, all_gate, list_var, all_names))
+
                 for nested_attr, nested_subtree in subtree.items():
                     _generate_nested_access(
                         lines,
@@ -336,6 +447,8 @@ def _generate_nested_access(
                         item_result_var,
                         None,
                         indent + 3,
+                        gate_var=all_gate,
+                        counter=counter,
                     )
 
                 lines.append(
@@ -356,6 +469,8 @@ def _generate_nested_access(
                     result_var,
                     None,
                     indent + 1,
+                    gate_var="",
+                    counter=counter,
                 )
         else:
             # Leaf node - final assignment
@@ -418,10 +533,10 @@ def compile_serializer(code: str, func_name: str) -> Callable:
     """
     namespace: Dict[str, Any] = {
         "_logger": logging.getLogger("djust.codegen.generated"),
-        # The generated code's only authority for "may this attribute ship"
+        # The generated code's only authority for "may these attributes ship"
         # (#2685). Bound here, not looked up per call, so a generated
         # serializer can never run without it.
-        "_djust_attr_ok": _attr_is_emittable,
+        "_djust_gate": emittable_names,
     }
 
     try:
