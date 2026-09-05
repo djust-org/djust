@@ -38,10 +38,12 @@ const STANDALONE_WITH_LOADER = {
     'bug_capture_replay.js': 'python/djust/templates/djust/bug_capture/replay.html',
     // DEBUG-only helper injected by mixins/post_processing.py.
     'client-dev.js': 'python/djust/mixins/post_processing.py',
-    // Client-side sanitizer helpers (classic script; see eslint.config.js).
-    'security.js': 'eslint.config.js (classic-script group)',
-    // React integration shim (classic script; see eslint.config.js).
-    'react-client.js': 'eslint.config.js (classic-script group)',
+    // NO loader. Documented as a global (`djustSecurity`) in
+    // docs/SECURITY_GUIDELINES.md but nothing injects it; imported only by
+    // its own test. Kept on the list ONLY because it is documented public
+    // API — the bundle-or-delete decision is tracked in #2679. Do not add
+    // rows like this one without an issue link.
+    'security.js': 'NONE — documented API without a loader, see #2679',
 };
 
 const PATH_RE = /static\/djust\/([A-Za-z0-9_./-]+\.js)/g;
@@ -78,9 +80,13 @@ describe('no test imports a static/djust JS file that is not shipped (#2659)', (
         });
     }
 
-    it('the two files #2659 removed are gone', () => {
+    it('the files #2659 removed are gone', () => {
         expect(fs.existsSync(path.join(STATIC_DIR, 'decorators.js'))).toBe(false);
         expect(fs.existsSync(path.join(STATIC_DIR, 'js', 'pwa.js'))).toBe(false);
+        // react-client.js: no loader, no test importer, no docs, and the
+        // React hydration it duplicated is server-side
+        // (mixins/post_processing.py::_hydrate_react_components).
+        expect(fs.existsSync(path.join(STATIC_DIR, 'react-client.js'))).toBe(false);
     });
 
     it('every documented standalone asset still exists (no stale allowlist rows)', () => {
