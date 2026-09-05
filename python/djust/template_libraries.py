@@ -386,7 +386,9 @@ def load_libraries(args: List[str]) -> None:
                 name = bits[-1]
                 library = _find_library(name)
                 key = (name, tuple(sorted(bits[1:-2])))
-                if _loaded_subsets.get(key) is library:
+                if _loaded_subsets.get(key) is library and _still_bridged(
+                    load_from_library(library, name, bits[1:-2]), _library_module(library)
+                ):
                     # Same parent, same names: every tag is already bridged.
                     # Re-bridging bumped the registry generation on every
                     # parse and demoted `_loaded[name]` to the subset.
@@ -523,6 +525,36 @@ def _library_module(library: Any) -> str:
     return ""
 
 
+def _still_bridged(library: Any, module: str) -> bool:
+    """Every tag and filter this library bridges is still registered.
+
+    Cheap registry probes, one per name. This — not `_loaded` — is the truth
+    about registration state: anything may `clear_*_handlers()` (test
+    isolation does) and `_loaded` would not know.
+    """
+    from djust._rust import (
+        has_block_tag_handler,
+        has_custom_filter,
+        has_raw_block_tag_handler,
+        has_tag_handler,
+    )
+
+    native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
+    for name in library.tags:
+        if name in _RAW_BLOCK_TAGS:
+            ok = has_raw_block_tag_handler(name)
+        elif name in _BESPOKE_BLOCK_TAGS:
+            ok = has_block_tag_handler(name)
+        elif name in native:
+            continue
+        else:
+            ok = has_tag_handler(name) or has_block_tag_handler(name)
+        if not ok:
+            return False
+    refused = refused_filters(module)
+    return all(has_custom_filter(name) for name in library.filters if name not in refused)
+
+
 def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
@@ -532,11 +564,15 @@ def _bridge_library(label: str, library: Any) -> None:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
         return
-    if _loaded.get(label) is library:
-        # Already bridged, same library object: re-registering every tag on
-        # every `{% load %}` bumped the registry generation DURING the parse,
-        # so a template loading a tag-bearing library never hit the template
-        # cache and invalidated everyone else's entry (#2668 review).
+    if _loaded.get(label) is library and _still_bridged(library, module):
+        # Already bridged, same library object, and every registration is
+        # still in place: re-registering every tag on every `{% load %}`
+        # bumped the registry generation DURING the parse, so a template
+        # loading a tag-bearing library never hit the template cache and
+        # invalidated everyone else's entry (#2668 review). The second
+        # condition is what makes this safe under `clear_*_handlers()` —
+        # `_loaded` alone said "bridged" after a test cleared the registry,
+        # and `{% cache %}` lost its `endcache`.
         return
     from .template_filters import bridge_library_filters
 

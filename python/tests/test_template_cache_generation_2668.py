@@ -108,3 +108,23 @@ class TestRegistryMutationsInvalidate:
         # Unregistering bumped again: the cached parse of a now-unknown filter
         # must NOT be served — Django raises `Invalid filter` at parse time.
         assert not _is_hit_next_time(self.SRC)
+
+
+class TestBridgeSurvivesRegistryClear:
+    """`_loaded` says "bridged"; the registry may disagree. Test isolation
+    calls `clear_block_tag_handlers()` between tests, and the first version of
+    the idempotent bridge trusted `_loaded` alone — `{% load cache %}` then
+    skipped re-registration and every `{% cache %}` died with
+    "Invalid block tag 'endcache'". The guard must consult the registry."""
+
+    SRC = "{% load cache %}{% cache 500 k %}body{% endcache %}-2668-clear"
+
+    def test_load_rebridges_after_a_registry_clear(self):
+        from djust.template import DjustTemplateBackend
+
+        be = DjustTemplateBackend({"NAME": "t", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}})
+        assert "body" in be.from_string(self.SRC).render({})
+        _rust.clear_block_tag_handlers()  # what test isolation does
+        # Same library object is still in `_loaded`; the guard must notice
+        # the registry no longer has `cache`/`endcache` and re-bridge.
+        assert "body" in be.from_string(self.SRC + "2").render({})
