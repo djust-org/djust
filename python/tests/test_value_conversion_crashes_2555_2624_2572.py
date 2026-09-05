@@ -76,19 +76,23 @@ _CHILD = textwrap.dedent(
     CASES = {
         "2555": ("{{ h }}", {"h": "\\udcc0x"}),
         "2555-object-str": ("{{ o }}", {"o": SurrogateStr()}),
+        "2555-pair": ("{{ h }}|{{ h|length }}", {"h": "\\ud83d\\ude00"}),
         "2624": ("{{ v.0 }}", {"v": L}),
         "2572": ("{{ v }}", {"v": NeverRaises()}),
         "2572-index": ("{{ v.0 }}", {"v": NeverRaises()}),
+        "2624-8mib": ("{{ v.0 }}", {"v": L}),
     }
     src, ctx = CASES[sys.argv[2]]
+    if sys.argv[2] == "2624-8mib":
+        threading.stack_size(8 * 1024 * 1024)
 
     def render():
         return backend.from_string(src).render(context=ctx, request=None)
 
-    # The main thread has 8 MiB; djust renders on `sync_to_async` workers,
-    # which on macOS get 512 KiB. A depth ceiling that fits only the former
-    # would still take a worker down, so the render runs on the smaller one.
-    threading.stack_size(512 * 1024)
+    # Rendered on a thread with the platform's REAL default stack (16 MiB on
+    # macOS, 8 MiB under glibc — the same as a `sync_to_async` worker), which
+    # is the stack the depth ceiling has to fit. A first draft shrank this to
+    # 512 KiB on the false premise that workers were that small.
     out = []
     t = threading.Thread(target=lambda: out.append(render()))
     t.start()
@@ -180,6 +184,19 @@ class TestTheStringArmClaimsASurrogate:
         assert _rust.crosses_as_encoded_by_conversion("\udcc0x") is False
 
 
+class TestSurrogateReplacementIsPerCodePoint:
+    """One U+FFFD per lone surrogate — and two adjacent lone surrogates that
+    happen to form a valid UTF-16 pair are TWO code points in Python and stay
+    two. The first fix round-tripped through UTF-16, which joined them into
+    one astral character (`'😀'`, `|length` 1); the #2673 review caught it."""
+
+    @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+    def test_a_high_low_pair_is_two_replacements_not_one_character(self, lazy: bool) -> None:
+        result = _render_in_child("2555-pair", lazy)
+        assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
+        assert result.stdout == repr("��|2")
+
+
 class TestTheBoundedSequenceGate:
     """The #2572 gate is a rule about the operation, not a list of shapes:
     a sequence crosses as a list only when it states a bound and honours it."""
@@ -254,32 +271,77 @@ class TestTheBoundedSequenceGate:
         assert _rust.crosses_as_encoded_by_conversion(Liar()) is True
 
 
+def _nested(depth: int) -> list:
+    v: object = "leaf"
+    for _ in range(depth):
+        v = [v]
+    return v  # type: ignore[return-value]
+
+
+def _render_leaf(depth: int) -> str:
+    """``{{ v.0.0…0 }}`` with ``depth`` segments over a ``depth``-deep list —
+    the LEAF, which is what the ceiling can actually truncate. The first
+    version of this test rendered ``{{ v|length }}`` of the root, which is
+    ``1`` at any ceiling ≥ 1 and stayed green with the ceiling gated off (the
+    #2673 review)."""
+    from djust.template_backend import DjustTemplateBackend
+
+    backend = DjustTemplateBackend(
+        params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
+    )
+    src = "{{ v" + ".0" * depth + " }}"
+    return backend.from_string(src).render(context={"v": _nested(depth)}, request=None)
+
+
 class TestTheDepthCeiling:
-    def test_the_ceiling_is_above_any_real_context_and_below_a_worker_stack(self) -> None:
-        """128: a 512 KiB worker converts 200 nested lists and dies before
-        1000. The constant is pinned so a change to it re-reads that
-        measurement."""
+    def test_the_ceiling_is_pythons_own_recursion_limit(self) -> None:
+        """1000 — the depth at which CPython itself refuses to ``repr`` /
+        ``json.dumps`` a structure, so no structure Python's own tooling
+        accepts can observe the ceiling. A first draft said 128 "for a 512 KiB
+        worker"; that stack does not exist (16 MiB macOS / 8 MiB glibc) and 128
+        regressed a 150-deep list `main` and Django both render."""
         from djust import _rust
 
-        assert _rust.MAX_CONVERSION_DEPTH == 128
+        assert _rust.MAX_CONVERSION_DEPTH == 1000 == sys.getrecursionlimit()
 
-    def test_a_context_nested_to_the_ceiling_converts_in_full(self) -> None:
-        from djust.template_backend import DjustTemplateBackend
+    def test_python_refuses_a_ceiling_deep_context_before_rust_can(self) -> None:
+        """Under Python's DEFAULT recursion limit the ceiling is unobservable:
+        the backend's own `serialize_value` (`template/serialization.py`) is
+        a recursive Python walk that spends one frame per level, so a
+        (ceiling - 1)-deep list raises `RecursionError` in Python before the
+        Rust conversion ever sees it. That is the design goal of choosing the
+        limit itself as the ceiling."""
+        from djust import _rust
 
-        backend = DjustTemplateBackend(
-            params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
-        )
-        v = "leaf"
-        for _ in range(_ceiling()):
-            v = [v]
-        out = backend.from_string("{{ v|length }}").render(context={"v": v}, request=None)
-        assert out == "1"
+        with pytest.raises(RecursionError):
+            _render_leaf(_rust.MAX_CONVERSION_DEPTH - 1)
 
+    def test_the_leaf_below_the_ceiling_renders_and_past_it_does_not(self) -> None:
+        """With Python's limit lifted, the ceiling becomes observable — and
+        exact: the root is depth 0, so a list nested (ceiling - 1) deep has
+        its leaf at level (ceiling - 1), converted and reachable by index; one
+        level past it the element AT the ceiling crosses as `str(list)` and
+        the remaining index segments read into that string instead."""
+        from djust import _rust
 
-def _ceiling() -> int:
-    from djust import _rust
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(limit * 8)
+        try:
+            assert _render_leaf(_rust.MAX_CONVERSION_DEPTH - 1) == "leaf"
+            assert _render_leaf(_rust.MAX_CONVERSION_DEPTH + 1) != "leaf"
+        finally:
+            sys.setrecursionlimit(limit)
 
-    # One below the ceiling: the root is depth 0 and the leaf string is the
-    # (ceiling)th level, which is the last one converted rather than
-    # stringified.
-    return _rust.MAX_CONVERSION_DEPTH - 1
+    def test_a_150_deep_list_renders_its_leaf(self) -> None:
+        """The regression the first draft shipped: 150 < 1000 but > 128."""
+        assert _render_leaf(150) == "leaf"
+
+    def test_the_heaviest_chain_at_the_ceiling_fits_an_8_mib_stack(self) -> None:
+        """The `GenericAlias` case builds one `Encoded` per level — the
+        heaviest per-level frame the conversion has — and must convert a
+        full ceiling-deep chain on the SMALLEST real thread stack (glibc's
+        8 MiB default; macOS gives 16 MiB). Rendered on such a thread in a
+        child, because a stack overflow takes the process."""
+        result = _render_in_child("2624-8mib", lazy=True)
+        assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
+        assert result.stdout == repr("__main__.L[0]")

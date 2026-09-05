@@ -3393,20 +3393,59 @@ fn py_str_lossy(ob: &Bound<'_, PyAny>) -> PyResult<String> {
 /// A `str` as a Rust `String`, one U+FFFD per lone surrogate (#2555).
 ///
 /// The fast path is PyO3's zero-copy UTF-8 view, which every well-formed
-/// string takes; only a string that fails it pays for two Python calls. NOT
-/// `to_string_lossy`, which encodes with `surrogatepass` and then replaces
-/// each of the three resulting BYTES — `"\udcc0x"` came out as `"���x"`,
-/// three characters for one. And not `encode("utf-8", "replace")`, whose
-/// substitute on the encode side is `?`. A UTF-16 round trip keeps the lone
-/// surrogate as one code unit and `decode(..., "replace")` replaces it as
-/// one code point.
+/// string takes; only a string that fails it pays for one Python call:
+/// `encode("utf-8", "surrogatepass")`, which spells each lone surrogate as
+/// its own three-byte sequence (`ED A0..BF xx`), and
+/// [`surrogatepass_bytes_to_string`] folds each such sequence into ONE
+/// U+FFFD. Two spellings were rejected on measurement: PyO3's
+/// `to_string_lossy` replaces each of the three BYTES (`"\udcc0x"` came out
+/// `"���x"`), and `encode("utf-8", "replace")` substitutes `?`. A UTF-16
+/// round trip was the first fix and is ALSO wrong, one axis over: two
+/// adjacent lone surrogates that happen to form a valid pair are JOINED by
+/// UTF-16 decoding into one astral character, so `"😀"` — two
+/// Python code points, `len` 2 — rendered as `'😀'` with `|length` 1 (the
+/// #2673 review). Per-code-point replacement is the rule, and the
+/// `surrogatepass` spelling honours it because CPython never joins there.
 fn py_string_lossy(s: &Bound<'_, PyString>) -> PyResult<String> {
     if let Ok(text) = s.to_cow() {
         return Ok(text.into_owned());
     }
-    s.call_method1("encode", ("utf-16", "surrogatepass"))?
-        .call_method1("decode", ("utf-16", "replace"))?
-        .extract::<String>()
+    let encoded = s.call_method1("encode", ("utf-8", "surrogatepass"))?;
+    let bytes: &[u8] = encoded.extract()?;
+    Ok(surrogatepass_bytes_to_string(bytes))
+}
+
+/// `surrogatepass` UTF-8 bytes to a `String`, one U+FFFD per encoded lone
+/// surrogate (#2555). Every other byte sequence is valid UTF-8 by
+/// construction (CPython produced it), so the only invalid runs are the
+/// three-byte surrogate spellings, and each is replaced as a unit.
+fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(tail) => {
+                out.push_str(tail);
+                return out;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // `valid_up_to` is by definition a valid prefix; the fallback
+                // arm is unreachable and kept only so nothing here can panic.
+                out.push_str(std::str::from_utf8(&rest[..valid]).unwrap_or(""));
+                out.push('\u{FFFD}');
+                // A `surrogatepass` surrogate is exactly three bytes; anything
+                // else that is invalid (which CPython does not emit) skips the
+                // bytes the decoder rejected, or one byte if it rejected none.
+                let skip = if rest.len() >= valid + 3 && rest[valid] == 0xED {
+                    3
+                } else {
+                    e.error_len().unwrap_or(1).max(1)
+                };
+                rest = &rest[(valid + skip).min(rest.len())..];
+            }
+        }
+    }
 }
 
 /// The elements of a Python object that is a BOUNDED sequence, or `None`
@@ -3431,7 +3470,9 @@ fn py_string_lossy(s: &Bound<'_, PyString>) -> PyResult<String> {
 /// can never produce a short list (#2129: a rule about the operation, not a
 /// list of shapes). A `list`, `tuple`, `range`, `bytes`, `deque`, `array`,
 /// numpy array and evaluated `QuerySet` all state a length and cross exactly
-/// as they did.
+/// as they did. The stated bound is trusted as stated: a `__len__` of
+/// `10**7` over a never-raising `__getitem__` is still read in full, as
+/// `range(10**9)` always was — tracked at #2678.
 ///
 /// A `str` is refused, as PyO3's `Vec` extraction refuses it: the `str` arm
 /// sits above the sequence arm and claims every string first.
@@ -3477,13 +3518,23 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
 /// until the stack overflowed (SIGSEGV), on both settings of
 /// `template_resolve_lazy`, because both walks end in the same conversion.
 ///
-/// A ceiling, sized against the smallest stack djust renders on: a 512 KiB
-/// worker thread converts 200 nested lists and dies before 1000, so 128 is
-/// inside the headroom while being a depth no real context reaches (Python's
-/// own `json.dumps` refuses at 1000). Past it the element crosses as
-/// `str(o)` — the terminal arm every object already had — so the top-level
-/// value keeps its carrier and renders as Django does (`str(alias)`).
-pub const MAX_CONVERSION_DEPTH: usize = 128;
+/// Python's own recursion limit (`sys.getrecursionlimit()`, 1000 by default):
+/// the depth at which CPython itself refuses to `repr`, `json.dumps`,
+/// `deepcopy` or `pickle` a nested structure, so no structure Python's own
+/// tooling accepts can observe this ceiling. A first draft said 128 "sized
+/// against a 512 KiB `sync_to_async` worker stack" — that stack does not
+/// exist: every CPython thread is 16 MiB on macOS and 8 MiB under glibc,
+/// `main` converted 5000 nested lists on a real thread, and 128 REGRESSED
+/// `{{ v.0.0…}}` over a 150-deep list from `'leaf'` to `'['` (the #2673
+/// review, which measured all three). The value has to fit the smallest
+/// REAL stack: a 1000-deep chain of the heaviest per-level frame (the
+/// `GenericAlias` case, `opaque_value` + `extract` per level) converts on an
+/// 8 MiB thread with room to spare — `TestTheDepthCeiling` pins that.
+///
+/// Past it the element crosses as `str(o)` — the terminal arm every object
+/// already had — so the top-level value keeps its carrier and renders as
+/// Django does (`str(alias)`).
+pub const MAX_CONVERSION_DEPTH: usize = 1000;
 
 thread_local! {
     /// The current [`Value`] conversion nesting on this thread. A
