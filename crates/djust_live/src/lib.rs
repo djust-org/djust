@@ -2790,8 +2790,8 @@ fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, 
 /// Convert Python object to Rust Value
 fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     // String
-    if let Ok(s) = obj.extract::<String>() {
-        return Ok(Value::String(s));
+    if obj.extract::<String>().is_ok() {
+        return obj.extract::<Value>();
     }
 
     // Boolean BEFORE Integer (#2203 review). PyO3 0.29 extracts a Python

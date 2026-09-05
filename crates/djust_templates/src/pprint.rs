@@ -92,7 +92,7 @@ fn flat_repr(value: &Value) -> String {
         Value::Decimal(d) => format!("Decimal('{d}')"),
         // `repr(int)` is the digits, however many there are (#2260).
         Value::BigInt(d) => d.clone(),
-        Value::String(s) => py_repr_string(s),
+        Value::String(s) | Value::SafeString(s) => py_repr_string(s),
         // The CONSTRUCTOR form — `datetime.datetime(2020, 1, 1, 3, 4, 5)` —
         // the way the `Decimal` arm above spells `Decimal('…')` (#2472).
         //
@@ -189,7 +189,7 @@ fn format_value(value: &Value, out: &mut String, indent: isize, allowance: isize
                 out.push('}');
                 return;
             }
-            Value::String(s) => {
+            Value::String(s) | Value::SafeString(s) => {
                 format_str(s, out, indent, allowance, level + 1);
                 return;
             }

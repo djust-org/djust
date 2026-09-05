@@ -827,6 +827,7 @@ INPUTS = {
     "l-marked": [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")],
     "l-marked-img": [mark_safe("<img src=x onerror=alert(1)>")],
     "l-mixed": [mark_safe("<b>ok</b>"), "<img src=x onerror=alert(1)>"],
+    "s-marked-empty": mark_safe(""),
     "s-marked": mark_safe("<img src=x onerror=alert(1)>"),
     # A marked TUPLE, which is a genuinely different cell from `l-marked` and
     # not a shape-coverage nicety (#2305). `render_both` hands the context to
@@ -1882,6 +1883,8 @@ ARG_SPELLINGS = [
     "known_tuple",
     "known_named_tuple",
     "known_empty_named_tuple",
+    "known_safe_string",
+    "known_empty_safe_string",
     "known_dict",
     "known_dt",
     # Arguments whose resolved value is FALSY (#2469). Every spelling above
@@ -1968,6 +1971,8 @@ ARG_SPELLINGS = [
 #: this argument's Python TYPE" — `int()` raises TypeError for a list, a tuple
 #: and a dict, and Django's `except ValueError` does not catch it.
 ARG_CONTEXT = {
+    "known_safe_string": mark_safe("<b>&</b>"),
+    "known_empty_safe_string": mark_safe(""),
     "known_named_tuple": namedtuple("Pair", "left right")("a", "b"),
     "known_empty_named_tuple": namedtuple("Empty", [])(),
     "known": "3",
@@ -3076,7 +3081,7 @@ def _value_variant(obj: object) -> str:
     if isinstance(obj, float):
         return "Float"
     if isinstance(obj, str):
-        return "String"
+        return "SafeString" if isinstance(obj, SafeData) else "String"
     if isinstance(obj, tuple):
         fields = getattr(obj, "_fields", None)
         if (

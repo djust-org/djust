@@ -735,6 +735,9 @@ impl Context {
 
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
+        if self.get(key).is_some_and(Value::is_safe_string) {
+            return true;
+        }
         // First check directly
         if self.safe_keys.contains(key) {
             return true;
@@ -952,7 +955,7 @@ impl Context {
         let (prefix, last) = key.rsplit_once('.')?;
         let index = last.parse::<usize>().ok()?;
         let base = match self.get(prefix) {
-            Some(Value::String(s)) => s.clone(),
+            Some(Value::String(s) | Value::SafeString(s)) => s.clone(),
             // A non-string prefix is not this step's business — `get` has
             // already tried every arm that applies to it.
             //
@@ -966,7 +969,7 @@ impl Context {
             // the intent without depending on that invariant being noticed.
             Some(_) => return None,
             None => match self.string_index(prefix)? {
-                Value::String(s) => s,
+                Value::String(s) | Value::SafeString(s) => s,
                 _ => return None,
             },
         };

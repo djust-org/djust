@@ -693,6 +693,10 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             };
             bits.hash(hasher);
         }
+        Value::SafeString(s) => {
+            13u8.hash(hasher);
+            s.hash(hasher);
+        }
         Value::String(s) => {
             4u8.hash(hasher);
             s.hash(hasher);

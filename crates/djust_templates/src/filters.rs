@@ -226,7 +226,7 @@ pub struct InputSafety {
 /// grapheme-cluster count would be a different, wronger one.
 pub fn python_len(value: &Value) -> Option<usize> {
     match value {
-        Value::String(s) => Some(s.chars().count()),
+        Value::String(s) | Value::SafeString(s) => Some(s.chars().count()),
         Value::List(l) | Value::Tuple(l) | Value::NamedTuple { items: l, .. } => Some(l.len()),
         // `len(d.keys())` is the entry count, not the repr's length.
         Value::DictView { items, .. } => Some(items.len()),
@@ -281,7 +281,9 @@ pub fn python_len(value: &Value) -> Option<usize> {
 
 pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
-        Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
+        Value::String(s) | Value::SafeString(s) => {
+            Some(s.chars().map(|c| Value::String(c.to_string())).collect())
+        }
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             Some(items.clone())
         }
@@ -359,7 +361,7 @@ fn rebuild_like(input: &Value, items: Vec<Value>) -> Value {
 
 /// Django's `django.utils.html.conditional_escape`: escape unless already safe.
 fn conditional_escape(value: &Value, already_safe: bool) -> String {
-    if already_safe {
+    if already_safe || value.is_safe_string() {
         value.to_string()
     } else {
         html_escape(&value.to_string())
@@ -478,7 +480,11 @@ fn builtin_produced_safe(
                 input_safety.container
             }
         }
-        "add" => input_safety.container && arg_was_quoted && matches!(result, Value::String(_)),
+        "add" => {
+            input_safety.container
+                && (arg_was_quoted || arg_type.is_safe)
+                && matches!(result, Value::String(_) | Value::SafeString(_))
+        }
         // The three EXTRACTORS, and the THIRD consumer of the item grant
         // (#2299). Django's bodies are `value[0]`, `value[-1]` and
         // `random.choice(value)` — each hands back the ELEMENT OBJECT, so when
@@ -918,6 +924,7 @@ pub fn apply_filter_full_safe(
                 &v,
                 input_safety,
             );
+            let safe = safe || v.is_safe_string();
             (v, safe)
         });
     }
@@ -1634,7 +1641,7 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("DATE_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
                         _ => None,
                     })
             } else {
@@ -1699,7 +1706,7 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("TIME_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
                         _ => None,
                     })
             } else {
@@ -2221,7 +2228,7 @@ fn apply_builtin_filter(
                 Value::List(
                     items
                         .iter()
-                        .map(|item| Value::String(item.py_str()))
+                        .map(|item| Value::SafeString(item.py_str()))
                         .collect(),
                 ),
                 input_safety.container,
@@ -2247,7 +2254,7 @@ fn apply_builtin_filter(
                 Value::List(
                     items
                         .iter()
-                        .map(|item| Value::String(conditional_escape(item, input_safety.items)))
+                        .map(|item| Value::SafeString(conditional_escape(item, input_safety.items)))
                         .collect(),
                 ),
                 input_safety.container,
@@ -2548,7 +2555,13 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
         });
     }
     Ok(match (value, arg) {
-        (Value::String(lhs), Value::String(rhs)) => Value::String(format!("{lhs}{rhs}")),
+        (Value::SafeString(lhs), Value::SafeString(rhs)) => {
+            Value::SafeString(format!("{lhs}{rhs}"))
+        }
+        (
+            Value::String(lhs) | Value::SafeString(lhs),
+            Value::String(rhs) | Value::SafeString(rhs),
+        ) => Value::String(format!("{lhs}{rhs}")),
         (Value::List(lhs), Value::List(rhs)) => {
             Value::List(lhs.iter().chain(rhs).cloned().collect())
         }
@@ -2669,6 +2682,7 @@ pub(crate) fn int_arg_is_type_error(resolved: Option<&Value>) -> bool {
         Some(value) => !matches!(
             value,
             Value::String(_)
+                | Value::SafeString(_)
                 | Value::Integer(_)
                 | Value::Float(_)
                 | Value::Bool(_)
@@ -2854,7 +2868,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
     };
 
     match value {
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             let chars: Vec<char> = s.chars().collect();
             let picked: String = slice_positions(start, stop, step, chars.len())
                 .into_iter()
@@ -3629,7 +3643,7 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
                 .ok()
                 .and_then(|f| filesize_to_int(&Value::Float(f)))
         }),
-        Value::String(s) => python_int_from_str(s),
+        Value::String(s) | Value::SafeString(s) => python_int_from_str(s),
         // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
         _ => None,
     }
@@ -4009,7 +4023,7 @@ fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
 /// is the filter's first line — so they answer `""` whatever the format says.
 fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     if matches!(value, Value::None | Value::Missing)
-        || matches!(value, Value::String(s) if s.is_empty())
+        || matches!(value, Value::String(s) | Value::SafeString(s) if s.is_empty())
     {
         return String::new();
     }
@@ -4367,7 +4381,10 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
 fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
     {
         match (&a_val, &b_val) {
-            (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str),
+            (
+                Value::String(a_str) | Value::SafeString(a_str),
+                Value::String(b_str) | Value::SafeString(b_str),
+            ) => a_str.cmp(b_str),
             (Value::Integer(a_int), Value::Integer(b_int)) => a_int.cmp(b_int),
             (Value::Float(a_float), Value::Float(b_float)) => a_float
                 .partial_cmp(b_float)
@@ -4463,7 +4480,9 @@ fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
     let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(items.len());
     for item in items {
         let k = match item {
-            Value::String(s) => s.chars().nth(n).map(|c| Value::String(c.to_string())),
+            Value::String(s) | Value::SafeString(s) => {
+                s.chars().nth(n).map(|c| Value::String(c.to_string()))
+            }
             Value::List(v) | Value::Tuple(v) | Value::NamedTuple { items: v, .. } => {
                 v.get(n).cloned()
             }
@@ -4928,7 +4947,7 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) if is_json_int_literal(d) => d.clone(),
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
-        Value::String(s) => format!("\"{}\"", json_string_body(s)),
+        Value::String(s) | Value::SafeString(s) => format!("\"{}\"", json_string_body(s)),
         // THE #2448 fix, and the only place in the engine that reads the
         // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
         // `isoformat()` with the microseconds truncated to milliseconds and a
@@ -6095,7 +6114,7 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // A STRING is `float(s)`, and on failure it is the `ValueError` arm —
         // which does NOT fall through to `len()`. `float` accepts surrounding
         // whitespace, `inf` and `nan`, and so does Rust's parse.
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             return match s.trim().parse::<f64>() {
                 Ok(f) => pick(f == 1.0),
                 Err(_) => String::new(),
@@ -6137,7 +6156,7 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         Value::BigInt(d) => Some(d.clone()),
         // `int(True)` is 1 in Python.
         Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-        Value::String(s) => python_int_str(s).or_else(|| {
+        Value::String(s) | Value::SafeString(s) => python_int_str(s).or_else(|| {
             string_float_ok
                 .then(|| s.trim().parse::<f64>().ok())
                 .flatten()
@@ -6325,7 +6344,7 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::Decimal(_) => "decimal.Decimal",
         Value::None => "NoneType",
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
-        Value::String(_) | Value::Missing => "str",
+        Value::String(_) | Value::SafeString(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
         Value::NamedTuple { name, .. } => name,
@@ -6484,7 +6503,7 @@ pub(crate) fn python_getitem(
         items.get(usize::try_from(at).ok()?).cloned()
     }
     match value {
-        Value::String(s) => {
+        Value::String(s) | Value::SafeString(s) => {
             let chars: Vec<char> = s.chars().collect();
             Ok(nth(&chars, index).map(|c| Value::String(c.to_string())))
         }
@@ -6539,7 +6558,7 @@ fn index_error_answer() -> Value {
 /// keypad spelling of the word "None".
 pub(crate) fn python_lower(value: &Value) -> std::result::Result<String, ValueOpError> {
     match value {
-        Value::String(s) => Ok(s.to_lowercase()),
+        Value::String(s) | Value::SafeString(s) => Ok(s.to_lowercase()),
         // `string_if_invalid` is a `str`; `"".lower()` is `""`.
         Value::Missing => Ok(String::new()),
         _ => Err(ValueOpError::NoAttribute("lower")),
@@ -7639,6 +7658,7 @@ mod tests {
             Value::Integer(_) => "Integer",
             Value::Float(_) => "Float",
             Value::String(_) => "String",
+            Value::SafeString(_) => "SafeString",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple { .. } => "NamedTuple",
@@ -7662,6 +7682,7 @@ mod tests {
             Value::Integer(-42),
             Value::Float(1.5),
             Value::String("<b>".to_string()),
+            Value::SafeString("<b>".to_string()),
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
             Value::Object(Default::default()),
@@ -7774,8 +7795,8 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 7,
-            "the iterating set is exactly String / List / Tuple / Object / \
+            iterating, 8,
+            "the iterating set is exactly String / SafeString / List / Tuple / Object / \
              Missing / DictView, plus an iterating Encoded (#2466) — a \
              change here is a change to what #2283 and #2466 fixed",
         );
@@ -7786,7 +7807,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            13,
+            14,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }

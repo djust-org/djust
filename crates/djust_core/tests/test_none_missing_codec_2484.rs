@@ -73,6 +73,7 @@ fn variant(v: &Value) -> &'static str {
         Value::Integer(_) => "Integer",
         Value::Float(_) => "Float",
         Value::String(_) => "String",
+        Value::SafeString(_) => "SafeString",
         Value::List(_) => "List",
         Value::Tuple(_) => "Tuple",
         Value::NamedTuple { .. } => "NamedTuple",

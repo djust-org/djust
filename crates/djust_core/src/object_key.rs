@@ -202,7 +202,7 @@ impl From<ObjectKey> for crate::Value {
 impl ObjectKey {
     pub fn from_value(value: &crate::Value) -> Option<ObjectKey> {
         Some(match value {
-            crate::Value::String(s) => ObjectKey::Str(s.clone()),
+            crate::Value::String(s) | crate::Value::SafeString(s) => ObjectKey::Str(s.clone()),
             crate::Value::Integer(n) => ObjectKey::Int(*n),
             crate::Value::Bool(b) => ObjectKey::Bool(*b),
             crate::Value::None => ObjectKey::None,

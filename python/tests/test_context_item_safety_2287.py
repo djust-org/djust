@@ -653,15 +653,13 @@ class TestACustomFilterSeesContextSourcedItemSafety:
         self._register_probe()
         assert_agrees("{{ p|_ctx_item_probe }}", ["<b>x</b>", "<i>y</i>"])
 
-    def test_a_partially_marked_list_arrives_wholly_plain(self) -> None:
-        """The narrowing, seen from the custom-filter side: djust withholds the
-        grant Django gives element 0. Over-escaping, and the residual this
-        issue's one-bool model implies."""
+    def test_a_partially_marked_list_preserves_each_items_safety(self) -> None:
+        """Mixed lists retain the safety of each element across custom filters."""
         self._register_probe()
         source = "{{ p|_ctx_item_probe }}"
         value = [mark_safe("<b>x</b>"), "<i>y</i>"]
         assert django_render(source, value) == "list[True,False]"
-        assert djust_render(source, value) == "list[False,False]"
+        assert djust_render(source, value) == "list[True,False]"
 
     def test_a_raw_tuple_reaches_a_custom_filter_marked(self) -> None:
         """The pin this class shipped with, flipped to parity by #2305.
@@ -959,13 +957,11 @@ class TestTheNarrowingsTheExtractorsInherit:
     """
 
     @pytest.mark.parametrize("name", sorted(EXTRACTORS))
-    def test_a_partially_marked_list_is_escaped_whole(self, name: str) -> None:
-        """One bool cannot express Django's per-element answer, so a mixed list
-        gets no grant at all."""
+    def test_a_partially_marked_list_escapes_only_plain_items(self, name: str) -> None:
+        """An extractor preserves the selected element's own safety."""
         source = EXTRACTORS[name]
         value = [mark_safe("<b>x</b>"), "<i>y</i>"]
-        assert "&lt;" in djust_render(source, value)
-        assert_no_more_permissive_than_django(source, value)
+        assert_agrees(source, value)
 
     @pytest.mark.parametrize("name", sorted(EXTRACTORS))
     def test_a_nested_container_is_refused(self, name: str) -> None:

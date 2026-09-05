@@ -99,7 +99,7 @@ pub fn floatformat(
         Value::Float(f) => decimal::python_float_repr(*f),
         Value::Integer(n) => n.to_string(),
         Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        Value::String(s) => s.clone(),
+        Value::String(s) | Value::SafeString(s) => s.clone(),
         other => other.to_string(),
     };
 
@@ -274,7 +274,7 @@ fn parse_int_like(body: &str, arg_was_quoted: bool) -> Option<i64> {
 fn coerce_float(value: &Value, trimmed: &str) -> Option<f64> {
     match value {
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::String(_) => trimmed.parse::<f64>().ok(),
+        Value::String(_) | Value::SafeString(_) => trimmed.parse::<f64>().ok(),
         // `float(None)`, `float([1, 2])`, `float({})` all raise TypeError.
         _ => None,
     }
@@ -353,7 +353,7 @@ mod tests {
 
     fn ff(v: Value, arg: Option<&str>) -> String {
         match floatformat(&v, arg, true, false).expect("no None-argument case in this table") {
-            Value::String(s) => s,
+            Value::String(s) | Value::SafeString(s) => s,
             other => other.to_string(),
         }
     }

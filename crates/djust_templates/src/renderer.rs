@@ -862,7 +862,7 @@ fn ifchanged_key(value: &Value) -> String {
             Ok(f) => numeric_key(f),
             Err(_) => format!("d{text}"),
         },
-        Value::String(s) => format!("s{s}"),
+        Value::String(s) | Value::SafeString(s) => format!("s{s}"),
         other => format!("o{other:?}"),
     }
 }
@@ -1504,7 +1504,7 @@ fn resolve_custom_tag_arg(arg: &str, context: &Context) -> TagArg {
 /// anyone vouched for.
 fn tag_arg(value: &Value, safe: bool) -> TagArg {
     let text = value_to_arg_string(value);
-    if safe && matches!(value, Value::String(_)) {
+    if safe && matches!(value, Value::String(_) | Value::SafeString(_)) {
         TagArg::marked(text)
     } else {
         TagArg::plain(text)
@@ -1696,7 +1696,9 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// that declares no policy is untouched.
 fn value_channel_arg_string(v: &Value) -> String {
     match v {
-        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| s.clone()),
+        Value::String(s) | Value::SafeString(s) => {
+            serde_json::to_string(s).unwrap_or_else(|_| s.clone())
+        }
         // JSON `true` / `false`, not Python's `True` / `False` (#2463).
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
         // A carried COLLECTION, as its ITEMS (#2477/#2489).
@@ -2532,7 +2534,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // closed. Empty for a non-normalised operand, where the loop
             // mapping is the (legitimate) channel.
             let (iterable_value, normalised, derived_grants) = match iterable_value {
-                Value::String(s) => (
+                Value::String(s) | Value::SafeString(s) => (
                     Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
                     true,
                     Vec::new(),
@@ -3847,7 +3849,7 @@ fn render_rust_component(
     let framework = context
         .get("_framework")
         .and_then(|v| {
-            if let Value::String(s) = v {
+            if let Value::String(s) | Value::SafeString(s) = v {
                 Some(s.as_str())
             } else {
                 None
@@ -4531,8 +4533,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     .items
                     .as_ref()
                     .is_some_and(|items| items.iter().any(|item| values_equal(&needle, item)))),
-                Value::String(s) => {
-                    if let Value::String(n) = &needle {
+                Value::String(s) | Value::SafeString(s) => {
+                    if let Value::String(n) | Value::SafeString(n) = &needle {
                         Ok(s.contains(n.as_str()))
                     } else {
                         return Ok(false);
@@ -5272,7 +5274,9 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // one. `(Float, Float)` keeps its epsilon — a separate question (#1079).
         (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
         (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
+            a == b
+        }
         // Two sequences of the SAME kind: same length, pairwise equal (#2335).
         // Without this arm two lists fell to `_ => false` and were never equal
         // — not even to themselves — so `{% if a == b %}` silently took the
@@ -5656,7 +5660,9 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // Allow comparing integers and floats
         (Value::Integer(a), Value::Float(b)) => order_floats(*a as f64, *b),
         (Value::Float(a), Value::Integer(b)) => order_floats(*a, *b as f64),
-        (Value::String(a), Value::String(b)) => Some(a.cmp(b) as i32),
+        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
+            Some(a.cmp(b) as i32)
+        }
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
         // of the other the shorter is smaller. The mirror of the `values_equal`
@@ -5990,8 +5996,10 @@ impl ToF64 for Value {
             // accepts `_` between digits, so `{% widthratio "1_0" 2 100 %}` is
             // 500 in Django, and a bare `parse::<f64>()` refused it and
             // rendered nothing.
-            Value::String(s) => crate::filters::strip_python_underscores(s.trim())
-                .and_then(|cleaned| cleaned.parse::<f64>().ok()),
+            Value::String(s) | Value::SafeString(s) => {
+                crate::filters::strip_python_underscores(s.trim())
+                    .and_then(|cleaned| cleaned.parse::<f64>().ok())
+            }
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             // Delegates rather than re-parsing: `Value::as_f64` is the one
             // definition of what a Decimal is worth numerically (#1646).

@@ -241,6 +241,8 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     String(String),
+    /// Runtime SafeData string. Serialized as plain text; wire data cannot mint safety.
+    SafeString(String),
     List(Vec<Value>),
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
@@ -962,7 +964,9 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a), Value::String(b)) | (Value::SafeString(a), Value::SafeString(b)) => {
+            a == b
+        }
         (Value::Decimal(a), Value::Decimal(b)) => a == b,
         (Value::BigInt(a), Value::BigInt(b)) => a == b,
         (
@@ -1267,7 +1271,7 @@ impl Serialize for Value {
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
             Value::Float(f) => serializer.serialize_f64(*f),
-            Value::String(st) => serializer.serialize_str(st),
+            Value::String(st) | Value::SafeString(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
             Value::NamedTuple {
@@ -2619,6 +2623,10 @@ impl Value {
         }
     }
 
+    pub fn is_safe_string(&self) -> bool {
+        matches!(self, Value::SafeString(_))
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Missing => false,
@@ -2634,7 +2642,7 @@ impl Value {
             // written on the digits anyway rather than through a parse that
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
-            Value::String(s) => !s.is_empty(),
+            Value::String(s) | Value::SafeString(s) => !s.is_empty(),
             // Python's own `bool(o)`, asked at the conversion and carried
             // (#2458). #2448 read `!e.display.is_empty()` here — always true
             // for this family — which kept `bool(timedelta(0))` at `True`
@@ -3031,7 +3039,7 @@ impl Value {
     /// top-level one.
     pub fn py_repr(&self) -> String {
         match self {
-            Value::String(s) => py_repr_string(s),
+            Value::String(s) | Value::SafeString(s) => py_repr_string(s),
             // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
             // nested in a list or dict renders the constructor form while a
             // top-level one renders bare digits — the same str/repr split that
@@ -3070,7 +3078,7 @@ impl Value {
             // `BigInt` and the #2260 loss.
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
             // The DISPLAY spelling on both display paths — an `Encoded` is
             // exactly the `Value::String(str(o))` this used to be, plus the two
             // fields nothing outside `json_script` and the refusal filters
@@ -3156,7 +3164,7 @@ impl fmt::Display for Value {
             // `numberformat.format` short-circuits an `int` before it reaches
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
             // See the `legacy_display` arm: the display spelling is `str(o)`
             // on both paths, and only `json_script` reads the other one.
             Value::Encoded(e) => write!(f, "{}", e.display),
@@ -3352,7 +3360,17 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
-            Ok(Value::String(s))
+            let safe = ob
+                .py()
+                .import("django.utils.safestring")
+                .and_then(|m| m.getattr("SafeData"))
+                .and_then(|cls| ob.is_instance(&cls))
+                .unwrap_or(false);
+            Ok(if safe {
+                Value::SafeString(s)
+            } else {
+                Value::String(s)
+            })
         } else if let Ok(tuple) = ob.cast::<pyo3::types::PyTuple>() {
             // BEFORE the sequence arm: a tuple extracts as `Vec<Value>` too, so
             // checking after it would render every tuple as a list (#2203).
@@ -4139,6 +4157,9 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            Value::SafeString(s) => py
+                .import("django.utils.safestring")?
+                .call_method1("mark_safe", (s,)),
             // Temporal values retain their Python type for arithmetic and
             // custom filters. Only validated temporal handles cross here;
             // opaque objects and carried collections keep their display-string

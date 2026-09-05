@@ -317,18 +317,11 @@ class TestABindReplacesTheAliasToo:
             == f"[{ESCAPED_HOSTILE}]"
         )
 
-    def test_a_self_binding_registers_nothing(self):
-        # `set_alias` refuses `p -> p`, and refusing it changes nothing: the
-        # `bind` that precedes it has already revoked `p` and every `p.…`, so
-        # a self-alias would resolve to a path that was just cleared.
-        #
-        # The resulting cell is an OVER-escape and it is PRE-EXISTING — it is
-        # #2378's revoke seen one segment down, identical before and after this
-        # change. Pinned rather than left silent so it cannot be mistaken for
-        # something this fix was supposed to cover.
+    def test_a_self_binding_preserves_intrinsic_safety(self):
+        # Intrinsic safety survives rebinding without a positional alias.
         django_out, djust_out = both("{% with p=p %}[{{ p.a }}]{% endwith %}", {"p": {"a": MARKED}})
         assert django_out == "[<b>ok</b>]"
-        assert djust_out == "[&lt;b&gt;ok&lt;/b&gt;]"
+        assert djust_out == django_out == "[<b>ok</b>]"
 
 
 class TestEachMechanismIsIndependentlyREACHABLE:
@@ -408,50 +401,34 @@ class TestEachMechanismIsIndependentlyREACHABLE:
         assert "<IMG" not in out, out
 
 
-class TestTheAliasIsRefusedWhereTheCorrespondenceIsFalse:
-    """The #2334 gate: register only where `name` genuinely IS `<path>`.
-
-    Each of these is an over-escape — a lost capability — and each is the
-    direction to fail in, because the alternative is resolving a mark that
-    belongs to a DIFFERENT element.
-    """
+class TestSafetyFollowsValuesWithoutPositionalAliases:
+    """Reordering preserves each value's safety without borrowing a sibling's grant."""
 
     @pytest.mark.parametrize(
         "expr",
         ["p|dictsort:'a'", "p|slice:':2'", "p|first", "'literal'", "5"],
     )
     def test_a_non_path_expression_gets_no_alias(self, expr):
-        # The claim is that NO grant is registered, so the marked value comes
-        # out escaped. Django disagrees for the filter spellings — that is the
-        # over-escaping direction the #2334 gate deliberately fails in — so
-        # this asserts djust's answer directly rather than agreement.
         tpl = "{% with q=" + expr + " %}[{{ q.0.a }}]{% endwith %}"
-        _django_out, djust_out = both(tpl, {"p": [{"a": MARKED}]})
-        assert "<b>" not in djust_out, djust_out
+        assert_agrees(tpl, {"p": [{"a": MARKED}]})
 
-    def test_a_filtered_binding_does_not_carry_the_sub_path_grant(self):
-        # `dictsort` REORDERS, so `q.0` is not `p.0`; resolving `p.0.a`'s mark
-        # through it would grant a mark belonging to a different element. The
-        # escape here is deliberate, and Django disagrees — the over-escaping
-        # direction, filed rather than closed.
+    def test_a_filtered_binding_preserves_each_values_safety(self):
+        # Safety follows the selected value after reordering.
         django_out, djust_out = both(
             "{% with q=p|dictsort:'k' %}[{{ q.0.a }}]{% endwith %}",
             {"p": [{"k": 1, "a": MARKED}]},
         )
         assert django_out == "[<b>ok</b>]"
-        assert djust_out == "[&lt;b&gt;ok&lt;/b&gt;]"
+        assert djust_out == django_out == "[<b>ok</b>]"
 
-    def test_a_dict_view_unpack_does_not_carry_the_sub_path_grant(self):
-        # `_collect_safe_keys` spells a dict's paths BY KEY NAME (`p.<k>`) and
-        # a positional alias would assert `p.<INDEX>` — the #2334 collision,
-        # which is a LIVE XSS when keys are user data. Refused, so the marked
-        # value is escaped. Django disagrees; over-escaping again.
+    def test_a_dict_view_unpack_preserves_nested_safety(self):
+        # Nested SafeString values survive dictionary-view unpacking.
         django_out, djust_out = both(
             "{% for k, v in p.items %}[{{ v.a }}]{% endfor %}",
             {"p": {"k1": {"a": MARKED}}},
         )
         assert django_out == "[<b>ok</b>]"
-        assert djust_out == "[&lt;b&gt;ok&lt;/b&gt;]"
+        assert djust_out == django_out == "[<b>ok</b>]"
 
     def test_the_collision_the_positional_alias_would_have_caused(self):
         # The falsifying case for the rule above, run rather than reasoned
@@ -462,11 +439,9 @@ class TestTheAliasIsRefusedWhereTheCorrespondenceIsFalse:
         django_out, out = both("{% for k, v in p.items %}[{{ v.a }}]{% endfor %}", ctx)
         # Django emits the marked FIRST value live and escapes the second.
         assert django_out == f"[<b>ok</b>][{ESCAPED_HOSTILE}]", django_out
-        # djust escapes BOTH — the refused alias costs the first cell's
-        # capability and buys the second cell's safety. The load-bearing claim
-        # is the second: the payload never reaches the page raw.
+        # Preserve the marked value while escaping the hostile sibling.
         assert HOSTILE not in out, out
-        assert out == f"[&lt;b&gt;ok&lt;/b&gt;][{ESCAPED_HOSTILE}]", out
+        assert out == django_out, out
 
 
 class TestTheLoopMappingItReplacedStillWorks:
@@ -479,12 +454,12 @@ class TestTheLoopMappingItReplacedStillWorks:
             == "[<b>ok</b>]"
         )
 
-    def test_a_filtered_loop_operand_still_grants_nothing(self):
+    def test_a_filtered_loop_operand_preserves_intrinsic_safety(self):
         django_out, djust_out = both(
             "{% for x in rows|slice:':2' %}[{{ x.a }}]{% endfor %}",
             {"rows": [{"a": MARKED}]},
         )
-        assert djust_out == "[&lt;b&gt;ok&lt;/b&gt;]"
+        assert djust_out == django_out == "[<b>ok</b>]"
         assert django_out == "[<b>ok</b>]"
 
     def test_a_nested_loop_reusing_the_name_uses_the_inner_binding(self):
