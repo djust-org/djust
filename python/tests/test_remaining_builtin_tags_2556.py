@@ -349,17 +349,49 @@ class TestCycleStateModel:
         out = backend.from_string(src).render(context={"values": [1, 2, 3, 4]})
         assert out == "abca"
 
-    def test_an_only_include_shares_the_render_state(self, tmp_path):
-        """Django's `context.new()` keeps `render_context`: the cycle inside an
-        `only` include is ONE node advancing across the loop, not a fresh
-        iterator per include."""
+    def test_an_only_include_gets_a_FRESH_render_state(self, tmp_path):
+        """MEASURED against Django 5.2, which answers `xxxx` (#2657).
+
+        This test used to assert `xyzx` on the reasoning that Django's
+        `context.new()` keeps the parent's `render_context` object, so the
+        cycle inside an `only` include is one node advancing across the loop.
+        The premise is true and the conclusion does not follow:
+        `Template.render` then calls `render_context.push_state(self)`, and
+        `RenderContext.__getitem__` reads only `dicts[-1]` — so each included
+        render sees a FRESH frame and the cycle restarts every iteration.
+
+        The claim was load-bearing in the wrong direction: the same reasoning,
+        written as a comment beside the `only` branch in `renderer.rs`,
+        motivated an equally wrong `{% ifchanged %}` share during #2650's
+        review rounds (caught there only because someone measured that case
+        directly). Nothing here is recalled — the expected value below is
+        Django's own output, and `test_the_plain_and_only_forms_agree` renders
+        the same source on Django and djust.
+        """
         (tmp_path / "inc.html").write_text("{% cycle 'x' 'y' 'z' %}", encoding="utf-8")
         src = "{% for i in xs %}{% include 'inc.html' only %}{% endfor %}"
         backend = DjustTemplateBackend(
             params={"NAME": "djust", "DIRS": [str(tmp_path)], "APP_DIRS": False, "OPTIONS": {}}
         )
         out = backend.from_string(src).render(context={"xs": [1, 2, 3, 4]})
-        assert out == "xyzx"
+        assert out == "xxxx"
+
+    def test_the_plain_and_only_forms_agree_with_django(self, tmp_path):
+        """The differential the assertion above is derived from — both include
+        forms, rendered on Django itself in the same process (#2657)."""
+        from django.template import Context, Engine
+
+        (tmp_path / "inc.html").write_text("{% cycle 'x' 'y' 'z' %}", encoding="utf-8")
+        backend = DjustTemplateBackend(
+            params={"NAME": "djust", "DIRS": [str(tmp_path)], "APP_DIRS": False, "OPTIONS": {}}
+        )
+        for only in ("", " only"):
+            src = "{% for i in xs %}{% include 'inc.html'" + only + " %}{% endfor %}"
+            expected = (
+                Engine(dirs=[str(tmp_path)]).from_string(src).render(Context({"xs": [1, 2, 3, 4]}))
+            )
+            assert expected == "xxxx", (only, expected)
+            assert backend.from_string(src).render(context={"xs": [1, 2, 3, 4]}) == expected
 
     @pytest.mark.parametrize(
         "src, ctx, expected",

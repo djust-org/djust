@@ -3381,20 +3381,24 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // (#2556, `include14`).
                         fresh.set_autoescape(context.autoescape());
                         fresh.set_string_if_invalid(context.string_if_invalid());
-                        // Django's `context.new()` keeps the parent's
-                        // `render_context`, so a `{% cycle %}` in an `only`
-                        // include advances the parent render's iterator (#2556).
-                        fresh.share_cycle_state_from(context);
-                        // `{% ifchanged %}` state is deliberately NOT shared here.
-                        // A first pass shared it "for symmetry with `{% cycle %}`";
-                        // measured against Django, an `{% ifchanged %}` in an
-                        // `only` include starts CLEAN each render (`CCC`, where a
-                        // shared frame gives `Css`) because `Template.render`
-                        // pushes a fresh `render_context` state for the included
-                        // template. The fresh `Context` built here already has an
-                        // empty store, so the parity is the absence of a call.
-                        // (A PLAIN include shares, via the lexical context scope in the
-                        // other branch — and Django agrees there. Both measured.)
+                        // Neither `{% cycle %}` nor `{% ifchanged %}` state is
+                        // carried across here, and NOT for the reason a first
+                        // pass gave. Django's `context.new()` does keep the
+                        // parent's `render_context` OBJECT — but `Template.render`
+                        // then `push_state`s a fresh frame onto it for the
+                        // included render, and `RenderContext` reads only that
+                        // frame. So a `{% cycle %}` in an include (plain or
+                        // `only`) starts fresh on every execution — measured:
+                        // `{% for x in v %}{% include 'cyc.html' %}{% endfor %}`
+                        // is `aaa` on Django 5.2 — and so does an
+                        // `{% ifchanged %}` outside a loop. Both stores are
+                        // keyed on the render frame `begin_template_render`
+                        // mints below (`Context::cycle_key`, #2657), which is
+                        // what makes the plain-include branch — a scope on the
+                        // SAME context — isolate too. A comment here once said
+                        // the opposite of a `{% cycle %}`, and it motivated an
+                        // equally wrong `{% ifchanged %}` share in the #2650
+                        // review rounds; the measurement is the rule.
                         fresh
                     })
                 } else {
