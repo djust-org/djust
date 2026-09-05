@@ -39,7 +39,11 @@ export default defineConfig({
     // or other `.claude/` internals — those are other branches' checkouts and
     // running their (possibly stale) test copies against this tree's built
     // client.js produces spurious failures. Preserve vitest's defaults.
-    exclude: [...configDefaults.exclude, '**/.claude/**'],
+    //
+    // `.django-src/` is the same situation (#2637): the gitignored Django
+    // checkout `make django-template-suite` creates carries Django's own
+    // QUnit admin tests, which cannot run under vitest and are not ours.
+    exclude: [...configDefaults.exclude, '**/.claude/**', '**/.django-src/**'],
     onUnhandledError(error) {
       const msg = String(error && error.message ? error.message : '');
       const stack = String(error && error.stack ? error.stack : '');
