@@ -83,6 +83,63 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         return cast(str, template.render(django_context))
 
 
+def _load_template_source(template_name: str) -> Optional[str]:
+    """The source of ``template_name`` as the project's loaders find it, or
+    ``None`` when the configured backend does not expose one (#2530)."""
+    from django.template.loader import get_template
+
+    loaded = get_template(template_name)
+    source = getattr(loaded, "source", None)
+    if source is None:
+        source = getattr(getattr(loaded, "template", None), "source", None)
+    return source if isinstance(source, str) else None
+
+
+def _render_template_name_with_markers(
+    template_name: str, context: Dict[str, Any]
+) -> Optional[str]:
+    """Render a ``template_name`` component through the LiveView engine entry
+    (``RustLiveView`` — ``<!--dj-if id=…-->`` boundary markers ON) so its
+    ``{% if %}`` blocks keep VDOM identity inside the parent (#2530).
+
+    Returns ``None`` when the source is unavailable or the template uses
+    ``{% extends %}`` (inheritance is resolved by the loader chain, not this
+    entry); the caller then falls back to ``render_to_string``. Context and
+    sidecar handling mirror the LiveView path: JSON-normalized values into
+    state, ``SafeString`` paths marked safe, raw objects (models behind the
+    serialization floor) on the ``set_raw_py_values`` sidecar.
+    """
+    try:
+        from djust._rust import RustLiveView
+    except ImportError:
+        return None
+    try:
+        source = _load_template_source(template_name)
+    except Exception:
+        return None
+    if source is None or "{% extends" in source:
+        return None
+    from ..config import template_auto_call_enabled
+    from ..mixins.rust_bridge import _collect_safe_keys
+    from ..render_env import apply_render_env_once
+    from ..serialization import build_render_sidecar, normalize_django_value
+    from ..utils import get_template_dirs
+
+    apply_render_env_once()
+    rust_view = RustLiveView(source, get_template_dirs())
+    if hasattr(rust_view, "set_template_auto_call"):
+        rust_view.set_template_auto_call(template_auto_call_enabled())
+    rust_view.update_state(normalize_django_value(context))
+    safe_keys: List[str] = []
+    for key, value in context.items():
+        safe_keys.extend(_collect_safe_keys(value, key))
+    if safe_keys:
+        rust_view.mark_safe_keys(safe_keys)
+    if hasattr(rust_view, "set_raw_py_values"):
+        rust_view.set_raw_py_values(build_render_sidecar(context))
+    return cast(str, rust_view.render())
+
+
 class Component(TemplateMutatorGuard, ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
@@ -765,6 +822,14 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 
         # Fall back to template_name (file-based template)
         if self.template_name:
+            # #2530: this HTML lands INSIDE the parent LiveView's VDOM, so it
+            # must be rendered through the LiveView engine entry (dj-if
+            # boundary markers ON), not the project's TEMPLATES backend —
+            # which emits none (post-#2519, and never on DjangoTemplates), so
+            # a component `{% if %}` toggle fell back to positional matching.
+            engine_html = _render_template_name_with_markers(self.template_name, context)
+            if engine_html is not None:
+                return cast(str, mark_safe(engine_html))
             from django.template.loader import render_to_string
 
             return cast(str, mark_safe(render_to_string(self.template_name, context)))
