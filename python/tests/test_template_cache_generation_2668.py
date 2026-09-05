@@ -51,6 +51,38 @@ class TestLoadTemplatesHitTheCache:
         )
 
 
+class TestLoadFromFormHitsTheCache:
+    """`{% load x from lib %}`: Django's `load_from_library` builds a fresh
+    `Library()` per call, so an identity guard on the SUBSET never matches —
+    the re-verification of #2668 measured this form bumping on every parse
+    (81→83→85→87→89) and demoting the plain label to a miss afterwards."""
+
+    FROM_SRC = "{% load translate from i18n %}{% translate 'y' as t %}[{{ t }}]-2668-from"
+    FULL_SRC = "{% load i18n %}{% translate 'z' as t %}[{{ t }}]-2668-full"
+
+    def test_from_form_second_compile_is_a_hit(self):
+        _compile(self.FROM_SRC)
+        _compile(self.FROM_SRC)
+        assert _is_hit_next_time(self.FROM_SRC)
+        gen = _rust.registry_generation()
+        _compile(self.FROM_SRC)
+        assert _rust.registry_generation() == gen, "a from-form load must not bump on re-parse"
+
+    def test_from_form_does_not_demote_the_full_library(self):
+        _compile(self.FULL_SRC)
+        _compile(self.FULL_SRC)
+        assert _is_hit_next_time(self.FULL_SRC)
+        _compile(self.FROM_SRC)
+        _compile(self.FROM_SRC)
+        # The full-library template must still be current, and a further
+        # compile of it must not re-bridge.
+        gen = _rust.registry_generation()
+        _compile(self.FULL_SRC)
+        assert _rust.registry_generation() == gen, (
+            "a `from` load overwrote _loaded[label] with the subset, so the plain label re-bridged"
+        )
+
+
 class TestRegistryMutationsInvalidate:
     SRC = "{{ v|stalefilter2668 }}"
 

@@ -230,6 +230,11 @@ _default_builtins: Optional[List[Any]] = None
 #: every synthetic parser so a filter from one library resolves inside a tag
 #: argument of another, exactly as ``Parser.add_library`` accumulates them.
 _loaded: Dict[str, Any] = {}
+# `{% load x from lib %}` subsets, keyed by (library label, requested names) →
+# the PARENT library object they were cut from. Django's `load_from_library`
+# allocates a fresh `Library()` on every call, so identity on the subset can
+# never match; identity on the parent can (#2668 re-verification).
+_loaded_subsets: Dict[tuple, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +385,20 @@ def load_libraries(args: List[str]) -> None:
             if len(bits) >= 4 and bits[-2] == "from":
                 name = bits[-1]
                 library = _find_library(name)
+                key = (name, tuple(sorted(bits[1:-2])))
+                if _loaded_subsets.get(key) is library:
+                    # Same parent, same names: every tag is already bridged.
+                    # Re-bridging bumped the registry generation on every
+                    # parse and demoted `_loaded[name]` to the subset.
+                    return
                 subset = load_from_library(library, name, bits[1:-2])
+                parent_entry = _loaded.get(name)
                 _bridge_library(name, subset)
+                _loaded_subsets[key] = library
+                if parent_entry is not None:
+                    # Keep the FULL library as the label's entry — a later plain
+                    # `{% load name %}` must still be a no-op, not a re-bridge.
+                    _loaded[name] = parent_entry
             else:
                 for name in bits[1:]:
                     _bridge_library(name, _find_library(name))
