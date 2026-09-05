@@ -1286,15 +1286,18 @@ impl Context {
         // register nothing and are NOT reached here either — they stay empty,
         // tracked at #2504.
         //
-        // Consulted only when `key`'s OWN head names no sidecar entry, which
-        // keeps the miss-only property this whole change is bounded by: the
-        // sidecar can ADD a resolution and never CHANGE one. In particular a
-        // loop variable that SHADOWS a top-level context name still resolves
-        // against the outer object exactly as it does today (wrongly — a
-        // pre-existing defect this fix deliberately does not move, #2505).
+        // A local binding must not fall back to the old object under the
+        // same name. Prefer its registered source alias when one exists;
+        // otherwise a shadowed raw root is unavailable. Local live handles
+        // have already been resolved by walk_from_handle above.
+        let is_shadowed = |name: &str| {
+            self.render_bindings
+                .iter()
+                .any(|frame| frame.contains(name))
+        };
         let head = key.split('.').next().unwrap_or(key);
         let expanded;
-        let key = if raw.contains_key(head) {
+        let key = if raw.contains_key(head) && !is_shadowed(head) {
             key
         } else {
             match self.resolve_alias(key) {
@@ -1309,6 +1312,9 @@ impl Context {
         let Some(first) = parts.first().copied() else {
             return Ok(None);
         };
+        if is_shadowed(first) {
+            return Ok(None);
+        }
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };

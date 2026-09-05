@@ -1,0 +1,1 @@
+- **Shadowed model lookups**: Stop falling back to an original model after its name is rebound, and prefer a local binding's registered source alias when resolving model attributes.
