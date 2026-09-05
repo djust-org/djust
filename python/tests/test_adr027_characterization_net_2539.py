@@ -1615,20 +1615,20 @@ SHELL_BRANCHES = [
 
 
 @pytest.mark.django_db
-class TestThePageShellPathHasNoSidecar2513:
-    """#2513: the page shell wires no sidecar on EITHER branch, so a component's
-    dotted spellings render empty there — while `{{ c }}` renders the
-    component in the SAME render (non-vacuity)."""
+class TestThePageShellPathHasTheSidecar2589:
+    """#2513 pinned the page shell as wiring NO sidecar on either branch (a
+    component's dotted spellings rendered empty there). #2589 closed that gap
+    — the shell now carries the same `build_render_sidecar` the other entries
+    get — so both branches resolve the dotted spellings exactly as the dj-root
+    LiveView path does (sibling test below)."""
 
     @pytest.mark.parametrize("with_serialized_context", SHELL_BRANCHES)
-    def test_dotted_spellings_are_empty_while_the_bare_one_renders(
-        self, with_serialized_context: bool
-    ) -> None:
+    def test_dotted_spellings_resolve_on_both_branches(self, with_serialized_context: bool) -> None:
         nav = render_page_shell(
             "[{{ c }}][{{ c.render }}][{{ c.render|safe }}][{{ c.cls_attr }}]",
             with_serialized_context=with_serialized_context,
         )
-        assert nav == "[<b>shellcard</b>][][][]"
+        assert nav == "[<b>shellcard</b>][<b>shellcard</b>][<b>shellcard</b>][shell-class-level]"
 
     def test_the_dj_root_liveview_path_resolves_the_same_spellings(self) -> None:
         """Sibling: the same component on the dj-root LiveView path DOES
