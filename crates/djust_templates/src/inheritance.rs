@@ -824,9 +824,10 @@ impl FilesystemTemplateLoader {
                 e
             ))
         })?;
-        let tokens = crate::lexer::tokenize(&source)?;
-        let mut nodes = crate::parser::parse_with_source(&tokens, &source)
-            .map_err(DjangoRustError::into_template_syntax)?;
+        let (tokens, spans) = crate::lexer::tokenize_spanned(&source)?;
+        let mut nodes = crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
+            .map_err(DjangoRustError::into_template_syntax)
+            .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
         set_include_origins(&mut nodes, name)?;
         set_ifchanged_origins(&mut nodes, &path.to_string_lossy());
         Ok(nodes)
@@ -900,9 +901,10 @@ impl TemplateLoader for FilesystemTemplateLoader {
                 e
             ))
         })?;
-        let tokens = lexer::tokenize(&source)?;
-        let mut nodes_vec = parser::parse_with_source(&tokens, &source)
-            .map_err(DjangoRustError::into_template_syntax)?;
+        let (tokens, spans) = lexer::tokenize_spanned(&source)?;
+        let mut nodes_vec = parser::parse_with_source_spanned(&tokens, &spans, &source)
+            .map_err(DjangoRustError::into_template_syntax)
+            .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
         set_include_origins(&mut nodes_vec, name)?;
         set_ifchanged_origins(&mut nodes_vec, &path.to_string_lossy());
         let arc: Arc<[Node]> = Arc::from(nodes_vec);

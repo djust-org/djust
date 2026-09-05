@@ -1,0 +1,1 @@
+- **Loaded-template diagnostics**: Preserve token spans and source origins for compilation errors in included and parent templates, highlight the failing tag in debug pages, and retain the original custom-tag exception object.

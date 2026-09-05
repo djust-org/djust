@@ -285,6 +285,26 @@ class DjustTemplate:
                 raise
             raise exc from e
 
+    def _annotate_loaded_error(self, error: Exception, original: Exception) -> None:
+        """Attach the loaded source's location without replacing a user exception."""
+        if not getattr(self.backend, "debug", False):
+            return
+        if getattr(error, "template_debug", None) is not None:
+            return
+        source = getattr(original, "djust_template_source", None)
+        span = getattr(original, "djust_token_span", None)
+        if not isinstance(source, str) or span is None:
+            return
+        from .exceptions import build_template_debug
+
+        error.template_debug = build_template_debug(  # type: ignore[attr-defined]
+            source,
+            getattr(original, "djust_template_origin", None),
+            span[0],
+            span[1],
+            str(error),
+        )
+
     def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
         """
         Apply JIT auto-serialization to a Django QuerySet.
@@ -912,6 +932,7 @@ class DjustTemplate:
             # ENGINE failure (unsupported tag, parse error) still gets the
             # hint, which is what it was written for.
             if _is_user_raised(e):
+                self._annotate_loaded_error(e, e)
                 raise
 
             # A missing `{% extends %}` / `{% include %}` target is Django's
@@ -925,7 +946,11 @@ class DjustTemplate:
             if isinstance(syntax_message, str):
                 from .exceptions import DjustTemplateSyntaxError
 
-                raise DjustTemplateSyntaxError(syntax_message, origin=self.origin) from e
+                origin_path = getattr(e, "djust_template_origin", None)
+                origin = Origin(name=origin_path) if origin_path else self.origin
+                error = DjustTemplateSyntaxError(syntax_message, origin=origin)
+                self._annotate_loaded_error(error, e)
+                raise error from e
 
             missing = _missing_template_exception(e, self.backend)
             if missing is not None:

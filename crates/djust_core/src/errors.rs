@@ -22,6 +22,14 @@ pub enum DjangoRustError {
         end: usize,
     },
 
+    /// Source provenance for an error raised while compiling a loaded template.
+    #[error("{error}")]
+    TemplateSource {
+        error: Box<DjangoRustError>,
+        template_source: String,
+        origin: String,
+    },
+
     /// A failed filesystem lookup, retaining the paths actually searched.
     /// Keep metadata separate from display text so Python need not parse paths.
     #[error("Template error: Template not found: {name}\nSearched in:\n{}", tried.iter().map(|path| format!("  - {path}")).collect::<Vec<_>>().join("\n"))]
@@ -109,6 +117,22 @@ pub enum DjangoRustError {
 impl From<DjangoRustError> for PyErr {
     fn from(err: DjangoRustError) -> PyErr {
         match err {
+            DjangoRustError::TemplateSource {
+                error,
+                template_source,
+                origin,
+            } => {
+                let error: PyErr = (*error).into();
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    if !value.hasattr("djust_template_source").unwrap_or(false) {
+                        let _ = value.setattr("djust_template_source", template_source);
+                        let _ = value.setattr("djust_template_origin", origin);
+                    }
+                });
+                error
+            }
+
             // Hand the caller back the exception user code actually raised,
             // so Django's handler chain still sees `PermissionDenied` /
             // `Http404` / a custom exception and dispatches on its type.
@@ -171,9 +195,31 @@ impl From<DjangoRustError> for PyErr {
 }
 
 impl DjangoRustError {
+    /// Keep loaded-template source beside the error; never replace an inner origin.
+    pub fn with_template_source(self, source: &str, origin: &str) -> Self {
+        if matches!(self, Self::TemplateSource { .. }) {
+            self
+        } else {
+            Self::TemplateSource {
+                error: Box::new(self),
+                template_source: source.to_string(),
+                origin: origin.to_string(),
+            }
+        }
+    }
+
     /// Classify parser failures at a loader boundary without changing user exceptions.
     pub fn into_template_syntax(self) -> Self {
         match self {
+            Self::TemplateSource {
+                error,
+                template_source,
+                origin,
+            } => Self::TemplateSource {
+                error: Box::new(error.into_template_syntax()),
+                template_source,
+                origin,
+            },
             Self::TemplateError(message) => Self::TemplateSyntax(message),
             Self::TemplateErrorAt {
                 message,
@@ -191,6 +237,7 @@ impl DjangoRustError {
     /// The byte span of the offending token, when this error knows one (#2557).
     pub fn span(&self) -> Option<(usize, usize)> {
         match self {
+            Self::TemplateSource { error, .. } => error.span(),
             DjangoRustError::TemplateErrorAt { start, end, .. }
             | DjangoRustError::TemplateSyntaxAt { start, end, .. } => Some((*start, *end)),
             _ => None,
