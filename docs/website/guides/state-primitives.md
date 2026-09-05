@@ -46,14 +46,21 @@ class CartView(LiveView):
 ```
 
 **When the cache invalidates.** A dep is "changed" when its identity
-differs OR its shallow fingerprint (id + length + sampled keys —
-matching the `_snapshot_assigns` semantics used elsewhere in djust)
-differs. Mutating an item in place (`self.items[0]["qty"] = 2`) without
-reassigning the list won't invalidate — assign a new list, or
-recompute manually. The same in-place-mutation caveat applies to
-**re-rendering in general**: an in-place nested mutation produces no
-patches. Assign a new value, or call `self.set_changed_keys("items")`
-to force a re-render — see the State Management API reference.
+differs OR its structural fingerprint differs — the same
+`deep_fingerprint` that drives re-rendering everywhere else in djust.
+Plain containers (dict / list / tuple / set) are walked to their
+leaves, so an in-place edit such as `self.items[0]["qty"] = 2` or
+`self.columns["done"].append(card)` invalidates the cache **and**
+re-renders the view on its own; you do not need to rebuild the list.
+
+What the fingerprint cannot see is an attribute write on an *opaque*
+object held in state — a model instance, a form, any non-container
+object — which is compared by identity (`self.rows[0].name = "x"`
+renders nothing). For those, assign a new value or call
+`self.set_changed_keys("rows")` to force a re-render — see the State
+Management API reference. A container so large it exceeds the
+fingerprint budget (20 000 nodes) is reported once per view class with
+the attribute name in the warning, and needs the same hatch.
 
 **Skip the cache.** Use plain `@computed` (no args) when the
 computation is cheap enough that property semantics are fine — every
