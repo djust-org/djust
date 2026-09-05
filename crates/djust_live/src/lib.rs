@@ -3549,6 +3549,12 @@ fn resolve_attr_gate(py: Python) -> PyResult<Py<PyAny>> {
 /// The subset of *tree*'s keys the gate permits for *obj*. Set-at-a-time: one
 /// Python call per OBJECT LEVEL, not per attribute, so the per-model denylist /
 /// allowlist / opt-out sets (and the `settings` read behind them) resolve once.
+///
+/// `tree` is a `HashMap`, so these names arrive in an order that differs per
+/// instance. That is fine and deliberately not sorted here: the gate memoizes
+/// on the SET of names (`_GATE_CACHE`), precisely so no caller's iteration
+/// order can thrash it. Sorting as well would be a second mechanism covering
+/// the same half, which no test could then tell apart from the first (#2233).
 fn gated_names(
     py: Python,
     obj: &Bound<'_, PyAny>,

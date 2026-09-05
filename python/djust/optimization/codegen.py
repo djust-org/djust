@@ -24,8 +24,16 @@ logger = logging.getLogger(__name__)
 #: ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``) changes
 #: one of the sets and therefore the key. There is no staleness mode to
 #: invalidate — a changed policy simply misses.
+#:
+#: *names* is keyed as a ``frozenset``, not a tuple, because the answer depends
+#: on the SET of names and nothing else — and because the Rust caller iterates a
+#: Rust ``HashMap``, whose order differs per instance. Keyed as a tuple, twelve
+#: identical ``serialize_queryset`` calls produced ELEVEN distinct keys: every
+#: call missed and the cache walked to its cap. `gated_names` also sorts before
+#: calling, so the Rust→Python contract is deterministic; this key makes the
+#: cache correct for any caller's ordering regardless.
 _GATE_CACHE: Dict[
-    Tuple[Tuple[str, ...], FrozenSet[str], Optional[FrozenSet[str]], FrozenSet[str]],
+    Tuple[FrozenSet[str], FrozenSet[str], Optional[FrozenSet[str]], FrozenSet[str]],
     FrozenSet[str],
 ] = {}
 
@@ -85,14 +93,13 @@ def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
         denied = encoder._get_denied_fields(obj)
         allowed = encoder._get_allowlist_fields(obj)
         optout = encoder._get_sensitive_optout_fields(obj)
-        # ``tuple()`` is free when *names* is already a tuple, which is what the
-        # generated prologue and the Rust caller both pass.
-        key = (tuple(names), denied, allowed, optout)
+        wanted = frozenset(names)
+        key = (wanted, denied, allowed, optout)
         hit = _GATE_CACHE.get(key)
         if hit is not None:
             return hit
         permitted = frozenset(
-            n for n in key[0] if encoder._attr_is_serializable(n, denied, allowed, optout)
+            n for n in wanted if encoder._attr_is_serializable(n, denied, allowed, optout)
         )
         if len(_GATE_CACHE) < _GATE_CACHE_MAX:
             _GATE_CACHE[key] = permitted

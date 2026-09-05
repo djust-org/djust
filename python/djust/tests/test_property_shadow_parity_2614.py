@@ -934,3 +934,53 @@ class TestRustQuerySetCallerSet:
         pkg = pathlib.Path(_codegen.__file__).resolve().parents[1]
         text = (pkg / rel).read_text(encoding="utf-8")
         assert "normalize_django_value" in text, rel
+
+
+class TestGateCacheKeyIsOrderInsensitive:
+    """The gate memoizes on the SET of names, not their order (#2688).
+
+    The Rust caller iterates a Rust ``HashMap``, whose order differs per
+    instance. Keyed on a tuple, twelve identical ``serialize_queryset`` calls
+    produced ELEVEN distinct cache keys — every call missed and the cache
+    walked toward its cap. This is the pin for that; the fix is one mechanism
+    (the frozenset key), deliberately not paired with a sort on the Rust side
+    that would shadow it (#2233).
+    """
+
+    def test_permutations_share_one_cache_entry(self):
+        names = ("label", "password", "get_session_auth_hash", "_secret")
+        obj = _qs_rows(1)[0]
+
+        _codegen._GATE_CACHE.clear()
+        first = _codegen.emittable_names(obj, names)
+        assert len(_codegen._GATE_CACHE) == 1, _codegen._GATE_CACHE
+
+        for perm in (
+            ("password", "label", "_secret", "get_session_auth_hash"),
+            ("_secret", "get_session_auth_hash", "password", "label"),
+            ("get_session_auth_hash", "_secret", "label", "password"),
+        ):
+            assert _codegen.emittable_names(obj, perm) == first
+        assert len(_codegen._GATE_CACHE) == 1, _codegen._GATE_CACHE
+
+    def test_a_different_name_set_is_a_different_entry(self):
+        """Gate-off sibling: the key must still DISCRIMINATE (non-vacuous)."""
+        obj = _qs_rows(1)[0]
+        _codegen._GATE_CACHE.clear()
+        _codegen.emittable_names(obj, ("label",))
+        _codegen.emittable_names(obj, ("label", "password"))
+        assert len(_codegen._GATE_CACHE) == 2, _codegen._GATE_CACHE
+
+    def test_repeated_rust_queryset_calls_do_not_grow_the_cache(self):
+        """The real path, end to end — this is what regressed."""
+        rust = pytest.importorskip("djust._rust")
+        paths = ["label", "password", "get_session_auth_hash", "_secret"]
+
+        rust.serialize_queryset(_qs_rows(1), paths)  # warm
+        before = len(_codegen._GATE_CACHE)
+        for _ in range(12):
+            rust.serialize_queryset(_qs_rows(1), paths)
+        assert len(_codegen._GATE_CACHE) == before, (
+            "the gate cache grew across identical serialize_queryset calls — the "
+            "key is sensitive to the Rust HashMap's iteration order again"
+        )
