@@ -24,15 +24,15 @@ by moving the script out — that would make the #1848 guard tautological.
         Browser Smoke Canary
     </h1>
 
-    {# --- Class 1: LiveView mount canary. dj-click round-trips over the WS.
-           If mount is refused, clicking does nothing and {{ clicks }} stays 0. #}
+    {% comment %} --- Class 1: LiveView mount canary. dj-click round-trips over the WS.
+           If mount is refused, clicking does nothing and {{ clicks }} stays 0. {% endcomment %}
     <div style="margin: 1.5rem 0;">
         <button id="smoke-bump" dj-click="bump" class="btn-primary-modern">Bump</button>
         <span id="smoke-count" style="margin-left: 0.75rem; font-weight: 700;">{{ clicks }}</span>
     </div>
 
-    {# --- Class 2: inline-in-dj-root <script> control (#1848). The delegated
-           click listener below toggles .active between the two tabs. #}
+    {% comment %} --- Class 2: inline-in-dj-root <script> control (#1848). The delegated
+           click listener below toggles .active between the two tabs. {% endcomment %}
     <div class="smoke-tabs" role="tablist" style="margin: 1.5rem 0;">
         <button id="smoke-tab-1" class="smoke-tab-button active" data-tab="1"
                 style="padding: 0.5rem 1rem;">Tab 1</button>

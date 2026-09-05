@@ -9,6 +9,15 @@ from django.utils import translation
 from djust.template import DjustTemplateBackend
 
 
+@pytest.fixture(autouse=True)
+def restore_native_render_environment():
+    """Language overrides restore Django state; restore native state as well."""
+    from djust.render_env import apply_render_env
+
+    yield
+    apply_render_env()
+
+
 @pytest.mark.parametrize("language", ["en", "fr", "de", "es", "pl"])
 @pytest.mark.parametrize(
     "expression,value",

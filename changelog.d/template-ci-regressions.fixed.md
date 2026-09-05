@@ -1,0 +1,1 @@
+- **Template compatibility regressions**: Preserve inheritance and block.super when rendering the initial LiveView page shell, use valid multiline comments in the browser canary, and isolate locale and conformance runner tests.

@@ -1148,7 +1148,7 @@ class TestAgainstRealDjangoCheckout:
     def test_if_module_through_djust(self, tmp_path: pathlib.Path) -> None:
         data = self._run(tmp_path)
         assert len(data["tests"]) == 115
-        assert data["fail"] >= 1
+        assert all(t["status"] == "OK" for t in data["tests"])
         assert sum(1 for t in data["tests"] if t["touched"]) >= 100
 
     def test_if_module_gate_off(self, tmp_path: pathlib.Path) -> None:
