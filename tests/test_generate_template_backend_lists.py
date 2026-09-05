@@ -570,7 +570,10 @@ class TestScoreboardParity:
         assert django_names_on_the_board == set(), (
             f"scoreboard reports Django tags as unsupported: {sorted(django_names_on_the_board)}"
         )
-        assert board - known, "the board should still carry the non-Django fixture names"
+        # Since #2665 even the fixture-only names (`foobar`) no longer surface
+        # as `Unsupported template tag` lines — the engine reports them the way
+        # Django does — so an EMPTY board is the expected steady state; the
+        # property under test is only that no DJANGO name is on it.
         # The old cross-check line lived here:
         #     missing = django_names_on_the_board - report.all_unsupported_tags
         #     assert missing == set()
