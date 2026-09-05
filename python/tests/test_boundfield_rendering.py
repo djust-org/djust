@@ -91,9 +91,9 @@ class TestNormalizeDjangoValueForms:
         assert set(result.keys()) == {"first_name", "email", "age"}
         for name, value in result.items():
             assert isinstance(value, SafeString), f"form[{name!r}] must be SafeString"
-            assert (
-                "<input" in value or "<select" in value or "<textarea" in value
-            ), f"Expected widget HTML for {name!r}, got: {value!r}"
+            assert "<input" in value or "<select" in value or "<textarea" in value, (
+                f"Expected widget HTML for {name!r}, got: {value!r}"
+            )
 
     def test_form_field_html_contains_name_attribute(self):
         """Each rendered field must include the correct name= attribute."""
@@ -131,9 +131,9 @@ class TestNormalizeDjangoValueForms:
         form = ChoiceForm()
         result = normalize_django_value(form)
 
-        assert (
-            "<select" in result["status"]
-        ), f"ChoiceField must render as <select>, got: {result['status']!r}"
+        assert "<select" in result["status"], (
+            f"ChoiceField must render as <select>, got: {result['status']!r}"
+        )
         assert "Open" in result["status"]
         assert "Closed" in result["status"]
 
@@ -145,9 +145,9 @@ class TestNormalizeDjangoValueForms:
         result = normalize_django_value(form)
 
         for name, value in result.items():
-            assert (
-                value.strip() != ""
-            ), f"form[{name!r}] rendered to empty string — BUG-03 regression"
+            assert value.strip() != "", (
+                f"form[{name!r}] rendered to empty string — BUG-03 regression"
+            )
 
     def test_not_object_literal_regression(self):
         """Regression: form fields must NOT serialize to '[Object]'."""
@@ -157,9 +157,9 @@ class TestNormalizeDjangoValueForms:
         result = normalize_django_value(form)
 
         for name, value in result.items():
-            assert (
-                "[Object]" not in value
-            ), f"form[{name!r}] rendered to '[Object]' — BUG-03 regression"
+            assert "[Object]" not in value, (
+                f"form[{name!r}] rendered to '[Object]' — BUG-03 regression"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ class TestFormRenderingInTemplate:
         )
 
         template = backend.from_string(
-            "<div>{{ form.first_name }}</div>" "<div>{{ form.email }}</div>"
+            "<div>{{ form.first_name }}</div><div>{{ form.email }}</div>"
         )
         form = SimpleForm()
         html = template.render(context={"form": form}, request=None)

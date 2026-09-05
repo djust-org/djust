@@ -131,9 +131,9 @@ class TestPredicate:
             await task
 
         # The predicate failure should be logged
-        assert any(
-            "predicate" in record.message for record in caplog.records
-        ), "Expected a warning log about the predicate raising"
+        assert any("predicate" in record.message for record in caplog.records), (
+            "Expected a warning log about the predicate raising"
+        )
 
     @pytest.mark.asyncio
     async def test_predicate_none_matches_any_kwargs(self, view):

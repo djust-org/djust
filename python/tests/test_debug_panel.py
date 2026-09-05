@@ -565,15 +565,15 @@ class TestDebugPanelSvgEscaping:
             js_content = f.read()
 
         # Tab icon SVGs must contain raw viewBox values (not escaped)
-        assert (
-            'viewBox="0 0 16 16"' in js_content
-        ), "SVG viewBox must not be escaped in debug-panel.js"
+        assert 'viewBox="0 0 16 16"' in js_content, (
+            "SVG viewBox must not be escaped in debug-panel.js"
+        )
         # Path d attributes must not have escaped quotes
         assert 'd="M8 1L2 9H6L5' in js_content, "SVG path d must not be escaped in debug-panel.js"
         # Must NOT contain double-escaped patterns
-        assert (
-            "&amp;" not in js_content or js_content.count("&amp;") <= 1
-        ), "debug-panel.js should not contain double-escaped HTML entities"
+        assert "&amp;" not in js_content or js_content.count("&amp;") <= 1, (
+            "debug-panel.js should not contain double-escaped HTML entities"
+        )
 
     def test_debug_info_json_not_double_escaped(self):
         """Verify that DJUST_DEBUG_INFO JSON injection doesn't double-escape."""
@@ -619,9 +619,9 @@ class TestDebugPanelSvgEscaping:
         # viewBox must be preserved exactly
         assert 'viewBox="0 0 24 24"' in html, f"viewBox must survive VDOM roundtrip. Got: {html}"
         # path d must be preserved exactly
-        assert (
-            'd="M12 2L2 7L12 12L22 7L12 2Z"' in html
-        ), f"path d must survive VDOM roundtrip. Got: {html}"
+        assert 'd="M12 2L2 7L12 12L22 7L12 2Z"' in html, (
+            f"path d must survive VDOM roundtrip. Got: {html}"
+        )
 
 
 if __name__ == "__main__":

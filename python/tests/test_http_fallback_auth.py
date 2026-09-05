@@ -170,9 +170,9 @@ class TestHTTPFallbackAuthContext:
         # After POST, temporary context processor attrs should be cleaned up.
         # 'perms' is injected by auth context processor — it should NOT remain
         # as an instance attribute on the view.
-        assert not hasattr(
-            view, "perms"
-        ), "Context processor attr 'perms' should be cleaned up after render"
+        assert not hasattr(view, "perms"), (
+            "Context processor attr 'perms' should be cleaned up after render"
+        )
 
     def test_context_processor_cleanup_on_render_error(self):
         """Context processor attrs are cleaned up even if render raises (#711)."""
@@ -201,6 +201,6 @@ class TestHTTPFallbackAuthContext:
                 pass  # We expect the error to propagate
 
         # Even after an error, context processor attrs must be cleaned up
-        assert not hasattr(
-            view, "perms"
-        ), "Context processor attr 'perms' should be cleaned up even after render error (#711)"
+        assert not hasattr(view, "perms"), (
+            "Context processor attr 'perms' should be cleaned up even after render error (#711)"
+        )

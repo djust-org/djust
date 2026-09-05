@@ -93,12 +93,12 @@ def test_replace_patch_order_removes_before_inserts():
                 first_insert_pos = i
 
     # Must have both remove and insert patches
-    assert (
-        len(remove_indices) > 0
-    ), f"Should have RemoveChild patches. All patches: {[p['type'] for p in patches]}"
-    assert (
-        len(insert_indices) > 0
-    ), f"Should have InsertChild patches. All patches: {[p['type'] for p in patches]}"
+    assert len(remove_indices) > 0, (
+        f"Should have RemoveChild patches. All patches: {[p['type'] for p in patches]}"
+    )
+    assert len(insert_indices) > 0, (
+        f"Should have InsertChild patches. All patches: {[p['type'] for p in patches]}"
+    )
 
     # All removes must come before all inserts
     assert last_remove_pos < first_insert_pos, (
@@ -110,9 +110,9 @@ def test_replace_patch_order_removes_before_inserts():
 
     # RemoveChild indices should be in descending order (safe removal)
     for i in range(len(remove_indices) - 1):
-        assert (
-            remove_indices[i] >= remove_indices[i + 1]
-        ), f"RemoveChild indices should be descending: {remove_indices}"
+        assert remove_indices[i] >= remove_indices[i + 1], (
+            f"RemoveChild indices should be descending: {remove_indices}"
+        )
 
 
 class ReplaceWithSiblingView(LiveView):

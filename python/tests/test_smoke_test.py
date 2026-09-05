@@ -367,9 +367,9 @@ class TestGetHandlers:
         # Only inherited decorated handlers should appear, not plain methods
         for name in handlers:
             attr = getattr(cls, name, None)
-            assert hasattr(
-                attr, "_djust_decorators"
-            ), f"Handler {name!r} should be @event_handler decorated"
+            assert hasattr(attr, "_djust_decorators"), (
+                f"Handler {name!r} should be @event_handler decorated"
+            )
 
     def test_plain_method_gets_param_info(self):
         def update(self, name: str, count: int = 5):

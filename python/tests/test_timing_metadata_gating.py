@@ -134,12 +134,12 @@ class TestPatchResponseTimingGating:
     async def test_production_omits_top_level_timing(self):
         """DEBUG=False, no opt-in → top-level response has no timing keys."""
         response = await self._send()
-        assert (
-            "timing" not in response
-        ), "timing must not be in production patch responses (CWE-203, #654)"
-        assert (
-            "performance" not in response
-        ), "performance must not be in production patch responses (CWE-215, #654)"
+        assert "timing" not in response, (
+            "timing must not be in production patch responses (CWE-203, #654)"
+        )
+        assert "performance" not in response, (
+            "performance must not be in production patch responses (CWE-215, #654)"
+        )
         # Sanity: the patches themselves still flowed.
         assert response["type"] == "patch"
         assert response["patches"]

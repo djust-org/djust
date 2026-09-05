@@ -596,7 +596,9 @@ class TestTheInputExitsAreUntouched:
             "that conversion is a TypeError Django does not catch — Django "
             "raises here too"
         )
-        matched = [name(m) for pattern, name in _CLASS_FROM_MESSAGE if (m := pattern.search(message))]
+        matched = [
+            name(m) for pattern, name in _CLASS_FROM_MESSAGE if (m := pattern.search(message))
+        ]
         assert matched[:1] == ["TypeError"], matched
 
 

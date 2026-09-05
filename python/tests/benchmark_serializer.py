@@ -64,9 +64,9 @@ def benchmark_serializer():
     # Generated should be within 3x of manual (allows for safety checks)
     # The extra overhead is from hasattr + None checks, which provide valuable safety
     # In real usage, this is amortized by caching and query optimization gains
-    assert (
-        generated_time < manual_time * 3.0
-    ), f"Generated serializer too slow: {overhead_pct:.1f}% overhead"
+    assert generated_time < manual_time * 3.0, (
+        f"Generated serializer too slow: {overhead_pct:.1f}% overhead"
+    )
     print(f"✓ Performance acceptable (overhead: {overhead_pct:.1f}%)")
     print("  Note: Overhead is from safety checks (hasattr + None handling)")
 
