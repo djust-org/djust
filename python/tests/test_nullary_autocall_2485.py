@@ -312,10 +312,11 @@ class TestTheCallsFailSoft:
         assert djust_render("{{ p.isoformat }}", {"p": value}) == "2026-03-04T05:06:07+00:00"
         assert djust_render("{{ p.utcoffset }}", {"p": value}) == "0:00:00"
         assert djust_render("{{ p.year }}", {"p": value}) == "2026"
-        # `{{ p }}` is `str(o)` and still is — djust's bare spelling of a
-        # datetime diverges from Django's LOCALIZED one and is deliberately
-        # untouched by this table (see the `Value::Encoded` doc).
-        assert djust_render("{{ p }}", {"p": value}) == str(value)
+        # Bare rendering follows Django localization even when unrelated
+        # methods on the timezone raise.
+        expected = django_render("{{ p }}", {"p": value})
+        assert expected != "<<REFUSED>>"
+        assert djust_render("{{ p }}", {"p": value}) == expected
 
     def test_the_skipped_cell_is_one_django_500s_on(self) -> None:
         """Non-vacuity: djust renders EMPTY where Django RAISES, so the
