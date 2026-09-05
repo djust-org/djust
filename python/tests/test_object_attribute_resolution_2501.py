@@ -413,7 +413,7 @@ class TestExceptionTypePreserved:
             f"backend wrapped it as {type(caught.value).__name__}: {caught.value}"
         )
 
-    def test_the_list_is_exactly_djangos_dispatch_set(self):
+    def test_every_django_dispatched_type_survives_a_real_render(self):
         """Read from Django, not recalled — the first version had 3 of 5.
 
         `BadRequest` and `MultiPartParserError` are SIBLINGS of
@@ -422,6 +422,18 @@ class TestExceptionTypePreserved:
         Pinning against Django's own source means a Django version that
         changes its dispatch set fails here rather than silently costing a
         status code.
+
+        Since #2605 this asks the question through a REAL RENDER rather than
+        by handing `_is_user_raised` a bare instance of each type. The
+        predicate no longer holds a type allow-list at all: it answers
+        "did this arrive whole via `DjangoRustError::PythonException`", which
+        is a fact about PROVENANCE that a synthetic instance cannot carry.
+        Asking it of `PermissionDenied("x")` built in the test would now say
+        No — correctly, since nothing raised it through a render — so the
+        old form measured the allow-list rather than the property that
+        matters. Raising each type from a property the template resolves is
+        the property that matters, and it covers all five where the two
+        sibling tests above cover three.
         """
         import inspect
 
@@ -440,7 +452,7 @@ class TestExceptionTypePreserved:
             if name in source
         }
 
-        from djust.template.rendering import _is_user_raised
+        import importlib
 
         unwrapped = set()
         for name in dispatched:
@@ -449,13 +461,21 @@ class TestExceptionTypePreserved:
                 "django.http",
                 "django.http.multipartparser",
             ):
-                import importlib
-
                 exc_type = getattr(importlib.import_module(module), name, None)
-                if exc_type is not None:
-                    if _is_user_raised(exc_type("x")):
+                if exc_type is None:
+                    continue
+
+                class Guarded:
+                    @property
+                    def secret(self):
+                        raise exc_type("denied")
+
+                try:
+                    djust_backend_render("{{ o.secret }}", {"o": Guarded()})
+                except BaseException as raised:  # noqa: BLE001 — the type IS the assertion
+                    if type(raised) is exc_type:
                         unwrapped.add(name)
-                    break
+                break
 
         assert unwrapped == dispatched, (
             f"Django dispatches {sorted(dispatched)} but djust unwraps only "
