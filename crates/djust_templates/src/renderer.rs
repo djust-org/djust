@@ -3076,7 +3076,8 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                         // attacker-controlled keys — and it never
                                         // descends into a `str` at all. Over-escaping
                                         // is the direction to fail in.
-                                        let parts = filters::iter_values(other).unwrap_or_default();
+                                        let parts =
+                                            filters::iter_values(other)?.unwrap_or_default();
                                         for (var_name, part) in var_names.iter().zip(parts) {
                                             ctx.set(var_name.clone(), part);
                                             ctx.set_safety(var_name, false);
@@ -3293,7 +3294,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 } else {
                     // Django consumes iterable candidates once. Unlike a
                     // string operand, their names are not made relative.
-                    filters::iter_values(&value).ok_or_else(|| {
+                    filters::iter_values(&value)?.ok_or_else(|| {
                         DjangoRustError::PythonException(pyo3::exceptions::PyTypeError::new_err(
                             format!(
                                 "'{}' object is not iterable",
@@ -4635,6 +4636,20 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                 // a zero-`__len__` class) falls through to `_ => false`, which
                 // is what `x in dt` does in Python: `TypeError`, and djust's
                 // `if` fails soft rather than raising.
+                //
+                // A live handle with no items — a one-shot iterator, an
+                // unbounded collection — is walked here through the handle
+                // (#2674), stopping at the FIRST match as Python's `in`
+                // does: `{% if 1 in g %}{{ g|join:"," }}` over `iter([1, 2])`
+                // is `T|2` in Django, and consuming the whole iterator to
+                // answer the membership test would make it `T|`.
+                Value::Encoded(ref e) if e.items.is_none() && e.live.is_some() => {
+                    match e.consume_live_match(|item| values_equal(&needle, item)) {
+                        Some(Ok(found)) => Ok(found),
+                        Some(Err(err)) => return Err(DjangoRustError::PythonException(err)),
+                        None => Ok(false),
+                    }
+                }
                 Value::Encoded(ref e) if e.items.is_some() => Ok(e
                     .items
                     .as_ref()
@@ -7718,7 +7733,9 @@ mod tests {
             };
             let rendered = render_node_with_loader::<NoOpLoader>(&node, &ctx, None);
             let refuses = rendered.is_err();
-            let for_iterable = filters::iter_values(value).is_some()
+            let for_iterable = filters::iter_values(value)
+                .expect("no live handle")
+                .is_some()
                 || matches!(value, Value::None)
                 || matches!(value, Value::Encoded(e) if e.len == Some(0) || e.items.is_some());
             let expected = !for_iterable;

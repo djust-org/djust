@@ -158,12 +158,12 @@ class TestValueConversionDoesNotTakeTheProcess:
         """``{{ v.0 }}`` used to hang exactly as ``{{ v }}`` did — the hang
         was in converting the root, before any segment was walked.
 
-        Only termination is pinned here. Django answers ``'x'`` (one
-        ``__getitem__`` call); djust answers ``'n'``, because an unsized
-        iterable past ``OPAQUE_ITEM_CAP`` is DECLINED to the terminal
-        ``str(v)`` and the segment then indexes that string — the
-        pre-existing decline behaviour of the opaque carrier, tracked at
-        #2670 rather than widened here (#1079)."""
+        Termination is pinned here; the ANSWER is pinned in
+        `test_engine_followups_2674_2670_2678_2657.py`. Both engines now say
+        ``'x'`` — one ``__getitem__`` call — where djust used to say ``'n'``,
+        the first character of ``str(v)``, because an unsized iterable past
+        ``OPAQUE_ITEM_CAP`` was declined to the terminal string path (#2670,
+        the follow-up this comment used to point forward to)."""
         result = _render_in_child("2572-index", lazy)
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout, result.stderr[-2000:]
@@ -224,9 +224,18 @@ class TestTheBoundedSequenceGate:
         assert _rust.crosses_as_encoded(Bounded()) is False
         assert _rust.crosses_as_encoded_by_conversion(Bounded()) is False
 
-    def test_a_legacy_sequence_without_a_len_is_declined_by_both_gates(self) -> None:
-        """The cheap probe and the real conversion must agree on the new
-        decline, or `crosses_as_encoded` drifts from the arm it mirrors."""
+    def test_a_legacy_sequence_without_a_len_is_carried_by_both_gates(self) -> None:
+        """The cheap probe and the real conversion must agree, or
+        `crosses_as_encoded` drifts from the arm it mirrors.
+
+        The list arm still DECLINES this shape — a sequence that states no
+        bound is not read through `iter()` — and since #2670 the fallback
+        block CARRIES it with a live handle rather than taking the terminal
+        `str(o)` path, so `{{ v.0 }}` is Django's one `__getitem__` call
+        (`'x'`) instead of the first character of `str(v)`. What this test
+        pins is the AGREEMENT of the two gates, which is unchanged; the
+        per-sink parity is in
+        `python/tests/test_engine_followups_2674_2670_2678_2657.py`."""
         from djust import _rust
 
         class Unbounded:
@@ -247,10 +256,10 @@ class TestTheBoundedSequenceGate:
         t.start()
         t.join(timeout=20)
         assert done, "the probe hung (the legacy-sequence walk did not terminate)"
-        # Declined by the list arm; not claimed by the opaque carrier either
-        # (an unsized iterable past OPAQUE_ITEM_CAP), so it is the terminal
-        # `str(o)` path on both.
-        assert done[0] == (False, False)
+        # Declined by the list arm (it states no bound) and CLAIMED by the
+        # opaque carrier (#2670) — the same answer from both gates, which is
+        # what this test exists to pin.
+        assert done[0] == (True, True)
 
     def test_a_sequence_that_yields_past_its_stated_bound_is_declined_not_truncated(self) -> None:
         from djust import _rust

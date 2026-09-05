@@ -279,8 +279,24 @@ pub fn python_len(value: &Value) -> Option<usize> {
     }
 }
 
-pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
-    match value {
+/// Python's `list(iter(value))` for the filters that iterate (#2466).
+///
+/// `Ok(None)` is "not iterable" — Python's `TypeError` — which `join` fails
+/// soft on and `safeseq` refuses. `Err` is an exception raised BY the
+/// iteration: a raising `__next__`, or a collection past
+/// [`djust_core::OPAQUE_ITEM_CAP`]. Both propagate as Django propagates them.
+///
+/// A [`Value::Encoded`] carrying a live handle and no items — a one-shot
+/// iterator, an unbounded collection — is CONSUMED here, once, through the
+/// same [`Encoded::consume_live_items`] path `{% for %}` uses (#2674, link
+/// N+1 of #2613): `{{ g|join:"," }}` over `iter([1, 2, 3])` is `1,2,3`, and
+/// a `{% for %}` after it is empty, exactly as the generator is spent in
+/// Django. Until #2674 this arm answered an empty list for that shape, so
+/// `join` rendered `''` and `safeseq` rendered nothing.
+///
+/// [`Encoded::consume_live_items`]: djust_core::Encoded::consume_live_items
+pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
+    Ok(match value {
         Value::String(s) | Value::SafeString(s) => {
             Some(s.chars().map(|c| Value::String(c.to_string())).collect())
         }
@@ -307,17 +323,38 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
         // raises from `|safeseq`, on Django as well as here, and one bit
         // answering both would have to be wrong for one of them.
         //
+        // A live handle with no items enumerated (#2674): consumed here,
+        // once, through the `{% for %}` sink's path — see the doc above.
+        Value::Encoded(e) if e.items.is_none() && e.live.is_some() && e.iterable => {
+            match e.consume_live_items() {
+                Some(Ok(items)) => Some(items),
+                Some(Err(err)) => return Err(DjangoRustError::PythonException(err)),
+                None => Some(Vec::new()),
+            }
+        }
         // The ITEMS the conversion enumerated (#2477/#2489). `Some` here means
         // the object was re-iterable and `opaque_value` ran `list(o)` on it:
         // a `set`, a `frozenset`, a `dict_keys`, a falsy `__iter__` class.
         Value::Encoded(e) if e.items.is_some() => e.items.clone(),
-        // Iterable, with no items enumerated. Empty by construction — the only
-        // producer that leaves `items` at `None` while claiming `iterable` is
-        // the zero-`len` arm, and a value read back off a pre-#2477 wire
-        // payload, which carried nothing but that shape. Pinned by
+        // Iterable, with no items enumerated and no handle. Empty by
+        // construction — the only producer that leaves `items` at `None`
+        // while claiming `iterable` without a handle is the zero-`len` arm,
+        // and a value read back off a pre-#2477 wire payload, which carried
+        // nothing but that shape. Pinned by
         // `an_iterable_encoded_without_items_is_empty`.
         Value::Encoded(e) if e.iterable => Some(Vec::new()),
         _ => None,
+    })
+}
+
+/// Would [`iter_values`] answer `Some` — WITHOUT consuming anything (#2674).
+///
+/// The safety probe `builtin_produced_safe` asks this of `join`'s input; a
+/// consuming probe would spend a one-shot iterator before the filter read it.
+pub fn is_iterable(value: &Value) -> bool {
+    match value {
+        Value::Encoded(e) => e.items.is_some() || e.iterable,
+        other => matches!(iter_values(other), Ok(Some(_))),
     }
 }
 
@@ -434,7 +471,7 @@ fn builtin_produced_safe(
         // It is kept for the same reason #2285's fall-through escape is: the
         // day a non-iterable `Value` variant can carry markup, this is the
         // line that already says the right thing.
-        "join" => iter_values(value).is_some(),
+        "join" => is_iterable(value),
         "cut" => input_safety.container && arg != Some(";"),
         // Two branches with two different provenances (#2389).
         //
@@ -831,6 +868,14 @@ pub fn apply_filter_full_safe(
     // than the whole `Value` being pushed through 57 filter arms.
     let mut resolved_type: Option<Value> = None;
     let resolved_arg: Option<String> = match (arg, arg_was_quoted, context) {
+        // An UNQUOTED numeric literal is a literal FIRST (#2674): Django's
+        // `Variable("0")` tries `int()`/`float()` before any lookup, so a
+        // context key literally named `"0"` never shadows it. Until #2674
+        // `ctx.resolve(a)` ran first and did exactly that.
+        (Some(a), false, Some(_)) if typed_numeric_literal(a).is_some() => {
+            resolved_type = typed_numeric_literal(a);
+            None
+        }
         (Some(a), false, Some(ctx)) => match ctx.resolve(a)? {
             Some(v) => {
                 let text = v.to_string();
@@ -1345,7 +1390,9 @@ fn apply_builtin_filter(
                 html_escape(raw_sep)
             };
             match iter_values(value) {
-                Some(items) => {
+                // A raising `__next__` / the cap — propagated (#2674).
+                Err(err) => return Some(Err(err)),
+                Ok(Some(items)) => {
                     let strings: Vec<String> = items
                         .iter()
                         .map(|v| {
@@ -1365,7 +1412,7 @@ fn apply_builtin_filter(
                 // `{{ n|join:", "|length }}` measured it (0 in Django, 2 for
                 // `"42"`). `builtin_produced_safe` withholds the grant on
                 // exactly this branch, which is why the value can stay raw.
-                None => Ok(value.clone()),
+                Ok(None) => Ok(value.clone()),
             }
         }
         "truncatewords" => {
@@ -2285,7 +2332,8 @@ fn apply_builtin_filter(
         // filter's answer, and the escape it needed a grant for no longer has
         // an output to protect.
         "safeseq" => match python_iter(value) {
-            Ok(items) => Ok(collapse_if_input_safe(
+            Err(err) => return Some(Err(err)),
+            Ok(Ok(items)) => Ok(collapse_if_input_safe(
                 Value::List(
                     items
                         .iter()
@@ -2294,7 +2342,7 @@ fn apply_builtin_filter(
                 ),
                 input_safety.container,
             )),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
+            Ok(Err(err)) => Err(value_op_error(filter_name, value, &err)),
         },
         // `[conditional_escape(obj) for obj in value]` — same iteration, and
         // the escaped items are `SafeString`s, so `escapeseq` is item-safe too
@@ -2311,7 +2359,8 @@ fn apply_builtin_filter(
         // those a second time made `{{ p|escapeseq|join:", " }}` emit
         // `&amp;lt;b&amp;gt;` where Django emits `<b>`.
         "escapeseq" => match python_iter(value) {
-            Ok(items) => Ok(collapse_if_input_safe(
+            Err(err) => return Some(Err(err)),
+            Ok(Ok(items)) => Ok(collapse_if_input_safe(
                 Value::List(
                     items
                         .iter()
@@ -2320,7 +2369,7 @@ fn apply_builtin_filter(
                 ),
                 input_safety.container,
             )),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
+            Ok(Err(err)) => Err(value_op_error(filter_name, value, &err)),
         },
         "urlize" => {
             // urlize filter: convert URLs and emails to clickable links.
@@ -2377,14 +2426,15 @@ fn apply_builtin_filter(
         // `iter(item_list)` under no `try`, so the `TypeError` is the filter's
         // answer and there is no output left to protect.
         "unordered_list" => match python_iter(value) {
+            Err(err) => return Some(Err(err)),
             // `escaper = conditional_escape if autoescape else lambda x: x`
             // (#2556): items already safe OR the block policy off → identity.
-            Ok(items) => Ok(Value::String(unordered_list(
+            Ok(Ok(items)) => Ok(Value::String(unordered_list(
                 &items,
                 1,
                 input_safety.items || !autoescape,
             ))),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
+            Ok(Err(err)) => Err(value_op_error(filter_name, value, &err)),
         },
         "truncatechars_html" => {
             match int_arg!(
@@ -6594,8 +6644,8 @@ pub(crate) fn value_op_error(
 /// guessing. Every consumer that must FAIL SOFT (`join`'s `except TypeError`,
 /// `{% for %}`'s own refusal, the truthiness probe) keeps calling
 /// [`iter_values`] directly.
-pub(crate) fn python_iter(value: &Value) -> std::result::Result<Vec<Value>, ValueOpError> {
-    iter_values(value).ok_or(ValueOpError::NotIterable)
+pub(crate) fn python_iter(value: &Value) -> Result<std::result::Result<Vec<Value>, ValueOpError>> {
+    Ok(iter_values(value)?.ok_or(ValueOpError::NotIterable))
 }
 
 /// Python's `value[index]` for a NEGATIVE-or-positive integer index (#2451).
@@ -7174,6 +7224,13 @@ mod parse_shape_tests_2227 {
 }
 
 #[cfg(test)]
+/// [`iter_values`] over a fixture, which carries no live handle and so can
+/// never take the error channel.
+fn iter_values_ok(value: &Value) -> Option<Vec<Value>> {
+    iter_values(value).expect("fixtures carry no live handle")
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use indexmap::IndexMap;
@@ -7271,7 +7328,7 @@ mod tests {
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
-            // `iter_values().len()` assertion below able to fail at a value
+            // `iter_values_ok().len()` assertion below able to fail at a value
             // other than 0, which two empty samples cannot.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -7360,7 +7417,7 @@ mod tests {
                     Some(0),
                     "an iterable Encoded with no items must be EMPTY: {value:?}"
                 );
-                assert!(iter_values(&value).is_some_and(|items| items.is_empty()));
+                assert!(iter_values_ok(&value).is_some_and(|items| items.is_empty()));
                 checked += 1;
             }
         }
@@ -7384,7 +7441,7 @@ mod tests {
             live: None,
             display_safe: false,
         }));
-        assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
+        assert!(iter_values_ok(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
     }
 
@@ -7410,7 +7467,7 @@ mod tests {
                 continue;
             };
             assert_eq!(
-                iter_values(&value).is_some(),
+                iter_values_ok(&value).is_some(),
                 e.items.is_some() || e.iterable,
                 "iter_values must follow `items` then `iterable` for {value:?}",
             );
@@ -7423,7 +7480,7 @@ mod tests {
                 // The carried items, exactly — `Value` has no `PartialEq`, so
                 // the COUNT is asserted rather than the vec compared.
                 Some(items) => assert_eq!(
-                    iter_values(&value).map(|v| v.len()),
+                    iter_values_ok(&value).map(|v| v.len()),
                     Some(items.len()),
                     "iter_values must hand back the carried items",
                 ),
@@ -7431,9 +7488,9 @@ mod tests {
                 // the invariant `an_iterable_encoded_without_items_is_empty`
                 // pins over the whole fixture set.
                 None if e.iterable => {
-                    assert!(iter_values(&value).is_some_and(|items| items.is_empty()))
+                    assert!(iter_values_ok(&value).is_some_and(|items| items.is_empty()))
                 }
-                None => assert!(iter_values(&value).is_none()),
+                None => assert!(iter_values_ok(&value).is_none()),
             }
         }
         // The canary: the loop ran, and ran over all FIVE shapes. Any two of
@@ -7478,7 +7535,7 @@ mod tests {
     /// `Need N values to unpack in for loop; got 0.` and `iter_values` is
     /// never called. Asserted below rather than argued.
     #[test]
-    fn python_len_agrees_with_iter_values() {
+    fn python_len_agrees_with_iter_values_ok() {
         for value in every_variant() {
             let Some(len) = python_len(&value) else {
                 continue;
@@ -7491,10 +7548,10 @@ mod tests {
                     len, 0,
                     "the len-without-iter shape must be empty: {value:?}"
                 );
-                assert!(iter_values(&value).is_none());
+                assert!(iter_values_ok(&value).is_none());
                 continue;
             }
-            let items = iter_values(&value).unwrap_or_else(|| {
+            let items = iter_values_ok(&value).unwrap_or_else(|| {
                 panic!("python_len answered {len} for {value:?} but iter_values refused it")
             });
             assert_eq!(
@@ -7892,7 +7949,7 @@ mod tests {
             display_safe: false,
         }));
         assert!(
-            iter_values(&hostile).is_none(),
+            iter_values_ok(&hostile).is_none(),
             "a non-iterating Encoded must reach #2285's fall-through escape",
         );
         assert_ne!(
@@ -7904,7 +7961,7 @@ mod tests {
         );
         let mut iterating = 0;
         for v in &variants {
-            match iter_values(v) {
+            match iter_values_ok(v) {
                 Some(_) => iterating += 1,
                 None => {
                     let s = v.to_string();
