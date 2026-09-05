@@ -510,9 +510,10 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
             field_name = field.name
 
-            # Sensitive-field filter (finding #19 / #1868). Identity keys always
-            # pass; the floor is unconditional unless deliberately opted out.
-            if not self._field_is_serializable(field_name, denied, allowed, optout):
+            # Sensitive-field filter (finding #19 / #1868 / #2614). Identity keys
+            # always pass; the floor is unconditional unless deliberately opted
+            # out; a sensitive-method NAME or ``_``-prefix is refused outright.
+            if not self._attr_is_serializable(field_name, denied, allowed, optout):
                 continue
 
             # TYPE-based floor (#1987): drop BinaryField / configured / encrypted
@@ -671,6 +672,46 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return field_name in allowed or field_name in optout
         return True
 
+    @staticmethod
+    def _attr_is_serializable(
+        name: str,
+        denied: FrozenSet[str],
+        allowed: Optional[FrozenSet[str]],
+        optout: FrozenSet[str] = frozenset(),
+    ) -> bool:
+        """The ONE per-attribute authority for a model reaching the client (#2614).
+
+        Every channel that decides whether a model attribute ships — the eager
+        field loop, the eager ``get_*`` method loop, the eager ``@property``
+        loop and the template sidecar proxy (``_SidecarModelProxy``) — calls
+        this and nothing else, so the channels cannot drift (#1646). Before
+        #2614 the property loop consulted only ``_field_is_serializable`` while
+        the sidecar also refused ``_SENSITIVE_MODEL_METHODS``; a ``@property``
+        that *shadowed* ``get_session_auth_hash`` was serialized eagerly and
+        refused lazily — and the permissive channel won, because the engine
+        reads the eager dict before it falls back to the sidecar.
+
+        Precedence, fail-closed (each step can only deny):
+        1. ``_``-prefixed names are refused (Django parity — template
+           resolution never touches them; also keeps ``_meta``/``_state`` off
+           the wire). No opt-out lifts this.
+        2. A sensitive / expensive model-method NAME (``_SENSITIVE_MODEL_METHODS``
+           and the ``get_next_by_``/``get_previous_by_`` prefixes) is refused
+           whatever kind of attribute carries it — method, ``@property``, or a
+           field. Neither a ``djust_serializable_fields`` allowlist nor the
+           ``djust_serialize_sensitive_fields`` opt-out lifts this: the opt-out
+           is documented for floor FIELDS only, and widening it to the method
+           set would re-expose ``get_session_auth_hash`` behind a flag named for
+           fields (#1868 — never widen exposure).
+        3. Otherwise the field floor / allowlist / opt-out precedence of
+           ``_field_is_serializable`` applies.
+        """
+        if name.startswith("_"):
+            return False
+        if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
+            return False
+        return DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout)
+
     def _is_relation_prefetched(self, obj: models.Model, field_name: str) -> bool:
         """Check if a relation was loaded via select_related/prefetch_related.
 
@@ -698,31 +739,22 @@ class DjangoJSONEncoder(json.JSONEncoder):
         get_previous_by_updated_at() which execute expensive cursor queries.
         We only want explicitly defined methods like get_full_name().
         """
-        # Skip Django's auto-generated N+1 methods + known-sensitive ones.
-        # Shared with the template sidecar proxy so the two paths can't drift
-        # (#1646 / #1986).
-        SKIP_PREFIXES = _SENSITIVE_MODEL_METHOD_PREFIXES
-        SKIP_METHODS = _SENSITIVE_MODEL_METHODS
-
         model_class = obj.__class__
 
-        # Sensitive-field filter (finding #19 / #1868): a get_*/property added
-        # below must also respect the unconditional floor + allowlist + opt-out
-        # (e.g. a get_password() getter).
+        # ONE authority (#2614): Django's auto-generated N+1 methods, the
+        # known-sensitive names, ``_``-prefixes and the field floor/allowlist/
+        # opt-out (e.g. a get_password() getter) are all refused by
+        # ``_attr_is_serializable`` — the same call the sidecar proxy makes.
         denied = self._get_denied_fields(obj)
         allowed = self._get_allowlist_fields(obj)
         optout = self._get_sensitive_optout_fields(obj)
 
         for attr_name in dir(obj):
-            if attr_name.startswith("_") or attr_name in result:
+            if attr_name in result:
                 continue
             if not attr_name.startswith("get_"):
                 continue
-            if any(attr_name.startswith(p) for p in SKIP_PREFIXES):
-                continue
-            if attr_name in SKIP_METHODS:
-                continue
-            if not self._field_is_serializable(attr_name, denied, allowed, optout):
+            if not self._attr_is_serializable(attr_name, denied, allowed, optout):
                 continue
 
             # Only include methods explicitly defined on the model class
@@ -781,15 +813,18 @@ class DjangoJSONEncoder(json.JSONEncoder):
             cache = {}
             obj._djust_prop_cache = cache
 
-        # Sensitive-field filter (finding #19 / #1868): a @property named password
-        # (or any floor/non-allowlisted name) must not be serialized — the floor
-        # is unconditional unless deliberately opted out.
+        # ONE authority (#2614): a @property named ``password`` (floor), a
+        # ``@property`` that SHADOWS a sensitive method name
+        # (``get_session_auth_hash``), or a ``_``-prefixed one is refused by the
+        # same ``_attr_is_serializable`` the sidecar proxy calls. Before #2614
+        # this loop consulted only the field floor, so the shadowing property
+        # shipped eagerly while the sidecar refused it (#1646 drift).
         denied = self._get_denied_fields(obj)
         allowed = self._get_allowlist_fields(obj)
         optout = self._get_sensitive_optout_fields(obj)
 
         for attr_name in DjangoJSONEncoder._property_cache[model_class]:
-            if not self._field_is_serializable(attr_name, denied, allowed, optout):
+            if not self._attr_is_serializable(attr_name, denied, allowed, optout):
                 continue
             if attr_name not in result:
                 if attr_name in cache:
@@ -1416,18 +1451,14 @@ class _SidecarModelProxy:
         # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
         # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose
         # the schema (#1986 review). Identity keys (pk/id) are not ``_``-names.
-        if name.startswith("_"):
-            raise AttributeError(name)
-        # Sensitive / expensive methods the eager path never emits.
-        if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
-            raise AttributeError(name)
-        # The serialization floor / allowlist — the SAME authority the eager
-        # dict uses. A floor field (or, under a per-model allowlist, any
-        # non-allowlisted name) is refused.
+        # ONE authority (#2614): ``_``-prefix, sensitive/expensive method
+        # names, and the serialization floor / allowlist / opt-out — the SAME
+        # ``_attr_is_serializable`` call every eager loop makes, so the two
+        # channels cannot drift (#1646). A refused name raises AttributeError.
         denied = object.__getattribute__(self, "_denied")
         allowed = object.__getattribute__(self, "_allowed")
         optout = object.__getattribute__(self, "_optout")
-        if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
+        if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
             raise AttributeError(name)
         obj = object.__getattribute__(self, "_obj")
         # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted
