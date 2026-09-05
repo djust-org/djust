@@ -29,24 +29,32 @@ from djust.tests.test_transport_behavioral_parity import (
 )
 
 
+class _Row:
+    """Opaque model-instance stand-in (attribute holder, not a container)."""
+
+    def __init__(self, n: int):
+        self.n = n
+
+
 class _DbOnlyView(_EventSpineMixin, LiveView):
     """A DB-backed value read fresh each render (via a private, in-place-mutated
-    holder — invisible to change detection, standing in for a re-queried DB
-    row), with NO public ``self.*`` attr ever changing in the handler."""
+    OPAQUE holder — a model-instance stand-in that change detection compares by
+    identity only; a plain dict would be seen structurally since #2664), with
+    NO public ``self.*`` attr ever changing in the handler."""
 
     def mount(self, request, **kwargs):
-        self._external = {"n": 0}  # stands in for a DB row
+        self._external = _Row(n=0)  # stands in for a DB row
 
     def get_context_data(self, **kwargs):
-        return {"n": self._external["n"]}  # re-"queried" each render
+        return {"n": self._external.n}  # re-"queried" each render
 
     @event_handler()
     def bump_no_hatch(self, **kwargs):
-        self._external["n"] += 1  # DB-only change, no self.* — gate-off baseline
+        self._external.n += 1  # DB-only change, no self.* — gate-off baseline
 
     @event_handler()
     def bump_zero_arg(self, **kwargs):
-        self._external["n"] += 1  # identical DB-only change...
+        self._external.n += 1  # identical DB-only change...
         self.set_changed_keys()  # ...plus the zero-arg force-render hatch
 
 
@@ -64,7 +72,7 @@ class TestZeroArgSetChangedKeys1992:
         """Gate-off baseline: a DB-only mutation with no hatch auto-skips
         (``_snapshot_assigns`` sees no changed public attr)."""
         runtime, transport = _event_runtime_with_view(_DbOnlyView())
-        runtime.view_instance._external = {"n": 0}
+        runtime.view_instance._external = _Row(n=0)
 
         await runtime.dispatch_event({"type": "event", "event": "bump_no_hatch", "params": {}})
 
@@ -80,7 +88,7 @@ class TestZeroArgSetChangedKeys1992:
         would drop — same DB-only mutation as the gate-off test, plus the
         zero-arg hatch, now renders."""
         runtime, transport = _event_runtime_with_view(_DbOnlyView())
-        runtime.view_instance._external = {"n": 0}
+        runtime.view_instance._external = _Row(n=0)
 
         await runtime.dispatch_event({"type": "event", "event": "bump_zero_arg", "params": {}})
 

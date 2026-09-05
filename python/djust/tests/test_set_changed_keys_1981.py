@@ -1,10 +1,13 @@
 """#1981 — ``LiveView.set_changed_keys`` escape hatch for in-place nested mutation.
 
-djust's auto change-detection (``_snapshot_assigns``) deliberately does NOT
-deep-copy state, so an in-place mutation of a nested container (e.g.
-``self.rows[0]["cards"].append(x)``) is invisible and the event auto-skips
-(0 patches / noop). ``set_changed_keys`` is the sanctioned escape hatch: it
-marks keys changed and forces a re-render.
+Since #2664 djust's auto change-detection (``_snapshot_assigns``) fingerprints
+plain containers STRUCTURALLY, so an in-place mutation of a nested list/dict
+(``self.rows[0]["cards"].append(x)``) is detected and renders on its own
+(pinned by ``test_in_place_container_mutation_renders_without_hatch``). What
+stays invisible is an attribute write on an OPAQUE object held in state (a
+model instance — compared by identity), so the gate-off baseline here mutates
+a ``_Card`` object's attribute. ``set_changed_keys`` is the sanctioned escape
+hatch for that: it marks keys changed and forces a re-render.
 
 These tests run the REAL production event path (``ViewRuntime.dispatch_event``
 via the ADR-022 spine), NOT ``LiveViewTestClient`` — the test client calls
@@ -27,34 +30,47 @@ from djust.tests.test_transport_behavioral_parity import (
 )
 
 
+class _Card:
+    """Opaque model-instance stand-in: an attribute holder, not a container."""
+
+    def __init__(self, title: str):
+        self.title = title
+
+
+def _fresh_rows():
+    return [{"cards": [_Card("a")]}, {"cards": []}]
+
+
 class _InPlaceView(_EventSpineMixin, LiveView):
-    """A nested-unhashable attr (``rows`` = list of dicts holding a nested list,
-    the shape that defeats ``_snapshot_assigns``' shallow fingerprint) mutated
-    in place, with and without the escape hatch."""
+    """``rows`` holds OPAQUE ``_Card`` objects. Writing ``card.title`` in place
+    is the shape the structural fingerprint cannot see (identity leaf); moving
+    the card between lists IS seen (#2664)."""
 
     def mount(self, request, **kwargs):
         self.count = 0
-        self.rows = [{"cards": ["a"]}, {"cards": []}]
+        self.rows = _fresh_rows()
 
     def get_context_data(self, **kwargs):
         return {"count": self.count, "rows": self.rows}
 
     @event_handler()
-    def move_no_hatch(self, **kwargs):
-        moved = self.rows[0]["cards"].pop(0)  # in-place nested mutation
-        self.rows[1]["cards"].append(moved)  # (same list/dict objects)
+    def rename_no_hatch(self, **kwargs):
+        self.rows[0]["cards"][0].title = "renamed"  # in-place write on an opaque object
 
     @event_handler()
-    def move_with_hatch(self, **kwargs):
-        moved = self.rows[0]["cards"].pop(0)  # identical in-place mutation...
-        self.rows[1]["cards"].append(moved)
+    def rename_with_hatch(self, **kwargs):
+        self.rows[0]["cards"][0].title = "renamed"  # identical in-place write...
         self.set_changed_keys("rows")  # ...plus the escape hatch
 
     @event_handler()
-    def move_with_raw_changed_keys(self, **kwargs):
-        moved = self.rows[0]["cards"].pop(0)  # identical in-place mutation...
-        self.rows[1]["cards"].append(moved)
+    def rename_with_raw_changed_keys(self, **kwargs):
+        self.rows[0]["cards"][0].title = "renamed"  # identical in-place write...
         self._changed_keys = {"rows"}  # ...raw flag only — documented as ineffective
+
+    @event_handler()
+    def move_no_hatch(self, **kwargs):
+        moved = self.rows[0]["cards"].pop(0)  # in-place CONTAINER mutation
+        self.rows[1]["cards"].append(moved)  # (same list/dict objects)
 
 
 def _updates(transport):
@@ -68,20 +84,36 @@ def _noops(transport):
 class TestSetChangedKeys1981:
     @pytest.mark.asyncio
     async def test_in_place_without_hatch_is_skipped(self):
-        """By-design: an in-place nested mutation with no hatch auto-skips
-        (``_snapshot_assigns`` can't see it) → noop, no render. This is the
-        gate-off baseline for the next test."""
+        """By-design: an in-place attribute write on an OPAQUE object with no
+        hatch auto-skips (``_snapshot_assigns`` compares it by identity) → noop,
+        no render. This is the gate-off baseline for the next test."""
         runtime, transport = _event_runtime_with_view(_InPlaceView())
         runtime.view_instance.count = 0
-        runtime.view_instance.rows = [{"cards": ["a"]}, {"cards": []}]
+        runtime.view_instance.rows = _fresh_rows()
+
+        await runtime.dispatch_event({"type": "event", "event": "rename_no_hatch", "params": {}})
+
+        assert not _updates(transport), (
+            "in-place write on an opaque object is invisible to auto-diff; the "
+            f"event must auto-skip, got {transport.sent!r}"
+        )
+        assert _noops(transport), f"expected a noop, got {transport.sent!r}"
+
+    @pytest.mark.asyncio
+    async def test_in_place_container_mutation_renders_without_hatch(self):
+        """#2664: the in-place CONTAINER mutation the pre-#2664 version of this
+        file pinned as "invisible, auto-skips" is now detected structurally and
+        renders with no hatch at all."""
+        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime.view_instance.count = 0
+        runtime.view_instance.rows = _fresh_rows()
 
         await runtime.dispatch_event({"type": "event", "event": "move_no_hatch", "params": {}})
 
-        assert not _updates(transport), (
-            "in-place nested mutation is invisible to auto-diff; the event must "
-            f"auto-skip, got {transport.sent!r}"
+        assert _updates(transport), (
+            "an in-place list.pop/append inside rows must render without "
+            f"set_changed_keys (#2664), got {transport.sent!r}"
         )
-        assert _noops(transport), f"expected a noop, got {transport.sent!r}"
 
     @pytest.mark.asyncio
     async def test_raw_changed_keys_alone_is_still_skipped(self):
@@ -96,10 +128,10 @@ class TestSetChangedKeys1981:
         this RENDERS instead of nooping → FAILS."""
         runtime, transport = _event_runtime_with_view(_InPlaceView())
         runtime.view_instance.count = 0
-        runtime.view_instance.rows = [{"cards": ["a"]}, {"cards": []}]
+        runtime.view_instance.rows = _fresh_rows()
 
         await runtime.dispatch_event(
-            {"type": "event", "event": "move_with_raw_changed_keys", "params": {}}
+            {"type": "event", "event": "rename_with_raw_changed_keys", "params": {}}
         )
 
         assert not _updates(transport), (
@@ -117,9 +149,9 @@ class TestSetChangedKeys1981:
         here is isolated to the ``_force_full_html`` mechanism."""
         runtime, transport = _event_runtime_with_view(_InPlaceView())
         runtime.view_instance.count = 0
-        runtime.view_instance.rows = [{"cards": ["a"]}, {"cards": []}]
+        runtime.view_instance.rows = _fresh_rows()
 
-        await runtime.dispatch_event({"type": "event", "event": "move_with_hatch", "params": {}})
+        await runtime.dispatch_event({"type": "event", "event": "rename_with_hatch", "params": {}})
 
         assert _updates(transport), (
             "set_changed_keys must force a render on the production path even "
