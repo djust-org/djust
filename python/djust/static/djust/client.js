@@ -648,6 +648,27 @@ async function handleServerResponse(data, eventName, triggerElement) {
 // ============================================================================
 
 /**
+ * #2632: the PAGE-LEVEL LiveView container.
+ *
+ * `{% live_render %}` emits a VALUELESS `dj-view` on sticky roots
+ * (`dj-sticky-root`) and embedded children (`data-djust-embedded`), and
+ * `[dj-view]` matches attribute PRESENCE — so a bare
+ * presence-only lookup returns whichever comes first in document
+ * order. When an embedded/sticky root precedes the real page container,
+ * `autoMount` read `getAttribute('dj-view') === ""` and refused the mount
+ * with "Container found but no view path specified" against a correct
+ * template. Two of the three page-container lookups in this module already
+ * excluded sticky roots and the third did not (#1646 drift); all three now
+ * go through this ONE helper. Returns null when no page container exists —
+ * callers decide their own fallback.
+ *
+ * @returns {Element|null}
+ */
+function findPageViewContainer() {
+    return document.querySelector('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])');
+}
+
+/**
  * #1813 (a): id-keyed reconciliation pass run AFTER the #1610 prerender
  * `skipMountHtml` morph. Embedded-view wrappers
  * (`<div dj-view [dj-sticky-view dj-sticky-root] data-djust-embedded="<id>">`)
@@ -1183,7 +1204,7 @@ class LiveViewWebSocket {
                     // handleEmbeddedUpdate (~line 1127) and the html_recovery
                     // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
-                        const _morphContainer = document.querySelector('[dj-view]:not([dj-sticky-root])')
+                        const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]');
                         if (_morphContainer) {
                             const _morphTemp = document.createElement('div');
@@ -1328,8 +1349,9 @@ class LiveViewWebSocket {
                     // replaced, a naive ``[dj-view]`` pick could return
                     // the sticky itself. ``[dj-sticky-root]`` is set by
                     // the server template tag on sticky wrappers —
-                    // exclude them from container selection.
-                    let container = document.querySelector('[dj-view]:not([dj-sticky-root])');
+                    // exclude them (and embedded children) from container
+                    // selection via the shared helper (#2632).
+                    let container = findPageViewContainer();
                     if (!container) {
                         container = document.querySelector('[dj-root]');
                     }
@@ -1956,12 +1978,11 @@ class LiveViewWebSocket {
     }
 
     autoMount() {
-        // Look for container with view path
-        let container = document.querySelector('[dj-view]');
-        if (!container) {
-            // Fallback: look for dj-root with dj-view attribute
-            container = document.querySelector('[dj-root][dj-view]');
-        }
+        // The page-level container (#2632). The former
+        // `[dj-root][dj-view]` fallback was dead code — `[dj-view]` is a
+        // strict superset of it, so it could never match when the primary
+        // lookup returned null — and is removed rather than kept unreachable.
+        const container = findPageViewContainer();
 
         if (container) {
             const viewPath = container.getAttribute('dj-view');
