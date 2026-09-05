@@ -974,8 +974,12 @@ def test_scope_tag_argument_errors_are_djangos_text(case):
 
 
 # ---------------------------------------------------------------------------
-# The tz-filter refusal pin (#2216 / #2541)
+# The tz filters bridge verbatim (#2216 / #2541)
 # ---------------------------------------------------------------------------
+# Until #2541 these three were refused by name ("needs a datetime object;
+# the Rust engine receives dates as strings"). A datetime crosses as a typed
+# value carrying the live object now, so they are ordinary bridged filters;
+# the full parity matrix is `test_library_loading_2558_2541_2591.py`.
 
 
 @pytest.mark.parametrize(
@@ -984,25 +988,20 @@ def test_scope_tag_argument_errors_are_djangos_text(case):
         LT + "{{ dt|localtime }}",
         LT + "{{ dt|utc }}",
         LT + '{{ dt|timezone:"Europe/Paris" }}',
+        LT + '{{ dt|timezone:"Europe/Paris"|date:"H:i e" }}',
     ],
 )
-def test_tz_filters_are_refused_loudly_never_blank(source):
-    # Django renders the converted datetime; djust cannot carry the object
-    # (#2216) and refuses by name rather than answering `""`.
-    assert django_render(source, CTX) != ""
-    with pytest.raises(Exception, match="needs a datetime object") as info:
-        plain_render(source, CTX)
-    assert "#2216" in str(info.value)
-    with pytest.raises(Exception, match="needs a datetime object"):
-        liveview_render(source, CTX)
+def test_tz_filters_render_djangos_converted_datetime(source):
+    expected = django_render(source, CTX)
+    assert expected != ""
+    assert plain_render(source, CTX) == expected
+    assert liveview_render(source, CTX) == expected
 
 
-def test_refused_filter_set_is_exactly_the_tz_three():
-    assert template_libraries.refused_filters("django.templatetags.tz") == frozenset(
-        {"localtime", "utc", "timezone"}
-    )
-    assert template_libraries.refused_filters("django.templatetags.l10n") == frozenset()
-    assert template_libraries.refused_filters("django.templatetags.i18n") == frozenset()
+def test_no_library_filter_is_refused_any_more():
+    for module in ("tz", "l10n", "i18n"):
+        assert template_libraries.refused_filters("django.templatetags." + module) == frozenset()
+    assert template_libraries._FILTER_REFUSALS == {}
 
 
 # ---------------------------------------------------------------------------

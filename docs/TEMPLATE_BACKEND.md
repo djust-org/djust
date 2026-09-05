@@ -202,9 +202,9 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and the `cache` library are not implemented; the generated lists below are the authority
-- Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library — see "Internationalization" below for what that covers and the residues it does not. The three `tz` *filters* (`localtime`, `timezone`, `utc`) are the exception — they need a datetime object the Rust engine cannot carry (#2216) and are refused loudly at load rather than rendering blank (#2541)
+- Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library — see "Internationalization" below for what that covers and the residues it does not. The three `tz` *filters* (`localtime`, `timezone`, `utc`) bridge verbatim too (#2541): a datetime crosses the boundary as a typed value carrying the object, and the converted result keeps Django's `convert_to_local_time = False` so a following `date` filter formats it in the zone the filter chose, not the active one
 - `{% debug %}` renders `""` unless `settings.DEBUG` (Django's own gate), and what it dumps has already been through djust's serialization floor and sidecar proxies — protected model fields never reach it. On the plain backend a model shows as its serialized dict rather than its repr (#2590)
-- `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` is refused until #2591
+- `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` binds the name and emits nothing, as Django's `simple_tag` does (#2591)
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
 - `{% url %}` raises `NoReverseMatch` on a failed reverse, as Django does, and `{% url … as var %}` stores `''` in the variable instead of raising (#2563). Both hold on the plain backend and on the LiveView path, for a quoted name and for a variable name, and the message is Django's (`Reverse for 'x' with no arguments not found. 1 pattern(s) tried: […]`). There is no fail-soft switch: a blank `href` is exactly the broken link the exception exists to surface, and `as var` is the escape hatch. Three differences remain:
   - a `{% url 'quoted-name' … %}` is resolved by a pre-pass BEFORE the template is parsed, so one inside a never-taken `{% if %}` branch or a `{% comment %}` block still raises;
@@ -307,13 +307,13 @@ A supported library tag is either a native Rust node or bridged on `{% load %}` 
 
 **Library filters — native (0):** none
 
-**Library filters — bridged on `{% load %}` (6):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`
+**Library filters — bridged on `{% load %}` (9):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`; tz `localtime`, `timezone`, `utc`
 
 Bridged filters are Django's own callables, forwarded to the Rust engine by the filter bridge when the template loads their library (#2558) — on any `TEMPLATES` shape, a `DjangoTemplates` engine beside djust or not.
 
-**Library filters — unsupported (3):** tz `localtime`, `timezone`, `utc`
+**Library filters — unsupported (0):** none
 
-Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each needs a datetime object on the wire, which the Rust `Value` cannot carry (#2216), so the load registers it as a filter that raises `TemplateSyntaxError` naming the filter and pointing at `date` with the active zone (#2209) — never a silent blank (#2541).
+Refused loudly on `{% load %}` (0): none — a filter the Rust engine structurally cannot serve is registered by the load as a filter that raises `TemplateSyntaxError` naming it, never a silent blank. The `tz` three (`localtime`, `timezone`, `utc`) were the last entries; they bridge verbatim since #2541, the datetime crossing the boundary as a typed value.
 
 **djust extensions (not Django tags, not scored):** `dj_flash`, `djust_client_config`, `djust_markdown`, `djust_offline_indicator`, `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `live_render`
 <!-- /generated:template-backend-lists -->

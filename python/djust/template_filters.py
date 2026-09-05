@@ -235,20 +235,20 @@ def bootstrap_django_filters() -> int:
     return count
 
 
-def _tz_filter_refusal(filter_name: str, filter_callable: Any) -> Any:
-    """A loud stand-in for a ``tz`` filter the Rust engine cannot serve
-    (#2558): raises Django's ``TemplateSyntaxError`` naming the residue, so
-    a template using ``{{ dt|localtime }}`` gets an error naming #2216
-    instead of the silent ``""`` Django answers for a non-datetime."""
+def _filter_refusal(filter_name: str, filter_callable: Any) -> Any:
+    """A loud stand-in for a library filter the Rust engine cannot serve
+    (#2558): raises Django's ``TemplateSyntaxError`` naming the filter, so a
+    template using it gets an error instead of a silent ``""``. No filter is
+    refused today — the ``tz`` three that were bridge verbatim since #2541
+    (``template_libraries._FILTER_REFUSALS``); the channel stays for the next
+    one that genuinely cannot cross."""
     from django.template import TemplateSyntaxError
 
-    module = getattr(filter_callable, "__module__", "django.templatetags.tz")
+    module = getattr(filter_callable, "__module__", "<unknown>")
 
     def refusal(value: Any, arg: Any = None) -> Any:
         raise TemplateSyntaxError(
-            "filter %r from %r needs a datetime object; the Rust engine "
-            "receives dates as strings (#2216) — use the `date` filter with "
-            "the active zone (#2209)" % (filter_name, module)
+            "filter %r from %r cannot be served by the Rust engine (#2558)" % (filter_name, module)
         )
 
     return refusal
@@ -264,10 +264,10 @@ def bridge_library_filters(library: Any, refuse: frozenset = frozenset()) -> int
     than a hand-copied twin (#1646). Returns the number forwarded.
 
     ``refuse`` (#2558): names to bridge as LOUD refusals instead — a filter
-    the Rust engine structurally cannot serve (the ``tz`` filters need a
-    datetime object on the wire, #2216) raises Django's
-    ``TemplateSyntaxError`` when used, rather than answering ``""`` the way
-    Django's ``do_timezone`` does for a non-datetime.
+    the Rust engine structurally cannot serve raises Django's
+    ``TemplateSyntaxError`` when used, rather than answering ``""``. Empty
+    since #2541 (the ``tz`` filters bridge verbatim now that a datetime
+    crosses the boundary as a typed value).
     """
     count = 0
     filters_dict = getattr(library, "filters", None)
@@ -277,7 +277,7 @@ def bridge_library_filters(library: Any, refuse: frozenset = frozenset()) -> int
         try:
             if filter_name in refuse:
                 if register_django_filter(
-                    filter_name, _tz_filter_refusal(filter_name, filter_callable)
+                    filter_name, _filter_refusal(filter_name, filter_callable)
                 ):
                     count += 1
                 continue

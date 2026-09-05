@@ -759,13 +759,13 @@ class TestQuerystringTag:
         html, _, _ = client.render_with_patches()
         assert "?a=2&amp;b=x" in html, html
 
-    def test_as_var_is_refused_rather_than_mis_rendered(self):
+    def test_as_var_binds_the_name_and_emits_nothing(self):
+        # #2591: `SimpleNode.target_var` through the built-in bridge's
+        # bindings diff — refused before, Django parity now.
         request = _FACTORY.get("/?a=1")
-        assert (
-            django_render("{% querystring a=2 as qs %}[{{ qs }}]", {}, request=request) == "[?a=2]"
-        )
-        with pytest.raises(Exception, match="#2547"):
-            backend_render("{% querystring a=2 as qs %}[{{ qs }}]", {}, request=request)
+        src = "{% querystring a=2 as qs %}[{{ qs }}]"
+        assert django_render(src, {}, request=request) == "[?a=2]"
+        assert backend_render(src, {}, request=request) == "[?a=2]"
 
     def test_kwargs_resolve_through_djangos_compiler(self):
         src = "{% querystring page=page_obj.number|add:1 %}"

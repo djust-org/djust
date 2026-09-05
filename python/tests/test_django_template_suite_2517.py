@@ -434,10 +434,29 @@ CANARY_MODULE = textwrap.dedent(
     '''
     """Three templates: one both engines agree on, one djust gets wrong, one djust cannot parse."""
 
-    import datetime
-
-    from django.template import Context, Engine, TemplateSyntaxError
+    from django.template import Context, Engine, Library, Node, TemplateSyntaxError
     from django.test import SimpleTestCase
+
+    # A raw @register.tag that CONSUMES A BODY — the one library-tag shape
+    # djust still refuses (#2547): the synthetic parser has no token stream
+    # to hand it. `Engine(libraries={"canary_lib": "canary_tests"})` imports
+    # this module as the library, so the canary is self-contained.
+    register = Library()
+
+
+    class _Shout(Node):
+        def __init__(self, nodelist):
+            self.nodelist = nodelist
+
+        def render(self, context):
+            return self.nodelist.render(context).upper()
+
+
+    @register.tag
+    def shout(parser, token):
+        nodelist = parser.parse(("endshout",))
+        parser.delete_first_token()
+        return _Shout(nodelist)
 
 
     class Canary(SimpleTestCase):
@@ -452,26 +471,20 @@ CANARY_MODULE = textwrap.dedent(
             template = Engine().from_string("{{ x }}")
             self.assertTrue(hasattr(template, "nodelist"))
 
-        def test_3_refused_tz_filter(self):
-            # Django renders `Jan. 1, 2020, noon`; djust REFUSES.
+        def test_3_refused_body_tag(self):
+            # Django renders `HI`; djust REFUSES at parse time.
             #
             # The canary needs a case where DJANGO SUCCEEDS and djust does
             # not, and it rotates as gaps close: `autoescape` until #2556,
             # `ifchanged` until #2517, `{% cache %}` until #2517's library
-            # row. No Django TAG is refused any more, so the canary moved to
-            # the refusal that remains — the three `tz` FILTERS, which need a
-            # datetime object on the wire the Rust `Value` cannot carry
-            # (#2216), and so are registered as filters that raise rather than
-            # answering the silent `""` a non-datetime would otherwise get.
-            src = "{% load tz %}{{ d|utc }}"
-            engine = Engine(libraries={"tz": "django.templatetags.tz"})
-            # The PROPERTY is "Django renders this and djust does not"; the
-            # exact bytes depend on the runner's TIME_ZONE / USE_TZ, which the
-            # gate-off subprocess does not fix, so they are not asserted.
-            out = engine.from_string(src).render(
-                Context({"d": datetime.datetime(2020, 1, 1, 12, 0)})
-            )
-            self.assertIn("2020", out)
+            # row, the `tz` filters until #2541. No Django tag or filter is
+            # refused any more, so the canary moved to the refusal that
+            # remains — a project library's raw `@register.tag` that consumes
+            # a block (#2547), which the bridge cannot hand a token stream.
+            src = "{% load canary_lib %}{% shout %}hi{% endshout %}"
+            engine = Engine(libraries={"canary_lib": "canary_tests"})
+            out = engine.from_string(src).render(Context({}))
+            self.assertEqual(out, "HI")
     '''
 )
 
@@ -529,11 +542,11 @@ class TestEmpiricalCanary:
         assert lines["canary_tests.Canary.test_2_django_node_inspection"].startswith(
             "FAIL  canary_tests.Canary.test_2_django_node_inspection | AssertionError: "
         )
-        assert lines["canary_tests.Canary.test_3_refused_tz_filter"].startswith(
-            "ERROR canary_tests.Canary.test_3_refused_tz_filter | RuntimeError: "
+        assert lines["canary_tests.Canary.test_3_refused_body_tag"].startswith(
+            "ERROR canary_tests.Canary.test_3_refused_body_tag | TemplateSyntaxError: "
         )
 
-        assert "utc" in lines["canary_tests.Canary.test_3_refused_tz_filter"]
+        assert "shout" in lines["canary_tests.Canary.test_3_refused_body_tag"]
 
     def test_engine_percent_and_touched(self, djust_run: tuple[str, dict]) -> None:
         text, data = djust_run
