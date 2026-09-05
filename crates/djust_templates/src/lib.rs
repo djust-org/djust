@@ -436,11 +436,19 @@ mod tests {
         // The LiveView-shaped render (a bare Context) still carries the marker,
         // so the assertion above is about the entry, not about the tag.
         let live = template.render(&Context::from_dict(ctx)).unwrap();
+        assert!(live.contains("<b>yes</b>"));
+        // Marker emission itself is gated on the `liveview` feature: without
+        // it a bare Context never emits, so the non-vacuity check inverts.
+        #[cfg(feature = "liveview")]
         assert!(
             live.contains("<!--dj-if"),
             "LiveView path lost its marker: {live}"
         );
-        assert!(live.contains("<b>yes</b>"));
+        #[cfg(not(feature = "liveview"))]
+        assert_eq!(
+            live, "<b>yes</b>",
+            "no liveview feature, yet a marker: {live}"
+        );
     }
 
     #[test]
