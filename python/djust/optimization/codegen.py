@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 #: on the SET of names and nothing else — and because the Rust caller iterates a
 #: Rust ``HashMap``, whose order differs per instance. Keyed as a tuple, twelve
 #: identical ``serialize_queryset`` calls produced ELEVEN distinct keys: every
-#: call missed and the cache walked to its cap. `gated_names` also sorts before
-#: calling, so the Rust→Python contract is deterministic; this key makes the
-#: cache correct for any caller's ordering regardless.
+#: call missed and the cache walked to its cap. ``gated_names`` deliberately does
+#: NOT sort to compensate — that would be a second mechanism covering the same
+#: half, which no test could then tell apart from this one (#2233). This key is
+#: the single mechanism, and it is correct for any caller's ordering.
 _GATE_CACHE: Dict[
     Tuple[FrozenSet[str], FrozenSet[str], Optional[FrozenSet[str]], FrozenSet[str]],
     FrozenSet[str],
