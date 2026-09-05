@@ -154,12 +154,19 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # model-backed benchmark). The test for membership is "is it ever
         # read by a template?", NOT "is it set after __init__": ``_action_state``
         # (splatted into the context by ``mixins/context.py`` — an ``@action``
-        # that only records an error must re-render) and ``_dirty_baseline``
-        # (behind the template-readable ``is_dirty`` / ``changed_fields``)
-        # are deliberately NOT here.
+        # that only records an error must re-render) is deliberately NOT here.
+        # ``_dirty_baseline`` IS here even though the template-readable
+        # ``is_dirty`` / ``changed_fields`` derive from it: it is the
+        # fingerprint of EVERY public attr, so walking it re-walks the whole
+        # state per event (measured 12.2k nodes vs 3.0k for the data, 7.6x
+        # slower, and it trips the budget with a warning naming it). The one
+        # thing that changes it without touching public state —
+        # ``mark_clean()`` — is made visible by ``_dirty_baseline_version``, a
+        # small counter ``_capture_dirty_baseline`` bumps that IS snapshotted.
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
+        "_dirty_baseline",
         "_rust_render_timing",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
@@ -692,6 +699,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         whenever the user calls :meth:`mark_clean`.
         """
         self._dirty_baseline = self._dirty_fingerprint()
+        # Snapshotted stand-in for the (excluded, large) baseline: a
+        # ``mark_clean()``-only handler flips ``is_dirty`` and must re-render
+        # (#2682 review). Assigned here, not in ``__init__``, so it is not in
+        # the ``_framework_attrs`` set and ``_snapshot_assigns`` sees it.
+        self._dirty_baseline_version = getattr(self, "_dirty_baseline_version", 0) + 1
 
     def mark_clean(self) -> None:
         """Reset the dirty-tracking baseline to the current state.

@@ -227,6 +227,66 @@ async def test_action_error_and_tuple_item_mutation_reach_the_browser(event, mar
         await communicator.disconnect()
 
 
+class _DirtyView(LiveView):
+    """#2682 re-review: ``mark_clean()`` alone must re-render ``{{ is_dirty }}``
+    without ``_snapshot_assigns`` walking the (excluded) ``_dirty_baseline``."""
+
+    template = (
+        '<div dj-view="djust.tests.test_in_place_mutation_2664._DirtyView" dj-id="0">'
+        "<p>dirty={{ dirty }}</p><p>n={{ n }}</p></div>"
+    )
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+
+    def get_context_data(self, **kwargs):
+        # ``is_dirty`` is a framework-derived property that ContextMixin skips
+        # on purpose; a view exposes it explicitly, as a user would.
+        return {**super().get_context_data(**kwargs), "dirty": self.is_dirty}
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1  # is_dirty -> True
+
+    @event_handler()
+    def clean(self, **kwargs):
+        self.mark_clean()  # is_dirty -> False; NO public attr changes
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_mark_clean_only_handler_re_renders_is_dirty():
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        communicator = await _mounted(f"{__name__}._DirtyView", "/dirty/")
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
+        frame = await _receive_until(communicator, {"patch", "html_update", "noop"})
+        assert _dom_changed(frame, "dirty=True"), frame
+        await communicator.send_json_to({"type": "event", "event": "clean", "params": {}, "ref": 2})
+        frame = await _receive_until(communicator, {"patch", "html_update", "noop"})
+        assert _dom_changed(frame, "dirty=False"), (
+            f"mark_clean()-only handler must re-render is_dirty, got {frame!r}"
+        )
+        await communicator.disconnect()
+
+
+def test_snapshot_never_walks_dirty_baseline():
+    """Structural pin: the baseline is the fingerprint of every public attr;
+    walking it per event is the 7.6x regression the re-review measured."""
+    from djust.websocket import _snapshot_assigns
+
+    view = _DirtyView()
+    view.n = 0
+    view.rows = [{"i": i} for i in range(50)]
+    view._capture_dirty_baseline()
+    snapshot = _snapshot_assigns(view)
+    assert "_dirty_baseline" not in snapshot
+    assert snapshot["_dirty_baseline_version"] == 1
+    view.mark_clean()
+    assert _snapshot_assigns(view)["_dirty_baseline_version"] == 2
+
+
 def test_all_change_detection_paths_share_one_fingerprint():
     """#1646 pin: every path that decides "did this value change?" must call the
     ONE structural fingerprint, so no path can drift back to an aliasing compare."""

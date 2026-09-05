@@ -249,8 +249,11 @@ _SETATTR_WHITELIST = {
     # +3 (1363/1365 → 1366/1368) by the #2682 review fix: the membership-rule
     # comment on that block grew while ``_action_state``/``_dirty_baseline``
     # were removed from it. Still the same two sites.
-    ("live_view.py", 1366),
-    ("live_view.py", 1368),
+    # +12 (1366/1368 → 1378/1380) by the #2682 re-review: the
+    # ``_dirty_baseline`` rationale comment + ``_dirty_baseline_version``
+    # bump in ``_capture_dirty_baseline``. Still the same two sites.
+    ("live_view.py", 1378),
+    ("live_view.py", 1380),
 }
 
 
