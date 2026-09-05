@@ -74,7 +74,10 @@ def compile_template(
     parse — an unregistered tag, an unknown filter, a bad arity, an unclosed
     block — and returns ``None`` otherwise. A successful parse is stored in
     the engine's template cache, so the render that follows does not parse
-    again; a failed parse is never cached. Set ``return_template=True`` to
+    again; a failed parse is never cached. A cached parse is reused only
+    while the tag/filter registry is unchanged — any register/unregister/
+    clear bumps a generation counter and the next compile re-parses, so
+    a template is always validated against the current library set. Set ``return_template=True`` to
     retain the immutable compiled handle for subsequent rendering.
     """
     ...
