@@ -271,6 +271,11 @@ class TestTheBoundedSequenceGate:
         assert _rust.crosses_as_encoded_by_conversion(Liar()) is True
 
 
+#: CPython's DEFAULT `sys.getrecursionlimit()`. A literal, deliberately: the
+#: live value is whatever the runner set (16384 on CI shard 4/4).
+CPYTHON_DEFAULT_RECURSION_LIMIT = 1000
+
+
 def _nested(depth: int) -> list:
     v: object = "leaf"
     for _ in range(depth):
@@ -302,19 +307,30 @@ class TestTheDepthCeiling:
         regressed a 150-deep list `main` and Django both render."""
         from djust import _rust
 
-        assert _rust.MAX_CONVERSION_DEPTH == 1000 == sys.getrecursionlimit()
+        # Against the LITERAL — CPython's DEFAULT `sys.getrecursionlimit()` —
+        # not the live value: a runner may raise the ambient limit (CI shard
+        # 4/4 runs at 16384), and the ceiling is a constant, not a mirror.
+        assert _rust.MAX_CONVERSION_DEPTH == CPYTHON_DEFAULT_RECURSION_LIMIT == 1000
 
     def test_python_refuses_a_ceiling_deep_context_before_rust_can(self) -> None:
-        """Under Python's DEFAULT recursion limit the ceiling is unobservable:
+        """Under CPython's DEFAULT recursion limit the ceiling is unobservable:
         the backend's own `serialize_value` (`template/serialization.py`) is
         a recursive Python walk that spends one frame per level, so a
         (ceiling - 1)-deep list raises `RecursionError` in Python before the
         Rust conversion ever sees it. That is the design goal of choosing the
-        limit itself as the ceiling."""
+        default limit itself as the ceiling. The limit is PINNED to the
+        default for the block — the claim is scoped to the default, and a
+        runner with a raised ambient limit (16384 on CI) would otherwise
+        render the leaf."""
         from djust import _rust
 
-        with pytest.raises(RecursionError):
-            _render_leaf(_rust.MAX_CONVERSION_DEPTH - 1)
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(CPYTHON_DEFAULT_RECURSION_LIMIT)
+        try:
+            with pytest.raises(RecursionError):
+                _render_leaf(_rust.MAX_CONVERSION_DEPTH - 1)
+        finally:
+            sys.setrecursionlimit(limit)
 
     def test_the_leaf_below_the_ceiling_renders_and_past_it_does_not(self) -> None:
         """With Python's limit lifted, the ceiling becomes observable — and
