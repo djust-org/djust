@@ -1378,7 +1378,20 @@ class WSConsumerTransport:
         logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
 
         context_data = await sync_to_async(view.get_context_data)()
-        result = await consumer.actor_handle.mount(view_path, context_data, view)
+        # #2599: hand the actor the view's OWN template + dirs. Without them
+        # `ViewActor::new` builds an empty-template backend and the mount
+        # frame is `<html><head></head><body></body></html>`.
+        from .utils import get_template_dirs
+
+        get_template = getattr(view, "get_template", None)
+        template = await sync_to_async(get_template)() if get_template is not None else None
+        result = await consumer.actor_handle.mount(
+            view_path,
+            context_data,
+            view,
+            template=template,
+            template_dirs=[str(d) for d in get_template_dirs()],
+        )
         return result
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:

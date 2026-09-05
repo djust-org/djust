@@ -76,11 +76,25 @@ impl ViewActor {
     /// for; the mount path does not use it yet, so it is what the #2592 tests
     /// use to make the actor's state OBSERVABLE through a real render.
     pub fn with_template(view_path: String, template_source: String) -> (Self, ViewActorHandle) {
+        Self::with_template_and_dirs(view_path, template_source, Vec::new())
+    }
+
+    /// `with_template` plus the template directories `{% include %}` /
+    /// `{% extends %}` resolve against (#2599 — the session mount's shape).
+    pub fn with_template_and_dirs(
+        view_path: String,
+        template_source: String,
+        template_dirs: Vec<String>,
+    ) -> (Self, ViewActorHandle) {
         let (tx, rx) = mpsc::channel(50); // Bounded channel for backpressure
 
         info!(view_path = %view_path, "Creating ViewActor");
 
-        let backend = RustLiveViewBackend::new_rust(template_source);
+        let backend = if template_dirs.is_empty() {
+            RustLiveViewBackend::new_rust(template_source)
+        } else {
+            RustLiveViewBackend::new_rust_with_dirs(template_source, template_dirs)
+        };
 
         let actor = ViewActor {
             view_path: view_path.clone(),

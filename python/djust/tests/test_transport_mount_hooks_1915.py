@@ -84,7 +84,7 @@ class _FakeActorHandle:
         self.mount_calls: list = []
         self.result = {"html": "<div>from-actor</div>", "version": 7}
 
-    async def mount(self, view_path, context_data, view):
+    async def mount(self, view_path, context_data, view, **kwargs):
         self.mount_calls.append((view_path, dict(context_data)))
         return self.result
 

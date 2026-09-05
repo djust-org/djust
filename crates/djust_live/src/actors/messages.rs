@@ -23,6 +23,11 @@ pub enum SessionMsg {
         view_path: String,
         params: HashMap<String, Value>,
         python_view: Option<Py<PyAny>>,
+        /// The view's template source (#2599). `None` mounts the actor on an
+        /// EMPTY template — the pre-#2599 shape, kept for pure-Rust tests.
+        template: Option<String>,
+        /// Template directories for `{% include %}` / `{% extends %}` (#2599).
+        template_dirs: Vec<String>,
         reply: oneshot::Sender<Result<MountResponse>>,
     },
 
