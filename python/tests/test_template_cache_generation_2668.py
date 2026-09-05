@@ -110,6 +110,78 @@ class TestRegistryMutationsInvalidate:
         assert not _is_hit_next_time(self.SRC)
 
 
+class TestEveryEntryPointIsGenerationGated:
+    """#2669: `compile_template` was the only inserter that recorded the
+    generation. A template FIRST parsed through any of the five render entry
+    points was served from `TEMPLATE_CACHE` forever — after an
+    `unregister_custom_filter`, the stale parse of `{{ v|f }}` rendered
+    happily where Django (and `compile_template`) raise `Invalid filter`.
+
+    Every entry point now goes through one `cached_template` helper. Each case
+    below is the same three beats on a different door: parse-with-filter →
+    unregister → the re-render must refuse the stale parse. Each uses its own
+    source so no case can be satisfied by another's parse.
+    """
+
+    FILTER = "gatefilter2669"
+
+    @staticmethod
+    def _via_render_template(src):
+        _rust.render_template(src, {"v": "x"})
+
+    @staticmethod
+    def _via_render_template_with_dirs(src):
+        _rust.render_template_with_dirs(src, {"v": "x"}, [])
+
+    @staticmethod
+    def _via_view_render(src):
+        view = _rust.RustLiveView(src)
+        view.set_state("v", "x")
+        view.render()
+
+    @staticmethod
+    def _via_view_render_with_diff(src):
+        view = _rust.RustLiveView(src)
+        view.set_state("v", "x")
+        view.render_with_diff()
+
+    @staticmethod
+    def _via_view_render_binary_diff(src):
+        view = _rust.RustLiveView(src)
+        view.set_state("v", "x")
+        view.render_binary_diff()
+
+    @staticmethod
+    def _via_compile_template(src):
+        _compile(src)
+
+    ENTRY_POINTS = {
+        "render_template": _via_render_template,
+        "render_template_with_dirs": _via_render_template_with_dirs,
+        "RustLiveView.render": _via_view_render,
+        "RustLiveView.render_with_diff": _via_view_render_with_diff,
+        "RustLiveView.render_binary_diff": _via_view_render_binary_diff,
+        "compile_template": _via_compile_template,
+    }
+
+    @pytest.mark.parametrize("name", sorted(ENTRY_POINTS))
+    def test_entry_point_records_generation_and_refuses_a_stale_parse(self, name):
+        enter = self.ENTRY_POINTS[name]
+        src = f"{{{{ v|{self.FILTER} }}}}-2669-{name}"
+        _rust.register_custom_filter(self.FILTER, lambda v: v, False, False)
+        try:
+            enter(src)
+            assert _rust.template_cache_contains(src)
+            assert _rust.template_compiled_at_generation(src) == _rust.registry_generation(), (
+                f"{name} inserted into TEMPLATE_CACHE without recording the generation"
+            )
+        finally:
+            _rust.unregister_custom_filter(self.FILTER)
+        assert not _is_hit_next_time(src)
+        with pytest.raises(Exception, match="(?i)invalid filter|unknown filter"):
+            enter(src)  # must re-parse, not serve the stale entry
+
+
 class TestBridgeSurvivesRegistryClear:
     """`_loaded` says "bridged"; the registry may disagree. Test isolation
     calls `clear_block_tag_handlers()` between tests, and the first version of
