@@ -86,6 +86,8 @@ impl SessionActor {
                     view_path,
                     params,
                     python_view,
+                    template,
+                    template_dirs,
                     reply,
                 } => {
                     debug!(
@@ -93,7 +95,9 @@ impl SessionActor {
                         view_path = %view_path,
                         "Handling Mount"
                     );
-                    let result = self.handle_mount(view_path, params, python_view).await;
+                    let result = self
+                        .handle_mount(view_path, params, python_view, template, template_dirs)
+                        .await;
                     let _ = reply.send(result);
                 }
 
@@ -230,6 +234,8 @@ impl SessionActor {
         view_path: String,
         params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
+        template: Option<String>,
+        template_dirs: Vec<String>,
     ) -> Result<MountResponse, ActorError> {
         // Phase 6: Generate unique view ID
         let view_id = Uuid::new_v4().to_string();
@@ -241,8 +247,15 @@ impl SessionActor {
             "Creating new view"
         );
 
-        // Create ViewActor
-        let (view_actor, view_handle) = ViewActor::new(view_path.clone());
+        // Create ViewActor on the view's OWN template (#2599). `ViewActor::new`
+        // builds an empty-template backend, which is what made every
+        // `use_actors=True` mount render `<html><head></head><body></body></html>`.
+        let (view_actor, view_handle) = match template {
+            Some(source) => {
+                ViewActor::with_template_and_dirs(view_path.clone(), source, template_dirs)
+            }
+            None => ViewActor::new(view_path.clone()),
+        };
         tokio::spawn(view_actor.run());
 
         // Phase 5: Set Python view instance if provided
@@ -440,6 +453,23 @@ impl SessionActorHandle {
         params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
+        self.mount_with_template(view_path, params, python_view, None, Vec::new())
+            .await
+    }
+
+    /// `mount` on the view's own template source + template dirs (#2599).
+    ///
+    /// The Python actor-mount path (`ViewRuntime.dispatch_actor_mount`) calls
+    /// this; `mount` (no template) is the pure-Rust shape whose backend
+    /// renders an empty document.
+    pub async fn mount_with_template(
+        &self,
+        view_path: String,
+        params: HashMap<String, Value>,
+        python_view: Option<pyo3::Py<pyo3::PyAny>>,
+        template: Option<String>,
+        template_dirs: Vec<String>,
+    ) -> Result<MountResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
@@ -447,6 +477,8 @@ impl SessionActorHandle {
                 view_path,
                 params,
                 python_view,
+                template,
+                template_dirs,
                 reply: tx,
             })
             .await

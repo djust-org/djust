@@ -337,10 +337,12 @@ _PKG = Path(__file__).resolve().parents[1] / "djust"
 
 
 def test_every_framework_update_state_caller_is_decided() -> None:
-    """Two Python callers. The per-view bridge (long-lived state, MUST retain
+    """Three Python callers. The per-view bridge (long-lived state, MUST retain
     first); the page-shell ``temp_rust`` in template.py (a fresh ``RustLiveView``
-    per request with nothing to retain — no call). A third caller is a decision
-    someone has to make.
+    per request with nothing to retain — no call); and the ``template_name``
+    LiveComponent render in components/base.py (#2530 — a fresh ``RustLiveView``
+    per component render, likewise nothing to retain — no call). A fourth
+    caller is a decision someone has to make.
 
     And the actor's Rust merge (#2592): ``use_actors=True`` bypasses the bridge
     entirely — the ``ViewActor`` pulls the full ``get_context_data()`` itself in
@@ -358,7 +360,11 @@ def test_every_framework_update_state_caller_is_decided() -> None:
         n = len(re.findall(r"\.update_state\(", text))
         if n:
             callers[str(path.relative_to(_PKG))] = n
-    assert callers == {"mixins/rust_bridge.py": 1, "mixins/template.py": 1}, callers
+    assert callers == {
+        "components/base.py": 1,
+        "mixins/rust_bridge.py": 1,
+        "mixins/template.py": 1,
+    }, callers
 
     bridge = (_PKG / "mixins" / "rust_bridge.py").read_text()
     retain_at = bridge.index("retain_state_keys(")
@@ -366,6 +372,8 @@ def test_every_framework_update_state_caller_is_decided() -> None:
     assert retain_at < update_at, "retain_state_keys must run before update_state"
     shell = (_PKG / "mixins" / "template.py").read_text()
     assert "retain_state_keys" not in shell, "temp_rust is per-request; decided: no call"
+    component = (_PKG / "components" / "base.py").read_text()
+    assert "retain_state_keys" not in component, "per-render RustLiveView; decided: no call"
 
     actor = (_PKG.parents[1] / "crates" / "djust_live" / "src" / "actors" / "view.rs").read_text()
     sync_at = actor.index("fn sync_state_from_python(")

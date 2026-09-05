@@ -31,7 +31,14 @@ pytest.importorskip("django")
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "python"))
 
-TEMPLATE_DIR = Path(__file__).resolve().parent / "_semantics_2660_templates"
+# Per-xdist-worker directory: the module-scoped fixture below CREATES and
+# DELETES the files, and `--dist load` can split this module's tests across
+# workers, so one worker's teardown raced another worker's `{% extends
+# 'base.html' %}` / `{% include 'sub/../ok.html' %}` (seen as 4 "template not
+# found" failures on a full pre-push run). A worker-suffixed dir has no sharer.
+TEMPLATE_DIR = Path(__file__).resolve().parent / (
+    "_semantics_2660_templates" + os.environ.get("PYTEST_XDIST_WORKER", "")
+)
 LIBRARIES = {"static": "django.templatetags.static"}
 
 
