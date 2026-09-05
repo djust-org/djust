@@ -1,5 +1,7 @@
 # API Stability & Deprecation Policy
 
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+
 This document is the canonical, authoritative statement of djust's API-stability
 commitment and its deprecation process. It defines exactly what the djust 1.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) promise covers, what

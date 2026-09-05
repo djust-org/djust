@@ -71,6 +71,19 @@ class FormMixin:
             self.model_pk = None
             self.model_label = ""
 
+        self._init_form_state()
+
+        # Create initial form instance (private, not serialized)
+        if self.form_class:
+            self._form_instance = self._create_form()
+
+    def _init_form_state(self) -> None:
+        """Populate every reactive form attribute from ``form_class``.
+
+        The single chokepoint for form-state initialization. ``mount()`` calls
+        it on the happy path; ``_ensure_form_state()`` calls it to repair a view
+        whose ``FormMixin.mount()`` never ran (#2667).
+        """
         # Initialize form state with all form fields set to empty strings
         # This ensures that when template renders {{ form_data.field_name }},
         # it doesn't render missing keys as empty, which would clear user input
@@ -106,11 +119,79 @@ class FormMixin:
         self.success_message = ""
         self.error_message = ""
 
-        # Create initial form instance (private, not serialized)
-        if self.form_class:
-            self._form_instance = self._create_form()
+    def _ensure_form_state(self) -> None:
+        """Repair form state when ``FormMixin.mount()`` never ran (#2667).
 
-    # Keep form_instance as a property for backward compatibility
+        ``form_data`` and friends are only class-level *annotations* — nothing
+        exists on the instance until ``mount()`` assigns them. Two ordinary
+        authoring mistakes skip that assignment entirely, and neither raises at
+        mount time; both blow up later on the first event that reads the state:
+
+        * a ``mount()`` override that forgets ``super().mount(request, **kwargs)``
+        * declaring the bases as ``(LiveView, FormMixin)``, so ``LiveView.mount``
+          wins the MRO and ``FormMixin.mount`` is never reached
+
+        ``validate_field`` already carried an inline version of this guard; the
+        other entry points had drifted without one (#1646). Rather than repeat
+        the ``hasattr`` check per attribute, every entry point that *reads* form
+        state now routes through here.
+        """
+        if hasattr(self, "form_data"):
+            return
+        logger.warning(
+            "%s reached a FormMixin handler without form state — FormMixin.mount() "
+            "never ran. %s Initializing form state now so the request can proceed.",
+            type(self).__name__,
+            self._diagnose_unrun_mount(),
+        )
+        self._init_form_state()
+
+    def _diagnose_unrun_mount(self) -> str:
+        """Name the specific mistake that kept ``FormMixin.mount()`` from running.
+
+        The two shapes need OPPOSITE advice, so one generic sentence is wrong for
+        whichever view is reading it: telling a class that has no ``mount()`` at
+        all to "call super().mount() from your mount()" sends the author looking
+        for a method they never wrote.
+
+        The discriminator is whether the class itself defines ``mount`` — not
+        which class wins the MRO. A first pass used the MRO winner's module
+        prefix and got BOTH shapes wrong: a test view living under a ``djust.``
+        package looked like a framework class, and the reversed-bases view
+        resolved to ``ComponentMixin`` rather than the ``LiveView`` the author
+        actually typed, so the advice named a class absent from their source.
+        """
+        cls = type(self)
+        bases = cls.__bases__
+
+        if "mount" in cls.__dict__:
+            return (
+                f"{cls.__name__} overrides mount() without calling "
+                f"super().mount(request, **kwargs) — add that call as the first line."
+            )
+
+        if FormMixin in bases and bases.index(FormMixin) > 0:
+            ordered = ", ".join(b.__name__ for b in sorted(bases, key=lambda b: b is not FormMixin))
+            typed = ", ".join(b.__name__ for b in bases)
+            return (
+                f"{cls.__name__} does not define mount(), and FormMixin is not first "
+                f"in its bases, so another class's mount() wins the MRO. Change "
+                f"({typed}) to ({ordered}) — FormMixin must come FIRST."
+            )
+
+        mro = cls.__mro__
+        owner = next((k for k in mro if "mount" in k.__dict__), None)
+        if owner is None or owner is FormMixin:
+            return (
+                "FormMixin.mount() is the resolved mount() for this class, so the "
+                "state was cleared after mount, or mount() was never called at all."
+            )
+        return (
+            f"{owner.__name__}.mount() resolves ahead of FormMixin.mount(); make sure "
+            f"FormMixin comes first in the bases and that every mount() override "
+            f"calls super().mount(request, **kwargs)."
+        )
+
     @property
     def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""
@@ -214,11 +295,8 @@ class FormMixin:
             return
         field_name = name
 
-        # Ensure form state is initialized (defensive check)
-        if not hasattr(self, "form_data"):
-            self.form_data = {}
-        if not hasattr(self, "field_errors"):
-            self.field_errors = {}
+        # Ensure form state is initialized (defensive check — see #2667)
+        self._ensure_form_state()
 
         # Update form data
         self.form_data[field_name] = value
@@ -275,6 +353,8 @@ class FormMixin:
         This is called when the form is submitted (dj-submit event).
         Validates all fields and calls form_valid() or form_invalid().
         """
+        self._ensure_form_state()
+
         # Merge kwargs into form_data (for fields submitted with the form)
         self.form_data.update(kwargs)
 
@@ -337,6 +417,10 @@ class FormMixin:
 
     def reset_form(self, **kwargs: Any) -> None:
         """Reset form to initial state"""
+        # reset_form() writes every attribute below EXCEPT form_choices, so an
+        # unmounted view would still be missing that one (#2667).
+        self._ensure_form_state()
+
         # Reset form_data with all field keys initialized (matching mount() behavior)
         # This ensures consistent VDOM state and prevents alternating patches/html_update
         self.form_data = {}
@@ -364,14 +448,17 @@ class FormMixin:
 
     def get_field_value(self, field_name: str, default: Any = "") -> Any:
         """Get current value for a field"""
+        self._ensure_form_state()
         return self.form_data.get(field_name, default)
 
     def get_field_errors(self, field_name: str) -> List[str]:
         """Get errors for a specific field"""
+        self._ensure_form_state()
         return self.field_errors.get(field_name, [])
 
     def has_field_errors(self, field_name: str) -> bool:
         """Check if a field has errors"""
+        self._ensure_form_state()
         return field_name in self.field_errors
 
     def as_live(self, **kwargs: Any) -> str:

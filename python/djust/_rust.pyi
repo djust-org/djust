@@ -981,6 +981,32 @@ class RustLiveView:
         """
         ...
 
+    def set_dj_if_id_namespace(self, namespace: str) -> None:
+        """
+        Namespace this view's ``<!--dj-if id=...-->`` marker ids (#2686).
+
+        Marker ids are ``if-<template-source-hash>-<ordinal>``, so two renders
+        of one source emit the same ids. When a parent composes several — two
+        ``template_name`` LiveComponent instances of one class, each on its own
+        RustLiveView with the ordinal restarting at 0 — the duplicate ids make
+        the client resolve subtree patches onto the FIRST match. A namespace
+        appends a segment: ``if-<hash>-<ordinal>-<namespace>`` (any ``{% for %}``
+        loop path follows it).
+
+        Must be stable for the instance across renders (the client keys DOM
+        subtrees on these ids). Input outside ``[A-Za-z0-9_]`` is refused
+        rather than escaped — the value is interpolated raw into an HTML
+        comment (#2529).
+
+        Args:
+            namespace: Instance namespace, ``[A-Za-z0-9_]*``
+        """
+        ...
+
+    def dj_if_id_namespace(self) -> str:
+        """This view's dj-if id namespace (#2686); empty when unset."""
+        ...
+
     def set_state(self, key: str, value: Any) -> None:
         """
         Set a single state variable.

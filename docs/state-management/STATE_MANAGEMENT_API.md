@@ -70,7 +70,7 @@ djust's State Management API provides Python-only abstractions for common client
 | `@throttle(interval)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
-| `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
+| `@client_state(keys)` | *(inert — no client impl, #2656)* | — | 0 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
 | `@background` | Long-running operations | API calls, AI, file processing | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
@@ -93,7 +93,7 @@ djust's State Management API provides Python-only abstractions for common client
    → @cache(ttl=60, key_params=["query"])
 
 ❓ Multiple components need to share state?
-   → @client_state(keys=["filter", "sort"])
+   → one handler setting both (@client_state is INERT, #2656)
 
 ❓ Auto-save form drafts to localStorage?
    → DraftModeMixin
@@ -145,7 +145,9 @@ def update_filter(self, filter: str = "", **kwargs):
 def on_filter_change(self, filter: str = "", **kwargs):
     self.results = self.apply_filter(filter)
 ```
-**Result**: Components automatically coordinate via client-side StateBus
+**Result**: nothing of the sort. `@client_state` is INERT (#2656) and the
+state bus was deleted (#2680) — Component B is never called. What actually
+coordinates these is the server re-render, so put both updates in ONE handler.
 
 ---
 
@@ -503,14 +505,14 @@ Components subscribe to state keys using HTML data attributes:
 </div>
 ```
 
-Or via JavaScript for custom handling:
+There is no JavaScript subscription API. This section used to show a
+`subscribe(...)` call on a `StateBus` global; that class had zero consumers
+and was deleted in #2680, and no shipped bundle ever assigned the global, so
+the snippet could only ever have thrown `TypeError`.
 
-```javascript
-// Custom subscriber (for canvas charts, etc.)
-window.StateBus.subscribe('temperature', (value) => {
-    updateChart(value);
-});
-```
+To drive a canvas chart from server state, read the value out of the DOM
+the server already re-rendered — e.g. a `MutationObserver` on the element
+holding it, or a `dj-hook` on that element.
 
 #### Multi-Component Coordination
 

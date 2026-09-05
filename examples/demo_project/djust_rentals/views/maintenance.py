@@ -2,6 +2,11 @@
 Maintenance Management Views
 
 Track and manage property maintenance requests.
+
+NOTE: @debounce, @client_state and @optimistic below are INERT (#2656) — they
+stamp metadata nothing in the shipped client reads, so the handlers behave
+exactly as they would undecorated. The views work because the server
+re-renders; the decorators contribute nothing.
 """
 
 from djust_shared.views import BaseViewWithNavbar

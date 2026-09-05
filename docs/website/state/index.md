@@ -16,7 +16,7 @@ User is typing?           → @debounce(wait=0.5)
 Rapid scroll/resize?      → @throttle(interval=0.1)
 Need instant UI feedback? → @optimistic
 Same query repeated?      → @cache(ttl=300)
-Coordinating components?  → @client_state(keys=[...])
+Coordinating components?  → one handler, one re-render (@client_state is INERT, #2656)
 Auto-save forms?          → DraftModeMixin
 ```
 
@@ -116,7 +116,13 @@ def search(self, value: str = "", **kwargs):
 
 ## Client State
 
-Coordinate state across multiple components or views with `@client_state`. State is stored client-side and automatically synced:
+> **`@client_state` is INERT (#2656).** It stamps metadata nothing in the
+> shipped client reads, so the handler below behaves exactly as it would
+> undecorated. Nothing is stored client-side and nothing is synced; the
+> `StateBus` this section used to describe was deleted in #2680.
+> To coordinate two values today, set both in one handler — the single
+> server re-render carries both.
+
 
 ```python
 from djust.decorators import event_handler, client_state
@@ -128,7 +134,8 @@ def update_filter(self, filter: str = "all", **kwargs):
     self._refresh()
 ```
 
-When `filter` changes, other components subscribed to the same key update automatically — without a server round-trip.
+The decorator publishes nothing. The page updates because the handler's
+assignments trigger djust's normal server re-render.
 
 ## DraftModeMixin
 
@@ -172,7 +179,7 @@ You'll see logs like:
 | `@background`             | —                                       | API calls, AI gen    |
 | `@optimistic`             | —                                       | Toggles, counters    |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
-| `@client_state(keys)`     | `keys`: list[str]                       | Multi-component sync |
+| `@client_state(keys)`     | `keys`: list[str]                       | *(INERT — no client impl, #2656)* |
 | `DraftModeMixin`          | `draft_fields`, `draft_ttl`             | Auto-save forms      |
 
 For detailed API docs, see [API Reference: Decorators](../api-reference/decorators.md).

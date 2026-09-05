@@ -1,14 +1,20 @@
 """
-Smart IoT Dashboard Demo - Showcasing @client_state + State Management
+Smart IoT Dashboard Demo
 
-This demo demonstrates the full power of djust's state management system:
-- @client_state: Cross-panel coordination via StateBus (NO JAVASCRIPT!)
-- @optimistic: Instant device toggles
-- @throttle: Simulated real-time sensor updates
-- @debounce: Smooth slider and filter inputs
-- @cache: Efficient data fetching
+The four panels stay in sync with NO JavaScript — but not for the reason this
+docstring used to give. Every handler computes its derived values server-side
+and djust's single re-render updates all four panels. That is the whole
+mechanism.
 
-All 4 panels coordinate via client-side StateBus without any manual JavaScript!
+Of the five decorators used below, only @cache is wired end-to-end.
+@client_state, @optimistic, @throttle and @debounce are INERT (#2656): they
+stamp metadata nothing in the shipped client reads, so each handler behaves
+exactly as it would undecorated. The StateBus this demo used to credit had
+zero consumers and was deleted in #2680.
+
+Left in place because the decision on whether to implement them is #2656;
+the prose is corrected so the demo no longer teaches a mechanism that does
+not run.
 """
 
 import random

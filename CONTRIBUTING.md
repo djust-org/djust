@@ -424,8 +424,10 @@ shipped duplicate of the `src/` logic) and `static/djust/js/pwa.js` (loaded by
 no template tag). What remains outside `src/` is either a build OUTPUT
 (`client.js`, `client.min.js`, `debug-panel*.js`) or a deliberately standalone
 asset with its own loader (`service-worker.js`, `ext/dj-chart.js`,
-`bug_capture_replay.js`, `client-dev.js`) — plus `security.js`, which is
-documented public API with NO loader yet (#2679).
+`bug_capture_replay.js`, `client-dev.js`). `security.js` was the one
+exception — documented as a global with no loader, so `djustSecurity` was
+`undefined` in every browser — and was deleted for that reason (#2679); the
+allowlist now carries no loader-less rows.
 `tests/js/non-bundle-importers-2659.test.js` fails when a test imports a
 `static/djust/` file that is neither a `src/` module nor on that documented
 list — so a new never-shipped-but-tested file cannot reappear silently.

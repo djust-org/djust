@@ -1,5 +1,7 @@
 # Phase 1 Implementation: Core Infrastructure
 
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+
 **Status**: 🚧 In Progress
 **Start Date**: 2025-01-12
 **Target Completion**: 2025-01-19 (1-2 weeks)

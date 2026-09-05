@@ -892,8 +892,11 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@client_state",
         "import": "from djust.decorators import client_state",
-        "description": "Share state via client-side StateBus (pub/sub). "
-        "When handler executes, specified keys are published.",
+        "description": "MARKER ONLY — stamps metadata that nothing in the shipped "
+        "client reads, so a decorated handler behaves exactly like an undecorated "
+        "one. The StateBus class that was to consume it was deleted in #2680 as "
+        "dead code; whether to implement the client half is #2656. Do not "
+        "recommend it as a working coordination mechanism.",
         "params": {
             "keys": "List[str] — state keys to publish/subscribe",
         },

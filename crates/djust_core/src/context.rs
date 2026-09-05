@@ -232,6 +232,25 @@ pub struct Context {
     /// `Clone` (a `{% for %}` / `{% with %}` derived context is inside the
     /// same iteration) and by `{% include … only %}`'s fresh context.
     dj_if_loop_path: String,
+    /// Per-INSTANCE namespace for dj-if marker ids (#2686). Same failure class
+    /// as `dj_if_loop_path`, on a different axis: the parser-assigned
+    /// `if-<hash>-N` is derived from the template SOURCE, so *any* mechanism
+    /// that renders one parsed template more than once into a single output
+    /// buffer emits duplicate ids, and the client resolves subtree patches by
+    /// FIRST match — a toggle inside the second occurrence lands on the first.
+    /// `{% for %}` iterations are disambiguated by `dj_if_loop_path`; this
+    /// field does the same for two `template_name` `LiveComponent` instances
+    /// of one component class, each of which renders on its own `RustLiveView`
+    /// with the counter restarting at 0.
+    ///
+    /// Written ONLY by the embedding host (`RustLiveView`), never by a context
+    /// key — the `#2529` lesson that put `dj_if_loop_path` here applies
+    /// verbatim: this value is interpolated raw into a marker comment, so a
+    /// user-reachable namespace would let `"-->` forge live markup. The
+    /// grammar is `[A-Za-z0-9_]*`; anything else is refused. Copied by `Clone`
+    /// and by `{% include … only %}`'s fresh context so a marker nested inside
+    /// a component's include keeps the component's namespace.
+    dj_if_id_namespace: String,
     /// Django's `Context.autoescape` (#2556). Default `true`; plain render APIs
     /// accept explicit policy, lexical autoescape bodies restore it on exit,
     /// and `{% include … only %}` copies it into its fresh context. Context
@@ -310,6 +329,7 @@ impl Clone for Context {
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
             dj_if_loop_path: self.dj_if_loop_path.clone(),
+            dj_if_id_namespace: self.dj_if_id_namespace.clone(),
             autoescape: self.autoescape,
             // SHARED, not copied: Django's `Context.__copy__` shallow-copies
             // `render_context`, so a `{% for %}` / `{% with %}` clone
@@ -380,6 +400,7 @@ impl Context {
             auto_call: true,
             emit_dj_if_markers: true,
             dj_if_loop_path: String::new(),
+            dj_if_id_namespace: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -407,6 +428,7 @@ impl Context {
             auto_call: true,
             emit_dj_if_markers: true,
             dj_if_loop_path: String::new(),
+            dj_if_id_namespace: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -454,6 +476,37 @@ impl Context {
     /// The dj-if loop-path suffix (#1832) — empty outside any `{% for %}`.
     pub fn dj_if_loop_path(&self) -> &str {
         &self.dj_if_loop_path
+    }
+
+    /// Set the per-instance dj-if id namespace for renders under this context
+    /// (#2686). Written ONLY by the embedding host (`RustLiveView`) before a
+    /// render, and never by a context key.
+    ///
+    /// The grammar is `[A-Za-z0-9_]*`; anything else is refused and the
+    /// namespace left unchanged, for the same reason `set_dj_if_loop_path`
+    /// refuses non-`(-<digits>)*` input (#2529) — this value is interpolated
+    /// raw into a marker comment, and `-->` in it would forge live markup.
+    /// Note `-` is deliberately NOT in the alphabet: the renderer supplies the
+    /// separator, so a namespace cannot introduce extra segments.
+    pub fn set_dj_if_id_namespace(&mut self, namespace: impl Into<String>) {
+        let namespace = namespace.into();
+        if namespace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            self.dj_if_id_namespace = namespace;
+        } else {
+            debug_assert!(
+                false,
+                "dj-if id namespace is not `[A-Za-z0-9_]*`: {namespace:?}"
+            );
+        }
+    }
+
+    /// The per-instance dj-if id namespace (#2686) — empty unless the
+    /// embedding host set one.
+    pub fn dj_if_id_namespace(&self) -> &str {
+        &self.dj_if_id_namespace
     }
 
     /// Set Django's `Context.autoescape` for renders under this context

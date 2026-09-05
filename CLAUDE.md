@@ -98,7 +98,7 @@ djust/
   - **Shipped**: `client.min.js.gz` is **~58 KB** gz — what a user downloads,
     and the only figure that constrains anything.
   - **Build input**: unminified `client.js` is ~188 KB gz <!-- size-claim: unminified -->
-    across 55 modules in `static/djust/src/`. Not a deliverable; do not quote
+    across 54 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
     and had drifted more than 2x, because only the README pair was checked.

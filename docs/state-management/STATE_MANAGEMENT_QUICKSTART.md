@@ -1,5 +1,7 @@
 # State Management Quick Start
 
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+
 **Get productive with djust state management in 5 minutes**
 
 ## ✅ Prerequisites

@@ -140,12 +140,22 @@ rules:
           }
     message: |
       Direct innerHTML assignment can lead to XSS vulnerabilities.
-      Use djustSecurity.safeSetInnerHTML() for untrusted content:
 
-        djustSecurity.safeSetInnerHTML(element, htmlString);
+      Set text with textContent, which cannot introduce markup:
+
+        element.textContent = untrustedString;
+
+      If the value must be markup, it has to come from a source the SERVER
+      escaped or explicitly marked safe -- never from a client-side string
+      you assembled. djust's own DOM updates arrive as VDOM patches, not as
+      innerHTML of a server string.
 
       Note: innerHTML from DOMParser output (as used in djust's VDOM patching)
       is generally safe as it's been re-parsed.
+
+      (This rule used to name a safeSetInnerHTML helper on a djustSecurity
+      global. No such global exists: security.js was never loaded by
+      anything, so it was undefined in every browser -- deleted in #2679.)
 
       See: docs/SECURITY_GUIDELINES.md
     languages: [javascript, typescript]
@@ -164,9 +174,21 @@ rules:
           }
     message: |
       Object.assign() with untrusted sources can lead to prototype pollution.
-      Use djustSecurity.safeObjectAssign() instead:
 
-        djustSecurity.safeObjectAssign(target, untrustedSource);
+      Refuse the dangerous keys at the point of the write, the way the client
+      bundle does (UNSAFE_KEYS in static/djust/src/00-namespace.js):
+
+        for (const [k, v] of Object.entries(untrustedSource)) {
+          if (UNSAFE_KEYS.includes(k)) continue;
+          target[k] = v;
+        }
+
+      Or hold the data in a Map / Object.create(null), which has no prototype
+      to pollute.
+
+      (This rule used to name a safeObjectAssign helper on a djustSecurity
+      global. No such global exists: security.js was never loaded by
+      anything, so it was undefined in every browser -- deleted in #2679.)
 
       See: docs/SECURITY_GUIDELINES.md
     languages: [javascript, typescript]
