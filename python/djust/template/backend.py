@@ -7,6 +7,7 @@ template engine framework.
 
 import logging
 from pathlib import Path
+from os.path import abspath
 from typing import Any, Dict, List
 
 from django.template import TemplateDoesNotExist, Origin
@@ -170,7 +171,7 @@ class DjustTemplateBackend(BaseEngine):
                     with open(template_path, "r", encoding="utf-8") as f:
                         template_code = f.read()
                     origin = Origin(
-                        name=str(template_path),
+                        name=abspath(template_path),
                         template_name=template_name,
                         loader=self,
                     )
@@ -179,7 +180,13 @@ class DjustTemplateBackend(BaseEngine):
                     raise TemplateDoesNotExist(template_name) from e
 
         # Template not found in any directory
-        tried = [str(d / template_name) for d in self.template_dirs]
+        tried = [
+            (
+                Origin(name=abspath(d / template_name), template_name=template_name, loader=self),
+                "Source does not exist",
+            )
+            for d in self.template_dirs
+        ]
         raise TemplateDoesNotExist(
             template_name,
             tried=tried,

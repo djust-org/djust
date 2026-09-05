@@ -659,18 +659,16 @@ impl FilesystemTemplateLoader {
             }
         }
 
-        // Build list of searched directories for error message
-        let searched_paths: Vec<String> = self
+        let tried = self
             .template_dirs
             .iter()
-            .map(|dir| format!("  - {}", dir.display()))
+            .filter(|_| template_name_is_contained(name))
+            .map(|dir| dir.join(name).to_string_lossy().into_owned())
             .collect();
-
-        Err(DjangoRustError::TemplateError(format!(
-            "Template not found: {}\nSearched in:\n{}",
-            name,
-            searched_paths.join("\n")
-        )))
+        Err(DjangoRustError::TemplateNotFound {
+            name: name.to_string(),
+            tried,
+        })
     }
 }
 

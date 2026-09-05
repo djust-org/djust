@@ -11,6 +11,15 @@ pub enum DjangoRustError {
     #[error("Template error: {0}")]
     TemplateError(String),
 
+    /// A failed filesystem lookup, retaining the paths actually searched.
+    /// Keep metadata separate from display text so Python need not parse paths.
+    #[error("Template error: Template not found: {name}\nSearched in:\n{}", tried.iter().map(|path| format!("  - {path}")).collect::<Vec<_>>().join("\n"))]
+    TemplateNotFound { name: String, tried: Vec<String> },
+
+    /// Django Engine.select_template reports candidate names without origins.
+    #[error("Template error: Template not found: {name}")]
+    TemplateSelectionNotFound { name: String },
+
     /// A template error that knows WHERE in the source it happened (#2557).
     ///
     /// `start`/`end` are BYTE offsets of the offending token in the template
@@ -94,6 +103,26 @@ impl From<DjangoRustError> for PyErr {
                     }
                 });
                 e
+            }
+            DjangoRustError::TemplateNotFound {
+                ref name,
+                ref tried,
+            } => {
+                let error = PyRuntimeError::new_err(err.to_string());
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    let _ = value.setattr("djust_missing_template_name", name);
+                    let _ = value.setattr("djust_tried_template_paths", tried.clone());
+                });
+                error
+            }
+            DjangoRustError::TemplateSelectionNotFound { name } => {
+                let error =
+                    PyRuntimeError::new_err(format!("Template error: Template not found: {name}"));
+                Python::attach(|py| {
+                    let _ = error.value(py).setattr("djust_missing_template_name", name);
+                });
+                error
             }
             other => PyRuntimeError::new_err(other.to_string()),
         }

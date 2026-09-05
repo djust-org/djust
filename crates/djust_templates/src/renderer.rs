@@ -3214,7 +3214,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // intentionally stays on `load_template` — it needs an
                 // owned, mutable `Vec<Node>` for block-merging and has no
                 // per-render identity requirement.
-                let nodes = loader.load_template_cached(name)?;
+                let nodes = loader
+                    .load_template_cached(name)
+                    .map_err(|error| match error {
+                        DjangoRustError::TemplateNotFound { .. } => {
+                            DjangoRustError::TemplateSelectionNotFound {
+                                name: name.to_string(),
+                            }
+                        }
+                        other => other,
+                    })?;
 
                 // An included template may itself `{% extends %}` — Django
                 // renders it as a template in its own right, so its inheritance

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from os.path import abspath
 
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
@@ -91,15 +92,27 @@ _MISSING_TEMPLATE_RE = re.compile(r"Template not found: (?P<name>[^\n]+)")
 def _missing_template_name(message: str) -> str | None:
     """The template name from the engine's "Template not found" error, or None.
 
-    Matched on the message because that is the only channel the Rust error
-    carries today; the engine has ONE producer for this text
-    (`inheritance.rs`), so the coupling is to a single site rather than to a
-    format that varies.
+    Compatibility fallback for older extensions and custom loaders. Current
+    filesystem errors carry the name and searched paths as structured data.
     """
     match = _MISSING_TEMPLATE_RE.search(message)
     if match is None:
         return None
     return match.group("name").strip()
+
+
+def _missing_template_exception(error: Exception, backend: Any) -> TemplateDoesNotExist | None:
+    """Reconstruct Django's lookup failure without parsing origin paths."""
+    name = getattr(error, "djust_missing_template_name", None)
+    if name is None:
+        name = _missing_template_name(str(error))
+    if name is None:
+        return None
+    tried = [
+        (Origin(name=abspath(path), template_name=name, loader=backend), "Source does not exist")
+        for path in getattr(error, "djust_tried_template_paths", ())
+    ]
+    return TemplateDoesNotExist(name, tried=tried, backend=backend)
 
 
 def _is_user_raised(exc: BaseException) -> bool:
@@ -890,11 +903,9 @@ class DjustTemplate:
             # catches it to try the next loader — so re-wrapping it lost both
             # behaviours. The engine reports the name it could not resolve;
             # that name is what Django puts on the exception.
-            missing = _missing_template_name(str(e))
+            missing = _missing_template_exception(e, self.backend)
             if missing is not None:
-                from django.template import TemplateDoesNotExist
-
-                raise TemplateDoesNotExist(missing) from e
+                raise missing from e
 
             # Provide helpful error message with template location
             origin_info = f" (from {self.origin.name})" if self.origin else ""
