@@ -621,8 +621,8 @@ ROWS: list[Row] = [
         "{{ s }}",
         lambda: {"s": SafeObj()},
         "<b>s</b>",
-        "&lt;b&gt;s&lt;/b&gt;",
-        "&lt;b&gt;s&lt;/b&gt;",
+        "<b>s</b>",
+        "<b>s</b>",
     ),
     _r(
         "P",
@@ -660,8 +660,8 @@ ROW_BY_ID: dict[str, Row] = {row.id: row for row in ROWS}
 #: Rows whose djust cell is NOT Django's answer today, per path — a stated
 #: SET, not a floor (#1125): an unrelated PR that fixes or breaks a cell must
 #: edit the table AND this set. The floor rows (E1–E4) are listed apart.
-PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M3 M5 M6 N N2 O P Q T V".split())
-LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b O P Q T V".split())
+PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M3 M5 M6 N N2 P Q T V".split())
+LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P Q T V".split())
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
 #: The same question with ADR-027's kill-switch ON — a STATED set (#1125),
@@ -677,12 +677,12 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #: Django engine every run. A row still in the set must keep TODAY's recorded
 #: bytes, so "wrong in a new way" fails too.
 #:
-#: Measured, not predicted. 29 of the 37 wrong in-process cells move to
-#: Django's bytes; these are the residue, and each has a NAMED reason:
+#: The remaining disagreements are measured against Django below; each
+#: retained row has a named reason:
 #:
-#: * ``O`` — an object whose ``__str__`` returns a ``SafeString`` renders
-#:   escaped. Needs a SafeData bit on ``Encoded``, which is a TWELFTH msgpack
-#:   slot; deferred with the wire widening (ADR-027 §Security 5).
+#: Row O now agrees on both paths and both flag settings: Encoded keeps
+#: string-conversion safety as runtime-only metadata, without a wire grant.
+#:
 #: * ``V`` — a generator. ``opaque_gate`` declines a ONE-SHOT iterator
 #:   deliberately, and lifting that decline without the ``{% for %}`` sink
 #:   materialising through the handle would enumerate a caller's generator at
@@ -695,15 +695,9 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #:   Component arm #2513 turns on, and deferred with it: lifting it changes
 #:   the LiveView STATE channel, not the resolution sink.
 #:
-#: **Tracked at #2621** (the movement-3 follow-on). Movement 3 flipped the
-#: default and left these six held; #2621 carries the two mechanisms that
-#: close five of them — a transient ``Encoded.safe`` bit (O) and gating
-#: ``normalize_django_value``'s callable arm on the flag (J, J2, Q, and the
-#: ``P``-liveview crash cell below). V needs the ``{% for %}``-sink accessor
-#: and may outlive them. Filed rather than left as a comment because an
-#: unfiled prerequisite is how a hold reason quietly becomes permanent.
-PLAIN_WRONG_UNDER_LAZY = frozenset("O V".split())
-LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 O Q V".split())
+#: Remaining callable and iterator differences are tracked at #2621.
+PLAIN_WRONG_UNDER_LAZY = frozenset("V".split())
+LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 Q V".split())
 
 
 def recorded(row: Row, path: str) -> Any:
@@ -1085,10 +1079,10 @@ class TestTheTableIsLoadBearing:
         assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
         with pytest.raises(AssertionError, match="does not answer Django's bytes"):
             assert_lazy_column(claimed, "plain", claimed.plain)
-        # A HELD row (row O) that starts matching Django must fail loudly, so
+        # A HELD row (row V) that starts matching Django must fail loudly, so
         # the residue set cannot rot into a floor.
-        held = ROW_BY_ID["O"]
-        assert "O" in PLAIN_WRONG_UNDER_LAZY
+        held = ROW_BY_ID["V"]
+        assert "V" in PLAIN_WRONG_UNDER_LAZY
         assert_lazy_column(held, "plain", held.plain)
         with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
             assert_lazy_column(held, "plain", held.django)
