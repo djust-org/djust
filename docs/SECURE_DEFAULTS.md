@@ -134,11 +134,20 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   `_SENSITIVE_MODEL_METHODS`: the eager field loop (`_serialize_model_safely`),
   the eager `get_*` method loop (`_add_safe_model_methods`), the eager
   `@property` loop (`_add_property_values`), the sidecar proxy
-  (`_SidecarModelProxy.__getattr__`) and the JIT codegen path — every
-  attribute the generated serializer reads is gated by
-  `python/djust/optimization/codegen.py::_attr_is_emittable`, which calls this
-  and nothing else (#2685; a denied name is omitted from the dict, so the
-  template renders `string_if_invalid`). Fail-closed precedence, each step can
+  (`_SidecarModelProxy.__getattr__`), the JIT codegen path and the **Rust
+  queryset serializer** — every attribute the generated serializer reads, and
+  every attribute `crates/djust_live/src/lib.rs::serialize_object_with_paths`
+  reads, is gated by
+  `python/djust/optimization/codegen.py::emittable_names`, which calls this
+  and nothing else (#2685 / #2688; a denied name is omitted from the dict, so
+  the template renders `string_if_invalid`). Rust holds no policy of its own:
+  `resolve_attr_gate` imports that one Python function and `gated_names` calls
+  it once per object LEVEL, threading the result through both recursions — so
+  the denylist cannot be duplicated, and therefore cannot drift (#1646). An
+  import or call failure propagates out of `serialize_queryset`, and
+  `mixins/jit.py::_jit_serialize_queryset` falls back to
+  `normalize_django_value` (itself gated) — never to an ungated row.
+  Fail-closed precedence, each step can
   only deny: (1) a `_`-prefixed name is refused; (2) a sensitive / expensive
   model-method NAME (`_SENSITIVE_MODEL_METHODS` + the `get_next_by_` /
   `get_previous_by_` prefixes) is refused **whatever kind of attribute carries
@@ -162,9 +171,18 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   pin the codegen channel (#2685 — before it, `{{ m.password }}` on a public
   `self.m` shipped the field through `mixins/context.py` →
   `_jit_serialize_model` → codegen, which consulted no floor at all), and
+  `TestRustQuerySetChannel` / `TestRustQuerySetRealRenderPaths` pin the Rust
+  queryset channel (#2688 — gating codegen alone left `self.users =
+  User.objects.all()` + `{{ u.password }}` shipping the pbkdf2 hash on the GET
+  html and in **both** WS frames, because a QuerySet never reaches codegen).
   `TestStructuralChokepointCodegen` pins codegen as a caller: the helper calls
-  the chokepoint, every emitted `hasattr(` read is guarded by
-  `_djust_attr_ok(`, and `compile_serializer` binds that name to the helper.
+  the chokepoint, every write into the result dict sits under the gate for its
+  own key, and `compile_serializer` binds `_djust_gate` to the helper. That
+  guard check walks the generated code's **AST** rather than grepping for
+  `hasattr(` — the text version only inspected lines that already contained
+  `hasattr(`, so a `getattr`-shaped emission was invisible to it;
+  `test_the_guard_check_catches_an_unguarded_getattr_site` is the empirical
+  canary (#1459) that feeds exactly that shape in and asserts it is reported.
 - `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
   (the #1987 **TYPE floor**) — the single authority the eager loop
   (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
