@@ -805,15 +805,38 @@ class TestRustQuerySetChannel:
         assert out == [{"owner": {"label": "visible0"}}], out
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRustQuerySetRealRenderPaths:
-    """The three surfaces #2688 reproduced on: GET html, WS mount, WS event."""
+    """The three surfaces #2688 reproduced on: GET html, WS mount, WS event.
 
-    @staticmethod
-    def _user():
+    ``transaction=True`` is load-bearing. The WS case creates its user through
+    ``sync_to_async``, which runs on a DIFFERENT thread and therefore a
+    different (thread-local) Django connection — outside the atomic block a
+    plain ``django_db`` rolls back. The row COMMITS and outlives the test, and
+    it collided with ``test_server_functions.py``'s own ``alice`` on whichever
+    xdist worker drew both: a UNIQUE-constraint IntegrityError surfacing as a
+    *foreign* file failing, and only under some shard splits (green locally,
+    red on CI shard 1/4). ``transaction=True`` truncates after the test, so
+    nothing escapes.
+
+    The username stays the generic ``alice`` deliberately. Namespacing it
+    would ALSO dodge this collision, and then neither mechanism could be shown
+    to matter on its own — the gate-off measured exactly that: reverting either
+    one alone left the suite green, and only reverting both reproduced the 12
+    failures. Two mechanisms covering the same half is one fix plus one
+    decoration (#2233), so the decoration is gone and gating off
+    ``transaction=True`` now goes red by itself. A namespaced name would hide
+    the leak rather than fix it — the row would still commit and outlive the
+    test, just without a name to trip over.
+    """
+
+    USERNAME = "alice"
+
+    @classmethod
+    def _user(cls):
         from django.contrib.auth.models import User
 
-        u = User.objects.create_user(username="alice", password="hunter2-2688")
+        u = User.objects.create_user(username=cls.USERNAME, password="hunter2-2688")
         u.is_superuser = True
         u.save()
         return u
@@ -828,7 +851,7 @@ class TestRustQuerySetRealRenderPaths:
         request.session.save()
         response = _QsView.as_view()(request)
         html = response.content.decode() if hasattr(response, "content") else str(response)
-        assert "alice" in html, html
+        assert self.USERNAME in html, html
         assert user.password not in html, html
         assert user.get_session_auth_hash() not in html, html
 
@@ -883,7 +906,7 @@ class TestRustQuerySetRealRenderPaths:
 
         for label, frames in (("mount", mount_frames), ("event", event_frames)):
             wire = repr(frames)
-            assert "alice" in wire, (label, wire)
+            assert self.USERNAME in wire, (label, wire)
             assert pw_hash not in wire, (label, wire)
             assert auth_hash not in wire, (label, wire)
 
