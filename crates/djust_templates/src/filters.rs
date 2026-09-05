@@ -4442,7 +4442,24 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
                 // equivalent here is whether this zone's offset at this instant
                 // differs from its offset in January, which is what a DST rule
                 // means. A zone with no DST answers 0 for every instant.
-                result.push(if is_dst(&stamped) { '1' } else { '0' });
+                //
+                // #2541: a value pinned by a `tz` filter displays in the
+                // FILTER's zone, not the active one, so `is_dst` (which reads
+                // the active zone's rule) would answer for the wrong zone in
+                // both directions. The encoded value carries Python's own
+                // `dst()` (a timedelta, `ENCODED_CALL_NAMES`); non-zero is `1`.
+                let dst = if pinned_by_tz_filter {
+                    match original {
+                        Value::Encoded(encoded) => encoded
+                            .attrs
+                            .get(&djust_core::ObjectKey::from("dst"))
+                            .is_some_and(|value| value.is_truthy()),
+                        _ => false,
+                    }
+                } else {
+                    is_dst(&stamped)
+                };
+                result.push(if dst { '1' } else { '0' });
             }
             // Literal characters
             '\\' => {

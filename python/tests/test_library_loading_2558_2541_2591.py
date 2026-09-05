@@ -70,6 +70,7 @@ AWARE = datetime.datetime(2026, 1, 1, 5, 30, 15, tzinfo=PLUS2)
 NAIVE = datetime.datetime(2026, 7, 4, 23, 45, 0)
 CTX: Dict[str, Any] = {
     "d": AWARE,
+    "summer": datetime.datetime(2026, 7, 4, 12, 0, tzinfo=UTC),
     "naive": NAIVE,
     "tzname": "Asia/Tokyo",
     "notadt": "2026-01-01",
@@ -204,6 +205,15 @@ TZ_ROWS = {
     "inside-localtime-off": TZ
     + '{% localtime off %}{{ d|localtime|date:"H:i e" }}|{{ d|date:"H:i e" }}{% endlocaltime %}',
     "with-other-filters-in-chain": TZ + '{{ d|timezone:"Asia/Tokyo"|date:"H:i"|upper }}',
+    # `I` (DST) on the pinned path must read the FILTER's zone rule, not the
+    # active zone's (PR #2676 review): a DST zone in summer AND winter, a
+    # no-DST zone, and the unpinned control next to each.
+    "dst-flag-summer": TZ
+    + '{{ summer|timezone:"America/New_York"|date:"I" }}|{{ summer|date:"I" }}',
+    "dst-flag-winter": TZ + '{{ d|timezone:"America/New_York"|date:"I" }}|{{ d|date:"I" }}',
+    "dst-flag-no-dst-zone": TZ
+    + '{{ summer|timezone:"Asia/Tokyo"|date:"I" }}|{{ d|timezone:"Asia/Tokyo"|date:"I" }}',
+    "dst-flag-localtime-utc": TZ + '{{ summer|utc|date:"I" }}|{{ summer|localtime|date:"I" }}',
 }
 
 
