@@ -707,15 +707,15 @@ fn sibling_updates<L: TemplateLoader>(
         Node::FirstOf {
             args,
             asvar: Some(name),
-        } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
-            name: name.clone(),
-            value: Value::String(first_of(args, context)?.unwrap_or_default()),
-            // `FirstOfNode` binds `render_value_in_context(...)`, which is a
-            // `SafeString` — measured, not assumed. Without the grant
-            // `{{ v }}` escapes an already-escaped string and renders
-            // `&amp;lt;b&amp;gt;` where Django renders `&lt;b&gt;`.
-            safe: true,
-        }]))),
+        } => {
+            let value = first_of(args, context)?.unwrap_or_else(|| Value::String(String::new()));
+            let safe = value.is_safe_string();
+            Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
+                name: name.clone(),
+                value,
+                safe,
+            }])))
+        }
         // `{% cycle … as name [silent] %}` (#2556): `CycleNode.render` does
         // `context.set_upward(name, value)` and then returns either `""`
         // (`silent`) or `render_value_in_context(value)`. One advance serves
@@ -3534,7 +3534,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             if asvar.is_some() {
                 return Ok(String::new());
             }
-            Ok(first_of(args, context)?.unwrap_or_default())
+            Ok(first_of(args, context)?
+                .map(|value| value.to_string())
+                .unwrap_or_default())
         }
 
         Node::TemplateTag(name) => {
@@ -5766,21 +5768,26 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 /// at runtime (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
 /// `Variable` / `InlineIf` arms (#1660). `runtime_safe` is true ONLY when the
 /// LAST filter produced a genuine `SafeString` → fail-safe.
-fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
+fn first_of(args: &[String], context: &Context) -> Result<Option<Value>> {
     for arg in args {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         if val.is_truthy() {
+            let safe = runtime_safe || val.string_conversion_is_safe();
             let text = val.to_string();
-            // Row 4 of #2556 (`firstof13`).
-            return Ok(Some(
-                if runtime_safe || val.string_conversion_is_safe() || !context.autoescape() {
+            return Ok(Some(if context.autoescape() {
+                Value::SafeString(if safe {
                     text
                 } else {
                     filters::html_escape(&text)
-                },
-            ));
+                })
+            } else if safe {
+                Value::SafeString(text)
+            } else {
+                Value::String(text)
+            }));
         }
     }
+    // Django binds the initial plain empty string when no operand is truthy.
     Ok(None)
 }
 
