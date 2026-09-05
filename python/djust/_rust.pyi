@@ -342,6 +342,10 @@ def crosses_as_encoded_by_conversion(obj: object) -> bool:
     """
     ...
 
+MAX_CONVERSION_DEPTH: int
+"""How deep the Python-to-``Value`` conversion recurses before an element
+crosses as ``str(o)`` (#2624). 128, sized against a 512 KiB worker stack."""
+
 def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
 
@@ -1298,6 +1302,7 @@ __all__ = [
     "compute_template_hash",
     "crosses_as_encoded",
     "crosses_as_encoded_by_conversion",
+    "MAX_CONVERSION_DEPTH",
     "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",
