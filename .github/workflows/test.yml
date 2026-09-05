@@ -764,16 +764,19 @@ jobs:
   # tag, routes every Engine the suite builds through djust's Rust engine,
   # isolates segfaults per test, and prints the pass percentage.
   #
-  # continue-on-error until it has been green on the runner once (#1534);
-  # the `compare` step (the ratchet against scripts/django-template-suite-
-  # baseline.json) is informational (`|| true`) for the same reason.
-  # Promotion — drop continue-on-error, make compare blocking, add the job to
-  # test-summary `needs` AND its &&-chain (#1713) — is a follow-up.
-  # NOT wired into the test-summary aggregate gate.
+  # Shipped `continue-on-error` + an informational compare (#1534) in #2517;
+  # promoted to a BLOCKING ratchet in #2612/#2522 after it was green on the
+  # runner across consecutive main merges AND caught a real regression on
+  # PR #2668 (1032 -> 1031) while still non-gating. The `compare` step exits
+  # 1 when the engine-subset or whole-label percentage drops below
+  # scripts/django-template-suite-baseline.json, or when nothing reached the
+  # djust engine (adapter failed to install), and that failure reaches the
+  # test-summary &&-chain (#1713). No continue-on-error on the job, any
+  # step, or the aggregate. A PR that raises the number regenerates the
+  # baseline with `--write-baseline` and commits it; never lower it by hand.
   django-template-suite:
-    name: django template_tests scoreboard (non-gating)
+    name: django template_tests scoreboard
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       # Nothing in this job pushes, and the child process executes the
       # cloned upstream test tree — do not leave the token on disk for it.
@@ -807,10 +810,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Compare against the stored baseline (informational until promoted)
+      - name: Compare against the stored baseline (blocking ratchet)
         run: |
           uv run python scripts/run-django-template-suite.py compare \
-            --json .django-src/last-run.json || true
+            --json .django-src/last-run.json \
+            --baseline scripts/django-template-suite-baseline.json
 
       - name: Runner self-tests against the real checkout
         run: |
@@ -828,7 +832,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [benchmarks, rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks]
+    needs: [benchmarks, rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
     if: always()
     steps:
       # `needs.python-tests.result` is the MATRIX-WIDE result: GitHub reports
@@ -851,9 +855,11 @@ jobs:
           echo "  Security tests: ${{ needs.security-tests.result }}"
           echo "  Demo checks: ${{ needs.demo-checks.result }}"
           echo "  Benchmarks: ${{ needs.benchmarks.result }}"
+          echo "  Django template_tests scoreboard: ${{ needs.django-template-suite.result }}"
 
           # Core tests must pass (Rust, Python, JavaScript, Browser-smoke,
-          # Nav/hooks guard, Security tests, Demo checks). The full
+          # Nav/hooks guard, Security tests, Demo checks, Benchmarks, the
+          # Django template_tests scoreboard ratchet — #2612). The full
           # playwright-tests leg and security scan are informational (not
           # blocking) — only the stable browser-smoke canary gates from the
           # playwright family (#1869 / Action Tracker #314).
@@ -864,7 +870,8 @@ jobs:
              [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
              [ "${{ needs.demo-checks.result }}" == "success" ] && \
-             [ "${{ needs.benchmarks.result }}" == "success" ]; then
+             [ "${{ needs.benchmarks.result }}" == "success" ] && \
+             [ "${{ needs.django-template-suite.result }}" == "success" ]; then
             echo "All core tests passed!"
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "WARNING: Playwright tests failed (optional, not blocking)"
