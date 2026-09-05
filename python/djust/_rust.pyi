@@ -1287,6 +1287,8 @@ __all__ = [
     "compile_template",
     "CompiledTemplate",
     "template_cache_contains",
+    "registry_generation",
+    "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
     "resolve_template_inheritance",
