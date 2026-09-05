@@ -237,7 +237,7 @@ class DjustTemplate:
         a bare message (#2557).
         """
         from .._rust import compile_template
-        from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+        from ..template_filters import _ensure_custom_filters_bridged
         from ..template_libraries import rendering_with_backend
         from .exceptions import DjustTemplateSyntaxError, build_template_debug
 
@@ -874,7 +874,7 @@ class DjustTemplate:
             #
             # Free after the first call: ``_ensure_custom_filters_bridged``
             # short-circuits on a module-level flag and never raises.
-            from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+            from ..template_filters import _ensure_custom_filters_bridged
 
             _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]

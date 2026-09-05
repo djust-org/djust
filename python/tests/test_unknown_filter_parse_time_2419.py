@@ -299,7 +299,7 @@ class TestTheRegistryIsPopulatedBeforeAnythingCanBeParsed:
                 "OPTIONS": {},
             }
         )
-        with mock.patch("djust.mixins.rust_bridge._ensure_custom_filters_bridged") as armed:
+        with mock.patch("djust.template_filters._ensure_custom_filters_bridged") as armed:
             backend.from_string("{{ p|upper }}").render({"p": "a"})
         assert armed.called, "the backend render path never armed the filter bridge"
 

@@ -31,6 +31,36 @@ from typing import Any, Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
+# One-shot guard for ``_ensure_custom_filters_bridged``. Lives here, next to
+# the bootstrap it guards, so the templates-only render path and
+# ``DjustConfig.ready()`` can arm the bridge without importing the
+# ``djust.mixins`` package (every LiveView mixin) for one function (#2565).
+_CUSTOM_FILTERS_BRIDGED = False
+
+
+def _ensure_custom_filters_bridged() -> None:
+    """One-shot bootstrap that forwards Django's ``@register.filter``
+    callables to the Rust filter registry. Idempotent and non-fatal on
+    failure — filters still work in the Python render path even if the
+    Rust bridge is unavailable.
+    """
+    global _CUSTOM_FILTERS_BRIDGED
+    if _CUSTOM_FILTERS_BRIDGED:
+        return
+    try:
+        bootstrap_django_filters()
+    except Exception:  # noqa: BLE001 — defensive; never block render
+        logger.warning(
+            "Failed to bridge Django custom filters to Rust template engine; "
+            "filters will still work in the Python render path",
+            exc_info=True,
+        )
+    finally:
+        # Set the guard whether bootstrap succeeded or threw — we never
+        # want to re-attempt on every render and re-log the warning.
+        _CUSTOM_FILTERS_BRIDGED = True
+
+
 # Filters we never want to forward — built-ins that the Rust engine
 # already implements natively. Forwarding would slow them down and
 # would never trip the Rust unknown-filter fallback anyway, but
