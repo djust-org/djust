@@ -374,8 +374,14 @@ impl Template {
         Ok(Template::new(source)?)
     }
 
+    /// A Python caller of the templates crate directly is by definition not
+    /// the LiveView differ, so the `<!--dj-if-->` VDOM markers are switched
+    /// OFF here exactly as on `render_template` below and on both plain
+    /// entries in `djust_live` (#2519, #2537). Only the LiveView render path
+    /// keeps `Context`'s default of `true`.
     fn py_render(&self, context_dict: HashMap<String, Value>) -> PyResult<String> {
-        let context = Context::from_dict(context_dict);
+        let mut context = Context::from_dict(context_dict);
+        context.set_emit_dj_if_markers(false);
         Ok(self.render(&context)?)
     }
 
@@ -412,6 +418,30 @@ fn djust_templates(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2537: the Python-facing entries of this crate never emit VDOM
+    /// markers; only a bare `Context` (the LiveView path) does.
+    #[test]
+    fn python_facing_entries_emit_no_dj_if_markers() {
+        let source = "{% if flag %}<b>yes</b>{% endif %}";
+        let template = Template::new(source).unwrap();
+        let mut ctx = HashMap::new();
+        ctx.insert("flag".to_string(), Value::Bool(true));
+
+        let via_method = template.py_render(ctx.clone()).unwrap();
+        let via_function = render_template(source.to_string(), ctx.clone()).unwrap();
+        assert_eq!(via_method, "<b>yes</b>");
+        assert_eq!(via_method, via_function);
+
+        // The LiveView-shaped render (a bare Context) still carries the marker,
+        // so the assertion above is about the entry, not about the tag.
+        let live = template.render(&Context::from_dict(ctx)).unwrap();
+        assert!(
+            live.contains("<!--dj-if"),
+            "LiveView path lost its marker: {live}"
+        );
+        assert!(live.contains("<b>yes</b>"));
+    }
 
     #[test]
     fn test_simple_variable() {
