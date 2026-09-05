@@ -104,6 +104,7 @@ import contextlib
 import contextvars
 import inspect
 import logging
+import importlib
 import threading
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -210,7 +211,9 @@ _lock = threading.RLock()
 _extra_libraries: Dict[str, str] = {}
 
 #: ``get_installed_libraries()``, computed once per process (module name →
-#: dotted path). Dropped by :func:`reset`.
+#: dotted path). Dropped by :func:`reassert`, by
+#: :func:`invalidate_installed_cache` (the hot-reload hook, #2602) and by
+#: :func:`_find_library` on a miss before it refuses a name.
 _installed_cache: Optional[Dict[str, str]] = None
 
 #: Tag name → (library label, handler) for every handler this module owns.
@@ -463,6 +466,22 @@ def owned_tags() -> Dict[str, str]:
     return {name: label for name, (label, _handler) in _owned_tags.items()}
 
 
+def invalidate_installed_cache() -> None:
+    """Forget the ``get_installed_libraries()`` scan so the next ``{% load %}``
+    re-walks every app's ``templatetags/`` package (#2602).
+
+    Called by the hot-reload change dispatcher (``djust.enable_hot_reload``)
+    whenever a ``.py`` file changes, and by :func:`_find_library` itself on a
+    miss. Also drops importlib's directory-listing caches: a module file
+    created after the package's ``FileFinder`` listed the directory is
+    otherwise invisible to ``import_module`` until the listing expires.
+    """
+    global _installed_cache
+    with _lock:
+        _installed_cache = None
+    importlib.invalidate_caches()
+
+
 # ---------------------------------------------------------------------------
 # Resolution: which libraries does ``{% load %}`` know?
 # ---------------------------------------------------------------------------
@@ -506,6 +525,13 @@ def _find_library(name: str) -> Any:
     from django.template.library import Library, import_library
 
     known = _library_map()
+    if name not in known and _installed_cache is not None:
+        # #2602: the installed-library scan is warmed once per process, so a
+        # ``templatetags/`` module added while the dev server runs is a miss
+        # forever. Re-scan ONCE before refusing — a genuine miss costs one
+        # extra ``get_installed_libraries()`` walk on a path that raises anyway.
+        invalidate_installed_cache()
+        known = _library_map()
     try:
         entry = known[name]
     except KeyError:
