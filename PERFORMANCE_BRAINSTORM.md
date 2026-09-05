@@ -120,8 +120,10 @@ before designing anything around it:
 Both are only worth attacking if §7's benchmark shows the sidecar path carries
 real traffic. It does — for the presenter shape, and only there (§7.1:
 `presenter_control` pays 52 direct crossings + 850 transitive re-wraps for
-the one-off `Value` extraction of the row list, ~5 ms of Python per full
-render, before a single sidecar segment is resolved). It is a
+the one-off `Value` extraction of the row list, ~3.9 ms of Python per full
+render — the earlier "~5 ms" summed the re-wraps' time on top of the
+crossings that already contained them, #2545 — before a single sidecar
+segment is resolved). It is a
 correctness-critical path (#1986 serialization floor) —
 `_protect_sidecar_value` must survive any optimization, not be bypassed.
 
@@ -588,7 +590,9 @@ is `_sync_state_to_rust` minus `get_context_data`; `4 jit` is
    right-hand column: the JIT resolves everything on a `list[Model]` row in
    Python before Rust runs. The sidecar carries traffic only for a container
    the JIT skips: `presenter_control` pays 52 direct crossings + 850
-   transitive re-wraps (~5 ms of Python) for the one-off `Value` extraction
+   transitive re-wraps (~3.9 ms of Python; the table's `xing_ms` column was
+   cut before #2545 removed the nested-re-wrap double count and reads high
+   on every `presenter_*` row) for the one-off `Value` extraction
    of the row list, and `presenter_reverse` pays 302 + 950 plus 50–51
    `COUNT(*)` queries per full render — an N+1 on every attribute-change
    event, ~6 ms in the Rust-side walk. The four `list_*` variants' zero

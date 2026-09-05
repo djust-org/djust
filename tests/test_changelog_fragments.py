@@ -397,6 +397,79 @@ class TestDirectEditRefusal:
         assert _run(repo, "check", "--cached").returncode == 0
 
 
+class TestFragmentMigration:
+    """#2603 — moving a pre-fragment ``[Unreleased]`` bullet INTO ``changelog.d/``
+    is a removal-only diff whose text reappears in a staged fragment. That is
+    not a direct edit and must pass; every neighbouring shape must still fail.
+    """
+
+    MIGRATED = "- **Existing fixed bullet.** Already merged.\n"
+
+    def _remove_fixed_bullet(self, repo: Path) -> None:
+        text = FIXTURE.replace("\n### Fixed\n\n- **Existing fixed bullet.** Already merged.\n", "")
+        assert text != FIXTURE
+        (repo / "CHANGELOG.md").write_text(text)
+
+    def test_staged_migration_into_a_fragment_is_allowed(self, repo):
+        self._remove_fixed_bullet(repo)
+        (repo / "changelog.d" / "2.fixed.md").write_text(self.MIGRATED)
+        _git(repo, "add", "-A")
+        proc = _run(repo, "check", "--cached")
+        assert proc.returncode == 0, proc.stderr
+
+    def test_committed_migration_is_allowed_in_range_form(self, repo):
+        self._remove_fixed_bullet(repo)
+        (repo / "changelog.d" / "2.fixed.md").write_text(self.MIGRATED)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "migrate", "--no-verify")
+        proc = _run(repo, "check", "--range", "HEAD~1..HEAD")
+        assert proc.returncode == 0, proc.stderr
+
+    def test_migration_tolerates_rewrapped_whitespace(self, repo):
+        self._remove_fixed_bullet(repo)
+        (repo / "changelog.d" / "2.fixed.md").write_text(
+            "- **Existing fixed bullet.**\n  Already merged.\n"
+        )
+        _git(repo, "add", "-A")
+        assert _run(repo, "check", "--cached").returncode == 0
+
+    def test_removal_without_a_fragment_is_still_refused(self, repo):
+        self._remove_fixed_bullet(repo)
+        _git(repo, "add", "-A")
+        proc = _run(repo, "check", "--cached")
+        assert proc.returncode == 1
+        assert "edited directly" in proc.stderr
+
+    def test_removal_with_a_fragment_carrying_different_text_is_refused(self, repo):
+        self._remove_fixed_bullet(repo)
+        (repo / "changelog.d" / "2.fixed.md").write_text("- **Something else entirely.**\n")
+        _git(repo, "add", "-A")
+        assert _run(repo, "check", "--cached").returncode == 1
+
+    def test_migration_plus_a_new_body_line_is_refused(self, repo):
+        self._remove_fixed_bullet(repo)
+        text = (repo / "CHANGELOG.md").read_text()
+        (repo / "CHANGELOG.md").write_text(
+            text.replace(
+                "- **Existing added bullet.**", "- **Sneaky.**\n- **Existing added bullet.**"
+            )
+        )
+        (repo / "changelog.d" / "2.fixed.md").write_text(self.MIGRATED)
+        _git(repo, "add", "-A")
+        assert _run(repo, "check", "--cached").returncode == 1
+
+    def test_a_pre_existing_untouched_fragment_does_not_license_the_removal(self, repo):
+        # The committed 1.added.md is not part of the change; only fragments the
+        # change adds/modifies count as the destination of a migration.
+        text = FIXTURE.replace("- **Existing added bullet.** Already merged.\n", "- **Pending.**\n")
+        (repo / "CHANGELOG.md").write_text(text)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "seed", "--no-verify")
+        (repo / "CHANGELOG.md").write_text(text.replace("- **Pending.**\n", ""))
+        _git(repo, "add", "-A")
+        assert _run(repo, "check", "--cached").returncode == 1
+
+
 # --------------------------------------------------------------------------
 # round trip against the REAL CHANGELOG.md
 # --------------------------------------------------------------------------

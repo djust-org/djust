@@ -78,7 +78,7 @@ pagination = Pagination(
 )
 
 # In template
-{{ pagination.render }}
+{{ pagination }}
 # or simply
 {{ pagination }}
 ```
@@ -250,7 +250,7 @@ class DataTableView(LiveView):
 
 In template:
 ```html
-{{ pagination.render }}
+{{ pagination }}
 
 <script>
 // Add click handlers to pagination links

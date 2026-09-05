@@ -606,16 +606,16 @@ class DashboardView(LiveView):
     <div class="row">
         <div class="col-md-4">
             <h3>Users</h3>
-            {{ user_list.render }}
+            {{ user_list }}
         </div>
 
         <div class="col-md-8">
             {% if selected_user %}
                 <h3>User Details</h3>
-                {{ user_detail.render }}
+                {{ user_detail }}
 
                 <h3>Tasks</h3>
-                {{ todo_list.render }}
+                {{ todo_list }}
             {% else %}
                 <p>Select a user to view details</p>
             {% endif %}
@@ -679,7 +679,7 @@ class Badge(Component):
         html = badge.render()
 
         # In template
-        {{ badge.render }}  # or just {{ badge }}
+        {{ badge }}
 
         # Multiple badges
         badges = [Badge(f"Item {i}") for i in range(100)]
@@ -945,7 +945,7 @@ class ProductListView(LiveView):
 {% for product in products %}
     <li>
         {{ product.name }}
-        {{ badges.forloop.counter0.render }}
+        {{ badges.forloop.counter0 }}
     </li>
 {% endfor %}
 </ul>

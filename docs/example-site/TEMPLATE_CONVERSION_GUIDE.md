@@ -51,7 +51,7 @@ We've created a unified `base.html` template with global navbar from a context p
 <body>
     <div dj-root>
     <!-- Navbar Component -->
-    {{ navbar.render }}
+    {{ navbar }}
 
     <!-- Theme Toggle -->
     <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
@@ -106,7 +106,7 @@ We've created a unified `base.html` template with global navbar from a context p
 - ✂️ Bootstrap CSS link
 - ✂️ Theme CSS links (theme.css, components.css, utilities.css)
 - ✂️ Tailwind script tag
-- ✂️ Navbar component (`{{ navbar.render }}`)
+- ✂️ Navbar component (`{{ navbar }}`)
 - ✂️ Theme toggle button
 - ✂️ Bootstrap JS script
 - ✂️ Theme switcher script
@@ -133,7 +133,7 @@ We've created a unified `base.html` template with global navbar from a context p
 {% block syntax_highlighting %}{% endblock %}
 {% block extra_head %}{% endblock %}
 {% block body_start %}{% endblock %}
-{% block navbar %}{{ navbar.render }}{% endblock %}
+{% block navbar %}{{ navbar }}{% endblock %}
 {% block content %}{% endblock %}
 {% block extra_js %}{% endblock %}
 ```
@@ -163,7 +163,7 @@ We've created a unified `base.html` template with global navbar from a context p
 </head>
 <body>
     <div dj-root>
-    {{ navbar.render }}
+    {{ navbar }}
     <!-- ... 15 lines of theme toggle ... -->
 
     <!-- Content starts here -->
@@ -231,7 +231,7 @@ class CounterView(LiveView):  # ✅ Also works (preferred going forward)
 For each template file:
 
 ### Analysis Phase:
-- [ ] Identify if template uses navbar (`{{ navbar }}` or `{{ navbar.render }}`)
+- [ ] Identify if template uses navbar (`{{ navbar }}` or `{{ navbar }}`)
 - [ ] Check if template has LiveView (`dj-root`)
 - [ ] Note any page-specific CSS/JS
 - [ ] Note if syntax highlighting is used

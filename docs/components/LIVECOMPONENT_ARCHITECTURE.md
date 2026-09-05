@@ -211,7 +211,7 @@ Simple components are rendered inline into the parent's HTML:
 # Parent template
 template_string = """
     <h1>Counter: {{ counter }}</h1>
-    {{ badge.render }}  <!-- Inline: <span class="badge">5</span> -->
+    {{ badge }}  <!-- Inline: <span class="badge">5</span> -->
 """
 ```
 

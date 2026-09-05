@@ -32,14 +32,18 @@ Bucket definitions (per phase, per variant):
    ``maybe_call`` per segment) cannot be timed from Python and stays inside
    this number; ``render_ms − render_ms(list_control)`` is its upper bound.
 2. ``xings`` / ``xing_ms`` — direct Rust-origin boundary crossings: count and
-   the Python-side time spent inside them (plus the ``proxy`` re-wraps below);
-   ``proxy`` — transitive re-wraps the sidecar proxy performed inside one of
-   those crossings (Python-internal, counted apart so ``xings`` stays exact);
+   the Python-side time spent inside them. ``proxy`` — transitive re-wraps the
+   sidecar proxy performed INSIDE one of those crossings (Python-internal,
+   counted apart so ``xings`` stays exact). Because the re-wraps nest inside
+   the timed crossings, their time is already part of ``xing_ms`` and is NOT
+   added again (#2545 — the earlier ``rust_secs + proxy_secs`` sum
+   double-counted it: 4.87 ms summed against a 4.61 ms render on
+   ``presenter_control``, which is what floored ``rust_ms`` at 0.00 there).
    ``py_calls`` — calls made while Rust was not running (the eager/JIT path).
-   ``xing_ms`` includes the counting wrappers' own ``perf_counter`` +
+   ``xing_ms`` still includes the counting wrappers' own ``perf_counter`` +
    ``sys._getframe`` overhead (two of each per call — ~900 calls on the
-   presenter variants), so on those variants bucket 2 is over-attributed and
-   bucket 1 under-attributed by that overhead, and ``rust_ms`` can floor at 0.
+   presenter variants), so on those variants bucket 2 stays slightly
+   over-attributed and bucket 1 under-attributed by that overhead.
 3. ``queries`` / ``sql_ms`` — ORM: statements issued and their wall time,
    measured by an ``execute_wrappers`` hook installed in the consumer's worker
    thread; ``list_ms`` (mount only) is the queryset instantiation wall time.

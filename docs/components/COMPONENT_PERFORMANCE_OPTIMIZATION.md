@@ -220,7 +220,7 @@ class MyView(LiveView):
         }
 
 # In template:
-# {{ badge.render }}
+# {{ badge }}
 ```
 
 **Advanced: Rust Component with Framework Detection**
@@ -790,7 +790,7 @@ class DashboardView(LiveView):
 
     template_string = """
         <!-- Critical: Loads immediately -->
-        <div dj-view="summary">{{ summary.render }}</div>
+        <div dj-view="summary">{{ summary }}</div>
 
         <!-- Hybrid component with lazy hydration -->
         <div dj-view="recent_orders" dj-lazy>

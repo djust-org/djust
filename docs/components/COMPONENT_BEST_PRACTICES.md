@@ -411,7 +411,7 @@ class TodoItemComponent(Component):
 template_string = """
     <ul>
         {% for item in items %}
-        {{ item_component(item).render }}
+        {{ item_component(item) }}
         {% endfor %}
     </ul>
 """

@@ -162,7 +162,7 @@ class MyView(LiveView):
 
 ### Usage in Template
 ```html
-{{ divider.render }}
+{{ divider }}
 ```
 
 ## Documentation

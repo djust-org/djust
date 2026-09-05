@@ -10,6 +10,9 @@ the markers with a post-render regex, ``_rust.render_template_with_dirs`` (the
 one the backend binds) did not. The fix removes the strip and has BOTH plain
 entries switch marker emission off on their ``Context``
 (``set_emit_dj_if_markers(false)``); the LiveView path keeps the default.
+The same rule holds inside ``crates/djust_templates`` (#2537): its own
+``Template::py_render`` / ``render_template`` are Python-facing and switch
+the markers off too — pinned by ``TestSourcePins`` below.
 
 Every backend row here is a real differential: the same source rendered
 through Django's ``DjangoTemplates`` backend and through ``DjustTemplateBackend``
@@ -232,6 +235,21 @@ class TestSourcePins:
             "exactly the two plain entries (`render_template`, "
             "`render_template_with_dirs`) switch marker emission off; a third "
             "plain entry must set it too, and a LiveView entry must never"
+        )
+
+    def test_every_python_facing_entry_in_djust_templates_sets_the_flag(self):
+        # #2537: the templates crate has two `#[pymethods]`/`#[pyfunction]`
+        # entries of its own (`Template::py_render`, `render_template`). Neither
+        # is registered on `djust._rust` today, but if either is ever exposed it
+        # must not be the one Python-shaped entry that leaks VDOM markers.
+        src = (REPO_ROOT / "crates" / "djust_templates" / "src" / "lib.rs").read_text(
+            encoding="utf-8"
+        )
+        entries = src.count("fn py_render(") + src.count("fn render_template(")
+        assert entries == 2, "the set of Python-facing entries in djust_templates changed"
+        assert src.count("set_emit_dj_if_markers(false)") == entries, (
+            "every Python-facing entry in crates/djust_templates/src/lib.rs "
+            "switches marker emission off (#2537)"
         )
 
     def test_the_regex_strip_is_deleted_everywhere(self):

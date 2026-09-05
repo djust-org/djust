@@ -380,6 +380,7 @@ If the PR modifies any file listed in [Security Hot Spot Files](SECURITY_GUIDELI
 - [ ] **Squash commits** if needed - Clean commit history for main branch
 - [ ] **Update branch** - Latest main branch merged if needed
 - [ ] **Final CI check** - All automated tests pass one final time
+- [ ] **Review verdict gate** - `scripts/check-pr-review-verdict.sh <pr>` exits 0. It reads the PR's reviews and comments as one timeline and requires the LAST verdict line (`APPROVE` / `REQUEST_CHANGES` at the start of a line, optionally after `Verdict:`; or a formal GitHub review state) to be `APPROVE` **and** to postdate the head commit (or be a review submitted against the head sha). Exit 1 = last verdict is `REQUEST_CHANGES`; 2 = no verdict at all (a self-review that never states one does not count); 3 = the approval predates the head (stale — re-review). To retract an approval, post a comment whose line starts with `REQUEST_CHANGES` — prose mentioning the token mid-sentence is not read as a verdict. The earlier gate only grepped for review-shaped text, so a `REQUEST_CHANGES` satisfied it and #2646 merged against a review that said "do not merge". *Source: #2661.*
 - [ ] **CLAUDE.md updates suggested** - If the PR introduces new patterns, modules, security rules, or conventions that should be reflected in `CLAUDE.md`, suggest specific changes in the review feedback
 
 ## 🚫 Common Rejection Reasons

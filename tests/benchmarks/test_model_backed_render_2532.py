@@ -472,7 +472,11 @@ def _phase_row(
         render_ms=timing.get("render_ms", 0.0),
         xings=CROSSINGS.rust_calls,
         proxy_xings=CROSSINGS.proxy_calls,
-        xing_ms=(CROSSINGS.rust_secs + CROSSINGS.proxy_secs) * 1000.0,
+        # #2545: the proxy re-wraps run INSIDE the timed direct crossings, so
+        # `proxy_secs` is already part of `rust_secs`; adding it double-counted
+        # bucket 2 (4.87 ms summed vs a 4.61 ms render on presenter_control).
+        # The proxy COUNT stays its own column; only its time is not re-added.
+        xing_ms=CROSSINGS.rust_secs * 1000.0,
         py_xings=CROSSINGS.python_calls,
         xing_kinds=dict(CROSSINGS.kinds),
         queries=len(QUERY_LOG),
