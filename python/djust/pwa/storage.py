@@ -139,7 +139,7 @@ class IndexedDBStorage(OfflineStorage):
         Get JavaScript bridge for IndexedDB operations.
 
         Note: This is a server-side in-memory simulation of IndexedDB.
-        Actual IndexedDB operations happen client-side in pwa.js.
+        Actual IndexedDB operations happen client-side (service worker).
         This backend is used for server-side state tracking and testing.
         """
         if not self._js_bridge:

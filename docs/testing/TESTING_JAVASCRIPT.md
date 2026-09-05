@@ -1,358 +1,113 @@
 # JavaScript Testing Guide
 
-This document describes how to run and maintain JavaScript tests for djust's state management decorators.
+This document describes how to run and maintain the JavaScript tests for
+djust's client (`python/djust/static/djust/`).
 
 ## Overview
 
-djust uses [Vitest](https://vitest.dev/) for testing JavaScript code. The test suite covers three decorator types:
+- **Runner:** [vitest](https://vitest.dev/) with a JSDOM/happy-dom environment.
+- **Where tests live:** `tests/js/*.test.js`.
+- **What they exercise:** the built bundle `client.js` (evaluated inside a
+  JSDOM window via `tests/js/_helpers.js#createDom`) and, for module-level
+  units, the individual source modules under `static/djust/src/`.
 
-- **@debounce** (Phase 2) - Delays event execution until user stops triggering events
-- **@throttle** (Phase 2) - Limits event execution frequency
-- **@optimistic** (Phase 3) - Applies instant UI updates before server validation
+There is exactly **one** implementation of the client. Everything that ships
+is concatenated from `static/djust/src/[0-9]*.js` by `scripts/build-client.sh`
+into `client.js` / `client.min.js`. Files outside `src/` are either build
+outputs or documented standalone assets — see `CONTRIBUTING.md` (Pattern 3)
+and `tests/js/non-bundle-importers-2659.test.js`, which fails if a test ever
+imports a `static/djust/` file that is not shipped.
 
 ## Test Structure
 
-### Files
-
 ```
-djust/
-├── python/djust/static/djust/
-│   └── decorators.js          # Testable decorator module
-├── tests/js/
-│   ├── debounce.test.js       # Debounce decorator tests
-│   ├── throttle.test.js       # Throttle decorator tests
-│   └── optimistic.test.js     # Optimistic update tests
-├── vitest.config.js           # Vitest configuration
-└── package.json               # Test scripts
+tests/js/
+├── _helpers.js                 # createDom(), nextFrame(), makeMessageEvent() …
+├── <feature>.test.js           # one file per src/ feature (required for new modules)
+└── <issue-slug>-NNNN.test.js   # regression tests, named after the issue
+python/djust/static/djust/
+├── src/NN-*.js                 # the ONLY inputs to the bundle
+├── client.js                   # build output (readable; what tests load)
+└── client.min.js               # build output (what ships)
 ```
 
-### Architecture
-
-The decorators are implemented in two places:
-
-1. **`python/djust/static/djust/decorators.js`** - Standalone ES module used for testing
-2. **`python/djust/live_view.py`** - Embedded JavaScript (actual runtime implementation)
-
-**⚠️ Important**: These two implementations must be kept in sync. When modifying decorator logic, update BOTH files.
+`createDom(bodyHtml, opts)` returns a JSDOM instance with `client.js`
+evaluated, a `MockWebSocket` installed and `DOMContentLoaded` fired. Use it
+for anything that touches the DOM, event binding, VDOM patching or the
+WebSocket client. For a pure function in one module, read the module source
+and evaluate it, or drive it through `window.djust.*` on the booted DOM.
 
 ## Running Tests
 
-### Run all tests
+```bash
+npm test                                   # all JS tests
+npx vitest run tests/js/foo.test.js        # one file
+npx vitest                                 # watch mode
+npx vitest run --coverage                  # coverage over static/djust/src/
+```
+
+Rebuild the bundle after editing `src/` — tests load `client.js`, not the
+modules:
 
 ```bash
-npm test
-```
-
-### Run tests in watch mode (auto-rerun on changes)
-
-```bash
-npm run test:watch
-```
-
-### Run tests with coverage
-
-```bash
-npm run test:coverage
-```
-
-### Run tests with UI
-
-```bash
-npm run test:ui
-```
-
-## Coverage Requirements
-
-The project maintains **85%+ coverage** across all metrics:
-
-- **Statements**: ≥ 85%
-- **Branches**: ≥ 85%
-- **Functions**: ≥ 85%
-- **Lines**: ≥ 85%
-
-Coverage reports are generated in:
-- **Console**: Text summary
-- **HTML**: `coverage/index.html` (open in browser for detailed view)
-- **JSON**: `coverage/coverage-final.json`
-
-## Test Organization
-
-### Debounce Tests (`debounce.test.js`)
-
-Tests the `@debounce` decorator which delays event execution:
-
-- **Basic Debouncing**: Event delays and timer resets
-- **Max Wait**: Force execution after maximum wait time
-- **State Management**: Timer state tracking and cleanup
-- **Real-World Scenarios**: Search input, window resize events
-
-**Key Test Cases**:
-```javascript
-// Basic delay
-debounceEvent('search', { query: 'test' }, { wait: 0.5 }, sendFn);
-vi.advanceTimersByTime(500);
-expect(sendFn).toHaveBeenCalledOnce();
-
-// Max wait forces execution
-debounceEvent('search', { query: 'a' }, { wait: 0.5, max_wait: 2.0 }, sendFn);
-// ... continuous events for 2+ seconds
-expect(sendFn).toHaveBeenCalled(); // Forced execution
-```
-
-### Throttle Tests (`throttle.test.js`)
-
-Tests the `@throttle` decorator which limits execution frequency:
-
-- **Basic Throttling**: Interval enforcement
-- **Leading Edge**: Execute immediately on first call
-- **Trailing Edge**: Execute after events stop
-- **Leading + Trailing**: Both edges enabled
-- **Real-World Scenarios**: Scroll events, mouse tracking
-
-**Key Test Cases**:
-```javascript
-// Leading edge (first event executes immediately)
-throttleEvent('scroll', { scrollY: 0 }, { interval: 0.5, leading: true }, sendFn);
-expect(sendFn).toHaveBeenCalledOnce();
-
-// Trailing edge (executes after events stop)
-throttleEvent('scroll', { scrollY: 100 }, { interval: 0.5, trailing: true }, sendFn);
-vi.advanceTimersByTime(500);
-expect(sendFn).toHaveBeenCalledOnce();
-```
-
-### Optimistic Update Tests (`optimistic.test.js`)
-
-Tests the `@optimistic` decorator which applies instant UI updates:
-
-- **Checkbox/Radio**: Instant toggle
-- **Input/Textarea**: Instant value updates
-- **Select**: Instant option selection
-- **Button**: Disable + loading text
-- **State Management**: Save, clear, revert operations
-- **Error Handling**: Revert with animation
-
-**Key Test Cases**:
-```javascript
-// Checkbox toggle
-const checkbox = document.createElement('input');
-checkbox.type = 'checkbox';
-applyOptimisticUpdate('toggle', { checked: true }, checkbox);
-expect(checkbox.checked).toBe(true);
-
-// Button loading state
-const button = document.createElement('button');
-button.setAttribute('data-loading-text', 'Saving...');
-applyOptimisticUpdate('submit', {}, button);
-expect(button.disabled).toBe(true);
-expect(button.textContent).toBe('Saving...');
+make build-js          # scripts/build-client.sh (also refreshes client-sizes.json)
 ```
 
 ## Writing New Tests
 
-### Test Structure
-
-Follow this pattern for new test files:
-
 ```javascript
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { yourFunction, clearAllState } from '../../python/djust/static/djust/decorators.js';
+import { describe, it, expect } from 'vitest';
+import { createDom, nextFrame } from './_helpers.js';
 
-describe('Your Feature', () => {
-    let sendFn;
-
-    beforeEach(() => {
-        clearAllState();
-        sendFn = vi.fn();
-        vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-        vi.useRealTimers();
-    });
-
-    it('should do something', () => {
-        // Your test
+describe('dj-foo', () => {
+    it('does the thing', async () => {
+        const dom = createDom('<button dj-foo="x">go</button>');
+        dom.window.document.querySelector('button').click();
+        await nextFrame(dom);
+        expect(dom.window.document.body.textContent).toContain('done');
     });
 });
 ```
 
 ### Best Practices
 
-1. **Always use fake timers** for decorator tests:
-   ```javascript
-   vi.useFakeTimers();
-   vi.advanceTimersByTime(500); // Advance time
-   vi.useRealTimers(); // Cleanup
-   ```
+- **Every new `src/` feature file needs a test file.** CI checks this.
+- **Own the async primitive.** Stub `requestAnimationFrame`, timers and
+  observers with something the test drives explicitly; never assert on
+  wall-clock timing (see the retro rules in `CLAUDE.md`).
+- **Build the DOM the way the browser does.** For morph/patch tests use
+  `innerHTML` with the whitespace a real SSR page carries, not
+  `createElement`/`appendChild`.
+- **Gate-off before you call it done.** Revert the change under test, confirm
+  at least one new test fails, restore it.
+- **`console.log` only behind `globalThis.djustDebug`** in source; in tests,
+  spy on `dom.window.console` rather than the Node console.
+- **Structural pins.** When a fix routes N call sites through one helper, pin
+  the call-site *set* (a count), so the next unqualified site fails loudly.
 
-2. **Clear state before each test**:
-   ```javascript
-   beforeEach(() => {
-       clearAllState(); // Clears debounce/throttle/optimistic state
-   });
-   ```
-
-3. **Mock the send function**:
-   ```javascript
-   const sendFn = vi.fn();
-   expect(sendFn).toHaveBeenCalledOnce();
-   ```
-
-4. **Create DOM elements for optimistic tests**:
-   ```javascript
-   const input = document.createElement('input');
-   document.body.appendChild(input);
-   ```
-
-5. **Test edge cases**:
-   - Empty data
-   - Null/undefined values
-   - Very short/long intervals
-   - Concurrent events
-
-## Debugging Tests
-
-### Enable verbose logging
-
-Set debug flag before running tests:
-
-```javascript
-globalThis.djustDebug = true;
-```
-
-### View test output
+## Debugging
 
 ```bash
-npm run test:watch # Shows real-time output
+DEBUG=1 npx vitest run tests/js/foo.test.js     # keep console output
+npx vitest run --reporter=verbose               # per-test names
 ```
 
-### Inspect coverage gaps
-
-```bash
-npm run test:coverage
-open coverage/index.html
-```
-
-Look for:
-- **Uncovered lines** (red highlighting)
-- **Partial branch coverage** (yellow highlighting)
-- **Function coverage** (function names in red)
-
-## Common Issues
-
-### Timers not advancing
-
-**Problem**: Tests hang or don't execute callbacks.
-
-**Solution**: Ensure you're using fake timers:
-```javascript
-vi.useFakeTimers();
-vi.advanceTimersByTime(500);
-```
-
-### State pollution between tests
-
-**Problem**: Tests pass individually but fail when run together.
-
-**Solution**: Clear state in `beforeEach()`:
-```javascript
-beforeEach(() => {
-    clearAllState();
-});
-```
-
-### DOM elements not found
-
-**Problem**: `element.classList` or similar throws errors.
-
-**Solution**: Create elements explicitly:
-```javascript
-const element = document.createElement('button');
-document.body.appendChild(element);
-```
-
-### Coverage not updating
-
-**Problem**: Changes to code don't affect coverage report.
-
-**Solution**: Clear cache and rebuild:
-```bash
-rm -rf coverage/
-npm run test:coverage
-```
+Set `dom.window.djustDebug = true` before evaluating the client to enable the
+client's own debug logging inside the JSDOM window.
 
 ## Continuous Integration
 
-Tests run automatically on:
-- Every push to main
-- Every pull request
-- Pre-commit hooks (if configured)
-
-**CI Requirements**:
-- All tests must pass
-- Coverage must be ≥ 85% for all metrics
-- No test failures or errors
-
-## Updating After Code Changes
-
-When modifying decorator behavior:
-
-1. **Update the implementation**:
-   - Edit `python/djust/live_view.py` (embedded JS)
-   - Copy changes to `python/djust/static/djust/decorators.js`
-
-2. **Update tests**:
-   - Modify expectations to match new behavior
-   - Add tests for new functionality
-   - Remove obsolete tests
-
-3. **Verify coverage**:
-   ```bash
-   npm run test:coverage
-   ```
-
-4. **Check both implementations match**:
-   - Compare embedded JS with decorators.js
-   - Ensure logic is identical
-
-## Additional Resources
-
-- [Vitest Documentation](https://vitest.dev/)
-- [Testing Library Best Practices](https://testing-library.com/docs/)
-- [Phase 2 Implementation Docs](../state-management/IMPLEMENTATION_PHASE2.md)
-- [Phase 3 Implementation Docs](../state-management/IMPLEMENTATION_PHASE3.md)
+`npm test` runs in the `js-tests` job; `npm run lint` (eslint) gates on
+errors. Both run in the pre-commit/pre-push hooks locally.
 
 ## FAQ
 
-### Q: Why are there two decorator implementations?
+**Q: I edited `static/djust/decorators.js` / `js/pwa.js` — where did they go?**
+They were removed in #2659. `decorators.js` was a never-shipped duplicate of
+the debounce/throttle/cache/state-bus logic that lives in `src/`; `js/pwa.js`
+was loaded by nothing. Edit the `src/` module instead and rebuild.
 
-A: djust uses **embedded JavaScript** in `live_view.py` for runtime, but this can't be directly imported by tests. The `decorators.js` module is a standalone, testable version that must be kept in sync.
-
-### Q: What's the difference between debounce and throttle?
-
-A:
-- **Debounce**: Waits until events stop, then executes once (e.g., search after typing stops)
-- **Throttle**: Limits execution frequency (e.g., max 10 scroll events per second)
-
-### Q: How do I test WebSocket cleanup?
-
-A: Use `clearAllState()` to simulate WebSocket disconnect:
-```javascript
-applyOptimisticUpdate('event', {}, element);
-clearAllState(); // Simulates disconnect
-expect(optimisticUpdates.size).toBe(0);
-```
-
-### Q: Can I test the embedded JavaScript directly?
-
-A: No. The embedded JS in `live_view.py` is a Python string and can't be imported by tests. Always test via `decorators.js`.
-
-### Q: How do I increase coverage?
-
-A:
-1. Look at coverage report: `open coverage/index.html`
-2. Find uncovered lines (red)
-3. Write tests that exercise those code paths
-4. Run `npm run test:coverage` to verify
+**Q: Can I test the minified bundle?**
+Yes — `tests/js/min_bundle_applypatches_1676.test.js` evaluates
+`client.min.js` to catch mangling regressions. Prefer `client.js` for
+readability unless the behaviour under test is minification-specific.

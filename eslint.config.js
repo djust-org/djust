@@ -143,8 +143,7 @@ export default [
   // `'use strict'` directives — turn off the strict rule here so the
   // IIFE-internal directive isn't flagged as redundant. Includes the
   // built bundles (client.js, debug-panel.js) plus stand-alone helpers
-  // (client-dev.js, security.js, etc.). NOTE: decorators.js is excluded
-  // — it uses `import/export` and is loaded as a module.
+  // (client-dev.js, security.js, etc.).
   //
   // `reportUnusedDisableDirectives: off` for the BUNDLES — the source
   // modules carry `// eslint-disable-next-line prefer-const` for the

@@ -180,20 +180,18 @@ emits CSS keyed on exactly those attribute selectors
 them itself (`djust_pwa.py:227-229`). They need no JavaScript — visibility
 follows the `djust-offline` / `djust-online` class on `<body>`.
 
-A value form (`dj-offline="<show|hide|disable|enable|queue>"`) is also parsed,
-but only by `static/djust/js/pwa.js`, which is **not** in `static/djust/src/`,
-is **not** in the built bundle, and is loaded by no template tag — so on a
-default install nothing evaluates it. Prefer the bare names until that file is
-either bundled or removed (the two forms are tracked as a documentation-vs-code
-gap, not a supported choice).
+The older value form (`dj-offline="<show|hide|disable|enable|queue>"`) is
+**not supported**: the only code that ever parsed it (`static/djust/js/pwa.js`)
+was never bundled or loaded by any template tag, and was removed in #2659.
+Use the bare-name attributes below.
 
 ### Only shown when online / offline
 
 ```html
-<div dj-offline="hide">
+<div dj-offline-hide>
     <button dj-click="save_to_server">Save Online</button>
 </div>
-<div dj-offline="show">
+<div dj-offline-show>
     <p>You're working offline. Changes will sync when online.</p>
 </div>
 ```
@@ -201,17 +199,12 @@ gap, not a supported choice).
 ### Disable / enable form elements
 
 ```html
-<button dj-offline="disable" dj-click="submit">Submit Form</button>
+<button dj-offline-disable dj-click="submit">Submit Form</button>
 ```
 
-### Queue the action when offline
-
-```html
-<button dj-offline="queue" dj-click="submit">Submit</button>
-```
-
-`queue` attaches a fallback click handler while offline so the intent is
-captured (and synced) instead of lost.
+There is no bare-name `queue` form: the offline action queue is driven by the
+service worker and the `OfflineMixin` sync endpoint, not by a per-element
+attribute.
 
 ## Storage Backends
 
