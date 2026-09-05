@@ -15,6 +15,61 @@ from ..utils import is_model_list
 
 logger = logging.getLogger(__name__)
 
+
+def _rows_lack_optimization(rows: List[models.Model], optimization: Any) -> bool:
+    """Whether any row in ``rows`` is missing a relation cache / annotation
+    the template paths need (#2536). ``select_related`` paths are checked
+    through ``_state.fields_cache`` segment by segment, ``prefetch_related``
+    through ``_prefetched_objects_cache``, annotations as attributes."""
+    for row in rows:
+        for path in optimization.select_related:
+            obj: Any = row
+            for seg in path.split("__"):
+                cache = getattr(getattr(obj, "_state", None), "fields_cache", None)
+                if cache is None or seg not in cache:
+                    return True
+                obj = cache[seg]
+                if obj is None:
+                    break
+        prefetched = getattr(row, "_prefetched_objects_cache", None) or {}
+        for path in optimization.prefetch_related:
+            if path.split("__", 1)[0] not in prefetched:
+                return True
+        for name in optimization.annotations:
+            if not hasattr(row, name):
+                return True
+    return False
+
+
+def _graft_optimization_caches(
+    rows: List[models.Model], fetched_by_pk: Dict[Any, models.Model], optimization: Any
+) -> None:
+    """Copy the relation caches / annotations from freshly-fetched instances
+    onto the caller's instances, in place (#2536). The caller's instances stay
+    the ones rendered, so a mutation made on them survives; a row the query
+    no longer returns keeps its in-memory state, as Django's engine would."""
+    for row in rows:
+        fetched = fetched_by_pk.get(row.pk)
+        if fetched is None:
+            continue
+        src_cache = getattr(fetched._state, "fields_cache", None) or {}
+        dst_cache = row._state.fields_cache
+        for path in optimization.select_related:
+            seg = path.split("__", 1)[0]
+            if seg in src_cache:
+                dst_cache[seg] = src_cache[seg]
+        src_prefetch = getattr(fetched, "_prefetched_objects_cache", None)
+        if src_prefetch:
+            dst_prefetch = getattr(row, "_prefetched_objects_cache", None)
+            if dst_prefetch is None:
+                row._prefetched_objects_cache = dict(src_prefetch)
+            else:
+                dst_prefetch.update(src_prefetch)
+        for name in optimization.annotations:
+            if hasattr(fetched, name):
+                setattr(row, name, getattr(fetched, name))
+
+
 # Module-level cache for context processors, keyed by TEMPLATES config tuple
 _context_processors_cache: Dict[Any, List[Any]] = {}
 
@@ -267,16 +322,28 @@ class ContextMixin:
                                 analyze_queryset_optimization(model_class, paths) if paths else None
                             )
 
-                            if optimization and (
-                                optimization.select_related
-                                or optimization.prefetch_related
-                                or optimization.annotations
+                            # #2536: re-query ONLY when some row lacks what the
+                            # template paths need, and graft the fetched
+                            # relation caches / annotations onto the USER'S
+                            # instances instead of replacing them. A static
+                            # list then costs one query for the whole session
+                            # (zero when the view already ``select_related``),
+                            # and an in-memory row mutation is rendered rather
+                            # than discarded by a fresh instance winning.
+                            if (
+                                optimization
+                                and (
+                                    optimization.select_related
+                                    or optimization.prefetch_related
+                                    or optimization.annotations
+                                )
+                                and _rows_lack_optimization(value, optimization)
                             ):
                                 pks = [obj.pk for obj in value]
                                 qs = model_class._default_manager.filter(pk__in=pks)
                                 qs = optimize_queryset(qs, optimization)
                                 pk_map = {obj.pk: obj for obj in qs}
-                                value = [pk_map[pk] for pk in pks if pk in pk_map]
+                                _graft_optimization_caches(value, pk_map, optimization)
 
                             if paths:
                                 # Use codegen serializer directly — avoids DjangoJSONEncoder fallback

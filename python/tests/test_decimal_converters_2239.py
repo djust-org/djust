@@ -570,6 +570,9 @@ EXPECTED_ROUNDTRIP_SITES = {
 #: every one of them feeds the template context or the Rust extractor, where a
 #: `Decimal` is the correct and exact value.
 EXPECTED_TEMPLATE_BOUND_MODULES = {
+    # #2530: a template_name LiveComponent rendered on its own RustLiveView —
+    # the value feeds the template context, so no state_roundtrip flag.
+    "components/base.py",
     "mixins/context.py",
     "mixins/jit.py",
     "mixins/request.py",

@@ -1377,8 +1377,21 @@ class WSConsumerTransport:
         consumer.actor_handle = await create_session_actor(consumer.session_id)
         logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
 
+        # #2599: hand the actor the view's OWN template + dirs. Without them
+        # `ViewActor::new` builds an empty-template backend and the mount
+        # frame is `<html><head></head><body></body></html>`.
+        from .utils import get_template_dirs
+
+        get_template = getattr(view, "get_template", None)
+        template = await sync_to_async(get_template)() if get_template is not None else None
         context_data = await sync_to_async(view.get_context_data)()
-        result = await consumer.actor_handle.mount(view_path, context_data, view)
+        result = await consumer.actor_handle.mount(
+            view_path,
+            context_data,
+            view,
+            template=template,
+            template_dirs=[str(d) for d in get_template_dirs()],
+        )
         return result
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
@@ -2427,11 +2440,21 @@ class ViewRuntime:
             if uses_actors_for_mount and uses_actors_for_mount(view_instance):
                 try:
                     result = await self.transport.dispatch_actor_mount(view_instance, data)
-                    # The actor render is authoritative — its HTML is sent verbatim
-                    # (the bespoke WS actor branch does NOT strip/extract, only the
-                    # consumer-owned no-arm version is stamped, websocket.py:2705/2746).
+                    # The actor render is authoritative for its BYTES, but it goes
+                    # through the same normalize + dj-root extraction as the
+                    # non-actor frame below (#2599 review): the client does
+                    # `container.innerHTML = html`, so a verbatim `<div dj-root>`
+                    # wrapper nested a second dj-root and put every patch one
+                    # level off. (Pre-#2599 the actor html was an empty document,
+                    # so the mismatch was invisible.)
                     html = result["html"] if isinstance(result, dict) else result.get("html")
                     rust_version = result.get("version", 1) if isinstance(result, dict) else 1
+                    if hasattr(view_instance, "_strip_comments_and_whitespace"):
+                        html = await sync_to_async(view_instance._strip_comments_and_whitespace)(
+                            html
+                        )
+                    if hasattr(view_instance, "_extract_liveview_content"):
+                        html = await sync_to_async(view_instance._extract_liveview_content)(html)
                     actor_mounted = True
                 except Exception as exc:
                     response = handle_exception(

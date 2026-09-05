@@ -2508,16 +2508,21 @@ impl SessionActorHandlePy {
     ///     view_path (str): Python path to the LiveView class (e.g. "app.views.Counter")
     ///     params (dict): Initial state parameters
     ///     python_view (Optional[Any]): Python LiveView instance for event handler callbacks
+    ///     template (Optional[str]): The view's template source (#2599). Without
+    ///         it the actor renders an EMPTY document.
+    ///     template_dirs (Optional[list[str]]): Directories for `{% include %}`.
     ///
     /// Returns:
     ///     dict: {"html": str, "session_id": str, "view_id": str}
-    #[pyo3(signature = (view_path, params, python_view=None))]
+    #[pyo3(signature = (view_path, params, python_view=None, template=None, template_dirs=None))]
     fn mount<'py>(
         &self,
         py: Python<'py>,
         view_path: String,
         params: &Bound<'py, PyDict>,
         python_view: Option<Py<PyAny>>,
+        template: Option<String>,
+        template_dirs: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
 
@@ -2526,7 +2531,13 @@ impl SessionActorHandlePy {
 
         future_into_py(py, async move {
             let result = handle
-                .mount(view_path, params_rust, python_view)
+                .mount_with_template(
+                    view_path,
+                    params_rust,
+                    python_view,
+                    template,
+                    template_dirs.unwrap_or_default(),
+                )
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
