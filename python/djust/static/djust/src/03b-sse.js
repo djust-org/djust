@@ -192,7 +192,9 @@ class LiveViewSSE {
                 }
 
                 if (data.html) {
-                    let container = document.querySelector('[dj-view]');
+                    // #2632: the PAGE container — a sticky/embedded root
+                    // with a valueless dj-view must not receive the page.
+                    let container = findPageViewContainer();
                     if (!container) container = document.querySelector('[dj-root]');
                     if (container) {
                         const hasDataDjAttrs = data.has_ids === true;

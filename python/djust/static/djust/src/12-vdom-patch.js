@@ -176,7 +176,7 @@ function restoreFocusState(state, rootEl = null) {
         el = scope.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
     } else {
         // Positional fallback — scoped to rootEl when provided.
-        const root = rootEl || document.querySelector('[dj-view]') || document.body;
+        const root = rootEl || findPageViewContainer() || document.body; // #2632
         const candidates = root.querySelectorAll(state.tag.toLowerCase());
         el = candidates[state.key] || null;
     }
@@ -1217,7 +1217,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
  */
 function _stampDjIds(serverHtml, container) {
     if (!container) {
-        container = document.querySelector('[dj-view]') ||
+        container = findPageViewContainer() || // #2632
                     document.querySelector('[dj-root]');
     }
     if (!container) return;

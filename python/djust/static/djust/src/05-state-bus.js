@@ -65,4 +65,4 @@ class StateBus {
     }
 }
 
-const _globalStateBus = new StateBus(); // eslint: prefixed _ (used in decorators.js, not in client.js IIFE)
+const _globalStateBus = new StateBus(); // eslint: prefixed _ — NO consumer in the bundle; tracked in #2680

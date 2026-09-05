@@ -2395,7 +2395,9 @@ class LiveViewSSE {
                 }
 
                 if (data.html) {
-                    let container = document.querySelector('[dj-view]');
+                    // #2632: the PAGE container — a sticky/embedded root
+                    // with a valueless dj-view must not receive the page.
+                    let container = findPageViewContainer();
                     if (!container) container = document.querySelector('[dj-root]');
                     if (container) {
                         const hasDataDjAttrs = data.has_ids === true;
@@ -2940,7 +2942,7 @@ class StateBus {
     }
 }
 
-const _globalStateBus = new StateBus(); // eslint: prefixed _ (used in decorators.js, not in client.js IIFE)
+const _globalStateBus = new StateBus(); // eslint: prefixed _ — NO consumer in the bundle; tracked in #2680
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -4844,7 +4846,7 @@ function bindLiveViewEvents(scope) {
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
     // fallback — body persists across TurboNav page swaps, causing duplicate
     // events when navigating away from a LiveView page and back.
-    const liveRoot = document.querySelector('[dj-view]') || document.querySelector('[dj-root]');
+    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]'); // #2632
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -5214,18 +5216,18 @@ function throttle(func, limit) {
     }
 }
 
-// Helper: Get LiveView root element
+// Helper: Get LiveView root element (the PARENT / page container).
 //
-// Sticky LiveViews (Phase B) invariant: the parent view's [dj-view] is
-// stamped in DOM order BEFORE its sticky child (the parent template tag
-// runs before {% live_render %} resolves), so the first matching
-// [dj-view] in document order is the parent. Calling code that needs to
-// operate on the PARENT (mainline patch application, form helpers,
-// etc.) relies on this ordering and MUST NOT be changed to select
-// [dj-sticky-root] subtrees. Sticky targets are reached via the scoped
-// applier in 45-child-view.js, NOT via getLiveViewRoot().
+// Callers that operate on the parent (mainline patch application, form
+// helpers, etc.) must never receive a [dj-sticky-root] / embedded
+// subtree. The old comment here relied on document ORDER ("the first
+// [dj-view] is the parent") — which is exactly the premise #2632 showed
+// to be false (a sticky/embedded root can precede the page container),
+// so selection is by QUALIFIER via the shared helper instead. Sticky
+// targets are reached via the scoped applier in 45-child-view.js, NOT
+// via getLiveViewRoot().
 function getLiveViewRoot() {
-    return document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document.body;
+    return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -5380,7 +5382,7 @@ function _processAutoRecover() {
 function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
-    let root = document.querySelector('[dj-view]');
+    let root = findPageViewContainer(); // #2632
     if (!root) root = document.querySelector('[dj-root]');
     if (!root) return;
 
@@ -6085,7 +6087,7 @@ function restoreFocusState(state, rootEl = null) {
         el = scope.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
     } else {
         // Positional fallback — scoped to rootEl when provided.
-        const root = rootEl || document.querySelector('[dj-view]') || document.body;
+        const root = rootEl || findPageViewContainer() || document.body; // #2632
         const candidates = root.querySelectorAll(state.tag.toLowerCase());
         el = candidates[state.key] || null;
     }
@@ -7126,7 +7128,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
  */
 function _stampDjIds(serverHtml, container) {
     if (!container) {
-        container = document.querySelector('[dj-view]') ||
+        container = findPageViewContainer() || // #2632
                     document.querySelector('[dj-root]');
     }
     if (!container) return;
@@ -8855,7 +8857,8 @@ window.djust.lazyHydration = lazyHydrationManager;
  * mounts the view via the SSE stream endpoint.
  */
 function _switchToSSETransport() {
-    const container = document.querySelector('[dj-view]');
+    // #2632: page container only — the WS autoMount twin of this lookup.
+    const container = findPageViewContainer();
     if (!container) {
         console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
         return;
@@ -10713,7 +10716,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // Fallback: check the current container's dj-view
         // (only works for live_patch, not cross-view navigation — cross-view
         // callers must use resolveLiveViewPath, #1934).
-        const container = document.querySelector('[dj-view]');
+        const container = findPageViewContainer(); // #2632: never a sticky root's ""
         if (container) {
             return container.getAttribute('dj-view');
         }
@@ -10774,7 +10777,7 @@ window.djust.getActiveStreams = getActiveStreams;
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
                         const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
-                            let fastContainer = document.querySelector('[dj-view]:not([dj-sticky-root])');
+                            let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
@@ -17106,7 +17109,7 @@ globalThis.djust.djTransitionGroup = {
             if (routePath === pathname) return viewPath;
         }
         if (typeof document !== 'undefined') {
-            const container = document.querySelector('[dj-view]');
+            const container = findPageViewContainer(); // #2632: never a sticky root's ""
             if (container) return container.getAttribute('dj-view') || '';
         }
         return '';

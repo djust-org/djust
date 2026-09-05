@@ -42,7 +42,7 @@
             if (routePath === pathname) return viewPath;
         }
         if (typeof document !== 'undefined') {
-            const container = document.querySelector('[dj-view]');
+            const container = findPageViewContainer(); // #2632: never a sticky root's ""
             if (container) return container.getAttribute('dj-view') || '';
         }
         return '';

@@ -16,8 +16,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
+const SRC_DIR = './python/djust/static/djust/src';
 const CLIENT_SRC = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
-const WS_MODULE = fs.readFileSync('./python/djust/static/djust/src/03-websocket.js', 'utf-8');
+const WS_MODULE = fs.readFileSync(`${SRC_DIR}/03-websocket.js`, 'utf-8');
+const MODULES = fs.readdirSync(SRC_DIR)
+    .filter((f) => /^[0-9].*\.js$/.test(f))
+    .map((f) => [f, fs.readFileSync(`${SRC_DIR}/${f}`, 'utf-8')]);
 
 function boot(bodyHtml) {
     const dom = new JSDOM(
@@ -93,27 +97,72 @@ describe('autoMount picks the page container (#2632)', () => {
     });
 });
 
-describe('structural pin: one page-container helper in 03-websocket.js (#2632, #1646)', () => {
-    it('defines findPageViewContainer with BOTH exclusions', () => {
+describe('SSE path picks the page container too (#2632 — the WS/SSE twin)', () => {
+    it('_switchToSSETransport connects the page view, not the sticky root before it', () => {
+        const dom = boot(STICKY_FIRST + PAGE);
+        const connected = [];
+        dom.window.djust.LiveViewSSE = class {
+            connect(viewPath, params) { connected.push([viewPath, params]); }
+        };
+        const warn = vi.spyOn(dom.window.console, 'warn').mockImplementation(() => {});
+        dom.window.djust._switchToSSETransport();
+        expect(connected.length).toBe(1);
+        expect(connected[0][0]).toBe('app.views.PageView');
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('_switchToSSETransport warns and does not connect when only an embedded child exists', () => {
+        const dom = boot(EMBEDDED_FIRST);
+        const connected = [];
+        dom.window.djust.LiveViewSSE = class {
+            connect(viewPath) { connected.push(viewPath); }
+        };
+        const warn = vi.spyOn(dom.window.console, 'warn').mockImplementation(() => {});
+        dom.window.djust._switchToSSETransport();
+        expect(connected.length).toBe(0);
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('structural pin: ONE page-container helper across src/ (#2632, #1646)', () => {
+    // Every site that answers "which element is THE page LiveView container"
+    // must go through findPageViewContainer(). A bare `[dj-view]` pick or an
+    // inline `:not([dj-sticky-root])` copy is the drift this closes.
+    // querySelectorAll('[dj-view]') (stamping/registering ALL containers)
+    // and attribute-qualified lookups ([dj-view][data-djust-embedded=…]) are
+    // different questions and are not counted.
+    const EXPECTED_CALL_SITES = {
+        '03-websocket.js': 3,   // prerender morph, html_update replace, autoMount
+        '03b-sse.js': 1,        // SSE mount html target
+        '09-event-binding.js': 3, // delegated-listener root, getLiveViewRoot, form recovery
+        '12-vdom-patch.js': 2,  // positional-fallback root, dj-id stamping root
+        '14-init.js': 1,        // _switchToSSETransport
+        '18-navigation.js': 2,  // getCurrentViewPath fallback, SW fast-path container
+        '46-state-snapshot.js': 1, // snapshot view-path fallback
+    };
+
+    it('defines findPageViewContainer once, in 03-websocket.js, with BOTH exclusions', () => {
         expect(WS_MODULE).toContain(
             "querySelector('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])')"
         );
-    });
-
-    it('has no bare [dj-view] lookup and no inline :not([dj-sticky-root]) copy', () => {
-        // The bare form is the #2632 bug; the inline-qualified form is the
-        // pre-fix drift (two sites carried it by hand, one did not).
-        expect(WS_MODULE).not.toContain("querySelector('[dj-view]')");
-        const inlineQualified = WS_MODULE.split("'[dj-view]:not([dj-sticky-root])'").length - 1;
-        expect(inlineQualified).toBe(0);
-    });
-
-    it('routes every page-container lookup through the helper (pinned call-site set)', () => {
-        const all = WS_MODULE.match(/\bfindPageViewContainer\(\)/g) || [];
-        const defs = WS_MODULE.match(/function findPageViewContainer\(\)/g) || [];
+        const defs = MODULES.flatMap(([, src]) => src.match(/function findPageViewContainer\(\)/g) || []);
         expect(defs.length).toBe(1);
-        // Exactly the three sites the issue enumerated: prerender morph
-        // (skipMountHtml), html_update replacement, and autoMount.
-        expect(all.length - defs.length).toBe(3);
+    });
+
+    it('no module carries a bare [dj-view] lookup or an inline :not([dj-sticky-root]) copy', () => {
+        for (const [name, src] of MODULES) {
+            expect(src.includes("querySelector('[dj-view]')"), `${name}: bare [dj-view] lookup`).toBe(false);
+            expect(src.includes("'[dj-view]:not([dj-sticky-root])'"), `${name}: inline qualified copy`).toBe(false);
+        }
+    });
+
+    it('routes every page-container lookup through the helper (pinned call-site SET)', () => {
+        const actual = {};
+        for (const [name, src] of MODULES) {
+            const all = (src.match(/\bfindPageViewContainer\(\)/g) || []).length;
+            const defs = (src.match(/function findPageViewContainer\(\)/g) || []).length;
+            if (all - defs > 0) actual[name] = all - defs;
+        }
+        expect(actual).toEqual(EXPECTED_CALL_SITES);
     });
 });

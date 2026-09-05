@@ -30,6 +30,9 @@ function createEnv({ routeMap = {}, ws = null, autoNav = true } = {}) {
     // Globals the nav IIFE references as free variables.
     window.eval('window.djust = { _routeMap: ' + JSON.stringify(routeMap) + ' };');
     window.eval('function isWSConnected(){ return true; }');
+    // 18-navigation.js is evaluated standalone here; shim the bundle-wide
+    // page-container helper it calls (defined in 03-websocket.js, #2632).
+    window.eval('function findPageViewContainer(){ return document.querySelector("[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])"); }');
     window.liveViewWS_mock = ws;
     window.eval('var liveViewWS = window.liveViewWS_mock;');
 

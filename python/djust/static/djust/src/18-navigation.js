@@ -337,7 +337,7 @@
         // Fallback: check the current container's dj-view
         // (only works for live_patch, not cross-view navigation — cross-view
         // callers must use resolveLiveViewPath, #1934).
-        const container = document.querySelector('[dj-view]');
+        const container = findPageViewContainer(); // #2632: never a sticky root's ""
         if (container) {
             return container.getAttribute('dj-view');
         }
@@ -398,7 +398,7 @@
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
                         const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
-                            let fastContainer = document.querySelector('[dj-view]:not([dj-sticky-root])');
+                            let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url

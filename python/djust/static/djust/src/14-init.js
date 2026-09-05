@@ -12,7 +12,8 @@
  * mounts the view via the SSE stream endpoint.
  */
 function _switchToSSETransport() {
-    const container = document.querySelector('[dj-view]');
+    // #2632: page container only — the WS autoMount twin of this lookup.
+    const container = findPageViewContainer();
     if (!container) {
         console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
         return;
