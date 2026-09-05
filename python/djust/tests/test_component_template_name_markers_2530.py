@@ -20,6 +20,7 @@ import pytest
 from django.test import override_settings
 
 from djust import LiveView
+from djust.utils import clear_template_dirs_cache
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
@@ -65,7 +66,13 @@ def templates(tmp_path):
             }
         ]
     ):
-        yield
+        # `get_template_dirs()` is lru-cached (#1801): drop the cache on both
+        # sides so this DIRS override neither sees nor leaves a stale value.
+        clear_template_dirs_cache()
+        try:
+            yield
+        finally:
+            clear_template_dirs_cache()
 
 
 @pytest.mark.django_db

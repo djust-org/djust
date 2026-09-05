@@ -20,6 +20,7 @@ import pytest
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
+from djust.utils import clear_template_dirs_cache
 
 _FACTORY = RequestFactory()
 
@@ -69,7 +70,13 @@ def templates(tmp_path, settings):
             }
         ]
     ):
-        yield
+        # `get_template_dirs()` is lru-cached (#1801): drop the cache on both
+        # sides so this DIRS override neither sees nor leaves a stale value.
+        clear_template_dirs_cache()
+        try:
+            yield
+        finally:
+            clear_template_dirs_cache()
 
 
 def _get(path: str) -> str:
