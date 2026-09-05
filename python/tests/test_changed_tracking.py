@@ -179,8 +179,12 @@ class TestSnapshotAssigns:
         assert snapshot["active"] is view.active
         assert snapshot["data"] is view.data
         assert snapshot["raw"] is view.raw
-        assert snapshot["coords"] is view.coords
-        assert snapshot["tags"] is view.tags
+        # tuple / frozenset are immutable CONTAINERS: their items need not be
+        # (``([1],)``), so since #2664 (PR #2682 review) they are walked like
+        # list/dict/set — (id, len, structural fingerprint), not stored as-is.
+        assert snapshot["coords"][0] == id(view.coords)
+        assert snapshot["coords"][1] == 3
+        assert snapshot["tags"][1] == 2
 
     def test_mutable_types_fingerprinted(self):
         """Mutable types use identity+fingerprint (id, length, etc.)."""

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
 
+from ..change_detection import deep_fingerprint, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..template_filters import _ensure_custom_filters_bridged
@@ -550,27 +551,27 @@ class RustBridgeMixin:
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
 
-        djust's auto change-detection uses a fast identity + shallow-fingerprint
-        snapshot (``_snapshot_assigns``) that deliberately does NOT deep-copy
-        state (~100x faster). The trade-off is that an *in-place* mutation of a
-        nested container — e.g. ``self.rows[0]["done"] = True`` or
-        ``self.columns[0]["cards"].append(card)`` — shares the same object with
-        the previous snapshot, so it is invisible to change detection and
-        produces no re-render. See the "Nested state" note in
-        ``docs/website/guides/state-primitives.md``.
+        djust's auto change-detection snapshots public state with a structural
+        fingerprint (``djust.change_detection.deep_fingerprint``, #2664): an
+        in-place mutation anywhere inside a dict/list/set of plain data —
+        ``self.rows[0]["done"] = True``, ``self.columns["done"].append(card)``
+        — IS detected and re-rendered without any call here. What the
+        fingerprint cannot see is an attribute write on an OPAQUE object held
+        in state (a model instance, a form, any non-container object), which is
+        compared by identity, and a container so large it exceeds the
+        fingerprint budget (a one-shot warning names the attribute). See the
+        "Nested state" note in ``docs/website/guides/state-primitives.md``.
 
         Call this from an event handler AFTER such a mutation to force a
         re-render::
 
-            def toggle(self, i: int):
-                self.rows[i]["done"] = not self.rows[i]["done"]  # in-place
+            def rename(self, i: int, name: str = ""):
+                self.rows[i].name = name  # in-place write on a model instance
                 self.set_changed_keys("rows")
 
-        Because the previous state is aliased (the snapshot shares the mutated
-        object), djust cannot compute a *targeted* VDOM diff for the changed
-        subtree, so this forces a full re-render of the view. When a targeted
-        diff matters (large views, hot paths), prefer building a NEW value
-        immutably instead — djust diffs that efficiently::
+        This forces a full re-render of the view. When a targeted diff matters
+        (large views, hot paths), prefer building a NEW value immutably
+        instead — djust diffs that efficiently::
 
             self.rows = [
                 {**r, "done": not r["done"]} if j == i else r
@@ -788,6 +789,19 @@ class RustBridgeMixin:
             # `completed_count = sum(...)` that change without their source
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
+            # Structural fingerprints of the previous render's containers
+            # (#2664). Computed at most once per key per sync (compare + store).
+            prev_fps = getattr(self, "_prev_context_fingerprints", {})
+            new_fps: Dict[str, Any] = {}
+
+            def _fp_of(key: str, value: Any) -> Any:
+                fp = new_fps.get(key, _MISSING)
+                if fp is _MISSING:
+                    fp, truncated = deep_fingerprint(value)
+                    new_fps[key] = fp
+                    if truncated:
+                        warn_fingerprint_truncated(type(self), key, value)
+                return fp
 
             # _force_full_html: bypass ALL change tracking and send everything.
             # The websocket code skips _changed_keys computation when this is
@@ -818,16 +832,16 @@ class RustBridgeMixin:
                     # `self._products_cache`, or `completed_count` computed
                     # from `self.todos`).
                     #
-                    # Containers (dict, list, tuple) use VALUE equality
-                    # instead of id() because id() is unreliable for them:
-                    # CPython address reuse after GC, persistent list lookups
-                    # returning the same object, etc. (#774). Unchanged
-                    # containers are still skipped (previous values cached
-                    # in _prev_context_containers).
+                    # Containers (dict, list, tuple) compare by STRUCTURAL
+                    # fingerprint (#2664), not id() and not ``==`` against a
+                    # kept reference: id() is unreliable for derived containers
+                    # (CPython address reuse, #774) and a kept reference IS the
+                    # mutated object after an in-place edit, so it compares
+                    # equal to itself (#1039 aliasing) — the ``patches: []``
+                    # frame of #2664. Unchanged containers are still skipped.
                     #
                     # Immutables use value equality (Python interns them).
                     # Other types use id() comparison as a last resort.
-                    prev_containers = getattr(self, "_prev_context_containers", {})
                     for key, value in full_context.items():
                         if key in context:
                             continue
@@ -838,14 +852,7 @@ class RustBridgeMixin:
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
                         elif isinstance(value, (dict, list, tuple)):
-                            # Containers: compare by VALUE, not id(). id() is
-                            # unreliable for derived containers due to CPython
-                            # address reuse and persistent-list lookups (#774).
-                            try:
-                                changed = prev_containers.get(key, _MISSING) != value
-                            except (TypeError, ValueError):
-                                changed = True  # Broken __eq__ → assume changed
-                            if changed:
+                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             # Immutable: compare by value to catch derived
@@ -860,7 +867,6 @@ class RustBridgeMixin:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
                     # and for in-place mutations without snapshot detection.
-                    prev_containers = getattr(self, "_prev_context_containers", {})
                     context = {}
                     for key, value in full_context.items():
                         if key not in prev_refs:
@@ -868,11 +874,7 @@ class RustBridgeMixin:
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
                         elif isinstance(value, (dict, list, tuple)):
-                            try:
-                                changed = prev_containers.get(key, _MISSING) != value
-                            except (TypeError, ValueError):
-                                changed = True
-                            if changed:
+                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
@@ -888,8 +890,9 @@ class RustBridgeMixin:
             # - Immutables (int/str/etc.) — Python interns them, so id() gives
             #   false negatives. Compared by value equality.
             # - Containers (dict/list/tuple) — CPython address reuse after GC
-            #   can cause id() to match even when the value changed (#774).
-            #   Compared by value equality.
+            #   can cause id() to match even when the value changed (#774),
+            #   and a kept REFERENCE aliases an in-place mutation (#2664).
+            #   Compared by structural fingerprint, never by reference.
             # Exclude request-scoped, framework-provided keys (#1786) from the
             # change-detection fingerprint — see the _request_scoped_keys
             # comment above. Keeping ``request`` / ``user`` / ``perms`` /
@@ -904,8 +907,8 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
-            self._prev_context_containers = {
-                k: v
+            self._prev_context_fingerprints = {
+                k: _fp_of(k, v)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, (dict, list, tuple))
             }

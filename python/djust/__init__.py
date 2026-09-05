@@ -342,6 +342,19 @@ def enable_hot_reload():
     # path unchanged.
     def on_file_change(file_path: str):
         """Called when a file changes - broadcasts reload to all clients."""
+        if file_path.lower().endswith(".py"):
+            # #2602: a templatetags module added (or renamed) while the server
+            # runs must be seen by the next ``{% load %}``. The installed-
+            # library scan is process-cached; drop it on ANY .py change — the
+            # debounced watcher hands us one representative path per burst, so
+            # matching ``templatetags/`` in it would miss a mixed burst. The
+            # drop is a pointer write; the re-scan is paid by the next load.
+            try:
+                from djust.template_libraries import invalidate_installed_cache
+
+                invalidate_installed_cache()
+            except Exception:  # noqa: BLE001 — dev-only safety net
+                logger.exception("[HotReload] template-library cache invalidation failed")
 
         async def _dispatch():
             if not can_broadcast:
