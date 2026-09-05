@@ -39,10 +39,12 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # field). The ONLY way to re-include a floor field is the deliberate, loudly
 # named per-model ``djust_serialize_sensitive_fields`` opt-out — a developer
 # must explicitly take ownership of shipping ``password``/privilege flags.
-# It does NOT (and cannot) cover a template that *explicitly* references a
-# field: ``{{ user.password }}`` flows through the compiled JIT serializer,
-# which emits exactly the paths the template names — that is a
-# developer-initiated disclosure which already renders into server-side HTML.
+# Since #2685 it ALSO covers a template that *explicitly* references a field:
+# ``{{ user.password }}`` flows through the compiled JIT serializer (and, for a
+# QuerySet, through Rust's ``serialize_object_with_paths``), and both now
+# consult this floor via ``optimization/codegen.py::emittable_names`` before
+# emitting a name. Naming a field in a template is not consent to ship a
+# password hash — the value renders as ``string_if_invalid`` (empty) instead.
 # The match is name-EXACT: it covers ``password`` but not a ``get_password()``
 # accessor or a differently-named ``@property`` — use ``DJUST_SENSITIVE_FIELDS``
 # / per-model ``djust_exclude_fields`` for those.
@@ -239,6 +241,41 @@ def model_identity(obj: Any) -> Dict[str, Any]:
     }
 
 
+#: Memoized result of :func:`_resolve_sensitive_fields` (#2685 perf). ``None``
+#: means "not resolved yet"; the empty-denylist case is impossible because the
+#: floor is never empty, so ``None`` is an unambiguous miss.
+_SENSITIVE_FIELDS_CACHE: Optional[FrozenSet[str]] = None
+
+
+def _invalidate_sensitive_fields_cache(**_kwargs: Any) -> None:
+    """Drop the memoized denylist — receiver for Django's ``setting_changed``."""
+    global _SENSITIVE_FIELDS_CACHE
+    _SENSITIVE_FIELDS_CACHE = None
+
+
+def _connect_sensitive_fields_invalidation() -> bool:
+    """Wire cache invalidation to ``setting_changed``; report whether it took.
+
+    The cache is enabled ONLY if this returns True. Without the signal a
+    ``override_settings(DJUST_SENSITIVE_FIELDS=...)`` would be silently ignored
+    by a stale cache — a fail-OPEN (too-narrow denylist), which is exactly the
+    direction this module must never take. Failing to connect therefore
+    disables memoization rather than accepting staleness.
+    """
+    try:
+        from django.core.signals import setting_changed
+
+        setting_changed.connect(_invalidate_sensitive_fields_cache)
+        return True
+    except Exception:  # pragma: no cover - Django too old / partially importable
+        logger.debug("setting_changed unavailable; sensitive-field cache disabled")
+        return False
+
+
+#: Whether :func:`_resolve_sensitive_fields` may memoize (see above).
+_SENSITIVE_FIELDS_CACHE_ENABLED = _connect_sensitive_fields_invalidation()
+
+
 def _resolve_sensitive_fields() -> FrozenSet[str]:
     """Return the set of field names to always drop during model serialization.
 
@@ -247,7 +284,41 @@ def _resolve_sensitive_fields() -> FrozenSet[str]:
     defensively: a missing setting, an unconfigured Django, or a non-iterable
     value all degrade gracefully to just the built-in floor — serialization
     must never raise because of this lookup.
+
+    Memoized (#2685): this runs once per serialized OBJECT on the codegen /
+    Rust-queryset gate, and each call reaches through Django's ``LazySettings``
+    ``__getattr__``. Two conditions must BOTH hold before a result is cached,
+    because every staleness mode here fails OPEN (a denylist narrower than the
+    project configured):
+
+    1. ``setting_changed`` connected, so ``override_settings`` invalidates.
+    2. ``settings.configured`` was already True when the value was resolved —
+       configuring settings for the first time does NOT fire ``setting_changed``,
+       so a value read before ``settings.configure()``/``DJANGO_SETTINGS_MODULE``
+       resolution must never be cached.
     """
+    global _SENSITIVE_FIELDS_CACHE
+
+    cached = _SENSITIVE_FIELDS_CACHE
+    if cached is not None:
+        return cached
+
+    resolved = _resolve_sensitive_fields_uncached()
+
+    if _SENSITIVE_FIELDS_CACHE_ENABLED:
+        try:
+            from django.conf import settings
+
+            if settings.configured:
+                _SENSITIVE_FIELDS_CACHE = resolved
+        except Exception:  # pragma: no cover - defensive, matches the resolver
+            pass
+
+    return resolved
+
+
+def _resolve_sensitive_fields_uncached() -> FrozenSet[str]:
+    """The un-memoized body of :func:`_resolve_sensitive_fields`."""
     try:
         from django.conf import settings
 

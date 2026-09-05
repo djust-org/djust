@@ -3229,9 +3229,13 @@ fn serialize_queryset_py(
         // Create Python list to hold results
         let result_list = PyList::empty(py);
 
+        // The serialization gate, resolved once for the whole queryset (#2685).
+        let gate = resolve_attr_gate(py)?;
+        let gate = gate.bind(py);
+
         // Iterate over objects
         for obj in objects.iter() {
-            let serialized = serialize_object_with_paths(py, &obj, &path_tree)?;
+            let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate)?;
             // Convert serde_json::Value to Python dict
             let py_dict = json_value_to_py(py, &serialized)?;
             result_list.append(py_dict)?;
@@ -3585,17 +3589,74 @@ fn add_path_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, path
     }
 }
 
+/// Resolve the serialization gate — `djust.optimization.codegen.emittable_names`,
+/// the ONE per-attribute authority (`DjangoJSONEncoder._attr_is_serializable`)
+/// every other channel calls (#2685 / #2614).
+///
+/// Before #2685 this serializer did a bare `obj.getattr(name)` with no floor at
+/// all, so a QuerySet in the context (`self.users = User.objects.all()` +
+/// `{{ u.password }}`) shipped the password hash on the GET response and in the
+/// WS mount/patch frames — the Python codegen fallback only fires when Rust
+/// returns FEWER keys than expected, which a plain field never trips.
+///
+/// Resolved once per `serialize_queryset` call and threaded through the
+/// recursion; an import failure propagates, so the Python caller falls back to
+/// `normalize_django_value` (itself gated) rather than shipping ungated rows.
+fn resolve_attr_gate(py: Python) -> PyResult<Py<PyAny>> {
+    Ok(py
+        .import("djust.optimization.codegen")?
+        .getattr("emittable_names")?
+        .unbind())
+}
+
+/// The subset of *tree*'s keys the gate permits for *obj*. Set-at-a-time: one
+/// Python call per OBJECT LEVEL, not per attribute, so the per-model denylist /
+/// allowlist / opt-out sets (and the `settings` read behind them) resolve once.
+///
+/// `tree` is a `HashMap`, so these names arrive in an order that differs per
+/// instance. That is fine and deliberately not sorted here: the gate memoizes
+/// on the SET of names (`_GATE_CACHE`), precisely so no caller's iteration
+/// order can thrash it. Sorting as well would be a second mechanism covering
+/// the same half, which no test could then tell apart from the first (#2233).
+fn gated_names(
+    py: Python,
+    obj: &Bound<'_, PyAny>,
+    tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+) -> PyResult<std::collections::HashSet<String>> {
+    let names: Vec<&str> = tree.keys().map(|k| k.as_str()).collect();
+    let permitted = gate.call1((obj, PyTuple::new(py, &names)?))?;
+    let mut out = std::collections::HashSet::new();
+    for name in names {
+        if permitted.contains(name)? {
+            out.insert(name.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// Serialize a single Python object based on path tree
 fn serialize_object_with_paths(
     py: Python,
     obj: &Bound<'_, PyAny>,
     tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
 ) -> PyResult<serde_json::Value> {
     use serde_json::{Map, Value as JsonValue};
 
     let mut result = Map::new();
 
+    // Every attribute this function reads is gated by the ONE serialization
+    // chokepoint (#2685). A denied name is omitted from the dict, so the
+    // template renders `string_if_invalid` (empty) — the same outcome as the
+    // eager channel.
+    let permitted = gated_names(py, obj, tree, gate)?;
+
     for (attr_name, node) in tree {
+        if !permitted.contains(attr_name) {
+            continue;
+        }
+
         // Try to access attribute
         let attr_result = obj.getattr(attr_name.as_str());
 
@@ -3634,7 +3695,8 @@ fn serialize_object_with_paths(
             }
             PathNode::Object(nested_tree) => {
                 // Nested object
-                let nested_result = serialize_object_with_paths(py, &attr_value, nested_tree)?;
+                let nested_result =
+                    serialize_object_with_paths(py, &attr_value, nested_tree, gate)?;
                 result.insert(attr_name.clone(), nested_result);
             }
             PathNode::List(nested_tree) => {
@@ -3670,7 +3732,8 @@ fn serialize_object_with_paths(
                             Ok(obj) => obj,
                             Err(_) => continue,
                         };
-                        let item_result = serialize_object_with_paths(py, &item_obj, nested_tree)?;
+                        let item_result =
+                            serialize_object_with_paths(py, &item_obj, nested_tree, gate)?;
                         list_results.push(item_result);
                     }
                 }
