@@ -3843,9 +3843,71 @@ fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
+/// Case-insensitive `needle` search in `hay` starting at `from`.
+fn find_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if from > hay.len() {
+        return None;
+    }
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+        .map(|p| from + p)
+}
+
+/// If `bytes[i]` (a `<`) opens a region the HTML tokenizer treats as RAW
+/// TEXT — an HTML comment (`<!-- … -->`) or a `<script>` / `<style>`
+/// element — return the byte offset just past the END of that region.
+/// Anything tag-shaped inside such a region is text, not markup: a
+/// JavaScript comment reading `<div dj-root>` must neither be selected as
+/// the root nor move the depth counter (#2663). Returns `None` when
+/// `bytes[i]` starts an ordinary tag. An unterminated region runs to EOF.
+fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes[i..].starts_with(b"<!--") {
+        return Some(
+            find_ci(bytes, i + 4, b"-->")
+                .map(|p| p + 3)
+                .unwrap_or(bytes.len()),
+        );
+    }
+    for name in [&b"script"[..], &b"style"[..]] {
+        let after = i + 1 + name.len();
+        if after < bytes.len()
+            && starts_with_ci(&bytes[i + 1..], name)
+            && matches!(bytes[after], b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+        {
+            let Some(open_end) = bytes[i..]
+                .iter()
+                .position(|&c| c == b'>')
+                .map(|p| i + p + 1)
+            else {
+                return Some(bytes.len());
+            };
+            let mut close = b"</".to_vec();
+            close.extend_from_slice(name);
+            let Some(close_start) = find_ci(bytes, open_end, &close) else {
+                return Some(bytes.len());
+            };
+            return Some(
+                bytes[close_start..]
+                    .iter()
+                    .position(|&c| c == b'>')
+                    .map(|p| close_start + p + 1)
+                    .unwrap_or(bytes.len()),
+            );
+        }
+    }
+    None
+}
+
 /// Locate the byte offset in `html` immediately after the opening tag
 /// of the first element bearing a `dj-root` or `dj-view` attribute.
 /// Returns None if no such element is found.
+///
+/// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
+/// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
+/// string inside them is raw text. This mirrors the Python twin
+/// (`mixins/template.py::_mask_raw_text`), which owns the initial-GET
+/// shell; the two must agree on what counts as markup (#1646).
 ///
 /// Used to align the scanner's starting point with `find_root` in the
 /// VDOM parser, which begins the VDOM tree at that same element. Without
@@ -3862,6 +3924,10 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
         }
         if bytes[i] != b'<' {
             i += 1;
+            continue;
+        }
+        if let Some(next) = skip_raw_text_region(bytes, i) {
+            i = next;
             continue;
         }
         let mut j = i + 1;
@@ -3899,6 +3965,10 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
     while k < bytes.len() {
         if bytes[k] != b'<' {
             k += 1;
+            continue;
+        }
+        if let Some(next) = skip_raw_text_region(bytes, k) {
+            k = next;
             continue;
         }
         let mut m = k + 1;
@@ -4569,6 +4639,91 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod dj_root_content_range_2663 {
+    //! `find_dj_root_content_range` must treat `<script>`/`<style>` bodies
+    //! and HTML comments as raw text (#2663). Before the fix, a JavaScript
+    //! comment reading `<div dj-root>` was found as the root (when before
+    //! the real one) or counted as an open (when inside it), the walk never
+    //! balanced, and the caller's `unwrap_or((0, len))` silently made the
+    //! WHOLE document the root content.
+    use super::find_dj_root_content_range;
+
+    fn inner(html: &str) -> Option<&str> {
+        find_dj_root_content_range(html).map(|(s, e)| &html[s..e])
+    }
+
+    #[test]
+    fn issue_shape_script_comment_before_the_root() {
+        // The djust.org `/examples/` shape: the comment precedes the real
+        // root in document order, so the LOCATING scan hit it first.
+        let html = "<html><head><script>\n  // base.html wraps the content block in <div dj-root>\n</script></head>\
+                    <body><nav></nav><main><div dj-root><p>hello</p></div></main><footer></footer></body></html>";
+        assert_eq!(inner(html), Some("<p>hello</p>"));
+    }
+
+    #[test]
+    fn script_comment_after_the_root_still_balances() {
+        let html = "<body><div dj-root><p>hello</p></div><footer></footer>\
+                    <script>// this comment mentions <div dj-root> and that is enough</script></body>";
+        assert_eq!(inner(html), Some("<p>hello</p>"));
+    }
+
+    #[test]
+    fn div_open_inside_a_script_inside_the_root() {
+        let html =
+            "<div dj-root><script>var s = '<div class=\"x\">';</script><p>a</p></div><b>after</b>";
+        assert_eq!(
+            inner(html),
+            Some("<script>var s = '<div class=\"x\">';</script><p>a</p>")
+        );
+    }
+
+    #[test]
+    fn div_close_inside_a_script_does_not_close_early() {
+        let html = "<div dj-root><script>var s = '</div>';</script><p>a</p></div><b>after</b>";
+        assert_eq!(
+            inner(html),
+            Some("<script>var s = '</div>';</script><p>a</p>")
+        );
+    }
+
+    #[test]
+    fn style_body_is_raw_text() {
+        let html = "<div dj-root><style>/* <div> */ .x{}</style></div><b>after</b>";
+        assert_eq!(inner(html), Some("<style>/* <div> */ .x{}</style>"));
+    }
+
+    #[test]
+    fn html_comment_with_a_phantom_root_before_the_real_one() {
+        // A comment containing `>` used to end the `<!` skip early.
+        let html = "<!-- <div dj-root> --><div dj-root><p>a</p></div>";
+        assert_eq!(inner(html), Some("<p>a</p>"));
+    }
+
+    #[test]
+    fn script_tag_case_and_attributes() {
+        let html = "<div dj-root><SCRIPT type=\"module\">// <div>\n</SCRIPT ></div><b>after</b>";
+        assert_eq!(
+            inner(html),
+            Some("<SCRIPT type=\"module\">// <div>\n</SCRIPT >")
+        );
+    }
+
+    #[test]
+    fn scripted_is_not_script() {
+        // `<scripted>` is an ordinary (unknown) element, not a raw-text one.
+        let html = "<div dj-root><scripted><div>x</div></scripted></div><b>after</b>";
+        assert_eq!(inner(html), Some("<scripted><div>x</div></scripted>"));
+    }
+
+    #[test]
+    fn unterminated_script_runs_to_eof_and_returns_none() {
+        let html = "<div dj-root><script>// <div dj-root>";
+        assert_eq!(find_dj_root_content_range(html), None);
+    }
 }
 
 #[cfg(test)]
