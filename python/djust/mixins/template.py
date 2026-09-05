@@ -1084,6 +1084,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             temp_rust = RustLiveView(self._full_template, template_dirs)
 
             safe_keys = []
+            context_for_sidecar: Optional[Dict[str, Any]] = None
             if serialized_context is not None:
                 from ..serialization import normalize_django_value
                 from ..mixins.rust_bridge import _collect_safe_keys
@@ -1117,19 +1118,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 # independent bug this removal also closes, since
                 # `normalize_django_value` preserves it.
                 #
-                # `.render` (the dotted spelling) does NOT resolve on this
-                # path either way: `temp_rust` (below) has no
-                # `set_raw_py_values` sidecar wired, on EITHER branch, so a
-                # miss here renders empty rather than falling through to the
-                # #2501 attribute walk. That gap is pre-existing on the
-                # ALREADY-correct sibling branch too — not introduced or
-                # fixed by this change, and out of scope for it (tracked
-                # separately rather than folded in, per #1079).
+                # `.render` (the dotted spelling) resolves on this path since
+                # #2589 wired the raw-Python sidecar onto `temp_rust` (below,
+                # `_set_shell_sidecar`) on BOTH branches — a miss on the
+                # eager dict falls through to the #2501 attribute walk, as it
+                # does on the dj-root / WS render.
                 rendered_context = {
                     key: value
                     for key, value in context.items()
                     if not isinstance(value, HttpRequest)
                 }
+                context_for_sidecar = context
 
                 from ..serialization import normalize_django_value
                 from ..mixins.rust_bridge import _collect_safe_keys
@@ -1141,6 +1140,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             temp_rust.update_state(json_compatible_context)
             if safe_keys:
                 temp_rust.mark_safe_keys(safe_keys)
+            # #2589: the page shell gets the SAME raw-Python sidecar the
+            # dj-root / WS render gets (``_sync_state_to_rust``), so
+            # ``{% querystring %}`` sees ``request`` and ``{{ obj.prop }}``
+            # resolves through the #2501 attribute walk here too (#1646).
+            # ``build_render_sidecar`` is the shared builder the three
+            # non-LiveView entries use; it protects models behind the
+            # serialization floor. ``request`` is request-scoped: it rides
+            # the sidecar only and never enters ``update_state``.
+            self._set_shell_sidecar(temp_rust, request, serialized_context, context_for_sidecar)
             shell_html = temp_rust.render()
 
             # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
@@ -1190,6 +1198,43 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return shell_html
         else:
             return self.render(request)
+
+    def _set_shell_sidecar(
+        self,
+        temp_rust: Any,
+        request: Optional["HttpRequest"],
+        serialized_context: Optional[Dict[str, Any]],
+        raw_context: Optional[Dict[str, Any]],
+    ) -> None:
+        """Wire the raw-Python sidecar onto the page-shell renderer (#2589).
+
+        Source of raw objects, in precedence order: the view's pre-processor
+        context (``_cached_context`` — the HTTP-GET entry normalizes models to
+        dicts BEFORE passing ``serialized_context``, so the raw models live
+        only there), then whatever the caller passed, then ``request``.
+        """
+        if not hasattr(temp_rust, "set_raw_py_values"):
+            return
+        source: Dict[str, Any] = {}
+        if serialized_context is not None:
+            source.update(serialized_context)
+        if raw_context is not None:
+            source.update(raw_context)
+        cached = getattr(self, "_cached_context", None)
+        if cached:
+            source.update(cached)
+        if request is not None:
+            source["request"] = request
+        try:
+            from ..serialization import build_render_sidecar
+
+            temp_rust.set_raw_py_values(build_render_sidecar(source))
+        except Exception:
+            logger.warning(
+                "page-shell sidecar unavailable; object attribute lookups on the shell "
+                "will resolve as empty",
+                exc_info=True,
+            )
 
     def render_with_diff(
         self,
