@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from typing import Any, Hashable, List, Tuple
 
-__all__ = ["deep_fingerprint", "DEFAULT_BUDGET"]
+__all__ = ["deep_fingerprint", "warn_fingerprint_truncated", "DEFAULT_BUDGET"]
 
 #: Maximum container nodes + leaves visited per top-level value before the
 #: walk degrades to identity for whatever remains.
@@ -56,6 +56,35 @@ _TAG_TUPLE = "T"
 _TAG_DICT = "D"
 _TAG_SET = "S"
 _TAG_TRUNCATED = "x"
+
+
+def warn_fingerprint_truncated(cls: type, name: str, value: Any) -> None:
+    """Warn ONCE per (view class, attribute) that *name* exceeded the budget.
+
+    Both change-detection sites that can hit the budget — the pre/post event
+    snapshot (``websocket._snapshot_assigns``) and the Rust state sync
+    (``rust_bridge._sync_state_to_rust``) — call this with the same key, so
+    an attribute that trips both is reported once, and a SECOND oversized
+    attribute on the same view is still reported (per-attribute sentinel,
+    not per-class).
+    """
+    from .utils import emit_one_shot_class_warning
+
+    emit_one_shot_class_warning(
+        cls,
+        "fingerprint_truncated_%s" % name,
+        "[djust] %s: %s '%s' has %d items and exceeds the change-detection "
+        "budget (%d nodes) — content fingerprint truncated. In-place mutations "
+        "inside it will NOT be detected by auto-diff. Use "
+        "self.set_changed_keys({'%s'}) or assign a new %s reference.",
+        cls.__qualname__,
+        type(value).__name__,
+        name,
+        len(value) if hasattr(value, "__len__") else 0,
+        DEFAULT_BUDGET,
+        name,
+        type(value).__name__,
+    )
 
 
 def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable, bool]:

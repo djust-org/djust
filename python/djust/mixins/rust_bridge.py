@@ -9,11 +9,11 @@ from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
 
-from ..change_detection import DEFAULT_BUDGET, deep_fingerprint
+from ..change_detection import deep_fingerprint, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..template_filters import _ensure_custom_filters_bridged
-from ..utils import emit_one_shot_class_warning, get_template_dirs
+from ..utils import get_template_dirs
 from ..render_env import apply_render_env
 from .context import _is_json_serializable
 
@@ -800,21 +800,7 @@ class RustBridgeMixin:
                     fp, truncated = deep_fingerprint(value)
                     new_fps[key] = fp
                     if truncated:
-                        _cls = type(self)
-                        emit_one_shot_class_warning(
-                            _cls,
-                            "context_fingerprint_truncated",
-                            "[djust] %s: context value '%s' (%s) exceeds the "
-                            "change-detection budget (%d nodes) — fingerprint "
-                            "truncated. In-place mutations inside it will NOT "
-                            "be detected. Use self.set_changed_keys({'%s'}) or "
-                            "assign a new value.",
-                            _cls.__qualname__,
-                            key,
-                            type(value).__name__,
-                            DEFAULT_BUDGET,
-                            key,
-                        )
+                        warn_fingerprint_truncated(type(self), key, value)
                 return fp
 
             # _force_full_html: bypass ALL change tracking and send everything.

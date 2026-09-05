@@ -151,13 +151,16 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # which is the structural fingerprint of the PREVIOUS render and
         # therefore the single largest value on the instance (measured:
         # 12.8k nodes vs 153 for the 50-row ``rows`` list on the
-        # model-backed benchmark). None of them is user state.
+        # model-backed benchmark). The test for membership is "is it ever
+        # read by a template?", NOT "is it set after __init__": ``_action_state``
+        # (splatted into the context by ``mixins/context.py`` — an ``@action``
+        # that only records an error must re-render) and ``_dirty_baseline``
+        # (behind the template-readable ``is_dirty`` / ``changed_fields``)
+        # are deliberately NOT here.
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
-        "_dirty_baseline",
         "_rust_render_timing",
-        "_action_state",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
         "_context_processor_keys",
