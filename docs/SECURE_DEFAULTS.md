@@ -45,10 +45,10 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > - **Proxies** — every model/manager/queryset entering the sidecar is wrapped
 >   in `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`),
 >   which **transitively** protect everything they return
->   (`_protect_sidecar_value`), refuse the SAME floor fields (via
->   `_field_is_serializable`) and the SAME sensitive methods
->   (`_SENSITIVE_MODEL_METHODS`, shared with `_add_safe_model_methods` so the
->   two paths can't drift), refuse `_`-prefixed names (Django parity), and
+>   (`_protect_sidecar_value`), refuse exactly what the eager dict refuses —
+>   the floor fields, the sensitive method NAMES and `_`-prefixed names — by
+>   calling the SAME per-attribute authority the eager loops call
+>   (`DjangoJSONEncoder._attr_is_serializable`, #2614; see below), and
 >   **refuse `.values()`/`.values_list()` projections wholesale** (their rows
 >   have no model identity to floor; precompute in `get_context_data()`).
 > - **Chokepoint 1 (getattr walk)** — the Rust resolve walk
@@ -128,6 +128,32 @@ flag, a PII column — because serialization defaulted to *allow everything*.
      floor-cleared) fields — a field passes iff it is in the allowlist (or was
      explicitly opted in via `optout`).
   4. Otherwise the field is serialized.
+- `_attr_is_serializable(name, denied, allowed, optout=frozenset())` — the
+  **single per-attribute authority** (#2614) that every channel deciding
+  whether a model attribute ships calls, and the ONLY production reader of
+  `_SENSITIVE_MODEL_METHODS`: the eager field loop (`_serialize_model_safely`),
+  the eager `get_*` method loop (`_add_safe_model_methods`), the eager
+  `@property` loop (`_add_property_values`) and the sidecar proxy
+  (`_SidecarModelProxy.__getattr__`). Fail-closed precedence, each step can
+  only deny: (1) a `_`-prefixed name is refused; (2) a sensitive / expensive
+  model-method NAME (`_SENSITIVE_MODEL_METHODS` + the `get_next_by_` /
+  `get_previous_by_` prefixes) is refused **whatever kind of attribute carries
+  it** — a method, a `@property` that shadows it, or a field — and neither the
+  `djust_serializable_fields` allowlist nor the `djust_serialize_sensitive_fields`
+  opt-out lifts it (the opt-out is documented for floor FIELDS only; widening
+  it to the method set would re-expose `get_session_auth_hash` behind a flag
+  named for fields, #1868); (3) otherwise `_field_is_serializable` above.
+
+  Before #2614 the `@property` loop consulted only `_field_is_serializable`
+  while the proxy also refused the method set, so a `@property` named
+  `get_session_auth_hash` was serialized eagerly and refused lazily — and the
+  permissive channel won, because the Rust engine reads the eager dict BEFORE
+  it falls back to the sidecar (the proxy's refusal was moot for that name).
+  `python/djust/tests/test_property_shadow_parity_2614.py` pins the parity
+  matrix (every floor name, every sensitive-method name, both prefixes, a
+  `_`-prefixed name and the exact-match spelling variants) against both
+  channels, each channel independently, a real GET + WS mount/event, and the
+  structural pin that all four sites call the chokepoint.
 - `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
   (the #1987 **TYPE floor**) — the single authority the eager loop
   (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
