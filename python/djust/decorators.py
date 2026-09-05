@@ -12,6 +12,7 @@ import threading
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional, overload
 
 from ._deprecation import warn_deprecated
+from .change_detection import deep_fingerprint
 from ._template_guards import alters_data  # noqa: F401 — re-export
 
 
@@ -734,12 +735,9 @@ def computed(*deps: Any) -> Any:
                     parts.append((name, _MISSING_TAG))
                 elif isinstance(v, (int, float, bool, str, bytes)) or v is None:
                     parts.append((name, "v", v))
-                elif isinstance(v, (list, tuple)):
-                    parts.append((name, "seq", id(v), len(v)))
-                elif isinstance(v, dict):
-                    parts.append((name, "dict", id(v), len(v), tuple(v.keys())[:16]))
-                elif isinstance(v, set):
-                    parts.append((name, "set", id(v), len(v)))
+                elif isinstance(v, (list, tuple, dict, set, frozenset)):
+                    # Structural (#2664): an in-place edit of a dep invalidates.
+                    parts.append((name, "c", id(v), deep_fingerprint(v)[0]))
                 else:
                     parts.append((name, "id", id(v)))
             return tuple(parts)

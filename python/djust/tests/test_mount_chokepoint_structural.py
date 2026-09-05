@@ -242,8 +242,18 @@ _SETATTR_WHITELIST = {
     # re-verified sanctioned: still the same two DynamicLiveView
     # developer-dict setattr lines (class at 1328, ``result = func(request,
     # ...)`` at 1339), not a new client-controlled setattr.
-    ("live_view.py", 1343),
-    ("live_view.py", 1345),
+    # shifted +20 (1343/1345 → 1363/1365) by #2664: the lazily-assigned
+    # framework bookkeeping block added to ``_FRAMEWORK_INTERNAL_ATTRS``
+    # (``_prev_context_fingerprints`` etc.) — re-verified sanctioned: still
+    # the same two DynamicLiveView developer-dict setattr lines.
+    # +3 (1363/1365 → 1366/1368) by the #2682 review fix: the membership-rule
+    # comment on that block grew while ``_action_state``/``_dirty_baseline``
+    # were removed from it. Still the same two sites.
+    # +12 (1366/1368 → 1378/1380) by the #2682 re-review: the
+    # ``_dirty_baseline`` rationale comment + ``_dirty_baseline_version``
+    # bump in ``_capture_dirty_baseline``. Still the same two sites.
+    ("live_view.py", 1378),
+    ("live_view.py", 1380),
 }
 
 

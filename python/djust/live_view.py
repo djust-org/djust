@@ -13,6 +13,7 @@ from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
+from .change_detection import deep_fingerprint
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
     StateRoundtripJSONEncoder,
@@ -142,6 +143,37 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # mechanism (and made the "setting _changed_keys directly is
         # ineffective" doc claim false).
         "_changed_keys",
+        # Lazily-assigned framework bookkeeping (#2664). These are written
+        # AFTER ``__init__`` (first render / first event / first dirty
+        # baseline), so they are NOT in the ``_framework_attrs`` snapshot
+        # taken at init and ``_snapshot_assigns`` would otherwise fingerprint
+        # them as user state — including ``_prev_context_fingerprints``,
+        # which is the structural fingerprint of the PREVIOUS render and
+        # therefore the single largest value on the instance (measured:
+        # 12.8k nodes vs 153 for the 50-row ``rows`` list on the
+        # model-backed benchmark). The test for membership is "is it ever
+        # read by a template?", NOT "is it set after __init__": ``_action_state``
+        # (splatted into the context by ``mixins/context.py`` — an ``@action``
+        # that only records an error must re-render) is deliberately NOT here.
+        # ``_dirty_baseline`` IS here even though the template-readable
+        # ``is_dirty`` / ``changed_fields`` derive from it: it is the
+        # fingerprint of EVERY public attr, so walking it re-walks the whole
+        # state per event (measured 12.2k nodes vs 3.0k for the data, 7.6x
+        # slower, and it trips the budget with a warning naming it). The one
+        # thing that changes it without touching public state —
+        # ``mark_clean()`` — is made visible by ``_dirty_baseline_version``, a
+        # small counter ``_capture_dirty_baseline`` bumps that IS snapshotted.
+        "_prev_context_refs",
+        "_prev_context_immutables",
+        "_prev_context_fingerprints",
+        "_dirty_baseline",
+        "_rust_render_timing",
+        "_djust_mount_kwargs",
+        "_jit_serialized_keys",
+        "_context_processor_keys",
+        "_cached_csrf_token",
+        "_template_deps",
+        "_sync_done_this_cycle",
         "_force_full_html",
     }
 )
@@ -641,9 +673,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def _dirty_fingerprint(self) -> Dict[str, Any]:
         """Shallow fingerprint of public assigns for dirty tracking.
 
-        Mirrors the WS consumer's ``_snapshot_assigns`` but scoped to public
-        attributes only (no leading underscore), so dirty tracking never
-        reports framework-internal changes.
+        Mirrors the WS consumer's ``_snapshot_assigns`` (same structural
+        ``deep_fingerprint``, #2664) but scoped to public attributes only (no
+        leading underscore), so dirty tracking never reports framework-internal
+        changes.
         """
         static_skip = set(getattr(self, "static_assigns", []))
         fp: Dict[str, Any] = {}
@@ -652,12 +685,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 continue
             if isinstance(v, (int, float, bool, str, bytes)) or v is None:
                 fp[k] = ("v", v)
-            elif isinstance(v, (list, tuple)):
-                fp[k] = ("seq", id(v), len(v))
-            elif isinstance(v, dict):
-                fp[k] = ("dict", id(v), len(v), tuple(v.keys())[:16])
-            elif isinstance(v, set):
-                fp[k] = ("set", id(v), len(v))
+            elif isinstance(v, (list, tuple, dict, set, frozenset)):
+                # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty.
+                fp[k] = ("c", id(v), deep_fingerprint(v)[0])
             else:
                 fp[k] = ("id", id(v))
         return fp
@@ -669,6 +699,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         whenever the user calls :meth:`mark_clean`.
         """
         self._dirty_baseline = self._dirty_fingerprint()
+        # Snapshotted stand-in for the (excluded, large) baseline: a
+        # ``mark_clean()``-only handler flips ``is_dirty`` and must re-render
+        # (#2682 review). Assigned here, not in ``__init__``, so it is not in
+        # the ``_framework_attrs`` set and ``_snapshot_assigns`` sees it.
+        self._dirty_baseline_version = getattr(self, "_dirty_baseline_version", 0) + 1
 
     def mark_clean(self) -> None:
         """Reset the dirty-tracking baseline to the current state.

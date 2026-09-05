@@ -10,6 +10,7 @@ import msgpack
 from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from .change_detection import deep_fingerprint, warn_fingerprint_truncated
 from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params
 from .profiler import profiler
@@ -323,20 +324,19 @@ def _should_expose_timing() -> bool:
 
 
 def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
-    """Fast identity+hash snapshot of public assigns for change detection.
+    """Identity + structural snapshot of public assigns for change detection.
 
-    Uses id() for all values plus a shallow fingerprint for mutable
-    containers (list length, dict length+keys, set length) to detect
-    common in-place mutations without the cost of copy.deepcopy().
-
-    This is ~100x faster than deep copy for views with many attributes.
-    Trade-off: deep nested in-place mutations (e.g., items[0]['name'] = 'x')
-    are NOT detected. For those, call ``self.set_changed_keys('items')`` after
-    the mutation to force a re-render, or assign a new value built immutably
-    (which djust diffs efficiently). Setting ``self._changed_keys`` directly does
-    NOT help: it is excluded from this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``),
-    so the pre/post skip still fires — the render-forcing mechanism is the
-    ``_force_full_html`` flag that ``set_changed_keys()`` sets.
+    Uses id() for every value plus :func:`djust.change_detection.deep_fingerprint`
+    for mutable containers, so an in-place mutation anywhere inside a
+    dict/list/set of plain data (``self.columns["done"].append(card)``,
+    ``self.items[0]["name"] = "x"``) is detected without ``copy.deepcopy``
+    (#2664). Objects that are not plain containers (model instances, forms)
+    are leaves compared by id(): a reassignment is seen, an in-place attribute
+    write on them is not — call ``self.set_changed_keys('items')`` for that.
+    Setting ``self._changed_keys`` directly does NOT help: it is excluded from
+    this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so the pre/post skip still
+    fires — the render-forcing mechanism is the ``_force_full_html`` flag that
+    ``set_changed_keys()`` sets.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
@@ -349,67 +349,20 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     for k, v in view_instance.__dict__.items():
         if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
-        # Identity + shallow fingerprint for mutable containers
+        # Identity + STRUCTURAL fingerprint for mutable containers (#2664):
+        # ``deep_fingerprint`` walks dict/list/tuple/set down to the leaves
+        # and shares no reference with the state, so ``columns["done"]
+        # .append(card)`` changes the post-snapshot. The budget bounds the
+        # cost; past it the remainder collapses to id() and we say so once.
         vid = id(v)
-        if isinstance(v, list):
-            # Include a content fingerprint to catch in-place mutations
-            # inside the list (e.g., todo['completed'] = True, matrix[0].append(5)).
-            if v and len(v) < 100:
-                try:
-                    content_fp = hash(
-                        tuple(
-                            (
-                                id(item),
-                                tuple(item.values())
-                                if isinstance(item, dict) and len(item) < 10
-                                else id(item),
-                            )
-                            for item in v
-                        )
-                    )
-                    snapshot[k] = (vid, len(v), content_fp)
-                except TypeError:
-                    # Unhashable values — fall back to id+length only
-                    snapshot[k] = (vid, len(v))
-            else:
-                snapshot[k] = (vid, len(v))
-                if v and len(v) >= 100:
-                    from .utils import emit_one_shot_class_warning
-
-                    _cls = type(view_instance)
-                    emit_one_shot_class_warning(
-                        _cls,
-                        "snapshot_list_truncated",
-                        "[djust] %s: list '%s' has %d items — content "
-                        "fingerprint truncated. In-place mutations inside "
-                        "list elements will NOT be detected by auto-diff. "
-                        "Use self.set_changed_keys({'%s'}) or assign a "
-                        "new list reference.",
-                        _cls.__qualname__,
-                        k,
-                        len(v),
-                        k,
-                    )
-        elif isinstance(v, dict):
-            snapshot[k] = (vid, len(v), tuple(v.keys()) if len(v) < 50 else len(v))
-            if len(v) >= 50:
-                from .utils import emit_one_shot_class_warning
-
-                _cls = type(view_instance)
-                emit_one_shot_class_warning(
-                    _cls,
-                    "snapshot_dict_truncated",
-                    "[djust] %s: dict '%s' has %d keys — key fingerprint "
-                    "truncated. Key additions/removals will NOT be detected "
-                    "by auto-diff. Use self.set_changed_keys({'%s'}) or "
-                    "assign a new dict reference.",
-                    _cls.__qualname__,
-                    k,
-                    len(v),
-                    k,
-                )
-        elif isinstance(v, set):
-            snapshot[k] = (vid, len(v))
+        if isinstance(v, (list, dict, set, tuple, frozenset)):
+            # A tuple is immutable but its ITEMS need not be (``([1],)``), so
+            # it is walked like the other containers — the same set of types
+            # ``_dirty_fingerprint`` and ``@computed`` walk (#2682 review).
+            content_fp, truncated = deep_fingerprint(v)
+            snapshot[k] = (vid, len(v), content_fp)
+            if truncated:
+                warn_fingerprint_truncated(type(view_instance), k, v)
         elif isinstance(v, _IMMUTABLE_TYPES):
             snapshot[k] = v
         else:
