@@ -317,6 +317,12 @@ impl Template {
             if let Some(name) = template_name {
                 let mut nodes = self.nodes.clone();
                 inheritance::set_include_origins(&mut nodes, name)?;
+                inheritance::set_ifchanged_origins(
+                    &mut nodes,
+                    &loader
+                        .template_origin(name)
+                        .unwrap_or_else(|| name.to_string()),
+                );
                 render_nodes_with_loader(&nodes, context, Some(loader))
             } else {
                 render_nodes_with_loader(&self.nodes, context, Some(loader))

@@ -160,6 +160,7 @@ struct ScopeFrame {
     aliases: AHashMap<String, Option<String>>,
     render_bindings: AHashSet<String>,
     loop_scope: Option<u64>,
+    render_scope: Option<u64>,
 }
 
 impl std::ops::Deref for ScopeFrame {
@@ -234,8 +235,8 @@ pub struct Context {
     /// so two `{% include %}`s of one template share a node's state exactly
     /// as Django's cached `Template` shares its `CycleNode` objects.
     cycle_state: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
-    /// Per-RENDER state for `{% ifchanged %}`: `"<loop scope>|<node id>" ->
-    /// the last compared value`. Django keeps this in the frame returned by
+    /// Per-render `{% ifchanged %}` state, keyed by loop/render frame, source
+    /// origin, and node id, storing the last compared value. Django keeps this in the frame returned by
     /// `IfChangedNode._get_context_stack_frame` — `context["forloop"]` when
     /// inside a loop, else `context.render_context` — keyed by the node.
     ///
@@ -249,8 +250,8 @@ pub struct Context {
     /// Shared through the same `Arc` as `cycle_state` and for the same
     /// reason (`Context.__copy__` shallow-copies `render_context`).
     ifchanged_state: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
-    /// Mints `loop_scope` values. Shared like `cycle_state` so two sibling
-    /// loops in one render can never collide on an id.
+    /// Mints loop and template-render frame identities. Shared across clones
+    /// so sibling frames in one render cannot collide.
     loop_scope_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Django's `Engine.string_if_invalid` — what `{{ missing }}` renders.
     ///
@@ -471,6 +472,16 @@ impl Context {
         self.stack.last_mut().unwrap().loop_scope = Some(id);
     }
 
+    /// Template.render pushes fresh render_context state for each include.
+    /// Loop-bound ifchanged state still belongs to the enclosing forloop.
+    pub fn begin_template_render(&mut self) {
+        let id = self
+            .loop_scope_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        self.stack.last_mut().unwrap().render_scope = Some(id);
+    }
+
     /// Set Django's `string_if_invalid` for this render.
     pub fn set_string_if_invalid(&mut self, value: impl Into<String>) {
         self.string_if_invalid = value.into();
@@ -510,7 +521,21 @@ impl Context {
     /// resolved value equals) or when `value` differs from the stored one,
     /// and stores `value` in that case. Returns `false` when unchanged.
     pub fn ifchanged_step(&self, id: &str, value: &str) -> bool {
-        let key = format!("{}|{}", self.loop_scope(), id);
+        self.ifchanged_step_in_template(id, None, value)
+    }
+
+    pub fn ifchanged_step_in_template(&self, id: &str, origin: Option<&str>, value: &str) -> bool {
+        let loop_scope = self.loop_scope();
+        let render_scope = if loop_scope == 0 {
+            self.stack
+                .iter()
+                .rev()
+                .find_map(|frame| frame.render_scope)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let key = format!("{:?}", (loop_scope, render_scope, origin, id));
         let mut state = self
             .ifchanged_state
             .lock()

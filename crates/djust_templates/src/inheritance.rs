@@ -115,6 +115,22 @@ fn attach_include_origins(nodes: &mut [Node], name: &str) {
     }
 }
 
+/// Preserve node identity across files with identical template source.
+/// Loaded parent origins survive block merging; the same cached origin keeps
+/// sharing its state when included repeatedly inside a loop.
+pub fn set_ifchanged_origins(nodes: &mut [Node], template_origin: &str) {
+    for node in nodes {
+        if let Node::IfChanged { origin, .. } = node {
+            if origin.is_none() {
+                *origin = Some(template_origin.to_string());
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            set_ifchanged_origins(children, template_origin);
+        }
+    }
+}
+
 /// Represents a template in the inheritance chain
 #[derive(Debug, Clone)]
 pub struct TemplateLayer {
@@ -455,6 +471,12 @@ pub trait TemplateLoader {
     fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
         let mut nodes = self.load_template(name)?;
         set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(
+            &mut nodes,
+            &self
+                .template_origin(name)
+                .unwrap_or_else(|| name.to_string()),
+        );
         Ok(std::sync::Arc::from(nodes))
     }
 }
@@ -587,6 +609,12 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
     let mut nodes = nodes;
     if let Some(name) = template_name {
         set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(
+            &mut nodes,
+            &loader
+                .template_origin(name)
+                .unwrap_or_else(|| name.to_string()),
+        );
     }
     let mut chain = InheritanceChain::new(nodes);
     let mut depth = 0;
@@ -617,6 +645,7 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
                 history.push(origin);
             }
             set_include_origins(&mut parent_nodes, &parent_name)?;
+            set_ifchanged_origins(&mut parent_nodes, &parent_name);
             chain.add_parent(parent_nodes);
             current_name = Some(parent_name);
             depth += 1;
@@ -799,6 +828,7 @@ impl FilesystemTemplateLoader {
         let mut nodes = crate::parser::parse_with_source(&tokens, &source)
             .map_err(DjangoRustError::into_template_syntax)?;
         set_include_origins(&mut nodes, name)?;
+        set_ifchanged_origins(&mut nodes, &path.to_string_lossy());
         Ok(nodes)
     }
 }
@@ -874,6 +904,7 @@ impl TemplateLoader for FilesystemTemplateLoader {
         let mut nodes_vec = parser::parse_with_source(&tokens, &source)
             .map_err(DjangoRustError::into_template_syntax)?;
         set_include_origins(&mut nodes_vec, name)?;
+        set_ifchanged_origins(&mut nodes_vec, &path.to_string_lossy());
         let arc: Arc<[Node]> = Arc::from(nodes_vec);
 
         let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {

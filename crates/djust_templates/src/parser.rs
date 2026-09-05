@@ -178,6 +178,7 @@ pub enum Node {
     /// alongside the cycle ids — the per-render state it keys lives on the
     /// `Context`, exactly as `{% cycle %}`'s does.
     IfChanged {
+        origin: Option<String>,
         vars: Vec<String>,
         id: String,
         nodes: Vec<Node>,
@@ -1668,6 +1669,7 @@ fn parse_token_inner(
                     };
                     *i = end_pos;
                     Ok(Some(Node::IfChanged {
+                        origin: None,
                         vars: args.clone(),
                         id: String::new(),
                         nodes,
@@ -5863,6 +5865,7 @@ mod dep_tests {
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::IfChanged {
+                origin: None,
                 vars: vec!["a".into()],
                 id: String::new(),
                 nodes: vec![Node::Variable("a".into(), vec![], false)],

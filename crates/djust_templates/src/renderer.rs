@@ -3284,6 +3284,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 }
                 let bound: Vec<&str> = with_vars.iter().map(|(name, _)| name.as_str()).collect();
                 let render_include = |include_context: &mut Context| {
+                    include_context.begin_template_render();
                     for (name, value, safe) in bindings {
                         include_context.bind(name, value, safe);
                     }
@@ -3614,6 +3615,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
         }
 
         Node::IfChanged {
+            origin,
             vars,
             id,
             nodes,
@@ -3646,7 +3648,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 (parts.join("\u{1f}"), None)
             };
 
-            if context.ifchanged_step(id, &compare_to) {
+            if context.ifchanged_step_in_template(id, origin.as_deref(), &compare_to) {
                 match rendered {
                     Some(body) => Ok(body),
                     None => render_nodes_with_loader_mut(nodes, context, loader),
