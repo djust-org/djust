@@ -515,6 +515,12 @@ def _bridge_library(label: str, library: Any) -> None:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
         return
+    if _loaded.get(label) is library:
+        # Already bridged, same library object: re-registering every tag on
+        # every `{% load %}` bumped the registry generation DURING the parse,
+        # so a template loading a tag-bearing library never hit the template
+        # cache and invalidated everyone else's entry (#2668 review).
+        return
     from .template_filters import bridge_library_filters
 
     _arm_scope_tags(module)

@@ -75,10 +75,23 @@ def compile_template(
     block — and returns ``None`` otherwise. A successful parse is stored in
     the engine's template cache, so the render that follows does not parse
     again; a failed parse is never cached. A cached parse is reused only
-    while the tag/filter registry is unchanged — any register/unregister/
-    clear bumps a generation counter and the next compile re-parses, so
-    a template is always validated against the current library set. Set ``return_template=True`` to
+    while the tag AND filter registries are unchanged — any register/
+    unregister/clear of a tag handler, scope tag, or custom filter bumps a
+    generation counter (after the write completes) and the next compile
+    re-parses, so a template is always validated against the current
+    library set. A `{% load %}` of an already-bridged library does not bump. Set ``return_template=True`` to
     retain the immutable compiled handle for subsequent rendering.
+    """
+    ...
+
+def registry_generation() -> int:
+    """Current tag/filter registry generation (test-support probe, #2668)."""
+    ...
+
+def template_compiled_at_generation(template_source: str) -> int | None:
+    """Generation the cached parse of this exact source was validated under
+    (``None`` if ``compile_template`` has not stored it). Equal to
+    ``registry_generation()`` means the next ``compile_template`` is a hit.
     """
     ...
 

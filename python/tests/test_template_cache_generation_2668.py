@@ -1,0 +1,71 @@
+"""The template-cache generation gate must actually HIT for real templates.
+
+#2668 review: every `{% load %}` of a tag-bearing library re-registered its
+handlers during the parse, bumping the registry generation, so such templates
+never hit the cache and invalidated everyone else's entry. Measured: three
+consecutive compiles of a `{% load i18n %}` template took 62/65/63 ms — no hit.
+
+These assertions are deterministic (the two `_rust` probes), not timing-based.
+"""
+
+import pytest
+
+from djust import _rust
+
+pytestmark = pytest.mark.django_db
+
+
+def _compile(src: str) -> None:
+    _rust.compile_template(src, None)
+
+
+def _is_hit_next_time(src: str) -> bool:
+    """The gate's own definition of a hit: stored generation == current."""
+    stored = _rust.template_compiled_at_generation(src)
+    return stored is not None and stored == _rust.registry_generation()
+
+
+class TestLoadTemplatesHitTheCache:
+    LOAD_SRC = "{% load i18n %}{% translate 'x' as t %}[{{ t }}]-2668-load"
+    PLAIN_SRC = "{% for i in xs %}{{ i }}{% endfor %}-2668-plain"
+
+    def test_second_compile_of_a_load_template_is_a_hit(self):
+        _compile(self.LOAD_SRC)  # first parse may bridge the library (bumps)
+        _compile(self.LOAD_SRC)  # re-parse under the new generation; bridge is now idempotent
+        assert _is_hit_next_time(self.LOAD_SRC), (
+            "a template that {% load %}s an already-bridged library must not "
+            "bump the generation on every parse"
+        )
+        gen = _rust.registry_generation()
+        _compile(self.LOAD_SRC)  # the hit itself
+        assert _rust.registry_generation() == gen, "a cache hit must not bump"
+
+    def test_a_load_template_does_not_thrash_other_entries(self):
+        _compile(self.PLAIN_SRC)
+        assert _is_hit_next_time(self.PLAIN_SRC)
+        _compile(self.LOAD_SRC)
+        _compile(self.LOAD_SRC)
+        # The plain template's entry must still be current.
+        assert _is_hit_next_time(self.PLAIN_SRC), (
+            "compiling a {% load %} template invalidated an unrelated cached parse"
+        )
+
+
+class TestRegistryMutationsInvalidate:
+    SRC = "{{ v|stalefilter2668 }}"
+
+    def test_custom_filter_registration_bumps_the_generation(self):
+        before = _rust.registry_generation()
+        _rust.register_custom_filter("stalefilter2668", lambda v: v, False, False)
+        try:
+            assert _rust.registry_generation() > before, (
+                "the parser validates filter names against this registry, so "
+                "registering one must invalidate cached parses"
+            )
+            _compile(self.SRC)
+            assert _is_hit_next_time(self.SRC)
+        finally:
+            _rust.unregister_custom_filter("stalefilter2668")
+        # Unregistering bumped again: the cached parse of a now-unknown filter
+        # must NOT be served — Django raises `Invalid filter` at parse time.
+        assert not _is_hit_next_time(self.SRC)

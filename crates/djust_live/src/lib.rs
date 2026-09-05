@@ -2238,6 +2238,20 @@ fn template_cache_contains(template_source: &str) -> bool {
     TEMPLATE_CACHE.contains_key(template_source)
 }
 
+/// Current tag/filter registry generation (test-support probe, #2668).
+#[pyfunction]
+fn registry_generation() -> u64 {
+    djust_templates::registry::registry_generation()
+}
+
+/// Generation a cached parse of this exact source was validated under, or
+/// `None` if `compile_template` has not stored it (test-support probe, #2668).
+/// `== registry_generation()` means the next `compile_template` is a hit.
+#[pyfunction]
+fn template_compiled_at_generation(template_source: &str) -> Option<u64> {
+    COMPILED_AT_GENERATION.get(template_source).map(|g| *g)
+}
+
 /// Fast template rendering with template directories for {% include %} support
 ///
 /// This function extends render_template to support {% include %} tags by
@@ -4357,6 +4371,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;
     m.add_function(wrap_pyfunction!(template_cache_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(registry_generation, m)?)?;
+    m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;

@@ -136,6 +136,9 @@ pub fn register_custom_filter(
     is_safe: bool,
     needs_autoescape: bool,
 ) -> PyResult<()> {
+    // Parse validation consults this registry (`is_known_filter`), so it is
+    // part of the generation the template cache is keyed on (#2668 review).
+    let _bump = crate::registry::BumpOnReturn;
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
@@ -161,6 +164,9 @@ pub fn register_custom_filter(
 /// Unregister a custom filter (returns ``true`` if a filter was removed).
 #[pyfunction]
 pub fn unregister_custom_filter(name: &str) -> PyResult<bool> {
+    // Parse validation consults this registry (`is_known_filter`), so it is
+    // part of the generation the template cache is keyed on (#2668 review).
+    let _bump = crate::registry::BumpOnReturn;
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
@@ -179,6 +185,9 @@ pub fn has_custom_filter(name: &str) -> PyResult<bool> {
 /// Clear all registered custom filters (primarily for tests).
 #[pyfunction]
 pub fn clear_custom_filters() -> PyResult<()> {
+    // Parse validation consults this registry (`is_known_filter`), so it is
+    // part of the generation the template cache is keyed on (#2668 review).
+    let _bump = crate::registry::BumpOnReturn;
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;

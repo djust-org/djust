@@ -1903,12 +1903,22 @@ fn localize_if_number(value: &Value) -> Result<String> {
                 let Some(value) = encoded.temporal_object(py)? else {
                     return Ok(encoded.display.clone());
                 };
-                let localize = LOCALIZE.get_or_init(py, || {
-                    py.import("djust.template_libraries")
-                        .and_then(|m| m.getattr("localize_temporal"))
-                        .ok()
-                        .map(|f| f.unbind())
-                });
+                // `None` is cached ONLY for ImportError (a bare-Rust harness
+                // with no djust package); any other failure propagates and
+                // is retried next time rather than becoming a permanent
+                // silent fallback. Note the callable OBJECT is cached, so
+                // monkeypatching `djust.template_libraries.localize_temporal`
+                // after first use has no effect — patch `django.utils.formats`.
+                let localize =
+                    LOCALIZE.get_or_try_init(py, || -> PyResult<Option<Py<PyAny>>> {
+                        match py.import("djust.template_libraries") {
+                            Ok(m) => Ok(Some(m.getattr("localize_temporal")?.unbind())),
+                            Err(e) if e.is_instance_of::<pyo3::exceptions::PyImportError>(py) => {
+                                Ok(None)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    })?;
                 let Some(localize) = localize else {
                     return Ok(encoded.display.clone());
                 };
