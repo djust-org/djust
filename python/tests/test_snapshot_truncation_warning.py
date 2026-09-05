@@ -25,8 +25,10 @@ class _DictView(LiveView):
 
 def _reset_truncation_sentinels(*classes):
     for cls in classes:
-        if "_djust_warned_snapshot_truncated" in cls.__dict__:
-            delattr(cls, "_djust_warned_snapshot_truncated")
+        for attr in [
+            a for a in cls.__dict__ if a.startswith("_djust_warned_fingerprint_truncated_")
+        ]:
+            delattr(cls, attr)
 
 
 def _huge_list():
@@ -121,6 +123,21 @@ class TestSnapshotTruncationWarning:
             _snapshot_assigns(view2)
 
         assert len(caplog.records) == 2
+
+    def test_second_oversized_attr_on_the_same_view_still_warns(self, caplog):
+        """#2682 review: the sentinel is per (class, attribute), not per class,
+        so a second oversized attribute is not silenced by the first."""
+        view = _ListView()
+        view.items = _huge_list()
+        view.more = _huge_list()
+
+        with caplog.at_level(logging.WARNING, logger="djust"):
+            _snapshot_assigns(view)
+            _snapshot_assigns(view)
+
+        assert len(caplog.records) == 2
+        assert "'items'" in caplog.records[0].getMessage()
+        assert "'more'" in caplog.records[1].getMessage()
 
     def test_truncated_fingerprint_reports_truncation(self):
         fp, truncated = deep_fingerprint(_huge_list())

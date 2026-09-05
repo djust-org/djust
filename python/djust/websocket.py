@@ -10,7 +10,7 @@ import msgpack
 from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .change_detection import DEFAULT_BUDGET, deep_fingerprint
+from .change_detection import deep_fingerprint, warn_fingerprint_truncated
 from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params
 from .profiler import profiler
@@ -355,29 +355,14 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
         # .append(card)`` changes the post-snapshot. The budget bounds the
         # cost; past it the remainder collapses to id() and we say so once.
         vid = id(v)
-        if isinstance(v, (list, dict, set)):
+        if isinstance(v, (list, dict, set, tuple, frozenset)):
+            # A tuple is immutable but its ITEMS need not be (``([1],)``), so
+            # it is walked like the other containers — the same set of types
+            # ``_dirty_fingerprint`` and ``@computed`` walk (#2682 review).
             content_fp, truncated = deep_fingerprint(v)
             snapshot[k] = (vid, len(v), content_fp)
             if truncated:
-                from .utils import emit_one_shot_class_warning
-
-                _cls = type(view_instance)
-                emit_one_shot_class_warning(
-                    _cls,
-                    "snapshot_truncated",
-                    "[djust] %s: %s '%s' has %d items and exceeds the "
-                    "change-detection budget (%d nodes) — content fingerprint "
-                    "truncated. In-place mutations inside it will NOT be "
-                    "detected by auto-diff. Use self.set_changed_keys({'%s'}) "
-                    "or assign a new %s reference.",
-                    _cls.__qualname__,
-                    type(v).__name__,
-                    k,
-                    len(v),
-                    DEFAULT_BUDGET,
-                    k,
-                    type(v).__name__,
-                )
+                warn_fingerprint_truncated(type(view_instance), k, v)
         elif isinstance(v, _IMMUTABLE_TYPES):
             snapshot[k] = v
         else:

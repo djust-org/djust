@@ -26,7 +26,7 @@ import pytest
 from asgiref.sync import sync_to_async
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import action, event_handler
 
 
 class _KanbanView(LiveView):
@@ -139,6 +139,91 @@ async def test_in_place_mutation_reaches_the_browser(event):
             f"{event}: in-place mutation of kanban_columns must reach the client as a "
             f"non-empty patch/html_update; got {frame!r} (#2664)"
         )
+        await communicator.disconnect()
+
+
+class _ReviewView(LiveView):
+    """#2682 review items 1 + 2: an ``@action`` whose only effect is recording
+    an error (``_action_state`` is template-visible), and a tuple holding a
+    mutable item (tuples must be walked like every other container)."""
+
+    template = (
+        '<div dj-view="djust.tests.test_in_place_mutation_2664._ReviewView" dj-id="0">'
+        "<p>err={{ create_thing.error }}</p>"
+        "<p>tup={% for x in tup.0 %}{{ x }},{% endfor %}</p>"
+        "</div>"
+    )
+
+    # No get_context_data override: the ``_action_state`` splat lives in
+    # ContextMixin.get_context_data, which an override would bypass.
+    def mount(self, request, **kwargs):
+        self.tup = ([1],)
+
+    @action
+    def create_thing(self, **kwargs):
+        raise ValueError("nope")  # recorded into _action_state, no self.* change
+
+    @event_handler()
+    def grow_tuple_item(self, **kwargs):
+        self.tup[0].append(2)  # in-place mutation INSIDE a tuple
+
+
+async def _mounted(view_name, url):
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust.websocket import LiveViewConsumer
+
+    def _create_session():
+        s = SessionStore()
+        s.create()
+        return s.session_key
+
+    session_key = await sync_to_async(_create_session)()
+
+    class _ScopeSession:
+        def __init__(self, key):
+            self.session_key = key
+
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope["session"] = _ScopeSession(session_key)
+    connected, _ = await communicator.connect()
+    assert connected
+    await communicator.receive_json_from(timeout=2)
+    await communicator.send_json_to({"type": "mount", "view": view_name, "url": url})
+    mount_resp = await _receive_until(communicator, {"mount"})
+    assert mount_resp.get("type") == "mount", mount_resp
+    return communicator
+
+
+def _dom_changed(frame, marker) -> bool:
+    if frame.get("type") == "patch":
+        return bool(frame.get("patches"))
+    if frame.get("type") == "html_update":
+        return marker in (frame.get("html") or "")
+    return False
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event, marker",
+    [("create_thing", "err=nope"), ("grow_tuple_item", "tup=1,2,")],
+)
+async def test_action_error_and_tuple_item_mutation_reach_the_browser(event, marker):
+    """Item 1: an action that only records an error must re-render (regressed
+    when ``_action_state`` was wrongly excluded from the snapshot). Item 2: a
+    list inside a tuple mutated in place must re-render (tuples were an
+    identity leaf in ``_snapshot_assigns`` while the other three paths walked
+    them — the drift this PR claims to retire)."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        communicator = await _mounted(f"{__name__}._ReviewView", "/review/")
+        await communicator.send_json_to({"type": "event", "event": event, "params": {}, "ref": 1})
+        frame = await _receive_until(communicator, {"patch", "html_update", "noop"})
+        assert _dom_changed(frame, marker), f"{event}: expected a DOM update, got {frame!r}"
         await communicator.disconnect()
 
 
