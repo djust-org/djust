@@ -2519,9 +2519,25 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // never a context key (#2529): a user context key of the old
                     // name `__djust_if_loop_path` was interpolated raw here and
                     // forged live markup. The accessor's grammar is `(-<digits>)*`.
+                    //
+                    // The per-instance namespace (#2686) is the same idea on
+                    // the instance axis: `id` is derived from the template
+                    // SOURCE, so two `template_name` LiveComponent instances of
+                    // one class — each a fresh `RustLiveView` whose counter
+                    // restarts at 0 — emit the identical `if-<hash>-0` into one
+                    // parent buffer, and the client resolves subtree patches by
+                    // FIRST match. Also a `Context` FIELD with a validated
+                    // grammar (`[A-Za-z0-9_]*`) for the #2529 reason. Empty for
+                    // every non-component render, so ids are unchanged there.
+                    let namespace = context.dj_if_id_namespace();
+                    let namespace = if namespace.is_empty() {
+                        String::new()
+                    } else {
+                        format!("-{namespace}")
+                    };
                     let loop_path = context.dj_if_loop_path();
                     return Ok(format!(
-                        "<!--dj-if id=\"{id}{loop_path}\"-->{body}<!--/dj-if-->"
+                        "<!--dj-if id=\"{id}{namespace}{loop_path}\"-->{body}<!--/dj-if-->"
                     ));
                 }
             }
@@ -3355,6 +3371,10 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // iteration, so its `{% if %}` ids must carry the same
                         // per-iteration suffix (#1832, #2529).
                         fresh.set_dj_if_loop_path(context.dj_if_loop_path());
+                        // Likewise the enclosing component instance: a marker
+                        // inside a component's `{% include … only %}` still
+                        // belongs to that component's namespace (#2686).
+                        fresh.set_dj_if_id_namespace(context.dj_if_id_namespace());
                         // Django's `context.new()` is `copy(self)`, so the
                         // `{% autoescape %}` policy crosses an `only` include
                         // (#2556, `include14`).

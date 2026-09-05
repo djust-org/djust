@@ -267,6 +267,16 @@ pub struct RustLiveViewBackend {
     /// not part of `SerializableViewState` — Python re-wires it on each
     /// view (re)initialization.
     template_auto_call: bool,
+    /// Per-instance namespace stamped into this view's `<!--dj-if id=...-->`
+    /// marker ids (#2686). Empty by default, so a plain LiveView's ids are
+    /// byte-identical to before. Set by the Python `LiveComponent`
+    /// `template_name` render entry, which renders each component instance on
+    /// its OWN `RustLiveView` over the SAME template source — so without a
+    /// namespace two instances both emit `if-<hash>-0` and the client, which
+    /// resolves subtree patches by first match, patches the wrong instance.
+    /// The `{% for %}` axis of the same problem is `Context::dj_if_loop_path`
+    /// (#1832). Transient, like `template_auto_call`.
+    dj_if_id_namespace: String,
 }
 
 #[derive(Clone, Debug)]
@@ -314,6 +324,9 @@ impl RustLiveViewBackend {
             // Default-ON (ADR-024, Django parity); the Python config
             // kill-switch flips it via set_template_auto_call.
             template_auto_call: true,
+            // Empty = no namespace segment in marker ids (#2686). Only the
+            // LiveComponent template_name entry sets one.
+            dj_if_id_namespace: String::new(),
         }
     }
 
@@ -363,6 +376,40 @@ impl RustLiveViewBackend {
     /// Whether template auto-call is currently enabled (introspection).
     fn template_auto_call_enabled(&self) -> bool {
         self.template_auto_call
+    }
+
+    /// Namespace this view's `<!--dj-if id=...-->` marker ids (#2686).
+    ///
+    /// Marker ids are `if-<template-source-hash>-<ordinal>`, so every render of
+    /// one template source produces the same ids. That is correct while one
+    /// buffer contains one render of that source; it is WRONG when a parent
+    /// composes several. Two `template_name` `LiveComponent` instances of the
+    /// same class each render on their own `RustLiveView` with the ordinal
+    /// restarting at 0, so both emit `if-<hash>-0`, and the client resolves
+    /// `RemoveSubtree` / `InsertSubtree` / `MoveSubtree` by FIRST matching id —
+    /// a toggle inside the second instance lands on the first.
+    ///
+    /// Setting a namespace appends a segment: `if-<hash>-<ordinal>-<namespace>`
+    /// (and any `{% for %}` loop path follows it). The
+    /// caller must pass something STABLE for the instance across renders (the
+    /// component id), because the client keys DOM subtrees on these ids.
+    ///
+    /// Input outside `[A-Za-z0-9_]` is REFUSED (the namespace is left
+    /// unchanged) rather than escaped: the value is interpolated raw into an
+    /// HTML comment, and #2529 is the bug where exactly that let `-->` forge
+    /// live markup.
+    fn set_dj_if_id_namespace(&mut self, namespace: &str) {
+        if namespace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            self.dj_if_id_namespace = namespace.to_string();
+        }
+    }
+
+    /// This view's dj-if id namespace (introspection); empty when unset.
+    fn dj_if_id_namespace(&self) -> String {
+        self.dj_if_id_namespace.clone()
     }
 
     /// Number of cache HITS in the most recent render (debug / tests).
@@ -640,6 +687,10 @@ impl RustLiveViewBackend {
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
+            // #2686: namespace this instance's dj-if marker ids. No-op (empty)
+            // for every render that did not opt in. Applied at ALL THREE render
+            // entries, not just the component one, so the paths cannot drift.
+            context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
             // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
             // to `getattr` when `attr` isn't in the JSON-serialized state.
             if let Some(raw) = &self.raw_py_values {
@@ -683,6 +734,10 @@ impl RustLiveViewBackend {
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
+            // #2686: namespace this instance's dj-if marker ids. No-op (empty)
+            // for every render that did not opt in. Applied at ALL THREE render
+            // entries, not just the component one, so the paths cannot drift.
+            context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
             // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
             // to `getattr` when `attr` isn't in the JSON-serialized state.
             if let Some(raw) = &self.raw_py_values {
@@ -1110,6 +1165,10 @@ impl RustLiveViewBackend {
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
+            // #2686: namespace this instance's dj-if marker ids. No-op (empty)
+            // for every render that did not opt in. Applied at ALL THREE render
+            // entries, not just the component one, so the paths cannot drift.
+            context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
             // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
             // to `getattr` when `attr` isn't in the JSON-serialized state.
             if let Some(raw) = &self.raw_py_values {
@@ -1428,6 +1487,10 @@ impl RustLiveViewBackend {
             // Transient (ADR-024): default-ON; the Python flag re-wires it
             // on view (re)initialization post-restore, like the loop cache.
             template_auto_call: true,
+            // Transient (#2686): empty post-restore. The component render
+            // entry re-sets it on every render, and a restored view that is
+            // not a component namespaces nothing — same as before this field.
+            dj_if_id_namespace: String::new(),
         })
     }
 

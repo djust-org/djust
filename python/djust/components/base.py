@@ -6,6 +6,7 @@ reusable, reactive components with automatic performance optimization.
 """
 
 import logging
+import re
 from typing import Callable, Dict, Any, List, Optional, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
@@ -95,6 +96,29 @@ def _load_template_source(template_name: str) -> Optional[str]:
     return source if isinstance(source, str) else None
 
 
+_ID_NAMESPACE_ALLOWED = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _dj_if_id_namespace(component_id: Optional[str]) -> str:
+    """A ``[A-Za-z0-9_]*`` namespace for this instance's dj-if marker ids (#2686).
+
+    Marker ids are ``if-<template-source-hash>-<ordinal>``. Two instances of one
+    ``template_name`` component render on separate ``RustLiveView``s over the
+    same source, so both restart the ordinal at 0 and emit ``if-<hash>-0`` into
+    one parent buffer — and the client resolves subtree patches by FIRST match.
+
+    ``component_id`` is the instance identity that is stable across renders,
+    which is what the client needs (it keys DOM subtrees on these ids). The
+    Rust setter REFUSES anything outside the alphabet rather than escaping it
+    (the value is interpolated raw into an HTML comment — #2529), so map the
+    disallowed characters here instead of handing over a value that would be
+    silently dropped.
+    """
+    if not component_id:
+        return ""
+    return _ID_NAMESPACE_ALLOWED.sub("_", component_id)
+
+
 def _render_template_name_with_markers(
     template_name: str, context: Dict[str, Any]
 ) -> Optional[str]:
@@ -129,6 +153,11 @@ def _render_template_name_with_markers(
     rust_view = RustLiveView(source, get_template_dirs())
     if hasattr(rust_view, "set_template_auto_call"):
         rust_view.set_template_auto_call(template_auto_call_enabled())
+    # #2686: give this instance its own dj-if id namespace, so two instances of
+    # one component class in a parent do not both emit `if-<hash>-0`.
+    namespace = _dj_if_id_namespace(context.get("component_id"))
+    if namespace and hasattr(rust_view, "set_dj_if_id_namespace"):
+        rust_view.set_dj_if_id_namespace(namespace)
     rust_view.update_state(normalize_django_value(context))
     safe_keys: List[str] = []
     for key, value in context.items():

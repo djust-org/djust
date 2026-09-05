@@ -25,7 +25,10 @@ from djust.components.base import LiveComponent
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
 
-_MARKER = re.compile(r'<!--dj-if id="(if-[0-9a-f]+-\d+)"-->(.*?)<!--/dj-if-->', re.S)
+# The id is `if-<source-hash>-<ordinal>` plus, since #2686, a trailing
+# `-<component-instance-namespace>` on the component path. Match the whole
+# opaque id rather than the pre-#2686 hex-and-digits shape.
+_MARKER = re.compile(r'<!--dj-if id="(if-[0-9A-Za-z_-]+)"-->(.*?)<!--/dj-if-->', re.S)
 
 
 class Card(LiveComponent):
