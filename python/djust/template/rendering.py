@@ -998,6 +998,12 @@ class DjustTemplate:
             self._annotate_loaded_error(runtime_error, e)
             raise runtime_error from e
         finally:
+            # Django writes top-level `{% … as var %}` bindings through to the
+            # caller's object on BOTH APIs: `Context(d)` pushes `d` itself as a
+            # frame, and the backend's `make_context(d)` wraps `d` the same
+            # way — so `render(d)` leaves `d["var"]` set in Django too. Verified
+            # against Django 5.2 in the #2665 review; a plain dict is mutated
+            # on purpose, for parity.
             if isinstance(context, (dict, Context)):
                 for name, value in assignments.items():
                     context[name] = value

@@ -81,6 +81,11 @@ except ImportError:
     JIT_AVAILABLE = False
 
 
+# A `_full_template` that is nothing but `{% extends "x" %}`: the child's
+# real source lives behind the loader, so this carries zero variable paths.
+_EXTENDS_STUB_RE = re.compile(r"^\s*\{%\s*extends\s+[^%]*%\}\s*$")
+
+
 class JITMixin:
     """JIT serialization: _jit_serialize_queryset, _jit_serialize_model, _get_template_content."""
 
@@ -101,9 +106,15 @@ class JITMixin:
         Prefers the fully-resolved template (with inheritance) so that
         variables used in parent/base templates are also discovered.
         """
-        # Prefer the fully-resolved template (includes inherited blocks)
+        # Prefer the fully-resolved template (includes inherited blocks).
+        # Since the inheritance fix, `_full_template` may be only an
+        # `{% extends %}` stub (mixins/template.py keeps inheritance intact
+        # for the initial GET); a stub has no variable paths, and returning
+        # it here silently disabled JIT query optimization on every
+        # inheritance-using view. Fall through to the resolver instead.
         if hasattr(self, "_full_template") and self._full_template:
-            return self._full_template
+            if not _EXTENDS_STUB_RE.match(self._full_template):
+                return self._full_template
 
         if hasattr(self, "template") and self.template:
             return self.template

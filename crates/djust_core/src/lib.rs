@@ -3351,12 +3351,24 @@ pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
 
 /// Called only after the caller has established that the value is a Python string.
 fn python_string_is_safe(value: &Bound<'_, PyAny>) -> bool {
-    value
-        .py()
-        .import("django.utils.safestring")
-        .and_then(|m| m.getattr("SafeData"))
-        .and_then(|cls| value.is_instance(&cls))
-        .unwrap_or(false)
+    // Hot path: every context string and every nested list/dict string
+    // crosses here. An exact `str` can never be `SafeData` (SafeString is a
+    // subclass), so it needs no lookup at all; the class itself is resolved
+    // once per process, not once per string (was an import + getattr per
+    // value — 20k lookups for a 5k-row table with four string columns).
+    static SAFE_DATA: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let py = value.py();
+    if value.get_type().is(py.get_type::<pyo3::types::PyString>()) {
+        return false;
+    }
+    let Ok(cls) = SAFE_DATA.get_or_try_init(py, || {
+        py.import("django.utils.safestring")
+            .and_then(|m| m.getattr("SafeData"))
+            .map(|c| c.unbind())
+    }) else {
+        return false;
+    };
+    value.is_instance(cls.bind(py)).unwrap_or(false)
 }
 
 impl<'py> FromPyObject<'_, 'py> for Value {
@@ -4157,7 +4169,10 @@ fn equality_class(ob: &Bound<'_, PyAny>) -> Option<EqClass> {
 
 impl Encoded {
     /// Reconstitute Python's temporal types without interpreting repr as code.
-    pub fn temporal_object<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    /// Which `datetime` type this encodes, decided in pure Rust — `None` for
+    /// anything that is not a temporal value. Lets the renderer skip the
+    /// Python round trip entirely for the common non-temporal `Encoded`.
+    pub fn temporal_kind(&self) -> Option<&'static str> {
         let kind = if self.attrs.contains_key("days") && self.attrs.contains_key("microseconds") {
             "timedelta"
         } else if self.attrs.contains_key("year") {
@@ -4169,7 +4184,7 @@ impl Encoded {
         } else if self.attrs.contains_key("hour") && self.attrs.contains_key("microsecond") {
             "time"
         } else {
-            return Ok(None);
+            return None;
         };
         // Restrict reconstruction to encoded temporal values, never arbitrary
         // objects with similarly named attributes.
@@ -4178,8 +4193,15 @@ impl Encoded {
             "datetime.date" | "datetime.datetime" | "datetime.time" | "datetime.timedelta"
         ) && self.live.is_none()
         {
-            return Ok(None);
+            return None;
         }
+        Some(kind)
+    }
+
+    pub fn temporal_object<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let Some(kind) = self.temporal_kind() else {
+            return Ok(None);
+        };
         let module = py.import("datetime")?;
         if let Some(live) = &self.live {
             if live.bind(py).is_instance(&module.getattr(kind)?)? {

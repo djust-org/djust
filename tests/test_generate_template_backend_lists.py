@@ -542,7 +542,18 @@ class TestScoreboardParity:
 
     def test_every_scoreboard_django_tag_is_in_the_generated_unsupported_set(self, gen, report):
         board = gen.scoreboard_unsupported_tags(_SCOREBOARD)
-        assert board, "the scoreboard regex found no `Unsupported template tag` lines"
+        # Since #2665 every Django built-in and library tag is implemented, so
+        # a scoreboard with ZERO `Unsupported template tag` lines is the
+        # correct state, not a regex failure — the two sets must simply agree
+        # on emptiness (this test failed on every machine that had run the
+        # suite, and only CI's absent artifact kept it green; #2668).
+        if not report.all_unsupported_tags:
+            assert board == set(), (
+                "the generator says nothing is unsupported but the scoreboard "
+                "still reports: %s" % sorted(board)
+            )
+        else:
+            assert board, "the scoreboard regex found no `Unsupported template tag` lines"
         assert "autoescape" not in report.all_unsupported_tags
         known = report.django_tags | report.library_tags
         # Since #2517 the engine refuses NO Django tag — `cache` was the last
@@ -559,7 +570,10 @@ class TestScoreboardParity:
         assert django_names_on_the_board == set(), (
             f"scoreboard reports Django tags as unsupported: {sorted(django_names_on_the_board)}"
         )
-        assert board - known, "the board should still carry the non-Django fixture names"
+        # Since #2665 even the fixture-only names (`foobar`) no longer surface
+        # as `Unsupported template tag` lines — the engine reports them the way
+        # Django does — so an EMPTY board is the expected steady state; the
+        # property under test is only that no DJANGO name is on it.
         # The old cross-check line lived here:
         #     missing = django_names_on_the_board - report.all_unsupported_tags
         #     assert missing == set()
@@ -597,21 +611,13 @@ class TestScoreboardParity:
             "update the Conformance sentence in docs/TEMPLATE_BACKEND.md" % sorted(never_exercised)
         )
         text = _DOC.read_text(encoding="utf-8")
-        # The doc must SAY the set is empty; the four historical names stay in
-        # the sentence as the record of what #2558 closed.
-        sentence = re.search(
-            r"Until #2558 four generated-unsupported names never appeared on the "
-            r"scoreboard[^\n]*?as a tag error — ([^—\n]+)\. All four are supported now, "
-            r"so the never-exercised set is empty",
-            text,
-        )
-        assert sentence is not None, "the Conformance never-exercised sentence moved"
-        assert set(re.findall(r"`([a-z_]+)`", sentence.group(1))) == {
-            "get_current_timezone",
-            "localize",
-            "localtime",
-            "timezone",
-        }
+        # The doc must SAY the set is empty. #2665 replaced the historical
+        # "Until #2558 four names…" sentence with the generated support lists;
+        # the load-bearing claim is now the two `unsupported (0): none` rows.
+        for row in ("Built-in tags", "Library tags"):
+            assert re.search(r"\*\*%s — unsupported \(0\):\*\* none" % re.escape(row), text), (
+                "docs/TEMPLATE_BACKEND.md no longer states `%s — unsupported (0): none`" % row
+            )
 
 
 class TestCrossCheckDetectsDisagreement:

@@ -1889,22 +1889,49 @@ fn localize_if_number(value: &Value) -> Result<String> {
     Ok(match value {
         Value::Encoded(encoded) => {
             use pyo3::prelude::*;
+            // Decided in Rust first: a non-temporal Encoded never attaches
+            // to Python (this arm runs once per rendered value).
+            if encoded.temporal_kind().is_none() {
+                return Ok(encoded.display.clone());
+            }
+            // `localize_temporal` resolved once per process, not per value.
+            // `None` remembers that the module is absent (a bare-Rust test
+            // harness), so that case stays a free fallback too.
+            static LOCALIZE: pyo3::sync::PyOnceLock<Option<Py<PyAny>>> =
+                pyo3::sync::PyOnceLock::new();
             return Python::attach(|py| -> PyResult<String> {
                 let Some(value) = encoded.temporal_object(py)? else {
                     return Ok(encoded.display.clone());
                 };
+                // `None` is cached ONLY for ImportError (a bare-Rust harness
+                // with no djust package); any other failure propagates and
+                // is retried next time rather than becoming a permanent
+                // silent fallback. Note the callable OBJECT is cached, so
+                // monkeypatching `djust.template_libraries.localize_temporal`
+                // after first use has no effect — patch `django.utils.formats`.
+                let localize =
+                    LOCALIZE.get_or_try_init(py, || -> PyResult<Option<Py<PyAny>>> {
+                        match py.import("djust.template_libraries") {
+                            Ok(m) => Ok(Some(m.getattr("localize_temporal")?.unbind())),
+                            Err(e) if e.is_instance_of::<pyo3::exceptions::PyImportError>(py) => {
+                                Ok(None)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    })?;
+                let Some(localize) = localize else {
+                    return Ok(encoded.display.clone());
+                };
                 let use_l10n = USE_L10N_STACK.with(|stack| stack.borrow().last().copied());
-                match py.import("djust.template_libraries") {
-                    Ok(module) => module
-                        .call_method1("localize_temporal", (value, use_l10n))?
-                        .extract(),
-                    Err(error) if error.is_instance_of::<pyo3::exceptions::PyImportError>(py) => {
-                        Ok(encoded.display.clone())
-                    }
-                    Err(error) => Err(error),
-                }
+                localize.bind(py).call1((value, use_l10n))?.extract()
             })
-            .map_err(DjangoRustError::PythonException);
+            // A failure inside `localize()` / `template_localtime()` is the
+            // framework's, not the template author's: it must wrap with the
+            // template origin like any other render error, so it is NOT
+            // routed through `PythonException` (which marks user-raised).
+            .map_err(|e| {
+                DjangoRustError::TemplateError(format!("localizing {}: {e}", encoded.type_name))
+            });
         }
 
         // Decimal included: a German site must localize it the same way it

@@ -31,6 +31,36 @@ use std::sync::RwLock;
 
 use djust_core::DjangoRustError;
 
+/// Bumped by EVERY registration / unregistration / clear below. A parse is
+/// only valid against the library set it was parsed under, so the template
+/// cache records the generation it was compiled at and `compile_template`
+/// re-parses on a hit only when this has moved (PR #2665 review, finding 2).
+/// `registry_generation_pin.rs` asserts each mutation fn calls the bump —
+/// 18 sites is exactly the parallel-path-drift shape (#1646).
+static REGISTRY_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Current registry generation; equal means "no library change since".
+pub fn registry_generation() -> u64 {
+    REGISTRY_GENERATION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn bump_registry_generation() {
+    REGISTRY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+/// Bumps the generation when DROPPED — i.e. after the mutation it guards has
+/// completed, on every return path including errors. Bumping BEFORE the write
+/// let a concurrent `compile_template` read the new generation, parse against
+/// the still-old registry, and store that stale parse as current
+/// (#2668 review). An extra bump on an error path only costs a re-parse.
+pub(crate) struct BumpOnReturn;
+
+impl Drop for BumpOnReturn {
+    fn drop(&mut self) {
+        bump_registry_generation();
+    }
+}
+
 /// A tag handler's return, escaped unless it is already HTML (#2379).
 ///
 /// # The defect this closes
@@ -533,6 +563,7 @@ static ASSIGN_TAG_HANDLERS: Lazy<RwLock<HashMap<String, AssignHandlerEntry>>> =
 /// ```
 #[pyfunction]
 pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     // Verify handler has render method
     let handler_ref = handler.bind(py);
     if !handler_ref.hasattr("render")? {
@@ -581,6 +612,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
 /// Returns true if a handler was removed, false if no handler existed for the name.
 #[pyfunction]
 pub fn unregister_tag_handler(name: &str) -> PyResult<bool> {
+    let _bump = BumpOnReturn;
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -611,6 +643,7 @@ pub fn get_registered_tags() -> PyResult<Vec<String>> {
 /// Clear all registered handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_tag_handlers() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -664,6 +697,7 @@ pub fn register_block_tag_handler(
     end_tag: String,
     handler: Py<PyAny>,
 ) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let handler_ref = handler.bind(py);
     if !handler_ref.hasattr("render")? {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -704,6 +738,7 @@ pub fn register_block_tag_handler(
 /// Unregister a block tag handler.
 #[pyfunction]
 pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
+    let _bump = BumpOnReturn;
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -724,6 +759,7 @@ pub fn has_block_tag_handler(name: &str) -> PyResult<bool> {
 /// Clear all block tag handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_block_tag_handlers() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -981,6 +1017,7 @@ pub fn register_assign_tag_handler(
     name: String,
     handler: Py<PyAny>,
 ) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let handler_ref = handler.bind(py);
     if !handler_ref.hasattr("render")? {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -1009,6 +1046,7 @@ pub fn register_assign_tag_handler(
 /// Unregister an assign tag handler.
 #[pyfunction]
 pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
+    let _bump = BumpOnReturn;
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1027,6 +1065,7 @@ pub fn has_assign_tag_handler(name: &str) -> PyResult<bool> {
 /// Clear all registered assign tag handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_assign_tag_handlers() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1433,6 +1472,7 @@ static LIBRARY_LOADER: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::ne
 /// crosses the parse WHOLE.
 #[pyfunction]
 pub fn register_library_loader(callable: Py<PyAny>) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = LIBRARY_LOADER.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1443,6 +1483,7 @@ pub fn register_library_loader(callable: Py<PyAny>) -> PyResult<()> {
 /// Remove the `{% load %}` library loader; `{% load %}` is a no-op again.
 #[pyfunction]
 pub fn clear_library_loader() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = LIBRARY_LOADER.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1660,6 +1701,7 @@ pub fn register_raw_block_tag_handler(
     end_tag: String,
     handler: Py<PyAny>,
 ) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let handler_ref = handler.bind(py);
     if !handler_ref.hasattr("render")? {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -1687,6 +1729,7 @@ pub fn register_raw_block_tag_handler(
 /// Unregister a raw-block tag handler (#2558).
 #[pyfunction]
 pub fn unregister_raw_block_tag_handler(name: &str) -> PyResult<bool> {
+    let _bump = BumpOnReturn;
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1705,6 +1748,7 @@ pub fn has_raw_block_tag_handler(name: &str) -> PyResult<bool> {
 /// Clear all raw-block handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_raw_block_tag_handlers() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1818,6 +1862,7 @@ pub fn register_translator(
     format_resolver: Option<Py<PyAny>>,
     default_timezone_resolver: Option<Py<PyAny>>,
 ) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1832,6 +1877,7 @@ pub fn register_translator(
 /// Drop the locale hooks — the `djust.test_isolation` reset.
 #[pyfunction]
 pub fn clear_translator() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1931,6 +1977,7 @@ static ARMED_SCOPE_TAGS: Lazy<RwLock<std::collections::HashSet<String>>> =
 /// loader when it bridges `i18n` / `l10n` / `tz`.
 #[pyfunction]
 pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1948,6 +1995,7 @@ pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
 /// process to that state.
 #[pyfunction]
 pub fn clear_scope_tags() -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -1980,6 +2028,7 @@ static LANGUAGE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new
 /// `exit(token)`.
 #[pyfunction]
 pub fn register_language_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = LANGUAGE_SCOPE_HOOKS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
@@ -2050,6 +2099,7 @@ static TIMEZONE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new
 /// `exit(token)`.
 #[pyfunction]
 pub fn register_timezone_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyResult<()> {
+    let _bump = BumpOnReturn;
     let mut slot = TIMEZONE_SCOPE_HOOKS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
