@@ -3,7 +3,9 @@ End-to-End tests for Phase 5 State Management decorators.
 
 Tests the complete integration of:
 - @cache decorator (client-side response caching)
-- @client_state decorator (StateBus coordination)
+- @client_state decorator (INERT, #2656: it stamps metadata nothing in the
+  shipped client reads, and the `StateBus` it coordinated was deleted in
+  #2680 — these tests pin the metadata stamp, not any client behaviour)
 - dj-loading HTML attributes (loading indicators)
 
 These tests verify the full Python → Rust → WebSocket → JavaScript flow.

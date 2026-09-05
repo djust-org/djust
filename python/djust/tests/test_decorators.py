@@ -311,7 +311,7 @@ class TestDecoratorMetadata:
         undecorated one. This pins the stamp, not any behaviour.
         """
 
-        @client_state(keys=["filter", "sort"])
+        @client_state(keys=["filter", "sort"])  # INERT (#2656)
         def handler(self, **kwargs):
             pass
 

@@ -966,18 +966,18 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
 
     Usage (the shape the metadata records — not working behaviour):
         class DashboardView(LiveView):
-            @client_state(keys=["filter"])
+            @client_state(keys=["filter"])  # INERT (#2656)
             def update_filter(self, filter: str = "", **kwargs):
                 # WOULD publish "filter" — today this comment is the
                 # only thing that happens.
                 self.filter = filter
 
-            @client_state(keys=["filter"])
+            @client_state(keys=["filter"])  # INERT (#2656)
             def on_filter_change(self, filter: str = "", **kwargs):
                 # WOULD be called when "filter" changes; it is not.
                 self.apply_filter()
 
-            @client_state(keys=["filter", "sort"])
+            @client_state(keys=["filter", "sort"])  # INERT (#2656)
             def apply_filters(self, filter: str = "", sort: str = "", **kwargs):
                 # WOULD publish both "filter" and "sort".
                 self.filter = filter
