@@ -59,6 +59,13 @@ class TestLoadFromFormHitsTheCache:
 
     FROM_SRC = "{% load translate from i18n %}{% translate 'y' as t %}[{{ t }}]-2668-from"
     FULL_SRC = "{% load i18n %}{% translate 'z' as t %}[{{ t }}]-2668-full"
+    # A DIFFERENT subset key from FROM_SRC: with the same key, the first test
+    # seeds `_loaded_subsets` and the early return means `_bridge_library`
+    # never runs here, so the parent-restore is never exercised and its
+    # gate-off passes vacuously in natural file order (#2668 verification).
+    FROM_SRC_2 = (
+        "{% load blocktranslate from i18n %}{% blocktranslate %}w{% endblocktranslate %}-2668-from2"
+    )
 
     def test_from_form_second_compile_is_a_hit(self):
         _compile(self.FROM_SRC)
@@ -72,8 +79,8 @@ class TestLoadFromFormHitsTheCache:
         _compile(self.FULL_SRC)
         _compile(self.FULL_SRC)
         assert _is_hit_next_time(self.FULL_SRC)
-        _compile(self.FROM_SRC)
-        _compile(self.FROM_SRC)
+        _compile(self.FROM_SRC_2)
+        _compile(self.FROM_SRC_2)
         # The full-library template must still be current, and a further
         # compile of it must not re-bridge.
         gen = _rust.registry_generation()
