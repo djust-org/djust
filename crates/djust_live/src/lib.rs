@@ -124,6 +124,10 @@ fn guard_panic<T>(entry: &'static str, f: impl FnOnce() -> PyResult<T>) -> PyRes
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
 static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap::new);
+/// Registry generation each `TEMPLATE_CACHE` entry was validated under, written
+/// only by `compile_template`. Kept beside the cache rather than inside its
+/// value so the six render-path readers stay untouched.
+static COMPILED_AT_GENERATION: Lazy<DashMap<String, u64>> = Lazy::new(DashMap::new);
 
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
@@ -2177,16 +2181,31 @@ fn compile_template(
 ) -> PyResult<Option<CompiledTemplate>> {
     guard_panic("compile_template", move || {
         // Compilation must validate against the calling engine's current
-        // libraries, even when another engine compiled the same source.
-        // Rendering can reuse the result after this validation boundary.
-        let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
+        // libraries, even when another engine compiled the same source — but
+        // "current libraries" is a registry GENERATION, not a request. A hit
+        // parsed under this generation has already been validated against
+        // exactly this library set; re-parsing it per request re-lexed the
+        // whole source on every HTTP GET (review of #2665, finding 2).
+        let generation = djust_templates::registry::registry_generation();
+        let cached = TEMPLATE_CACHE.get(&template_source).map(|c| c.clone());
+        let validated_at = COMPILED_AT_GENERATION.get(&template_source).map(|g| *g);
+        let template = match (cached, validated_at) {
+            (Some(template), Some(at)) if at == generation => template,
+            _ => {
+                let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
+                let template = Arc::new(template);
+                TEMPLATE_CACHE.insert(template_source.clone(), template.clone());
+                COMPILED_AT_GENERATION.insert(template_source, generation);
+                template
+            }
+        };
+        // Relative-reference validation is per template NAME, which can differ
+        // for the same source, so it runs on hits too (it is a cheap walk).
         if let Some(name) = template_name.as_deref() {
             template
                 .validate_relative_references(name)
                 .map_err(span_aware_pyerr)?;
         }
-        let template = Arc::new(template);
-        TEMPLATE_CACHE.insert(template_source, template.clone());
         Ok(return_template.then_some(CompiledTemplate { template }))
     })
 }
