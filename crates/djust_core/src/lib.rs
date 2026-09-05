@@ -721,6 +721,13 @@ pub const ENCODED_ATTR_NAMES: &[(&str, &[&str])] = &[
             "microsecond",
             "fold",
             "tzinfo",
+            // Django's `tz` filters (`localtime` / `utc` / `timezone`) return a
+            // `datetimeobject` subclass flagged `convert_to_local_time = False`
+            // so `template_localtime` and the `date` filter's
+            // `expects_localtime` do NOT convert the value AGAIN to the active
+            // zone (#2541). A plain `datetime` has no such attribute and
+            // `collect_named_attrs` skips it; `filters::format_date` reads it.
+            "convert_to_local_time",
         ],
     ),
     ("datetime.date", &["year", "month", "day"]),

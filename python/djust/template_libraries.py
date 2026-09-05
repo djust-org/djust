@@ -166,13 +166,16 @@ _BESPOKE_BLOCK_TAGS = {"cache": "endcache"}
 #: and crosses to Django un-rendered through ``LibraryRawBlockTagHandler``.
 _RAW_BLOCK_TAGS = frozenset({"blocktranslate", "blocktrans"})
 
-#: The ``tz`` FILTERS that need a datetime OBJECT on the wire (#2216: the
-#: Rust ``Value`` has no date variant, so a datetime arrives as its ISO
-#: string and Django's ``do_timezone`` answers ``""`` for a non-datetime —
-#: a silent blank). Refused by name at bridge time with a filter that
-#: raises: loud, not blank. The two ``l10n`` filters (``localize`` /
-#: ``unlocalize``) work on numbers and bridge normally.
-_TZ_FILTER_REFUSALS = frozenset({"localtime", "utc", "timezone"})
+#: Filters a Django library module bridges as LOUD refusals — a filter the
+#: Rust engine structurally cannot serve raises Django's
+#: ``TemplateSyntaxError`` when used instead of answering ``""``. Empty since
+#: #2541: the ``tz`` three (``localtime`` / ``utc`` / ``timezone``) were the
+#: only entries, refused while a datetime crossed the boundary as its ISO
+#: string (#2216). A ``datetime`` now crosses as a typed ``Value::Encoded``
+#: carrying the live object (#2481), the filter's ``datetimeobject`` return
+#: crosses back the same way, and its ``convert_to_local_time = False`` flag
+#: reaches the ``date`` filter — so they bridge verbatim, like ``l10n``'s.
+_FILTER_REFUSALS: Dict[str, frozenset] = {}
 
 #: ``Engine.default_builtins`` — the Rust natives. Never bridged as
 #: ``OPTIONS['builtins']`` entries.
@@ -611,12 +614,11 @@ def _bridge_library(label: str, library: Any) -> None:
 
 def refused_filters(module: str) -> frozenset:
     """The filters ``{% load %}`` bridges as LOUD refusals for ``module``
-    (#2216 / #2558): the ``tz`` three. One producer, so the generator that
-    lists them (``scripts/generate-template-backend-lists.py``) reads the
-    same answer :func:`_bridge_library` applies (#1646)."""
-    if module == "django.templatetags.tz":
-        return _TZ_FILTER_REFUSALS
-    return frozenset()
+    (#2216 / #2558) — none today (#2541, see :data:`_FILTER_REFUSALS`). One
+    producer, so the generator that lists them
+    (``scripts/generate-template-backend-lists.py``) reads the same answer
+    :func:`_bridge_library` applies (#1646)."""
+    return _FILTER_REFUSALS.get(module, frozenset())
 
 
 def _arm_scope_tags(module: str) -> None:

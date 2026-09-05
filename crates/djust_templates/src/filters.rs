@@ -4173,12 +4173,36 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
         })?;
 
+    // #2541: a value Django's `tz` filters already converted carries
+    // `convert_to_local_time = False`, and `template_localtime` leaves it in
+    // the zone the filter chose — `{{ d|timezone:"Asia/Tokyo"|date:"H" }}`
+    // is Tokyo's hour, not the active zone's. Treat it as the no-active-zone
+    // case: format the wall clock as it arrived, naming its own zone.
+    let pinned_by_tz_filter = matches!(
+        original,
+        Value::Encoded(encoded)
+            if matches!(
+                encoded.attrs.get(&djust_core::ObjectKey::from("convert_to_local_time")),
+                Some(Value::Bool(false))
+            )
+    );
     // #2209: everything above produced a wall clock in whatever offset arrived.
     // Django would have run `timezone.localtime()` by now.
-    let mut stamped = apply_active_timezone(dt, aware, time_only);
+    let mut stamped = if pinned_by_tz_filter && aware && !time_only {
+        Stamped {
+            dt,
+            abbrev: Some(fixed_offset_name(dt.offset())),
+            aware,
+            timestamp: dt.timestamp(),
+            time_only,
+        }
+    } else {
+        apply_active_timezone(dt, aware, time_only)
+    };
     // No conversion occurred: use the object's real name instead of
     // inventing datetime.timezone's default name from its numeric offset.
-    if aware && !time_only && crate::timezone::active_timezone().is_none() {
+    if aware && !time_only && (pinned_by_tz_filter || crate::timezone::active_timezone().is_none())
+    {
         if let Value::Encoded(encoded) = original {
             if let Some(Value::String(name)) =
                 encoded.attrs.get(&djust_core::ObjectKey::from("tzname"))

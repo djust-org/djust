@@ -21,8 +21,9 @@ The lists are derived from the engine's own registries, never written by hand:
   djust-only ``TEMPLATES`` and reads back what landed in ``djust._rust``'s
   registries. A library tag or filter that lands there is *bridged on
   ``{% load``*: it resolves on any ``TEMPLATES`` shape once the template loads
-  its library. The ``tz`` filters the bridge refuses by name (#2216: they need a
-  datetime object the Rust ``Value`` cannot carry) are listed unsupported.
+  its library. A filter the bridge refuses by name (``template_libraries.
+  refused_filters``; none since #2541, when the ``tz`` three started bridging
+  verbatim) is listed unsupported.
 
 Modes::
 
@@ -92,7 +93,9 @@ ARITY_HEADER = "const ARITY: &[(&str, u8, u8, u8)] = &["
 PARSER_MATCH = "match tag_name.as_str() {"
 _ARM_RE = re.compile(r'^ {16}("[a-z_0-9]+"(?:\s*\|\s*"[a-z_0-9]+")*)\s*=>')
 _ARITY_ROW_RE = re.compile(r'^[ \t]*\("([a-z_0-9]+)",', re.M)
-_SCOREBOARD_RE = re.compile(r"(?:Unsupported template tag '\{% |Invalid block tag on line \d+: ')([a-z_0-9]+)")
+_SCOREBOARD_RE = re.compile(
+    r"(?:Unsupported template tag '\{% |Invalid block tag on line \d+: ')([a-z_0-9]+)"
+)
 # Every name the doc block emits comes from a registry the generator reads at
 # runtime (Django's, djust's tag handlers, the Rust filter registry). A name
 # that is not a plain template identifier cannot be a real tag or filter and
@@ -251,7 +254,7 @@ def load_bridged_library_entries(
     declared name with no parser arm, or an arm no library declares, is a
     structural error), and the custom-filter registry. ``refused_filters`` are
     the names the bridge registers as LOUD refusals rather than callables
-    (``_TZ_FILTER_REFUSALS``, #2216): they parse, then raise. Detected rather
+    (``_FILTER_REFUSALS``; empty since #2541): they parse, then raise. Detected rather
     than asserted so the buckets follow the loader if it changes what it
     bridges; a ``{% load %}`` that fails is a structural error, never an
     empty bucket.
@@ -497,10 +500,11 @@ def render_block(report: SupportReport) -> str:
         f"{_by_library(report, 'filters', report.unsupported_library_filters)}",
         "",
         f"Refused loudly on `{{% load %}}` ({len(report.refused_filters)}): "
-        f"{_by_library(report, 'filters', report.refused_filters)} — each needs a datetime "
-        "object on the wire, which the Rust `Value` cannot carry (#2216), so the load "
-        "registers it as a filter that raises `TemplateSyntaxError` naming the filter and "
-        "pointing at `date` with the active zone (#2209) — never a silent blank (#2541).",
+        f"{_by_library(report, 'filters', report.refused_filters) or 'none'} — a filter "
+        "the Rust engine structurally cannot serve is registered by the load as a filter "
+        "that raises `TemplateSyntaxError` naming it, never a silent blank. The `tz` three "
+        "(`localtime`, `timezone`, `utc`) were the last entries; they bridge verbatim since "
+        "#2541, the datetime crossing the boundary as a typed value.",
         "",
         f"**djust extensions (not Django tags, not scored):** {_codes(report.djust_only_tags)}",
         MARKER_CLOSE,

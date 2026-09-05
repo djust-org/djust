@@ -809,14 +809,15 @@ class TestBridgedLibraryFilters:
         byte for byte — including the refusal text."""
         assert rendered_filters["djust_only"] == rendered_filters["with_django"]
 
-    def test_a_refused_filter_raises_and_names_itself(self, rendered_filters):
-        """The `tz` three parse and then raise (#2216) — never a silent blank
-        (#2541) and never `Unknown filter`."""
+    def test_the_tz_filters_bridge_verbatim(self, rendered_filters):
+        """The `tz` three were loud refusals (#2216) until #2541; they bridge
+        like any library filter now. The harness feeds a NON-datetime, for
+        which Django's `do_timezone` answers `""` — so `OK:` with nothing
+        after it is Django's own answer, not the old blank (the datetime
+        rows live in `python/tests/test_library_loading_2558_2541_2591.py`)."""
         for name in ("localtime", "timezone", "utc"):
             result = rendered_filters["djust_only"][name]
-            assert result.startswith("ERR:"), (name, result)
-            assert "Unknown filter" not in result, (name, result)
-            assert f"filter '{name}' from 'django.templatetags.tz' needs a datetime" in result
+            assert result == "OK:", (name, result)
 
     def test_bridged_line_names_exactly_the_filters_that_behave_that_way(
         self, gen, report, rendered_filters
@@ -848,7 +849,9 @@ class TestBridgedLibraryFilters:
         assert report.unsupported_library_filters == behaves_unknown | behaves_refused
         assert report.refused_filters == behaves_refused
         assert "unlocalize" in behaves_bridged
-        assert behaves_refused == {"localtime", "timezone", "utc"}
+        # #2541: the tz three moved from refused to bridged; nothing is refused.
+        assert {"localtime", "timezone", "utc"} <= behaves_bridged
+        assert behaves_refused == set()
 
         block = gen.render_block(report)
         bridged_line = next(
