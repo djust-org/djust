@@ -362,3 +362,204 @@ class TestStructuralChokepoint:
             if re.search(r"\bin _SENSITIVE_MODEL_METHODS\b", ln) and not ln.lstrip().startswith("#")
         ]
         assert len(uses) == 1, uses
+
+
+# ---------------------------------------------------------------------------
+# Channel 3 — the JIT codegen path (#2685, link N+1 of #2614).
+#
+# ``python/djust/mixins/context.py`` routes every public Model in the context
+# through ``_jit_serialize_model`` → ``optimization/codegen.py``, which emitted
+# ANY attribute the template named. ``{{ m.password }}`` on a model with a
+# ``password`` FIELD shipped the value in ``get_context_data()['m']`` and in
+# the rendered html — the floor the eager and sidecar channels enforce was
+# never consulted. The generated code now calls the same ONE chokepoint via
+# ``codegen._attr_is_emittable`` for every attribute it reads; a denied name
+# is omitted (renders as ``string_if_invalid``, i.e. empty), never shipped.
+# ---------------------------------------------------------------------------
+
+from djust.optimization import codegen as _codegen  # noqa: E402
+
+LEAK_JIT = "LEAK-2685"
+
+JitModel = type(
+    "JitModel2685",
+    (models.Model,),
+    {
+        "__module__": __name__,
+        "label": models.CharField(max_length=32, default=""),
+        # A real FIELD — exactly the case _ALWAYS_EXCLUDED_FIELDS exists for.
+        "password": models.CharField(max_length=64, default=""),
+        # A sensitive method NAME carried by a @property (the #2614 trigger).
+        "get_session_auth_hash": property(lambda self: f"{LEAK_JIT}:get_session_auth_hash"),
+        "_secret": property(lambda self: f"{LEAK_JIT}:_secret"),
+        "__str__": lambda self: f"jit({self.pk})",
+        "Meta": type("Meta", (), {"app_label": "tests"}),
+    },
+)
+
+
+def _jit_instance():
+    obj = JitModel(label="visible", password=f"{LEAK_JIT}:password")
+    obj.pk = 3
+    obj.id = 3
+    return obj
+
+
+def _codegen_serialize(obj, paths):
+    code = _codegen.generate_serializer_code(type(obj).__name__, list(paths), "serialize_2685")
+    return _codegen.compile_serializer(code, "serialize_2685")(obj)
+
+
+class _JitView(LiveView):
+    """PUBLIC ``self.m`` — the shape the issue reproduced on: the context loop
+    in ``mixins/context.py`` JIT-serializes it through codegen."""
+
+    template = (
+        '<div dj-view="djust.tests.test_property_shadow_parity_2614._JitView" dj-id="0">'
+        "n={{ n }} label=[{{ m.label }}] password=[{{ m.password }}]"
+        " get_session_auth_hash=[{{ m.get_session_auth_hash }}]</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+        self.m = _jit_instance()
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+
+class TestJitCodegenChannel:
+    @pytest.mark.parametrize("name", ["password", "get_session_auth_hash", "_secret"])
+    def test_denied_name_is_omitted(self, name):
+        out = _codegen_serialize(_jit_instance(), ["label", name])
+        assert out == {"label": "visible"}, out
+
+    @pytest.mark.parametrize("name", REFUSED_NAMES)
+    def test_shadowing_property_is_omitted(self, name):
+        out = _codegen_serialize(_instance(), ["label", name])
+        assert name not in out and LEAK not in repr(out), out
+
+    def test_nested_object_is_gated_per_object(self):
+        """A nested path crosses objects; the gate runs on the INNER object."""
+        outer = _jit_instance()
+        outer.owner = _jit_instance()
+        out = _codegen_serialize(outer, ["owner.label", "owner.password", "owner._secret"])
+        assert out == {"owner": {"label": "visible"}}, out
+
+    def test_context_data_omits_the_field(self):
+        """The symptom from the issue: ``get_context_data()['m']`` carried it."""
+        from django.test import RequestFactory
+
+        view = _JitView()
+        view.request = RequestFactory().get("/jit/")
+        view.mount(view.request)
+        m = view.get_context_data()["m"]
+        assert m["label"] == "visible", m
+        assert "password" not in m and "get_session_auth_hash" not in m, m
+        assert LEAK_JIT not in repr(m), m
+
+
+# ``get_Session_auth_hash`` is excluded from the codegen parity row only because
+# codegen treats every ``get_*`` name as a METHOD and calls it — a ``get_*``
+# @property therefore fails the call and is dropped for a reason unrelated to
+# the floor (pre-existing codegen shape, not a security decision).
+CODEGEN_PARITY_NAMES = ["label"] + [n for n in ALL_NAMES if n != "get_Session_auth_hash"]
+
+
+class TestJitCodegenParity:
+    @pytest.mark.parametrize("name", CODEGEN_PARITY_NAMES)
+    def test_codegen_agrees_with_the_eager_channel(self, name):
+        eager = _eager(_instance())
+        out = _codegen_serialize(_instance(), [name])
+        assert (name in out) == (name in eager), (name, out, eager)
+
+
+@pytest.mark.django_db
+class TestJitRealRenderPaths:
+    def test_http_get_does_not_ship_the_field(self):
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        request = RequestFactory().get("/jit/")
+        SessionMiddleware(lambda r: r).process_request(request)
+        request.session.save()
+        response = _JitView.as_view()(request)
+        html = response.content.decode() if hasattr(response, "content") else str(response)
+        assert "label=[visible]" in html, html
+        assert "password=[]" in html and "get_session_auth_hash=[]" in html, html
+        assert LEAK_JIT not in html, html
+
+    @pytest.mark.asyncio
+    async def test_ws_mount_and_event_do_not_ship_the_field(self):
+        pytest.importorskip("channels")
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.sessions.backends.db import SessionStore
+        from django.test import override_settings
+
+        from djust.websocket import LiveViewConsumer
+
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
+
+        session_key = await sync_to_async(_create_session)()
+
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
+
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+            comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+            comm.scope["session"] = _ScopeSession(session_key)
+            connected, _ = await comm.connect()
+            assert connected
+            await comm.receive_json_from(timeout=2)  # connect frame
+            await comm.send_json_to(
+                {"type": "mount", "view": f"{__name__}._JitView", "url": "/jit/"}
+            )
+            frames = []
+            for _ in range(6):
+                f = await comm.receive_json_from(timeout=3)
+                frames.append(f)
+                if f.get("type") == "mount":
+                    break
+            assert frames[-1].get("type") == "mount", frames
+            await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
+            for _ in range(6):
+                f = await comm.receive_json_from(timeout=3)
+                frames.append(f)
+                if f.get("type") in ("patch", "html_update"):
+                    break
+            await comm.disconnect()
+
+        wire = repr(frames)
+        assert "label=[visible]" in wire, wire
+        assert LEAK_JIT not in wire, wire
+
+
+class TestStructuralChokepointCodegen:
+    """Codegen is a pinned caller of the chokepoint (#1125) — three layers, so
+    gating any one off (the helper, the emission, the binding) goes red."""
+
+    def test_helper_calls_the_chokepoint(self):
+        src = inspect.getsource(_codegen._attr_is_emittable)
+        assert "_attr_is_serializable(" in src
+        assert "_field_is_serializable(" not in src
+        assert "_SENSITIVE_MODEL_METHODS" not in src
+
+    def test_every_emission_is_guarded(self):
+        code = _codegen.generate_serializer_code(
+            "M", ["a", "b.c", "d.0.e", "f.all.g", "get_h", "i.get_j"], "s"
+        )
+        reads = [ln for ln in code.splitlines() if "hasattr(" in ln]
+        assert reads, code
+        for ln in reads:
+            assert "_djust_attr_ok(" in ln, ln
+        assert len(re.findall(r"_djust_attr_ok\(", code)) == len(reads), code
+
+    def test_compiled_namespace_binds_the_helper(self):
+        code = _codegen.generate_serializer_code("M", ["a"], "s")
+        fn = _codegen.compile_serializer(code, "s")
+        assert fn.__globals__["_djust_attr_ok"] is _codegen._attr_is_emittable

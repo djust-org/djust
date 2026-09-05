@@ -12,6 +12,36 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _attr_is_emittable(obj: Any, name: str) -> bool:
+    """May the generated serializer emit ``obj.<name>``? (#2685)
+
+    The JIT codegen path used to emit any attribute the template named —
+    ``{{ m.password }}`` shipped the field, bypassing the serialization floor
+    that the eager and sidecar channels enforce (#2614). Every attribute the
+    generated code reads now goes through the same ONE chokepoint,
+    ``DjangoJSONEncoder._attr_is_serializable``, with the same per-model
+    denylist / allowlist / opt-out resolution the eager loops use — so the
+    three channels cannot drift (#1646). Called per object at runtime because
+    a nested path (``lease.tenant.password``) crosses model classes.
+
+    A denied name is simply omitted from the result dict, which the template
+    renders as ``string_if_invalid`` (empty) — the same outcome as the eager
+    channel. Fail-closed: any error resolving the per-model sets denies.
+    """
+    from ..serialization import DjangoJSONEncoder
+
+    try:
+        return DjangoJSONEncoder._attr_is_serializable(
+            name,
+            DjangoJSONEncoder._get_denied_fields(obj),
+            DjangoJSONEncoder._get_allowlist_fields(obj),
+            DjangoJSONEncoder._get_sensitive_optout_fields(obj),
+        )
+    except Exception:
+        logger.debug("attribute gate failed for %s; refusing it", name)
+        return False
+
+
 def generate_serializer_code(
     model_name: str, variable_paths: List[str], func_name: Optional[str] = None
 ) -> str:
@@ -174,7 +204,13 @@ def _generate_nested_access(
         obj_access = f"{obj_var}.{root_attr}"
 
         # Generate safety check for root
-        lines.append(f"{ind}if hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:")
+        # Every emitted attribute consults the ONE serialization chokepoint
+        # (#2685 / #2614): a denied name is omitted from the dict — the
+        # template then renders ``string_if_invalid`` (empty) — never shipped.
+        lines.append(
+            f"{ind}if _djust_attr_ok({obj_var}, '{root_attr}') and "
+            f"hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:"
+        )
 
         if tree:
             # If the value is a dict (e.g., JSONField), serialize it whole —
@@ -257,7 +293,12 @@ def _generate_nested_access(
         obj_access = f"{obj_var}.{attr_name}"
 
         # Generate safety check
-        lines.append(f"{ind}if hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:")
+        # Same chokepoint consult as the root site (#2685) — nested objects may
+        # be a different model, so the decision is made per object at runtime.
+        lines.append(
+            f"{ind}if _djust_attr_ok({obj_var}, '{attr_name}') and "
+            f"hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:"
+        )
 
         if subtree:
             # Check if subtree contains list iteration marker
@@ -375,7 +416,13 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         >>> print(serialized)
         {"property": {"name": "123 Main St"}}
     """
-    namespace: Dict[str, Any] = {"_logger": logging.getLogger("djust.codegen.generated")}
+    namespace: Dict[str, Any] = {
+        "_logger": logging.getLogger("djust.codegen.generated"),
+        # The generated code's only authority for "may this attribute ship"
+        # (#2685). Bound here, not looked up per call, so a generated
+        # serializer can never run without it.
+        "_djust_attr_ok": _attr_is_emittable,
+    }
 
     try:
         # Compile to bytecode
