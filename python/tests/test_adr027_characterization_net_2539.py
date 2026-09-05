@@ -682,11 +682,11 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #: Row O now agrees on both paths and both flag settings: Encoded keeps
 #: string-conversion safety as runtime-only metadata, without a wire grant.
 #:
-#: * ``V`` — a generator. ``opaque_gate`` declines a ONE-SHOT iterator
-#:   deliberately, and lifting that decline without the ``{% for %}`` sink
-#:   materialising through the handle would enumerate a caller's generator at
-#:   CONVERSION time — a NEW wrong answer, not an unfixed one. Deferred with
-#:   the ``Encoded`` accessor sweep.
+#: Row V (a generator) agrees on both paths with the flag ON since #2613:
+#: ``opaque_gate`` admits a ONE-SHOT iterator with a live handle and no
+#: items, and the ``{% for %}`` sink consumes it once through
+#: ``Encoded::consume_live_items`` — Django's ``list(values)``. With the flag
+#: OFF there is no handle, so the recorded (declined) bytes stand there.
 #: * ``J`` / ``J2`` / ``Q``, LiveView only — ``normalize_django_value``
 #:   replaces ANY callable with ``None`` before Rust sees it
 #:   (``serialization.py``'s "safety net: skip callables"), so a lambda and a
@@ -695,8 +695,8 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #:   the LiveView STATE channel, not the resolution sink.
 #:
 #: Remaining callable and iterator differences are tracked at #2621.
-PLAIN_WRONG_UNDER_LAZY = frozenset("V".split())
-LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 Q V".split())
+PLAIN_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
+LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 Q".split())
 
 
 def recorded(row: Row, path: str) -> Any:
@@ -941,7 +941,8 @@ class TestTheDifferentialTable:
         assert held == expected_held, (
             f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
         )
-        assert len(moved) == 27, f"expected 27 cells to move, got {len(moved)}: {sorted(moved)}"
+        # 27 at the flip, 29 since #2613 moved row V on both paths.
+        assert len(moved) == 29, f"expected 29 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
@@ -1078,16 +1079,17 @@ class TestTheTableIsLoadBearing:
         assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
         with pytest.raises(AssertionError, match="does not answer Django's bytes"):
             assert_lazy_column(claimed, "plain", claimed.plain)
-        # A HELD row (row V) that starts matching Django must fail loudly, so
-        # the residue set cannot rot into a floor.
-        held = ROW_BY_ID["V"]
-        assert "V" in PLAIN_WRONG_UNDER_LAZY
-        assert_lazy_column(held, "plain", held.plain)
+        # A HELD row (row J, LiveView — the plain held set emptied when #2613
+        # closed row V) that starts matching Django must fail loudly, so the
+        # residue set cannot rot into a floor.
+        held = ROW_BY_ID["J"]
+        assert "J" in LIVEVIEW_WRONG_UNDER_LAZY
+        assert_lazy_column(held, "liveview", held.liveview)
         with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
-            assert_lazy_column(held, "plain", held.django)
+            assert_lazy_column(held, "liveview", held.django)
         # And wrong in a NEW way is not the same as still wrong.
         with pytest.raises(AssertionError, match="wrong in a NEW way"):
-            assert_lazy_column(held, "plain", held.plain + "x")
+            assert_lazy_column(held, "liveview", held.liveview + "x")
         # The floor, with the flag ON.
         floor = ROW_BY_ID["E1"]
         assert_lazy_column(floor, "plain", floor.plain)

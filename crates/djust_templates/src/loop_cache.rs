@@ -35,7 +35,7 @@
 //! * `Node::If` inside the body — emits a `<!--dj-if id="if-<hash>-N-<index>"-->`
 //!   marker whose `<index>` is the loop position (#1832).
 //! * `Node::Cycle` / `Node::ResetCycle` — `{% cycle %}` state is per node per render (#2556).
-//! * a nested `Node::For` — composes `__djust_if_loop_path` from the outer
+//! * a nested `Node::For` — composes `Context::dj_if_loop_path` from the outer
 //!   index, so any dj-if inside the nested loop is position-dependent.
 //! * a `{{ forloop.* }}` reference (counter/index/first/last/parentloop/…).
 //!   The Rust renderer does not currently implement `forloop`, but a future

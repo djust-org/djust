@@ -782,38 +782,32 @@ static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<PathBuf, ParsedTemplateEntry>>
 /// refuses:
 ///
 /// * an absolute name (`/etc/passwd`, or a Windows drive/UNC prefix), and
-/// * any name whose `..` segments pop above the search directory — at ANY
-///   position, not merely as a prefix. `a/../../x` is refused exactly like
-///   `../x`; the prefix-only reading is what left `construct_relative_path`'s
-///   refusals incomplete.
+/// * any name whose NORMALISED join lands outside the search directory.
+///
+/// Django's `safe_join` normalises the whole joined path first and tests
+/// containment ONCE (`final_path.startswith(base_path + sep)`), so a name
+/// whose `..` segments transiently leave the directory and return —
+/// `sub/../../<dirname>/ok.html` — loads (#2660). The first version of this
+/// guard walked segments and refused as soon as depth went negative: the
+/// safe direction, but a parity gap. `absolute_template_path` is the same
+/// lexical normalisation the loader already applies to the origin (pop on
+/// `..`, drop `.`, no `canonicalize`), so the decision here and the path
+/// opened below cannot disagree.
 ///
 /// A `..` that stays inside is allowed, because it names a real template:
 /// `a/b/../c.html` is `a/c.html`.
-fn template_name_is_contained(name: &str) -> bool {
+fn template_name_is_contained(dir: &std::path::Path, name: &str) -> Result<bool> {
     if name.is_empty() {
-        return false;
+        return Ok(false);
     }
     // Absolute in the host's terms (covers `/x`, and `C:\x` / `\\host\share`
     // on Windows), or a bare leading separator.
     if std::path::Path::new(name).is_absolute() || name.starts_with('/') || name.starts_with('\\') {
-        return false;
+        return Ok(false);
     }
-    let mut depth: i32 = 0;
-    // Split on BOTH separators: a Windows-style name reaches this on any host
-    // (template names travel in template source, not from the local FS).
-    for part in name.split(['/', '\\']) {
-        match part {
-            "" | "." => {}
-            ".." => {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
-                }
-            }
-            _ => depth += 1,
-        }
-    }
-    true
+    let base = absolute_template_path(dir.to_path_buf())?;
+    let joined = absolute_template_path(dir.join(name))?;
+    Ok(joined != base && joined.starts_with(&base))
 }
 
 /// Keep cache-policy comparison identical to origin-history comparison.
@@ -861,8 +855,9 @@ impl FilesystemTemplateLoader {
         let mut tried = Vec::new();
         let mut skipped = Vec::new();
         for dir in &self.template_dirs {
-            // Check containment before joining or touching the filesystem.
-            if !template_name_is_contained(name) {
+            // Check containment lexically, before touching the filesystem
+            // (per directory, as Django's `safe_join` is).
+            if !template_name_is_contained(dir, name)? {
                 continue;
             }
             // Django safe_join uses absolute, lexically normalized names.
@@ -1154,7 +1149,7 @@ fn node_to_template_string(node: &Node) -> String {
             result
         }
         Node::CsrfToken => "{% csrf_token %}".to_string(),
-        Node::Static(path) => format!("{{% static \"{path}\" %}}"),
+        Node::Static(operand) => format!("{{% static {operand} %}}"),
         Node::ReactComponent { .. } => {
             // React components should be preserved as-is if possible
             // For now, skip them as they're handled separately

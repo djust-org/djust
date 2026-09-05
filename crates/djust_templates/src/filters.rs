@@ -843,7 +843,18 @@ pub fn apply_filter_full_safe(
                      raises VariableDoesNotExist here"
                 )));
             }
-            None => None,
+            // An UNQUOTED numeric literal (#2571). Django's `Variable("0")`
+            // is the INTEGER 0, and the two fallback filters hand the argument
+            // back AS THE VALUE — so `{% if x|default_if_none:0 %}` is False
+            // there and was True here, because the literal reached the
+            // fallback arm below only as the text `"0"`, a non-empty string.
+            // The resolved-variable channel was fixed by #2569 (#2528); this
+            // types the literal channel at the same site, leaving the text
+            // itself for the dispatch table exactly as before.
+            None => {
+                resolved_type = typed_numeric_literal(a);
+                None
+            }
         },
         _ => None,
     };
@@ -2655,6 +2666,19 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
 ///
 /// A QUOTED argument never reaches this — `arg_was_quoted` short-circuits the
 /// whole resolution — so only the bare spellings are listed.
+/// The `Value` Django's `Variable(literal)` builds for an unquoted numeric
+/// filter argument (#2571): `0` → `Integer(0)`, `0.0` / `1e3` → `Float`.
+/// `None` for anything else — `_("…")` is a `str`, and a magnitude past `i64`
+/// stays on the untyped text channel rather than saturating.
+fn typed_numeric_literal(a: &str) -> Option<Value> {
+    if a.contains('.') || a.contains(['e', 'E']) {
+        return python_float(a).map(Value::Float);
+    }
+    python_int_from_str(a)
+        .and_then(|n| i64::try_from(n).ok())
+        .map(Value::Integer)
+}
+
 fn is_literal_filter_arg(a: &str) -> bool {
     if a.starts_with("_(") && a.ends_with(')') {
         return true;

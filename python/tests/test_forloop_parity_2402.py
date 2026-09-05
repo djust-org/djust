@@ -158,8 +158,9 @@ class TestReversedUsesTheIterationOrdinalNotTheItemIndex:
     """Django reverses the sequence and THEN enumerates.
 
     The one shape where the render ordinal and the item's own index disagree.
-    An implementation reading the item index — which `__djust_if_loop_path`
-    deliberately does — agrees on every forward loop and silently reverses the
+    An implementation reading the item index — which the dj-if loop path
+    (`Context::dj_if_loop_path`, #1832/#2529) deliberately does — agrees on
+    every forward loop and silently reverses the
     numbering here, so this is the case that distinguishes the two.
     """
 

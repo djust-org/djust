@@ -1386,9 +1386,12 @@ fn parse_token_inner(
                             "'static' takes at least one argument (path to file)".to_string(),
                         ));
                     }
-                    // Remove quotes from path if present
-                    let path = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
-                    Ok(Some(Node::Static(path)))
+                    // The operand as written, quotes included: the renderer
+                    // resolves an unquoted one from the context (#2660) —
+                    // Django's `StaticNode` compiles it as a `FilterExpression`
+                    // — where this arm used to strip nothing from `p` and emit
+                    // `/static/p`, a broken asset link with no error.
+                    Ok(Some(Node::Static(args[0].clone())))
                 }
 
                 "comment" => {
@@ -5842,7 +5845,7 @@ mod dep_tests {
             Node::Comment,
             Node::Load(vec!["mytags".into()]),
             Node::CsrfToken,
-            Node::Static("img/foo.png".into()),
+            Node::Static("\"img/foo.png\"".into()),
             Node::With {
                 assignments: vec![("x".into(), "y".into())],
                 nodes: vec![],
