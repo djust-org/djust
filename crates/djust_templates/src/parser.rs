@@ -434,6 +434,7 @@ fn parse_internal(
     let mut i = 0;
 
     while i < tokens.len() {
+        let token_index = i;
         let node = parse_token(&mut block_names, tokens, spans, source, &mut i, &[])?;
         if let Some(n) = node {
             // Django's `ExtendsNode.must_be_first` (`loader_tags.py`) refuses
@@ -471,9 +472,21 @@ fn parse_internal(
                     }
                 }
                 if already_has_extends || already_has_nontext {
-                    return Err(DjangoRustError::TemplateError(
-                        "'extends' must be the first tag in the template".to_string(),
-                    ));
+                    // Django reports the offending token's contents, preserving
+                    // internal whitespace but normalizing the delimiters.
+                    let contents = spans
+                        .get(token_index)
+                        .and_then(|(start, end)| source.get(*start..*end))
+                        .and_then(|raw| raw.strip_prefix("{%")?.strip_suffix("%}"))
+                        .map(|contents| contents.trim().to_string())
+                        .unwrap_or_else(|| match &tokens[token_index] {
+                            Token::Tag(name, args) => format!("{} {}", name, args.join(" ")),
+                            _ => unreachable!("an extends node comes from a tag token"),
+                        });
+                    return Err(DjangoRustError::TemplateError(format!(
+                        "{{% {contents} %}} must be the first tag in the template."
+                    ))
+                    .at(spans.get(token_index).copied()));
                 }
             }
             nodes.push(n);

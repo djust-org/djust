@@ -181,9 +181,12 @@ class DjustTemplate:
             backend: DjustTemplateBackend instance
             origin: Template origin (for debugging)
         """
+        from .exceptions import UNKNOWN_SOURCE
+
         self.template_string = template_string
+        self.source = template_string
         self.backend = backend
-        self.origin = origin
+        self.origin = origin if origin is not None else Origin(name=UNKNOWN_SOURCE)
 
         # Add .template.source for LiveView compatibility
         # LiveView expects: template.template.source
@@ -231,6 +234,19 @@ class DjustTemplate:
             user_raised = _is_user_raised(e)
             if not user_raised and not isinstance(e, RuntimeError):
                 raise
+            # The parser does not know the loader's template name. Complete
+            # Django's must-be-first diagnostic here, at the origin boundary.
+            first_tag_suffix = " must be the first tag in the template."
+            template_name = getattr(self.origin, "template_name", None)
+            if (
+                not user_raised
+                and template_name
+                and message.startswith("Template error: {% extends")
+                and message.endswith(first_tag_suffix)
+            ):
+                message = message[: -len(first_tag_suffix)] + (
+                    f" must be the first tag in {template_name!r}."
+                )
             exc = e if user_raised else DjustTemplateSyntaxError(message, origin=self.origin)
             span = getattr(e, "djust_token_span", None)
             if span is not None:

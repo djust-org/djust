@@ -1,0 +1,1 @@
+- **Template diagnostics and metadata**: Report the offending extends tag and template name in must-be-first errors, attach its source location, and expose Django-compatible source and origin metadata for templates created from strings.
