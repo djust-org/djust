@@ -4,7 +4,7 @@ Django's ``AutoEscapeControlNode`` saves ``context.autoescape``, sets it for
 the body and restores it. djust mirrors that with a ``Context::autoescape``
 flag (mirroring ``emit_dj_if_markers``: render-time, per-context, never on the
 cached ``Template``) that a ``Node::AutoEscape`` render arm flips on a
-per-block clone.
+lexical body and restores on exit.
 
 The flag is an EMIT-time term and the ``needs_autoescape`` argument — it is
 **not** a safety grant. It reaches the sink at exactly the sites in the plan's
@@ -521,16 +521,17 @@ def _production_lines(src: str) -> list[str]:
 
 
 class TestSecurityPins:
-    def test_only_lexical_policy_and_include_copy_write_autoescape(self):
-        """Only the lexical setting/restoration and the `include … only` copy.
-        Context keys, pyfunctions, and request-derived values must not gain
-        a separate way to alter the policy."""
+    def test_only_explicit_render_policy_and_lexical_scopes_write_autoescape(self):
+        """Only explicit API policy, lexical scopes, and include-only copies.
+        Context dictionary keys must never configure the render policy."""
         writers: list[tuple[str, str]] = []
         for rs in sorted(CRATES.glob("*/src/**/*.rs")):
             for line in _production_lines(rs.read_text(encoding="utf-8")):
                 if "set_autoescape(" in line and "pub fn set_autoescape" not in line:
                     writers.append((rs.relative_to(CRATES).as_posix(), line.strip()))
         assert sorted(writers) == [
+            ("djust_live/src/lib.rs", "ctx.set_autoescape(autoescape);"),
+            ("djust_live/src/lib.rs", "ctx.set_autoescape(autoescape);"),
             ("djust_templates/src/renderer.rs", "context.set_autoescape(*on);"),
             ("djust_templates/src/renderer.rs", "context.set_autoescape(previous);"),
             ("djust_templates/src/renderer.rs", "fresh.set_autoescape(context.autoescape());"),
@@ -548,17 +549,13 @@ class TestSecurityPins:
         # `input_was_safe` is captured from `runtime_safe` alone, at every site.
         assert re.findall(r"let input_was_safe = (\w+);", src) == ["runtime_safe"] * 3
 
-    def test_no_pyfunction_exposes_the_flag(self):
-        for rs in (
-            CRATES / "djust_live" / "src" / "lib.rs",
-            CRATES / "djust_templates" / "src" / "lib.rs",
-        ):
-            src = rs.read_text(encoding="utf-8")
-            assert not re.search(r"signature\s*=\s*\([^)]*autoescape", src), rs
-            assert not re.search(r"fn \w+\([^)]*\bautoescape\b", src), rs
-        assert "set_autoescape" not in (CRATES / "djust_live" / "src" / "lib.rs").read_text(
-            encoding="utf-8"
-        )
+    def test_only_plain_render_pyfunctions_expose_explicit_policy(self):
+        src = (CRATES / "djust_live" / "src" / "lib.rs").read_text(encoding="utf-8")
+        exposed = re.findall(r"fn (\w+)\([^)]*\bautoescape\b[^)]*\)", src)
+        assert sorted(exposed) == ["render_template", "render_template_with_dirs"]
+        signatures = re.findall(r"signature\s*=\s*\(([^)]*autoescape[^)]*)\)", src)
+        assert len(signatures) == 2
+        assert all("*, autoescape=true" in signature for signature in signatures)
         assert not hasattr(_rust.RustLiveView, "set_autoescape")
 
     def test_a_context_key_named_autoescape_has_no_effect(self, engines):

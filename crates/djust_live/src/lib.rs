@@ -2088,12 +2088,13 @@ fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None))]
+#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None, *, autoescape=true))]
 fn render_template(
     template_source: String,
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
     string_if_invalid: Option<String>,
+    autoescape: bool,
 ) -> PyResult<String> {
     guard_panic("render_template", move || {
         // Inside the closure, not before it (PR #2514 review, finding 4):
@@ -2114,6 +2115,7 @@ fn render_template(
         };
 
         let mut ctx = Context::from_dict(state);
+        ctx.set_autoescape(autoescape);
         // ADR-024 kill-switch. `None` keeps `Context::from_dict`'s default of
         // ON, which is Django's behaviour and what a caller reaching this
         // function directly should get; `DjustTemplate.render` passes the
@@ -2228,7 +2230,7 @@ fn template_cache_contains(template_source: &str) -> bool {
 // original-object sidecar for backend callers.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -2238,6 +2240,7 @@ fn render_template_with_dirs(
     string_if_invalid: Option<String>,
     template_name: Option<String>,
     raw_context: Option<&Bound<'_, PyDict>>,
+    autoescape: bool,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2260,6 +2263,7 @@ fn render_template_with_dirs(
         };
 
         let mut ctx = Context::from_dict(state);
+        ctx.set_autoescape(autoescape);
         // See `render_template` for why `None` means ON.
         ctx.set_auto_call(auto_call.unwrap_or(true));
         // Django's `Engine.string_if_invalid` (#2517). `None`/absent keeps the

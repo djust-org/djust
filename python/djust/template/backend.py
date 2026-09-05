@@ -12,7 +12,6 @@ from typing import Any, Dict, List
 
 from django.template import TemplateDoesNotExist, Origin
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 from django.template.backends.base import BaseEngine
 
 from .rendering import DjustTemplate
@@ -62,30 +61,9 @@ class DjustTemplateBackend(BaseEngine):
         # `debug` (#2518): Django defaults it to `settings.DEBUG`.
         self.debug: bool = bool(options.pop("debug", getattr(settings, "DEBUG", False)))
 
-        # `autoescape` is REFUSED, not honoured — deliberately, and loudly.
-        #
-        # Django lets a backend turn escaping off engine-wide. djust does not:
-        # `Context::set_autoescape` has exactly two production writers (the
-        # `{% autoescape %}` render arm and the `include … only` copy), pinned
-        # by `test_no_pyfunction_exposes_the_flag` /
-        # `test_exactly_two_production_writers_of_set_autoescape`, on the
-        # reasoning that a global escape-off reachable from configuration — or
-        # from a pyfunction, or a context key — is the XSS shape that pin
-        # exists to refuse.
-        #
-        # Silently dropping it (the pre-#2518 behaviour) is the worst option:
-        # the project believes escaping is off and it is not, or vice versa.
-        # So an explicit `False` raises, and `True` is accepted as a no-op
-        # because it asks for what djust already does.
-        autoescape = options.pop("autoescape", True)
-        if autoescape is not True:
-            raise ImproperlyConfigured(
-                "DjustTemplateBackend does not support OPTIONS['autoescape'] = "
-                f"{autoescape!r}. djust has no engine-wide escaping switch by "
-                "design — use {% autoescape off %} around the specific block "
-                "that needs raw output, which is scoped and visible in the "
-                "template."
-            )
+        # Match Django's engine default; render-time Context settings can
+        # override it. Context dictionary keys never configure escaping.
+        self.autoescape = bool(options.pop("autoescape", True))
 
         # Anything still in OPTIONS is a key djust does not implement. Django
         # raises `ImproperlyConfigured` for an unknown option; staying silent is

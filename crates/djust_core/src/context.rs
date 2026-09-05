@@ -212,10 +212,10 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
-    /// Django's `Context.autoescape` (#2556). Default `true`; flipped ONLY by
-    /// the `{% autoescape off %}` render arm with restoration on exit, and copied
-    /// into the fresh `Context` an `{% include … only %}` builds — never from
-    /// data (a context key spelled `autoescape` has no effect). It is an
+    /// Django's `Context.autoescape` (#2556). Default `true`; plain render APIs
+    /// accept explicit policy, lexical autoescape bodies restore it on exit,
+    /// and `{% include … only %}` copies it into its fresh context. Context
+    /// dictionary keys cannot alter the policy. It is an
     /// EMIT-time term and the `needs_autoescape` argument, not a safety
     /// grant: `renderer::filter_output_is_safe` never reads it. Render-time on
     /// the `Context` for the same reason as `emit_dj_if_markers` — the parsed
@@ -409,8 +409,8 @@ impl Context {
     }
 
     /// Set Django's `Context.autoescape` for renders under this context
-    /// (#2556). Production writers are the `{% autoescape %}` setting/restoration
-    /// and the `{% include … only %}` fresh-context copy — pinned by a
+    /// (#2556). Production writers are the explicit plain-render API options,
+    /// lexical setting/restoration, and the include-only context copy, pinned by a
     /// source grep in `python/tests/test_autoescape_tag_2556.py`.
     pub fn set_autoescape(&mut self, on: bool) {
         self.autoescape = on;

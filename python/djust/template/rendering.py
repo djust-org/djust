@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from django.db import models
 from django.db.models import QuerySet
-from django.template import TemplateDoesNotExist, Origin
+from django.template import Context, TemplateDoesNotExist, Origin
 from django.template.backends.utils import csrf_input_lazy, csrf_token_lazy
 from django.utils.safestring import SafeString
 
@@ -879,6 +879,11 @@ class DjustTemplate:
                     # `construct_relative_path` reads.
                     getattr(self.origin, "template_name", None) if self.origin else None,
                     raw_context=raw_context,
+                    autoescape=bool(
+                        context.autoescape
+                        if isinstance(context, Context)
+                        else getattr(self.backend, "autoescape", True)
+                    ),
                 )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.

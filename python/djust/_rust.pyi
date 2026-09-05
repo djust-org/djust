@@ -19,6 +19,8 @@ def render_template(
     context: Dict[str, Any],
     auto_call: Optional[bool] = None,
     string_if_invalid: Optional[str] = None,
+    *,
+    autoescape: bool = True,
 ) -> str:
     """
     Render a template string with the given context.
@@ -41,6 +43,8 @@ def render_template(
             MISSING variable renders. ``None``/absent means the empty string
             (render nothing). A non-empty value also SKIPS the filter chain,
             which is Django's own control flow.
+        autoescape: Explicit render policy, defaulting to True. Dictionary
+            keys cannot override it; lexical autoescape tags can.
 
     Returns:
         The rendered HTML string
@@ -83,6 +87,8 @@ def render_template_with_dirs(
     string_if_invalid: Optional[str] = None,
     template_name: Optional[str] = None,
     raw_context: Optional[Dict[str, Any]] = None,
+    *,
+    autoescape: bool = True,
 ) -> str:
     """
     Render a template with support for {% include %} tags.

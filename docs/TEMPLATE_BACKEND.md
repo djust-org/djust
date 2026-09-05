@@ -221,7 +221,7 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 - **Django's own libraries:** `i18n`, `l10n` and `tz` are bridged the same way (#2558), except that `{% blocktranslate %}` crosses its body as raw source and `{% language %}` / `{% localize %}` / `{% localtime %}` / `{% timezone %}` are native scope nodes the load arms. `static`, `cache` and djust's own `djust.templatetags.*` are not bridged, deliberately: they resolve — `{% load static %}` keeps parsing — but their tags come from the engine's native handlers, each its own row in the generated lists below.
 - **`OPTIONS['builtins']`** (dotted library paths) are bridged when the backend is constructed, so their tags and filters need no `{% load %}` — Django's meaning. Django's three default builtins are the Rust natives and are skipped.
 - **Scoping differs from Django.** Django scopes a loaded library to the template that loaded it; djust's registries are process-global, so once any render loads a library every later template on either engine path (plain backend or LiveView) sees its tags, `{% load %}` or not. A missing library is still refused. A test suite that clears the Rust tag registries must call `djust.template_libraries.reassert()` afterwards (the framework's own `djust.test_isolation` does): the Rust template cache is keyed by source, so a template parsed while the tags were registered is served from cache and never re-runs its `{% load %}`.
-- **Known gaps:** `context.use_l10n` / `autoescape` are not carried into a bridged tag's `Context` (#2586); the scoreboard's `test_no_render_side_effect` reads `template.nodelist`, a Django-internal attribute the backend does not have — a deliberate, documented ERROR (#2587).
+- **Context settings:** Bridged tags receive the active `autoescape`, `use_l10n`, and `use_tz` settings. Django node metadata (`template.nodelist`) remains unsupported (#2587).
 
 ### Internationalization
 
@@ -268,16 +268,15 @@ Three things are worth knowing about how it works:
 
 Escaping follows Django's rule that a node's output is final: a catalog string
 and a template literal are author content and render raw (`{% translate "<b>" %}`
-→ `<b>`), while an interpolated VARIABLE is escaped (`{% translate hostile %}`
+→ `<b>`), while an interpolated VARIABLE is escaped when autoescaping is enabled (`{% translate hostile %}`
 and `{% blocktranslate %}{{ hostile }}{% endblocktranslate %}` both escape).
 Nothing user-controlled can become a msgid except through
-`{% translate var %}`, whose output is escaped whatever the catalog answers.
+`{% translate var %}`, whose output follows the active escaping policy.
 
 Residues, all of them named tests rather than silent gaps:
 
 | shape | djust | why |
 |---|---|---|
-| `{% autoescape off %}{% translate var %}` | refuses the `autoescape` tag | `{% autoescape %}` is not implemented yet (#2556); until it is, the bridge builds its `Context` with `autoescape=True` |
 | `{{ dt\|localtime }}`, `\|utc`, `\|timezone:"…"` | raises, naming the filter | a datetime crosses the wire as its ISO string (#2216), so the filter has no datetime object; use `{{ dt\|date:"…" }}`, which converts to the active zone (#2209) |
 | `{% localize off %}{{ some_date }}` | ISO, not the raw `DATE_FORMAT` | same date-wire residue (#2221 piece 3); the NUMBER half of `{% localize %}` is exact |
 | `{% localtime on %}` under `USE_TZ = False` | no conversion | Django's `on` forces conversion even with `USE_TZ` off; djust's `on` keeps whatever the render env pushed. `off` and the whole `USE_TZ = True` matrix agree |
@@ -323,13 +322,13 @@ Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each n
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **96.37%** of the Django template tests that reach the engine pass (1009 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 97.39% (1418 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
+- **96.66%** of the Django template tests that reach the engine pass (1012 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 97.60% (1421 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
 
 Two result kinds are counted separately because they are different work:
 
 - **ERROR**: the test could not run to an assertion. Remaining cases include template-object inheritance, loader cache behavior, node metadata, and debug exception metadata. Unknown tags are refused during compilation with Django-style `Invalid block tag` diagnostics. The support-list generator recognizes both these messages and historical unsupported-tag messages when cross-checking saved scoreboards.
-- **FAIL**: the test reached an assertion and disagreed with Django. The six remaining failures cover a missing render-time error for `block.super` in a base template (one), `ifchanged` state across includes (one), engine/context-wide autoescape policy (three), and inheritance/include behavior (one). Engine-wide autoescape remains explicitly refused by this backend; `{% autoescape off %}` is supported inside templates.
+- **FAIL**: the test reached an assertion and disagreed with Django. The three remaining failures cover a missing render-time error for `block.super` in a base template, `ifchanged` state across includes, and inheritance/include behavior. The backend honors `OPTIONS["autoescape"]` and explicit Django `Context.autoescape` overrides; escaping defaults to enabled, and dictionary keys cannot change the policy.
 
 **No `template_tests` case segfaults the interpreter any more.** Seven did — a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class — and all seven stopped when ADR-027's lazy resolution became the default in #2539. Two mechanisms did it, and neither was aimed at the crashes: nothing walks an object's `__dict__` eagerly, so a reference cycle has no unbounded recursion to overflow, and the segment walk carries Django's metaclass guard, so a `list`-subclass class object never reaches `__class_getitem__`. Only one of the seven (`test_subscriptable_class`) reaches OK; the other six still ERROR for unrelated reasons, but they no longer take the process with them.
 

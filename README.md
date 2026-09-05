@@ -60,7 +60,7 @@ TEMPLATES = [
 
 Two numbers, and nothing softer:
 
-- **96.37%** of Django's own `template_tests` suite passes unmodified against this backend (1009 of the 1,047 cells that reach an engine at all; measured by `scripts/run-django-template-suite.py` against the Django tag matching the installed version — see [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md) for the full breakdown and what the remaining cells are). <!-- django-suite-claim -->
+- **96.66%** of Django's own `template_tests` suite passes unmodified against this backend (1012 of the 1,047 cells that reach an engine at all; measured by `scripts/run-django-template-suite.py` against the Django tag matching the installed version — see [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md) for the full breakdown and what the remaining cells are). <!-- django-suite-claim -->
 - Rendering is **7–11x faster** on variable- and filter-heavy templates (see [Performance](#performance) below); static markup is not faster, because there is nothing there to accelerate.
 
 The scaffold (`djust new`) already configures the `TEMPLATES` setting
