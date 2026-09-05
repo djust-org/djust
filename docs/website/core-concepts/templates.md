@@ -13,7 +13,7 @@ Every LiveView template needs two things:
     {% load live_tags %}
     {% djust_client_config %}   {# Emits client config meta tags; djust auto-injects the ~58 KB gz client JS #}
 </head>
-<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
+<body>
     <div dj-root>                    {# Reactive region — only this is patched #}
         {{ count }}
         <button dj-click="increment">+</button>
@@ -23,8 +23,8 @@ Every LiveView template needs two things:
 ```
 
 - `{% djust_client_config %}` — emits client config meta tags; djust auto-injects the client JavaScript into every LiveView response (no manual `<script>` tag needed)
-- `dj-view="myapp.views.CounterView"` — on `<body>`, binds the page to the session (a literal dotted path to your view class; there is no `dj_view_id` context variable — djust injects `dj-view` server-side when missing)
-- `dj-root` — marks the reactive subtree; only HTML inside this element is diffed and patched
+- `dj-root` — marks the reactive subtree; only HTML inside this element is diffed and patched. It is the only root attribute you write: djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page
+- `dj-view="myapp.views.MyView"` — optional; write it only to name a specific view (embedded/sticky, or a template shared by several views). Literal path — there is no `dj_view_id` context variable
 
 ## Event Directives
 
@@ -226,10 +226,10 @@ While `{% if %}` inside attribute values works, **inline conditionals are recomm
 
 ## Template Requirements (Legacy)
 
-Some older setups used `dj-view` and `dj-root` differently. The required pattern is:
+Some older setups used `dj-view` and `dj-root` differently. The pattern is:
 
-- `dj-view="myapp.views.CounterView"` on the `<body>` tag (or outermost container) — literal dotted path, as the scaffold emits
-- `dj-root` on the reactive region inside
+- `dj-root` on the reactive region — the one attribute you write; djust stamps `dj-view` onto it server-side
+- `dj-view="myapp.views.MyView"` only when you need to name a specific view (embedded/sticky, or a shared template); a literal dotted path, never `{{ dj_view_id }}`
 
 See [error codes](../../guides/error-codes.md) if you get a `T002`- or
 `T012`-family system-check warning about missing template attributes. (`T001`

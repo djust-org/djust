@@ -42,7 +42,7 @@ class OnboardingView(TutorialMixin, LiveView):
 <!-- onboarding.html -->
 {% load djust_tutorials %}
 
-<div dj-root dj-view="myapp.views.OnboardingView">
+<div dj-root>
     <button dj-click="start_tutorial">Take the tour</button>
 
     <nav id="nav-dashboard">...</nav>
@@ -296,7 +296,7 @@ The bubble's Skip and Close buttons use plain `onclick` handlers that dispatch a
 ### Correct placement
 
 ```html
-<div dj-root dj-view="myapp.views.OnboardingView">
+<div dj-root>
     <button dj-click="start_tutorial">Take the tour</button>
     <nav id="nav-dashboard">...</nav>
     <!-- All LiveView content inside dj-root -->
@@ -309,7 +309,7 @@ The bubble's Skip and Close buttons use plain `onclick` handlers that dispatch a
 ### Incorrect placement
 
 ```html
-<div dj-root dj-view="myapp.views.OnboardingView">
+<div dj-root>
     <button dj-click="start_tutorial">Take the tour</button>
     <nav id="nav-dashboard">...</nav>
 

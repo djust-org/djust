@@ -109,7 +109,7 @@ everything click.
 <head>
     {% djust_client_config %}        {# Emits client config meta tags; djust auto-injects the client runtime #}
 </head>
-<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
+<body>
     <div dj-root>                    {# Reactive boundary — only this is diffed #}
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>
@@ -122,8 +122,8 @@ everything click.
 | Attribute | Where | Purpose |
 |---|---|---|
 | `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~58 KB gz client runtime into every LiveView response — no manual `<script>` tag needed |
-| `dj-view="myapp.views.CounterView"` | `<body>` | Literal dotted path to your LiveView class; connects page to WebSocket session |
-| `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched |
+| `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched. This is the only root attribute you write — djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page |
+| `dj-view="myapp.views.MyView"` | any root | Optional. Write it yourself only to name a specific view — an embedded or sticky view, or a template shared by several views. There is no `dj_view_id` variable; it is a literal path |
 
 ### Stable List Identity
 
@@ -250,7 +250,7 @@ class CounterView(LiveView):
     <title>Counter</title>
     {% djust_client_config %}
 </head>
-<body dj-view="myapp.views.CounterView">
+<body>
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>

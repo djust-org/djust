@@ -83,7 +83,7 @@ The tag validates at render time that ``AudioPlayerView.sticky == True``
 >
 > | View kind | Root `dj-view`? |
 > |---|---|
-> | Normal page view (routed via a URL) | **Required** — `<div dj-view="myapp.views.MyView">` |
+> | Normal page view (routed via a URL) | **Not needed** — `<div dj-root>` is enough; the server stamps `dj-view` onto it with the rendering view's path. Writing `dj-view` explicitly is allowed but redundant |
 > | Sticky child (`{% live_render ... sticky=True %}`) | **Must NOT declare it** — the wrapper provides it |
 >
 > So `AudioPlayerView`'s template (`myapp/audio_player.html`) should look like

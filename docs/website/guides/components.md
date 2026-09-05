@@ -58,7 +58,7 @@ class DashboardView(LiveView):
 In the template, `{{ status }}` calls `__str__()` which calls `render()`:
 
 ```html
-<div dj-root dj-view="myapp.views.DashboardView">
+<div dj-root>
     <h1>Server Status: {{ status }}</h1>
 </div>
 ```
@@ -222,7 +222,7 @@ class DashboardView(LiveView):
 ```
 
 ```html
-<div dj-root dj-view="myapp.views.DashboardView">
+<div dj-root>
     <h2>Counter</h2>
     {{ counter|safe }}
 </div>
