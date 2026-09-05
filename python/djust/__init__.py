@@ -260,7 +260,8 @@ def enable_hot_reload():
     Requirements:
         - DEBUG = True (automatically disabled in production)
         - watchdog package installed (pip install watchdog)
-        - Django Channels configured for WebSocket support
+        - Django Channels installed for the reload broadcast (without it the
+          watcher still runs but has no socket to notify)
 
     Notes:
         - Only activates when DEBUG=True
@@ -312,9 +313,20 @@ def enable_hot_reload():
 
     exclude_dirs = config.get("hot_reload_exclude_dirs")
 
-    # Import WebSocket consumer for broadcasting
-    from djust.websocket import LiveViewConsumer
     import asyncio
+    import importlib.util
+
+    # The reload broadcast rides the LiveView WebSocket, which needs
+    # ``channels``. ``djust.websocket`` is imported only when a change has to
+    # be broadcast, and only when channels is installed, so a templates-only
+    # project running with DEBUG=True keeps the file watcher without pulling
+    # the LiveView stack into every process (#2566). Without channels there
+    # is no socket to broadcast on, so the change handler is a no-op.
+    can_broadcast = importlib.util.find_spec("channels") is not None
+    if not can_broadcast:
+        logger.info(
+            "[HotReload] channels is not installed; file changes are watched but not broadcast"
+        )
 
     # HVR is opt-out via LIVEVIEW_CONFIG["hvr_enabled"] (default True).
     # When disabled we fall back to the pre-v0.6.1 behavior (template +
@@ -332,6 +344,10 @@ def enable_hot_reload():
         """Called when a file changes - broadcasts reload to all clients."""
 
         async def _dispatch():
+            if not can_broadcast:
+                return
+            from djust.websocket import LiveViewConsumer
+
             is_py = hvr_enabled and file_path.lower().endswith(".py")
             if is_py:
                 try:

@@ -125,6 +125,10 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
 )
 assert len(ALLOWLIST_SETUP) == 57
 
+# ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
+# ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
+ALLOWLIST_SETUP_DEBUG = ALLOWLIST_SETUP | {"djust.dev_server"}
+
 # Each asserted absent by name so the failure names the leak (#1104).
 FORBIDDEN = (
     "channels",
@@ -270,6 +274,30 @@ class TestImportFootprint:
         assert set(report["djust"]) == ALLOWLIST_SETUP, (
             f"extra={sorted(set(report['djust']) - ALLOWLIST_SETUP)} "
             f"missing={sorted(ALLOWLIST_SETUP - set(report['djust']))}"
+        )
+        _assert_none_forbidden(report, stmt)
+
+    def test_django_setup_under_debug_true_never_loads_channels(self, tmp_path):
+        """#2566: ``DEBUG=True`` auto-enables hot reload. The watcher starts
+        (asserted, so the gate is exercised and not skipped by an early
+        return) but ``djust.websocket`` / ``channels`` are imported only on a
+        change event, and only when channels is installed."""
+        pytest.importorskip("watchdog")
+        stmt = (
+            "from django.conf import settings; settings.DEBUG = True; "
+            f"settings.BASE_DIR = {str(tmp_path)!r}; "
+            "import djust.template.backend; django.setup(); "
+            "from djust.dev_server import hot_reload_server; "
+            "EXTRA = {'running': hot_reload_server.is_running()}; "
+            "hot_reload_server.stop()"
+        )
+        report = _fresh_import(stmt)
+        assert report["extra"]["running"] is True, (
+            "hot reload never started — the websocket-import gate was not exercised"
+        )
+        assert set(report["djust"]) == ALLOWLIST_SETUP_DEBUG, (
+            f"extra={sorted(set(report['djust']) - ALLOWLIST_SETUP_DEBUG)} "
+            f"missing={sorted(ALLOWLIST_SETUP_DEBUG - set(report['djust']))}"
         )
         _assert_none_forbidden(report, stmt)
 
