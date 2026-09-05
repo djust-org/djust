@@ -30,7 +30,7 @@ class TodoView(LiveView):
 ```
 
 ```html
-<div dj-root dj-view="myapp.views.TodoView">
+<div dj-root>
     <form dj-submit="add_item">
         <input type="text" name="title" placeholder="New item">
         <button type="submit">Add</button>
@@ -79,7 +79,7 @@ FormMixin gives you `submit_form()` (validates the form), `validate_field()` (va
 Write your HTML however you want. No CSS framework required:
 
 ```html
-<div dj-root dj-view="myapp.views.ContactView">
+<div dj-root>
     {% if success_message %}<p>{{ success_message }}</p>{% endif %}
     {% if error_message %}<p>{{ error_message }}</p>{% endif %}
 

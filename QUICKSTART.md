@@ -102,7 +102,7 @@ class CounterView(LiveView):
     {% load live_tags %}
     {% djust_client_config %}
 </head>
-<body dj-view="myapp.views.CounterView">
+<body>
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="decrement">-</button>
@@ -114,16 +114,12 @@ class CounterView(LiveView):
 
 ### LiveView Root Container
 
-Every LiveView template **must** include two attributes:
+Every LiveView template needs **one** attribute on its root element: **`dj-root`**, marking the subtree djust patches on updates. That is all you write — the server stamps `dj-view` onto it with the dotted path of the view rendering the page, so the path is never duplicated into your template.
 
-- **`dj-view`** on an ancestor element -- identifies the LiveView class and establishes the WebSocket connection.
-- **`dj-root`** on the reactive subtree -- marks the region that djust patches on updates.
-
-Without `dj-view`, the LiveView will not mount even if the WebSocket connects. Without `dj-root`, DOM updates will not be applied.
+Given either attribute djust fills in the other (with `dj-view` alone, the client stamps `dj-root`). With **neither**, no `dj-view` reaches the browser, no WebSocket opens, and the page is silently static — no error, it just never updates.
 
 ```html
-<!-- Both attributes are required -->
-<body dj-view="myapp.views.CounterView">
+<body>
     <div dj-root>
         <!-- Only this subtree is patched on state changes -->
         <p>{{ content }}</p>
@@ -131,13 +127,7 @@ Without `dj-view`, the LiveView will not mount even if the WebSocket connects. W
 </body>
 ```
 
-For single-element layouts, combine them on the same element:
-
-```html
-<div dj-view="myapp.views.CounterView" dj-root>
-    <p>{{ content }}</p>
-</div>
-```
+Write `dj-view="myapp.views.MyView"` yourself only when you need to name a specific view: an embedded or sticky view, or one template shared by several views. It is a literal dotted path — there is no `dj_view_id` context variable.
 
 ### Event Handler Parameters
 
@@ -183,9 +173,9 @@ Visit **http://localhost:8000/counter/** -- the buttons update the count instant
 
 ### "No containers found"
 
-**Cause:** The template is missing the `dj-view` attribute.
+**Cause:** No root element carries `dj-root` (or `dj-view`), so djust has nothing to mount.
 
-**Fix:** Add `dj-view="myapp.views.CounterView"` (the literal dotted path to your view class, exactly as `djust new` scaffolds it) to a root element (typically `<body>` or a wrapper `<div>`). djust does not provide a `dj_view_id` context variable — the attribute must name the view class.
+**Fix:** Put `dj-root` on a root element (typically a wrapper `<div>` inside `<body>`). djust stamps `dj-view` onto it server-side with your view's dotted path. If you wrote `dj-view` yourself, make sure it is a literal path such as `myapp.views.CounterView` — djust does not provide a `dj_view_id` context variable, so `dj-view="{{ dj_view_id }}"` renders empty and cannot mount.
 
 ### "DOM not updating" / DJE-053
 

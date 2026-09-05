@@ -22,7 +22,7 @@ Every LiveView template needs these two things:
 <head>
     {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~58 KB gz client JavaScript #}
 </head>
-<body dj-view="myapp.views.CounterView">   {# Dotted path to your LiveView class #}
+<body>
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
         {{ count }}
         <button dj-click="increment">+</button>
@@ -463,7 +463,7 @@ Handler receives `_target="email"` or `_target="username"`.
 ### Reactive Region
 
 ```html
-<body dj-view="myapp.views.CounterView">
+<body>
     <div dj-root>
         <!-- Everything inside dj-root is managed by djust's VDOM -->
         <!-- Only this region is diffed and patched after events -->

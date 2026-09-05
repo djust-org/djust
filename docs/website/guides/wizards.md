@@ -63,7 +63,7 @@ Place `WizardMixin` **before** `LiveView` in the class definition so its methods
 ```html
 {% load live_tags %}
 
-<div dj-root dj-view="myapp.views.SignupWizard">
+<div dj-root>
 
     {# Step indicator #}
     <div class="steps">
