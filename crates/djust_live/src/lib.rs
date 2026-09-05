@@ -4380,6 +4380,9 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded_by_conversion, m)?)?;
+    // The conversion's recursion ceiling (#2624), exported so the test that
+    // pins it against the worker-stack measurement reads the real constant.
+    m.add("MAX_CONVERSION_DEPTH", djust_core::MAX_CONVERSION_DEPTH)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;

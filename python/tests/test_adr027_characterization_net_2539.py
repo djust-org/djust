@@ -362,8 +362,10 @@ class _Sentinel:
         return self.name
 
 
-#: The process dies in this cell today (rows H, P). Asserted in a child
-#: process by `TestTheTwoCrashes`; excluded from the in-process cells.
+#: The process dies in this cell today. No row records it since #2624 (the
+#: former crash cells are `FORMER_CRASH_CELLS`, asserted in a child by
+#: `TestTheFormerCrashCells`); a row that records it again is excluded from
+#: the in-process cells and `test_no_cell_is_a_crash_cell` names it.
 SEGFAULT = _Sentinel("SEGFAULT")
 
 
@@ -387,6 +389,19 @@ MARKER_DICT = "{&#x27;do_not_call_in_templates&#x27;: True}"
 LAMBDA_REPR = "&lt;function &lt;lambda&gt; at 0x…&gt;"
 GEN_REPR = "&lt;generator object gen at 0x…&gt;"
 CLS_CLASS_REPR = f"&lt;class &#x27;{Cls.__module__}.Cls&#x27;&gt;"
+#: Rows P / P0 on the pre-ADR walk: its step 1 is the UNGUARDED string-key
+#: item call, which on a `list`-subclass CLASS honours `__class_getitem__`
+#: and yields a `types.GenericAlias` spelled with the string key. Converting
+#: that alias used to recurse until the stack overflowed (#2624); it now
+#: renders as `str(alias)`, which is the wrong bytes rather than a dead
+#: process. Django's metaclass guard skips step 1, which is why its answer
+#: is the class attribute (P) or the INT-keyed alias (P0).
+MYCLASS_ALIAS_STRKEY = (
+    f"{MyClass.__module__}.MyClass[&#x27;class_property&#x27;] | "
+    f"{MyClass.__module__}.MyClass[&#x27;class_method&#x27;]"
+)
+MYCLASS_ALIAS_0_STRKEY = f"{MyClass.__module__}.MyClass[&#x27;0&#x27;]"
+MYCLASS_ALIAS_0 = f"{MyClass.__module__}.MyClass[0]"
 
 
 def _r(id_, source, make_ctx, django, plain, liveview, *, floor=False) -> Row:
@@ -519,7 +534,9 @@ ROWS: list[Row] = [
         "no",
         "no",
     ),
-    _r("H", "{{ x }}", cycle, "1", SEGFAULT, "1"),
+    # H-plain used to SEGFAULT: the eager `__dict__` walk recursed through the
+    # cycle. Fixed by the conversion's depth ceiling (#2624), on both flags.
+    _r("H", "{{ x }}", cycle, "1", "1", "1"),
     _r(
         "I",
         "{{ o }}",
@@ -623,13 +640,27 @@ ROWS: list[Row] = [
         "<b>s</b>",
         "<b>s</b>",
     ),
+    # P used to SEGFAULT on both paths; see MYCLASS_ALIAS_STRKEY (#2624).
     _r(
         "P",
         "{{ class_var.class_property }} | {{ class_var.class_method }}",
         lambda: {"class_var": MyClass},
         "Example property | Example method",
-        SEGFAULT,
-        SEGFAULT,
+        MYCLASS_ALIAS_STRKEY,
+        MYCLASS_ALIAS_STRKEY,
+    ),
+    # P0 is the NUMERIC-index form (#2624) — undeclared until that issue,
+    # and a segfault on both paths and both flags. Django's step 3 is
+    # `current[int(bit)]`, so ITS answer is the int-keyed alias, not the
+    # class attribute; the ADR-027 sink matches it, the pre-ADR walk spells
+    # the alias with the string key.
+    _r(
+        "P0",
+        "{{ class_var.0 }}",
+        lambda: {"class_var": MyClass},
+        MYCLASS_ALIAS_0,
+        MYCLASS_ALIAS_0_STRKEY,
+        MYCLASS_ALIAS_0_STRKEY,
     ),
     _r("Q", "{{ k }}", lambda: {"k": Cls}, "&lt;Cls&gt;", CLS_CLASS_REPR, "None"),
     _r(
@@ -659,8 +690,8 @@ ROW_BY_ID: dict[str, Row] = {row.id: row for row in ROWS}
 #: Rows whose djust cell is NOT Django's answer today, per path — a stated
 #: SET, not a floor (#1125): an unrelated PR that fixes or breaks a cell must
 #: edit the table AND this set. The floor rows (E1–E4) are listed apart.
-PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M5 N N2 P Q T V".split())
-LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P Q T V".split())
+PLAIN_WRONG_TODAY = frozenset("A G I J J2 K3 K4 M M2 M5 N N2 P P0 Q T V".split())
+LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P P0 Q T V".split())
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
 #: The same question with ADR-027's kill-switch ON — a STATED set (#1125),
@@ -694,16 +725,21 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #:   Component arm #2513 turns on, and deferred with it: lifting it changes
 #:   the LiveView STATE channel, not the resolution sink.
 #:
+#: * ``P`` / ``P0``, LiveView only — the same callable arm: the class is
+#:   replaced before Rust sees it, no handle exists, and the pre-ADR walk's
+#:   unguarded string-key item call answers (#2624 made that an answer
+#:   rather than a segfault). Closes with J / J2 / Q.
+#:
 #: Remaining callable and iterator differences are tracked at #2621.
 PLAIN_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
-LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 Q".split())
+LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 P P0 Q".split())
 
 
 def recorded(row: Row, path: str) -> Any:
     return getattr(row, path)
 
 
-#: (row, path) cells that run IN-PROCESS: everything but the three crash cells.
+#: (row, path) cells that run IN-PROCESS: every cell not recorded as SEGFAULT.
 CELLS = [
     pytest.param(row, path, id=f"{row.id}-{path}")
     for row in ROWS
@@ -941,15 +977,17 @@ class TestTheDifferentialTable:
         assert held == expected_held, (
             f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
         )
-        # 27 at the flip, 29 since #2613 moved row V on both paths.
-        assert len(moved) == 29, f"expected 29 cells to move, got {len(moved)}: {sorted(moved)}"
+        # 27 at the flip, 29 since #2613 moved row V on both paths, 31 since
+        # #2624: P-plain and P0-plain joined once they stopped crashing (the
+        # flag's metaclass guard answers both with Django's bytes).
+        assert len(moved) == 31, f"expected 31 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
     """The two raw entries `DjustTemplateBackend` binds answer the backend's
-    bytes on every non-crash row — the #1646 twin check. Their crash rows
-    (H, P) share the backend's conversion and are asserted by
-    `TestTheTwoCrashes` through the backend only."""
+    bytes on every non-crash row — the #1646 twin check. The former crash
+    rows (H, P, P0) share the backend's conversion and are also asserted by
+    `TestTheFormerCrashCells` through the backend in a child."""
 
     NON_CRASH_PLAIN = [pytest.param(row, id=row.id) for row in ROWS if row.plain is not SEGFAULT]
 
@@ -992,8 +1030,8 @@ class TestThePlainEntriesAgree:
 
 class TestTheTableIsSelfConsistent:
     def test_every_row_has_three_columns_and_a_unique_id(self) -> None:
-        assert len(ROWS) == 47
-        assert len(ROW_BY_ID) == 47
+        assert len(ROWS) == 48
+        assert len(ROW_BY_ID) == 48
         for row in ROWS:
             for column in ("django", "plain", "liveview"):
                 assert recorded(row, column) is not None, f"row {row.id} lacks {column}"
@@ -1027,9 +1065,13 @@ class TestTheTableIsSelfConsistent:
         for rid in PLAIN_WRONG_UNDER_LAZY | LIVEVIEW_WRONG_UNDER_LAZY:
             assert rid in ROW_BY_ID, rid
 
-    def test_the_crash_cells_are_exactly_three(self) -> None:
-        assert sorted(CRASH_CELLS) == [("H", "plain"), ("P", "liveview"), ("P", "plain")]
-        assert len(CELLS) == 47 * 2 - 3
+    def test_no_cell_is_a_crash_cell(self) -> None:
+        """The three #2516/#2517 crash cells (H-plain, P-plain, P-liveview)
+        and the undeclared numeric-index variant (P0, #2624) all render since
+        the conversion gained a depth ceiling. A cell recorded as SEGFAULT
+        again is a regression, not a held finding."""
+        assert CRASH_CELLS == []
+        assert len(CELLS) == 48 * 2
 
 
 class TestTheTableIsLoadBearing:
@@ -1141,7 +1183,7 @@ class TestTheDjangoSideIsNonTrivial:
 
 
 # ---------------------------------------------------------------------------
-# 2. The two crashes — subprocess per cell, asserting the crash TODAY
+# 2. The former crash cells — subprocess per cell, asserting they RENDER
 # ---------------------------------------------------------------------------
 CHILD = r"""
 import json
@@ -1220,6 +1262,7 @@ def cycle():
 
 SHAPES = {
     "P": ("{{ class_var.class_property }} | {{ class_var.class_method }}", lambda: {"class_var": MyClass}),
+    "P0": ("{{ class_var.0 }}", lambda: {"class_var": MyClass}),
     "H": ("{{ x }}", cycle),
     "A": ("{{ o.keep }}", lambda: {"o": Mutating()}),
 }
@@ -1255,12 +1298,19 @@ print("RENDERED " + json.dumps(out))
 #: reading honest across platforms while a fix still flips to a named failure.
 CRASH_SIGNALS = {-signal.SIGSEGV, -signal.SIGBUS, -signal.SIGABRT}
 
-#: Crash cells ADR-027's flag does NOT fix, stated (#1125). See
-#: ``test_the_cell_under_the_lazy_flag`` for why this one is held, and **#2621**
-#: for the fix: it is the same ``normalize_django_value`` callable arm as
-#: J / J2 / Q, so all four close together. ``H-plain`` and ``P-plain`` were
-#: fixed by the flip itself and have already left this set.
-CRASH_CELLS_HELD_UNDER_LAZY = frozenset({("P", "liveview")})
+#: The cells that USED to kill the process — the three #2516/#2517 crash
+#: cells plus the numeric-index variant #2624 found undeclared. Every one
+#: renders since the conversion gained a depth ceiling (#2624); each is still
+#: run in a CHILD, on both flags, because "does not segfault" is a claim only
+#: a subprocess can make, and a returning crash must flip to a named failure
+#: rather than take the suite with it.
+FORMER_CRASH_CELLS = [
+    ("H", "plain"),
+    ("P", "plain"),
+    ("P", "liveview"),
+    ("P0", "plain"),
+    ("P0", "liveview"),
+]
 
 
 def run_child(key: str, path: str, *, lazy: bool = False) -> subprocess.CompletedProcess:
@@ -1289,54 +1339,57 @@ def child_rendered(proc: subprocess.CompletedProcess) -> str:
     raise AssertionError(f"no RENDERED line; rc={proc.returncode}\n{proc.stderr[-2000:]}")
 
 
-class TestTheTwoCrashes:
-    """Rows H (reference cycle, conversion) and P (`list`-subclass class,
-    `__class_getitem__` in the walk) kill the process TODAY. Each cell is
-    asserted in a child so the suite survives it, and so that a fix flips to
-    a NAMED failure ("no longer crashes — move the row to Django's bytes")
-    rather than to a silent pass."""
+def child_module_normalized(proc: subprocess.CompletedProcess) -> str:
+    """The child's bytes with its ``__main__.`` spelled as this module.
 
-    @pytest.mark.parametrize(("key", "path"), CRASH_CELLS, ids=[f"{k}-{p}" for k, p in CRASH_CELLS])
-    def test_the_cell_still_crashes_today(self, key: str, path: str) -> None:
+    Rows P / P0 render a ``types.GenericAlias`` whose ``repr`` names the
+    class's module — ``__main__`` in the ``-c`` child, this test module in
+    process. The table records the in-process spelling; the child's is the
+    same bytes under a different module name and nothing else."""
+    return child_rendered(proc).replace("__main__.", f"{MyClass.__module__}.")
+
+
+class TestTheFormerCrashCells:
+    """Rows H (reference cycle, conversion), P (`list`-subclass class,
+    `__class_getitem__` in the walk) and P0 (its numeric-index form, #2624)
+    USED to kill the process. Each is asserted in a child so that a returning
+    crash flips to a NAMED failure rather than taking the suite with it, and
+    the rendered bytes are held to the same columns the in-process cells are:
+    today's recorded bytes with the flag OFF, ``assert_lazy_column`` ON.
+
+    Before #2624 the flag fixed H-plain and P-plain (nothing walks a
+    `__dict__` eagerly; the sink carries Django's metaclass guard) and HELD
+    P-liveview, where ``normalize_django_value`` replaces the class before
+    Rust sees it and the pre-ADR walk's unguarded item call reached
+    `__class_getitem__`. That call still happens; converting the alias it
+    yields no longer overflows the stack, so P-liveview renders the string-
+    keyed alias on both flags — wrong bytes, tracked with J / J2 / Q at #2621,
+    rather than a dead worker.
+    """
+
+    @pytest.mark.parametrize(
+        ("key", "path"), FORMER_CRASH_CELLS, ids=[f"{k}-{p}" for k, p in FORMER_CRASH_CELLS]
+    )
+    def test_the_cell_renders_with_the_flag_off(self, key: str, path: str) -> None:
         proc = run_child(key, path)
-        assert proc.returncode in CRASH_SIGNALS, (
-            f"row {key} on {path} no longer crashes (rc={proc.returncode}, "
-            f"stdout tail={proc.stdout[-300:]!r}, stderr tail={proc.stderr[-300:]!r}) — the #2516/#2517 "
-            f"crash is fixed; move the row to Django's bytes "
-            f"({ROW_BY_ID[key].django!r}) and update the *_WRONG_TODAY sets."
+        assert proc.returncode not in CRASH_SIGNALS, (
+            f"row {key} on {path} CRASHES again (rc={proc.returncode}) — the #2624 depth "
+            f"ceiling or its neighbours regressed; stderr tail={proc.stderr[-500:]!r}"
         )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        assert child_module_normalized(proc) == recorded(ROW_BY_ID[key], path)
 
-    @pytest.mark.parametrize(("key", "path"), CRASH_CELLS, ids=[f"{k}-{p}" for k, p in CRASH_CELLS])
-    def test_the_cell_under_the_lazy_flag(self, key: str, path: str) -> None:
-        """The #2516 crashes with ADR-027's flag ON. Two of the three are
-        fixed by it and the third is HELD — stated as data, because an
-        explicit hold is a finding and a silent one is a lie.
-
-        ``H-plain`` and ``P-plain`` are fixed by the SAME two mechanisms the
-        in-process rows turn on: nothing walks a `__dict__` eagerly any more
-        (so a reference cycle has no unbounded recursion to overflow), and the
-        segment walk carries Django's metaclass guard (so a `list`-subclass
-        CLASS never reaches `__class_getitem__`). ``P-liveview`` still dies,
-        and NOT in the sink: ``normalize_django_value`` replaces the class
-        with ``None`` before Rust sees it, so no handle exists, the value
-        stack cannot answer, and the pre-ADR sidecar walk — which is still
-        routed — makes the unguarded item call. It is fixed with the same
-        callable arm rows J / J2 / Q-liveview wait on.
-        """
+    @pytest.mark.parametrize(
+        ("key", "path"), FORMER_CRASH_CELLS, ids=[f"{k}-{p}" for k, p in FORMER_CRASH_CELLS]
+    )
+    def test_the_cell_renders_with_the_flag_on(self, key: str, path: str) -> None:
         proc = run_child(key, path, lazy=True)
-        if (key, path) in CRASH_CELLS_HELD_UNDER_LAZY:
-            assert proc.returncode in CRASH_SIGNALS, (
-                f"row {key} on {path} no longer crashes with the flag ON (rc={proc.returncode}) — "
-                f"drop it from CRASH_CELLS_HELD_UNDER_LAZY and record the win."
-            )
-            return
-        assert proc.returncode == 0, (
-            f"row {key} on {path} still dies with the ADR-027 flag ON (rc={proc.returncode}, "
-            f"stderr tail={proc.stderr[-500:]!r})"
+        assert proc.returncode not in CRASH_SIGNALS, (
+            f"row {key} on {path} CRASHES again with the flag ON (rc={proc.returncode}); "
+            f"stderr tail={proc.stderr[-500:]!r}"
         )
-        assert child_rendered(proc) == ROW_BY_ID[key].django, (
-            f"row {key} on {path} survives with the flag ON but does not render Django's bytes"
-        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        assert_lazy_column(ROW_BY_ID[key], path, child_module_normalized(proc))
 
     @pytest.mark.django_db
     @pytest.mark.parametrize("path", PATHS)
