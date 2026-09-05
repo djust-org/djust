@@ -151,6 +151,8 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
     values: AHashMap<String, Value>,
+    assignments: indexmap::IndexSet<String>,
+    invalid_block_super: bool,
     safe_keys: AHashSet<String>,
     unsafe_keys: AHashSet<String>,
     revoked_safe_subtrees: AHashSet<String>,
@@ -161,6 +163,7 @@ struct ScopeFrame {
     render_bindings: AHashSet<String>,
     loop_scope: Option<u64>,
     render_scope: Option<u64>,
+    include_instance: Option<String>,
 }
 
 impl std::ops::Deref for ScopeFrame {
@@ -184,6 +187,7 @@ impl std::ops::DerefMut for ScopeFrame {
 #[derive(Debug)]
 pub struct Context {
     stack: Vec<ScopeFrame>,
+    node_identity: Option<(usize, usize)>,
     /// Optional sidecar of raw Python objects keyed by top-level
     /// context name. Used only as a fallback when `get()` misses —
     /// the value-stack path remains the fast path for JSON-friendly
@@ -284,6 +288,7 @@ impl Clone for Context {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
+            node_identity: self.node_identity,
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
@@ -354,6 +359,7 @@ impl Context {
     pub fn new() -> Self {
         Self {
             stack: vec![ScopeFrame::default()],
+            node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
@@ -379,6 +385,7 @@ impl Context {
                 values: map,
                 ..ScopeFrame::default()
             }],
+            node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
@@ -472,6 +479,36 @@ impl Context {
         self.stack.last_mut().unwrap().loop_scope = Some(id);
     }
 
+    pub fn replace_node_identity(
+        &mut self,
+        identity: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        std::mem::replace(&mut self.node_identity, identity)
+    }
+
+    pub fn node_identity(&self) -> Option<(usize, usize)> {
+        self.node_identity
+    }
+
+    fn include_instance(&self) -> &str {
+        self.stack
+            .iter()
+            .rev()
+            .find_map(|frame| frame.include_instance.as_deref())
+            .unwrap_or("")
+    }
+
+    /// Uncached Django loaders produce a distinct template for each IncludeNode.
+    /// Repeated execution of that same node still reuses its render-local template.
+    pub fn enter_include_instance(&mut self, shared: bool, identity: (usize, usize)) {
+        let instance = if shared {
+            String::new()
+        } else {
+            format!("{}/{:?}", self.include_instance(), identity)
+        };
+        self.stack.last_mut().unwrap().include_instance = Some(instance);
+    }
+
     /// Template.render pushes fresh render_context state for each include.
     /// Loop-bound ifchanged state still belongs to the enclosing forloop.
     pub fn begin_template_render(&mut self) {
@@ -535,7 +572,16 @@ impl Context {
         } else {
             0
         };
-        let key = format!("{:?}", (loop_scope, render_scope, origin, id));
+        let key = format!(
+            "{:?}",
+            (
+                loop_scope,
+                render_scope,
+                self.include_instance(),
+                origin,
+                id
+            )
+        );
         let mut state = self
             .ifchanged_state
             .lock()
@@ -674,6 +720,30 @@ impl Context {
     /// only where the positional correspondence is genuine. That alias is
     /// left alone deliberately — it is how a real list's per-item marks
     /// (#2287) still resolve.
+    /// Assignments which survived at the caller's lexical scope.
+    pub fn root_assignments(&self) -> Vec<(String, Value)> {
+        let frame = &self.stack[0];
+        frame
+            .assignments
+            .iter()
+            .filter_map(|key| {
+                frame.get(key).map(|value| {
+                    let value = match value {
+                        Value::String(text) if self.is_safe(key) => Value::SafeString(text.clone()),
+                        other => other.clone(),
+                    };
+                    (key.clone(), value)
+                })
+            })
+            .collect()
+    }
+
+    /// A base block has no inheritance context; super is invalid until evaluated.
+    pub fn enter_base_block(&mut self) {
+        self.set("block".to_owned(), Value::Object(Default::default()));
+        self.stack.last_mut().unwrap().invalid_block_super = true;
+    }
+
     pub fn bind(&mut self, name: String, value: Value, safe: bool) {
         self.bind_at(self.stack.len() - 1, name, value, safe);
     }
@@ -689,6 +759,12 @@ impl Context {
     }
 
     fn bind_at(&mut self, index: usize, name: String, value: Value, safe: bool) {
+        if index == 0 {
+            self.stack[index].assignments.insert(name.clone());
+        }
+        if name == "block" {
+            self.stack[index].invalid_block_super = false;
+        }
         self.revoke_safe_subtree_at(index, &name);
         self.set_safety_at(index, &name, safe);
         self.set_at(index, name, value);
@@ -1229,6 +1305,25 @@ impl Context {
     /// auto-called method* (Django propagates those); lookup failures
     /// stay `Ok(None)` as before.
     pub fn resolve(&self, key: &str) -> crate::Result<Option<Value>> {
+        if key.contains(".super") {
+            let canonical = self.alias_path(key);
+            if (canonical == "block.super" || canonical.starts_with("block.super."))
+                && self
+                    .stack
+                    .iter()
+                    .rev()
+                    .find(|frame| frame.contains_key("block"))
+                    .is_some_and(|frame| frame.invalid_block_super)
+            {
+                return Err(crate::DjangoRustError::TemplateSyntax(
+                    concat!(
+                        "'BlockNode' object has no attribute 'context'. Did you use ",
+                        "{{ block.super }} in a base template?"
+                    )
+                    .to_owned(),
+                ));
+            }
+        }
         // Django's THREE template builtins, tried LAST (#2347).
         //
         // `django.template.context.builtins` is `[{"True": True, "False":

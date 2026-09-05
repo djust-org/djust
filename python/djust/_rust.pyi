@@ -98,6 +98,8 @@ def render_template_with_dirs(
     *,
     autoescape: bool = True,
     compiled_template: CompiledTemplate | None = None,
+    assignments: Dict[str, Any] | None = None,
+    uncached_template_dirs: List[str] | None = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.

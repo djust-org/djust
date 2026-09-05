@@ -65,6 +65,7 @@ class DjustEngine(RealEngine):  # type: ignore[misc, valid-type]
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._djust_tmp: str | None = None
+        self.uncached_template_dirs: list[Path] = []
         from djust._rust import render_template_with_dirs
 
         # What ``DjustTemplate`` reads off its ``backend``: ``template_dirs``
@@ -90,10 +91,10 @@ class DjustEngine(RealEngine):  # type: ignore[misc, valid-type]
 
         dirs: list[Path] = []
 
-        def walk(loader: Any) -> None:
+        def walk(loader: Any, cached: bool = False) -> None:
             if isinstance(loader, CachedLoader):
                 for inner in loader.loaders:
-                    walk(inner)
+                    walk(inner, cached=True)
             elif isinstance(loader, LocmemLoader):
                 # A per-engine temp dir under TMPDIR — the outer runner (or
                 # Django's runtests.py, which sets its own TMPDIR) removes it.
@@ -108,10 +109,15 @@ class DjustEngine(RealEngine):  # type: ignore[misc, valid-type]
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(str(source), encoding="utf-8")
                 dirs.append(directory)
+                if not cached:
+                    self.uncached_template_dirs.append(directory)
             elif isinstance(loader, (FilesystemLoader, AppDirsLoader)) or hasattr(
                 loader, "get_dirs"
             ):
-                dirs.extend(Path(d) for d in loader.get_dirs())
+                loader_dirs = [Path(d) for d in loader.get_dirs()]
+                dirs.extend(loader_dirs)
+                if not cached:
+                    self.uncached_template_dirs.extend(loader_dirs)
 
         for loader in self.template_loaders:
             walk(loader)

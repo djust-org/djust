@@ -231,12 +231,18 @@ impl InheritanceChain {
                     parents.insert(name.clone(), existing.clone());
                 }
                 let content = match merged.get(name) {
-                    // Only a body that actually references `block.super` gets
-                    // the wrapper: Django resolves it lazily, so an unwrapped
-                    // body must not render its parent at all.
+                    // Only a body referencing `block.super` requests parent
+                    // content; other inherited blocks get an empty context
+                    // below without evaluating an unused parent.
                     Some(previous) if nodes_reference_block_super(nodes) => {
                         vec![Node::BlockSuperScope {
                             super_nodes: previous.clone(),
+                            nodes: nodes.clone(),
+                        }]
+                    }
+                    _ if self.layers.len() > 1 => {
+                        vec![Node::BlockSuperScope {
+                            super_nodes: vec![],
                             nodes: nodes.clone(),
                         }]
                     }
@@ -452,6 +458,11 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
 /// Trait for loading parent templates
 /// This will be implemented by the Python integration layer
 pub trait TemplateLoader {
+    /// Whether separate include nodes receive the same compiled target.
+    fn shares_include_nodes(&self, _name: &str) -> bool {
+        true
+    }
+
     fn load_template(&self, name: &str) -> Result<Vec<Node>>;
 
     /// Identity of the first source this loader would select, when available.
@@ -805,15 +816,40 @@ fn template_name_is_contained(name: &str) -> bool {
     true
 }
 
+/// Keep cache-policy comparison identical to origin-history comparison.
+fn absolute_template_path(input: PathBuf) -> Result<PathBuf> {
+    let absolute = std::path::absolute(input)?;
+    let mut path = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => path.push(other.as_os_str()),
+        }
+    }
+    Ok(path)
+}
+
 /// Filesystem-based template loader for production use
 pub struct FilesystemTemplateLoader {
     template_dirs: Vec<std::path::PathBuf>,
+    uncached_dirs: Vec<std::path::PathBuf>,
 }
 
 impl FilesystemTemplateLoader {
     /// Create a new filesystem template loader with search directories
     pub fn new(template_dirs: Vec<std::path::PathBuf>) -> Self {
-        Self { template_dirs }
+        Self {
+            template_dirs,
+            uncached_dirs: Vec::new(),
+        }
+    }
+
+    pub fn with_uncached_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.uncached_dirs = dirs;
+        self
     }
 
     /// Find a template file by searching through template directories
@@ -832,17 +868,7 @@ impl FilesystemTemplateLoader {
             // Django safe_join uses absolute, lexically normalized names.
             // Do not canonicalize symlinks: distinct loader origins can point
             // at the same physical file and remain distinct in Django.
-            let absolute = std::path::absolute(dir.join(name))?;
-            let mut path = PathBuf::new();
-            for component in absolute.components() {
-                match component {
-                    std::path::Component::ParentDir => {
-                        path.pop();
-                    }
-                    std::path::Component::CurDir => {}
-                    other => path.push(other.as_os_str()),
-                }
-            }
+            let path = absolute_template_path(dir.join(name))?;
             let origin = path.to_string_lossy().into_owned();
             tried.push(origin.clone());
             if skip.contains(&origin) {
@@ -891,6 +917,18 @@ impl FilesystemTemplateLoader {
 }
 
 impl TemplateLoader for FilesystemTemplateLoader {
+    fn shares_include_nodes(&self, name: &str) -> bool {
+        if self.uncached_dirs.is_empty() {
+            return true;
+        }
+        let Ok(path) = self.find_template(name) else {
+            return true;
+        };
+        !self.uncached_dirs.iter().any(|dir| {
+            absolute_template_path(dir.join(name)).is_ok_and(|candidate| candidate == path)
+        })
+    }
+
     fn load_template(&self, name: &str) -> Result<Vec<Node>> {
         self.parse_template_path(name, &self.find_template(name)?)
     }

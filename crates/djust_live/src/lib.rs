@@ -2235,7 +2235,7 @@ fn template_cache_contains(template_source: &str) -> bool {
 // original-object sidecar for backend callers.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None, assignments=None, uncached_template_dirs=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -2247,6 +2247,8 @@ fn render_template_with_dirs(
     raw_context: Option<&Bound<'_, PyDict>>,
     autoescape: bool,
     compiled_template: Option<PyRef<'_, CompiledTemplate>>,
+    assignments: Option<&Bound<'_, PyDict>>,
+    uncached_template_dirs: Option<Vec<String>>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -2293,12 +2295,25 @@ fn render_template_with_dirs(
 
         // Create filesystem template loader with the provided directories
         let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
-        let loader = FilesystemTemplateLoader::new(dirs);
+        let loader = FilesystemTemplateLoader::new(dirs).with_uncached_dirs(
+            uncached_template_dirs
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+        );
 
         // Render with the loader to support {% include %} tags
         // The template's own name is what a relative `{% extends "./x" %}`
         // resolves against (#2517); `None` leaves such a name unchanged.
-        Ok(template_arc.render_with_loader_named(&ctx, &loader, template_name.as_deref())?)
+        let rendered =
+            template_arc.render_with_loader_named_mut(&mut ctx, &loader, template_name.as_deref());
+        if let Some(assignments) = assignments {
+            for (name, value) in ctx.root_assignments() {
+                assignments.set_item(name, value.into_pyobject(assignments.py())?)?;
+            }
+        }
+        Ok(rendered?)
     })
 }
 

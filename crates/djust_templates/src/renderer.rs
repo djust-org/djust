@@ -554,7 +554,7 @@ pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
 /// Assignment effects remain visible to following siblings and recursive
 /// control-flow bodies. Nodes that introduce a lexical scope push a frame;
 /// their local bindings disappear when that frame is popped.
-fn render_nodes_with_loader_mut<L: TemplateLoader>(
+pub fn render_nodes_with_loader_mut<L: TemplateLoader>(
     nodes: &[Node],
     context: &mut Context,
     loader: Option<&L>,
@@ -578,7 +578,10 @@ fn render_effectful_node<L: TemplateLoader>(
         origin,
     } = node
     {
-        return render_effectful_node(&nodes[0], context, loader).map_err(|error| {
+        let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
+        let rendered = render_effectful_node(&nodes[0], context, loader);
+        context.replace_node_identity(previous);
+        return rendered.map_err(|error| {
             error
                 .at(Some(*span))
                 .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
@@ -3197,9 +3200,10 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             }
         }
 
-        Node::Block { name: _, nodes } => {
-            context.with_scope(|inner| render_nodes_with_loader_mut(nodes, inner, loader))
-        }
+        Node::Block { name: _, nodes } => context.with_scope(|inner| {
+            inner.enter_base_block();
+            render_nodes_with_loader_mut(nodes, inner, loader)
+        }),
 
         Node::Include {
             origin,
@@ -3352,7 +3356,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     }
                 }
                 let bound: Vec<&str> = with_vars.iter().map(|(name, _)| name.as_str()).collect();
+                let shared = loader.shares_include_nodes(name);
+                let identity = context
+                    .node_identity()
+                    .unwrap_or((node as *const Node as usize, 0));
                 let render_include = |include_context: &mut Context| {
+                    include_context.enter_include_instance(shared, identity);
                     include_context.begin_template_render();
                     for (name, value, safe) in bindings {
                         include_context.bind(name, value, safe);
@@ -3675,15 +3684,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // escaping it again would double-escape every parent block.
             let parent_html =
                 context.with_scope(|ctx| render_nodes_with_loader_mut(super_nodes, ctx, loader))?;
-            let mut scoped = context.clone();
-            let mut block_obj = indexmap::IndexMap::new();
-            block_obj.insert(
-                djust_core::ObjectKey::from("super"),
-                Value::String(parent_html),
-            );
-            scoped.set("block".to_string(), Value::Object(block_obj));
-            scoped.mark_safe("block.super".to_string());
-            render_nodes_with_loader_mut(nodes, &mut scoped, loader)
+            context.with_scope(|scoped| {
+                let mut block_obj = indexmap::IndexMap::new();
+                block_obj.insert(
+                    djust_core::ObjectKey::from("super"),
+                    Value::String(parent_html),
+                );
+                scoped.bind("block".to_string(), Value::Object(block_obj), false);
+                scoped.mark_safe("block.super".to_string());
+                render_nodes_with_loader_mut(nodes, scoped, loader)
+            })
         }
 
         Node::IfChanged {

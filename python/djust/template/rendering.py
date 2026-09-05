@@ -203,6 +203,7 @@ class DjustTemplate:
         self.template_string = template_string
         self.source = template_string
         self.backend = backend
+        self.engine = backend
         self.origin = origin if origin is not None else Origin(name=UNKNOWN_SOURCE)
 
         # Add .template.source for LiveView compatibility
@@ -747,6 +748,7 @@ class DjustTemplate:
         # tested (`python/djust/tests/test_template_inheritance_resolution.py`)
         # — it is simply no longer on the render path.
         resolved_template = self.template_string
+        assignments: dict[str, Any] = {}
 
         # Convert context to dict
         if context is None:
@@ -913,6 +915,10 @@ class DjustTemplate:
                     getattr(self.origin, "template_name", None) if self.origin else None,
                     raw_context=raw_context,
                     compiled_template=self._compiled_template,
+                    assignments=assignments,
+                    uncached_template_dirs=[
+                        str(path) for path in getattr(self.backend, "uncached_template_dirs", [])
+                    ],
                     autoescape=bool(
                         context.autoescape
                         if isinstance(context, Context)
@@ -991,6 +997,10 @@ class DjustTemplate:
             runtime_error = RuntimeError(f"Error rendering template{origin_info}: {error_msg}")
             self._annotate_loaded_error(runtime_error, e)
             raise runtime_error from e
+        finally:
+            if isinstance(context, (dict, Context)):
+                for name, value in assignments.items():
+                    context[name] = value
 
     # Regex to match opening HTML element tags (not comments, not closing tags, not doctypes)
     _OPENING_TAG_RE = re.compile(

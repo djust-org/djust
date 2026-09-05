@@ -39,7 +39,6 @@ pub use markdown::render_markdown;
 
 use inheritance::{build_inheritance_chain, build_inheritance_chain_from, TemplateLoader};
 use parser::Node;
-use renderer::render_nodes_with_loader;
 
 // Re-export for JIT auto-serialization
 pub use parser::extract_template_variables;
@@ -303,12 +302,26 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<String> {
+        self.render_with_loader_named_mut(&mut context.clone(), loader, template_name)
+    }
+
+    /// Render into a caller-owned context so surviving assignments can be exported.
+    pub fn render_with_loader_named_mut<L: TemplateLoader>(
+        &self,
+        context: &mut Context,
+        loader: &L,
+        template_name: Option<&str>,
+    ) -> Result<String> {
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
         // the cache is keyed by source (#2517).
         if template_name.is_none() && !self.extends_is_relative() {
             if let Some(resolved) = self.resolved.get() {
-                return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
+                return renderer::render_nodes_with_loader_mut(
+                    &resolved.final_nodes,
+                    context,
+                    Some(loader),
+                );
             }
         }
 
@@ -324,7 +337,7 @@ impl Template {
             )?;
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
-            render_nodes_with_loader(&final_nodes, context, Some(loader))
+            renderer::render_nodes_with_loader_mut(&final_nodes, context, Some(loader))
         } else {
             if let Some(name) = template_name {
                 let mut nodes = self.nodes.clone();
@@ -335,9 +348,9 @@ impl Template {
                         .template_origin(name)
                         .unwrap_or_else(|| name.to_string()),
                 );
-                render_nodes_with_loader(&nodes, context, Some(loader))
+                renderer::render_nodes_with_loader_mut(&nodes, context, Some(loader))
             } else {
-                render_nodes_with_loader(&self.nodes, context, Some(loader))
+                renderer::render_nodes_with_loader_mut(&self.nodes, context, Some(loader))
             }
         }
     }
