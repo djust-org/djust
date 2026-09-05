@@ -185,12 +185,22 @@ The tracker supports `X-Forwarded-For` headers for deployments behind reverse pr
 
 ### JavaScript Security Utilities
 
-```javascript
-// Available globally as djustSecurity
-djustSecurity.safeSetInnerHTML(element, htmlString);  // Safe innerHTML
-djustSecurity.safeObjectAssign(target, source);       // Safe object merge
-djustSecurity.sanitizeForLog(value);                  // Safe logging
-```
+There is no `djustSecurity` global. A `security.js` offering
+`safeSetInnerHTML` / `safeObjectAssign` / `sanitizeForLog` was documented here
+until #2679, but nothing ever loaded it, so the global was `undefined` in every
+browser.
+
+The protections it described are applied by the client bundle itself, at the
+sinks rather than through a helper a caller must remember to use: prototype-
+pollution keys are refused where untrusted keys are actually written
+(`UNSAFE_KEYS` in `static/djust/src/00-namespace.js`, plus guards in
+`08-event-parsing.js`, `07-form-data.js`, `06-draft-manager.js` and
+`12-vdom-patch.js`), and DOM content arrives as VDOM patches rather than
+`innerHTML` of a server string.
+
+If you are writing your own inline JS against untrusted input, use the
+platform: `textContent` rather than `innerHTML`, and a `Map` or
+`Object.create(null)` rather than merging attacker keys into an object literal.
 
 ---
 

@@ -38,12 +38,6 @@ const STANDALONE_WITH_LOADER = {
     'bug_capture_replay.js': 'python/djust/templates/djust/bug_capture/replay.html',
     // DEBUG-only helper injected by mixins/post_processing.py.
     'client-dev.js': 'python/djust/mixins/post_processing.py',
-    // NO loader. Documented as a global (`djustSecurity`) in
-    // docs/SECURITY_GUIDELINES.md but nothing injects it; imported only by
-    // its own test. Kept on the list ONLY because it is documented public
-    // API — the bundle-or-delete decision is tracked in #2679. Do not add
-    // rows like this one without an issue link.
-    'security.js': 'NONE — documented API without a loader, see #2679',
 };
 
 const PATH_RE = /static\/djust\/([A-Za-z0-9_./-]+\.js)/g;
@@ -87,6 +81,13 @@ describe('no test imports a static/djust JS file that is not shipped (#2659)', (
         // React hydration it duplicated is server-side
         // (mixins/post_processing.py::_hydrate_react_components).
         expect(fs.existsSync(path.join(STATIC_DIR, 'react-client.js'))).toBe(false);
+        // security.js: the one allowlist row that admitted to having no
+        // loader (#2679). `djustSecurity` was `undefined` in every browser
+        // because nothing ever served the file, while two docs taught it as
+        // "available globally"; and the protections it offered are already
+        // applied by the bundle at the real sinks (UNSAFE_KEYS in
+        // src/00-namespace.js and six more guards). Docs corrected with it.
+        expect(fs.existsSync(path.join(STATIC_DIR, 'security.js'))).toBe(false);
     });
 
     it('every documented standalone asset still exists (no stale allowlist rows)', () => {

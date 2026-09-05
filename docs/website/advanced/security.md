@@ -121,18 +121,18 @@ js_value = json.dumps(user_input)  # Handles \, newlines, quotes
 
 ### Client-Side Safety
 
-djust provides JavaScript security utilities:
+djust's client applies these protections itself, at the sinks — there is no
+`djustSecurity` global to call. (One was documented here until #2679, but
+nothing loaded the file, so it was `undefined` in every browser.)
 
-```javascript
-// Safe innerHTML (strips dangerous content)
-djustSecurity.safeSetInnerHTML(element, htmlString);
+- DOM updates arrive as VDOM patches, not as `innerHTML` of a server string.
+- Keys that could pollute a prototype are refused where untrusted keys are
+  written — see `UNSAFE_KEYS` in `static/djust/src/00-namespace.js` and the
+  guards in the event-parsing, form-data, draft-manager and VDOM-patch modules.
 
-// Safe object merge (blocks __proto__, constructor)
-djustSecurity.safeObjectAssign(target, source);
-
-// Safe logging (strips control characters)
-djustSecurity.sanitizeForLog(value);
-```
+Writing your own inline JS against untrusted input? Use `textContent` over
+`innerHTML`, and a `Map` or `Object.create(null)` over merging attacker-
+controlled keys into an object literal.
 
 ## Python Security Utilities
 

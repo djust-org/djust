@@ -157,7 +157,6 @@ export default [
       "python/djust/static/djust/client-dev.js",
       "python/djust/static/djust/debug-panel.js",
       "python/djust/static/djust/react-client.js",
-      "python/djust/static/djust/security.js",
       "python/djust/static/djust/service-worker.js",
     ],
     languageOptions: {
