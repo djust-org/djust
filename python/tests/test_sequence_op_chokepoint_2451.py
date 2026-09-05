@@ -618,13 +618,16 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         for probe in ("python_iter", "python_getitem", "python_lower"):
             assert self.callers(source, probe) == {"apply_builtin_filter"}, probe
 
-    def test_the_type_name_has_exactly_two_readers_across_both_modules(self) -> None:
+    def test_the_type_name_readers_cover_filters_loops_and_include_candidates(self) -> None:
         """The unification, as a set (#1125): ``renderer.rs``'s ``{% for %}``
-        refusal reads the SAME answer the filters do since #2451."""
+        refusal and include candidate errors use the same Python type names."""
         filters_src = production(FILTERS_RS)
         renderer_src = production(RENDERER_RS)
         assert self.callers(filters_src, "python_type_name") == {"detail"}
-        assert self.callers(renderer_src, "python_type_name") == {"python_type_name_for_iteration"}
+        assert self.callers(renderer_src, "python_type_name") == {
+            "python_type_name_for_iteration",
+            "render_node_with_loader_mut",
+        }
         assert "fn python_type_name(" not in renderer_src, (
             "renderer.rs defines its own type-name function again — that is the "
             "four-arm copy #2451 retired (#1646)"
