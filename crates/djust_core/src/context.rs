@@ -217,6 +217,21 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
+    /// The per-iteration `{% for %}` path suffix a `<!--dj-if id="…">`
+    /// marker appends (#1832) — `-<index>` per enclosing loop, composed
+    /// (`-3-2` two loops deep), empty outside any loop.
+    ///
+    /// A FIELD, not a context key (#2529). It used to travel as the context
+    /// variable `__djust_if_loop_path`, which meant a user context carrying
+    /// a key of that name — reachable only from a developer's own
+    /// `get_context_data()`, never from a client write (`safe_setattr`
+    /// refuses leading underscores) — was interpolated RAW into the marker
+    /// comment, and `"--><script>…` forged live markup. State that only the
+    /// framework writes belongs on the `Context` where the user namespace
+    /// cannot reach it, exactly as `emit_dj_if_markers` does. Copied by
+    /// `Clone` (a `{% for %}` / `{% with %}` derived context is inside the
+    /// same iteration) and by `{% include … only %}`'s fresh context.
+    dj_if_loop_path: String,
     /// Django's `Context.autoescape` (#2556). Default `true`; plain render APIs
     /// accept explicit policy, lexical autoescape bodies restore it on exit,
     /// and `{% include … only %}` copies it into its fresh context. Context
@@ -294,6 +309,7 @@ impl Clone for Context {
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
+            dj_if_loop_path: self.dj_if_loop_path.clone(),
             autoescape: self.autoescape,
             // SHARED, not copied: Django's `Context.__copy__` shallow-copies
             // `render_context`, so a `{% for %}` / `{% with %}` clone
@@ -363,6 +379,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            dj_if_loop_path: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -389,6 +406,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            dj_if_loop_path: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -414,6 +432,28 @@ impl Context {
     /// Should the renderer emit `<!--dj-if-->` markers under this context?
     pub fn emit_dj_if_markers(&self) -> bool {
         self.emit_dj_if_markers
+    }
+
+    /// Set the dj-if loop-path suffix for renders under this context
+    /// (#1832, #2529). Written ONLY by the renderer's `{% for %}` arm — once
+    /// per iteration, restored on exit — and never by a context key.
+    ///
+    /// The suffix grammar is `(-<digits>)*`; anything else is refused and the
+    /// path left unchanged, so even a future writer cannot put a marker
+    /// terminator into the comment. Belt and braces: the field itself is what
+    /// keeps user data out.
+    pub fn set_dj_if_loop_path(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        if path.chars().all(|c| c == '-' || c.is_ascii_digit()) {
+            self.dj_if_loop_path = path;
+        } else {
+            debug_assert!(false, "dj-if loop path is not `(-<digits>)*`: {path:?}");
+        }
+    }
+
+    /// The dj-if loop-path suffix (#1832) — empty outside any `{% for %}`.
+    pub fn dj_if_loop_path(&self) -> &str {
+        &self.dj_if_loop_path
     }
 
     /// Set Django's `Context.autoescape` for renders under this context

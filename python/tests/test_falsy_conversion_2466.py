@@ -542,15 +542,15 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert django_render(FOR, {"p": value}) == "[a][b]"
         assert djust_render(FOR, {"p": value}) == "[a][b]"
 
-    def test_a_ONE_SHOT_iterator_is_still_declined_and_is_not_consumed(self) -> None:
-        """What #2477/#2489 does NOT close, and the reason.
+    def test_a_ONE_SHOT_iterator_is_carried_and_is_not_consumed_by_the_conversion(self) -> None:
+        """What #2477/#2489 did NOT close, closed by #2613 — with the reason kept.
 
         `iter(g) is g` for a generator, so enumerating it at the conversion
-        would empty the caller's object — the template would iterate items the
-        view can never see again. Declined outright: the value keeps its
-        `Value::String` path, so djust reads the repr where Django reads the
-        items. Asserted in the DIVERGING direction, and paired with the
-        assertion that actually justifies it.
+        would empty the caller's object. It is still never enumerated HERE:
+        under ADR-027's default it crosses with a live handle and no items, and
+        only the `{% for %}` sink consumes it (once, Django's `list(values)`).
+        So `length` — `len(g)` raises, Django answers 0 — now agrees, AND
+        nothing consumed it.
         """
 
         def gen():
@@ -558,7 +558,7 @@ class TestWhatThisDeliberatelyDoesNOTClose:
             yield "b"
 
         value = gen()
-        assert djust_render(LENGTH, {"p": value}) != django_render(LENGTH, {"p": gen()})
+        assert djust_render(LENGTH, {"p": value}) == django_render(LENGTH, {"p": gen()}) == "0"
         # The justification: nothing consumed it.
         assert list(value) == ["a", "b"]
 
@@ -568,23 +568,19 @@ class TestWhatThisDeliberatelyDoesNOTClose:
             pytest.param(iter([]), id="list_iterator"),
         ],
     )
-    def test_a_TRUTHY_no_variant_ITERATOR_still_claims_to_be_a_str(self, value) -> None:
-        """What is LEFT of "a truthy no-variant object is a string" (#2477/#2489).
+    def test_a_TRUTHY_no_variant_ITERATOR_answers_django(self, value) -> None:
+        """The last of "a truthy no-variant object is a string" (#2477/#2489).
 
         This test used to carry three values. Two of them — a non-empty `set`
-        and a plain user instance — were closed: the prediction below was that
-        closing them "needs an ENUMERATION, and enumerating an arbitrary object
-        means calling `list(o)` at the conversion: that consumes a generator
-        and hangs on `itertools.count()`", and both halves of that were right
-        and are what the gate is built out of. A generator is declined because
-        `iter(o) is o`; an unbounded re-iterable is declined at
-        `OPAQUE_ITEM_CAP`. Everything in between is enumerated.
-
-        A list ITERATOR is the shape both objections apply to at once, so it is
-        the one still here, asserted in the DIVERGING direction.
+        and a plain user instance — were closed by the gate; the list ITERATOR
+        was the one still asserted DIVERGING, because enumerating it at the
+        conversion would consume it. #2613 closed it WITHOUT enumerating at
+        conversion: the iterator crosses with a live handle, `{% if %}` reads
+        the measured truthiness and `length` the measured (absent) `len`, and
+        only the `{% for %}` sink consumes it.
         """
         assert djust_render(IF, {"p": value}) == django_render(IF, {"p": value})
-        assert djust_render(LENGTH, {"p": value}) != django_render(LENGTH, {"p": value})
+        assert djust_render(LENGTH, {"p": value}) == django_render(LENGTH, {"p": value})
 
     @pytest.mark.parametrize(
         "value",

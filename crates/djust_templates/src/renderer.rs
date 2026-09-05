@@ -2487,10 +2487,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // marker stays `<!--/dj-if-->` (it carries no id). The id
                     // is treated as an opaque string by the Rust differ and
                     // the JS client — neither parses the `-N` structure.
-                    let loop_path = match context.get("__djust_if_loop_path") {
-                        Some(Value::String(s)) if !s.is_empty() => s.as_str(),
-                        _ => "",
-                    };
+                    //
+                    // The path is a `Context` FIELD the `{% for %}` arm writes,
+                    // never a context key (#2529): a user context key of the old
+                    // name `__djust_if_loop_path` was interpolated raw here and
+                    // forged live markup. The accessor's grammar is `(-<digits>)*`.
+                    let loop_path = context.dj_if_loop_path();
                     return Ok(format!(
                         "<!--dj-if id=\"{id}{loop_path}\"-->{body}<!--/dj-if-->"
                     ));
@@ -2624,6 +2626,19 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     let items = e.items.clone().unwrap_or_default();
                     (Value::List(items), true, Vec::new())
                 }
+                // A ONE-SHOT iterator — a generator, `iter(list)`,
+                // `MultiValueDict.lists()` — carried with a live handle and
+                // no items (#2613). THIS is the sink that consumes it, once:
+                // Django's `list(values)` in `ForNode.render` (ADR-027 row V).
+                // Same no-grant policy as the arm above.
+                Value::Encoded(ref e) if e.iterable && e.items.is_none() && e.live.is_some() => {
+                    let items = match e.consume_live_items() {
+                        Some(Ok(items)) => items,
+                        Some(Err(err)) => return Err(DjangoRustError::PythonException(err)),
+                        None => Vec::new(),
+                    };
+                    (Value::List(items), true, Vec::new())
+                }
                 other => (other, false, Vec::new()),
             };
 
@@ -2734,11 +2749,10 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // item index (not the enumerate counter) so ids stay
                         // stable under `{% for ... reversed %}`. Mirrors the
                         // cycle-counter save/restore pattern above/below.
-                        let parent_if_loop_path = match ctx.get("__djust_if_loop_path") {
-                            Some(Value::String(s)) => s.clone(),
-                            _ => String::new(),
-                        };
-                        let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
+                        //
+                        // A `Context` field, not a context key (#2529) — see
+                        // `Context::set_dj_if_loop_path`.
+                        let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
 
                         // Per-item render cache (#1967). Enabled only when:
                         //   (a) a `LoopRenderCache` is installed for this render
@@ -2773,10 +2787,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                             // Composes for nested loops: an inner For reads this
                             // (non-empty) path and appends its own `-<index>`,
                             // yielding e.g. `-3-2`.
-                            ctx.set(
-                                "__djust_if_loop_path".to_string(),
-                                Value::String(format!("{parent_if_loop_path}-{index}")),
-                            );
+                            ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
 
                             // The six per-iteration counters, in Django's own
                             // arithmetic (#2402). `counter` is the ITERATION
@@ -3133,18 +3144,9 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                             }
                         }
 
-                        // Restore outer dj-if loop path (#1832). There is no
-                        // public Context::remove for an arbitrary key, so when
-                        // there was no parent path we reset to the empty string,
-                        // which Node::If treats as "no path" (it appends only a
-                        // non-empty path). Otherwise restore the saved value.
-                        match saved_if_loop_path {
-                            Some(saved) => ctx.set("__djust_if_loop_path".to_string(), saved),
-                            None => ctx.set(
-                                "__djust_if_loop_path".to_string(),
-                                Value::String(String::new()),
-                            ),
-                        }
+                        // Restore the outer dj-if loop path (#1832): empty
+                        // outside any loop, which Node::If appends as nothing.
+                        ctx.set_dj_if_loop_path(parent_if_loop_path);
 
                         // Clear loop mappings after the loop
                         for var_name in var_names {
@@ -3322,6 +3324,10 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // follow-up issue.)
                         let mut fresh = Context::new();
                         fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                        // The included body renders INSIDE the enclosing
+                        // iteration, so its `{% if %}` ids must carry the same
+                        // per-iteration suffix (#1832, #2529).
+                        fresh.set_dj_if_loop_path(context.dj_if_loop_path());
                         // Django's `context.new()` is `copy(self)`, so the
                         // `{% autoescape %}` policy crosses an `only` include
                         // (#2556, `include14`).
@@ -3488,7 +3494,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             }
         }
 
-        Node::Static(path) => {
+        Node::Static(operand) => {
             // Render static file URL
             // Get STATIC_URL from context (should be provided by Django)
             let static_url = context
@@ -3496,6 +3502,19 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "/static/".to_string());
 
+            // A quoted operand is the path itself; an unquoted one is a
+            // variable / filter expression resolved from the context (#2660),
+            // as Django's `StaticNode` does. A missing variable renders
+            // Django's empty string, so `{% static p %}` with `p` unbound is
+            // `/static/` on both engines.
+            let path = if is_quoted_arg(operand) {
+                operand[1..operand.len() - 1].to_string()
+            } else {
+                match get_value(operand, context)? {
+                    Value::Missing | Value::None => String::new(),
+                    v => v.to_string(),
+                }
+            };
             Ok(format!("{static_url}{path}"))
         }
 
@@ -8696,5 +8715,52 @@ mod tests {
             try_compare(&Value::String("b".into()), &Value::String("a".into())),
             Some(1)
         );
+    }
+}
+
+#[cfg(test)]
+mod static_operand_tests_2660 {
+    //! The NATIVE `{% static %}` node — reached only when no Python library
+    //! is registered for the tag, which is exactly the state a Django-configured
+    //! pytest process never has (the registered library serves it there). So
+    //! the operand rule lives here, at the Rust level: an unquoted operand is
+    //! a variable resolved from the context, a quoted one is the path (#2660).
+
+    use super::*;
+
+    fn render(src: &str, ctx: &Context) -> String {
+        crate::Template::new(src).unwrap().render(ctx).unwrap()
+    }
+
+    #[test]
+    fn an_unquoted_operand_is_resolved_from_the_context() {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::String("a.css".into()));
+        assert_eq!(render("{% static p %}", &ctx), "/static/a.css");
+        assert_eq!(render("{% static p|upper %}", &ctx), "/static/A.CSS");
+    }
+
+    #[test]
+    fn a_quoted_operand_is_the_path_itself() {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::String("a.css".into()));
+        assert_eq!(render("{% static 'p' %}", &ctx), "/static/p");
+        assert_eq!(
+            render("{% static \"img/x.png\" %}", &ctx),
+            "/static/img/x.png"
+        );
+    }
+
+    #[test]
+    fn a_missing_variable_renders_djangos_empty_string() {
+        assert_eq!(render("{% static p %}", &Context::new()), "/static/");
+    }
+
+    #[test]
+    fn static_url_from_the_context_is_honoured() {
+        let mut ctx = Context::new();
+        ctx.set("STATIC_URL".to_string(), Value::String("/s/".into()));
+        ctx.set("p".to_string(), Value::String("a.css".into()));
+        assert_eq!(render("{% static p %}", &ctx), "/s/a.css");
     }
 }

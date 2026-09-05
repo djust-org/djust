@@ -3621,12 +3621,29 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
     // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
     let len = ob.len().ok();
     if let Some(it) = iterator {
-        // `iter(o) is o` — a one-shot iterator. Reading it would consume the
-        // caller's object; declined outright, so the value keeps the string
-        // path it has today rather than becoming an empty collection (which
-        // would be a NEW wrong answer, not an unfixed one).
+        // `iter(o) is o` — a one-shot iterator. Reading it here would consume
+        // the caller's object, so it is NOT enumerated at conversion.
+        //
+        // Under ADR-027 (the shipped default) it is ADMITTED with `items`
+        // left `None`: the `Encoded` carries a live handle, and the
+        // `{% for %}` sink consumes it once through
+        // [`Encoded::consume_live_items`] — Django's `list(values)` in
+        // `ForNode.render`, row V (#2613). Before this a generator or
+        // `MultiValueDict.lists()` fell to the terminal `str()` path and
+        // `{% for %}` walked the REPR character by character: silent wrong
+        // output. On the eager escape hatch there is no handle to consume
+        // later, so the decline stands there (enumerating at conversion is a
+        // new wrong answer, not an unfixed one).
         if it.as_any().is(ob) {
-            return None;
+            return if resolve_lazy() {
+                Some(OpaqueFacts {
+                    truthy,
+                    len,
+                    iterable: true,
+                })
+            } else {
+                None
+            };
         }
         // An object that states a `__len__` has stated its own bound, and
         // Django iterates all of it — so there is nothing to check and the
@@ -3674,6 +3691,45 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         len,
         iterable,
     })
+}
+
+impl Encoded {
+    /// Consume a ONE-SHOT iterator carried by the live handle into its items
+    /// (#2613) — Django's `list(values)` in `ForNode.render`, run at the
+    /// `{% for %}` sink rather than at conversion so that a generator the
+    /// template never loops over is never advanced.
+    ///
+    /// `None` when there is nothing to consume: no handle (eager path, or a
+    /// wire round-trip), not iterable, or the items were already enumerated
+    /// at conversion (a re-iterable object). Bounded by [`OPAQUE_ITEM_CAP`]:
+    /// past it the render RAISES rather than truncating — Django would hang
+    /// on the same `itertools.count()`, so an error is the strictly better
+    /// answer and a short list would be a silently wrong one. A raising
+    /// `__next__` propagates as Django propagates it.
+    ///
+    /// A second call after exhaustion yields an empty list, exactly as a
+    /// second `{% for %}` over the same generator is empty in Django.
+    pub fn consume_live_items(&self) -> Option<PyResult<Vec<Value>>> {
+        if !self.iterable || self.items.is_some() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Some(Python::attach(|py| {
+            let ob = handle.bind(py);
+            let mut collected = Vec::new();
+            for item in ob.try_iter()? {
+                collected.push(item?.extract::<Value>()?);
+                if collected.len() > OPAQUE_ITEM_CAP {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "'{}' object yielded more than {} items in a {{% for %}} — \
+                         an unbounded iterator cannot be rendered",
+                        self.type_name, OPAQUE_ITEM_CAP
+                    )));
+                }
+            }
+            Ok(collected)
+        }))
+    }
 }
 
 /// Does this object cross into the renderer as a [`Value::Encoded`]?
@@ -3812,10 +3868,11 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
 /// it has today — so a decline is never a REGRESSION, only an unfixed cell:
 ///
 /// * **A one-shot iterator** — `iter(o) is o`. A generator, a `zip`, a `map`,
-///   an `enumerate`. Enumerating it consumes the caller's object, so the
-///   template would iterate items the view can never see again. This is the
-///   decline #2466's doc-comment already named; it stands, and it is now the
-///   ONLY reason iteration is declined.
+///   an `enumerate`. Enumerating it consumes the caller's object, so it is
+///   never enumerated HERE. Under ADR-027 (the default) it is carried with a
+///   live handle and `items: None`, and consumed once by the `{% for %}` sink
+///   ([`Encoded::consume_live_items`], #2613) — Django's `list(values)`. On
+///   the eager escape hatch it is declined outright, as #2466 named.
 /// * **An unsized iterable longer than [`OPAQUE_ITEM_CAP`]** — an object with
 ///   no `__len__` whose iterator keeps yielding. `itertools.count()` is an
 ///   iterator and is declined by the arm above, but a class whose `__iter__`
@@ -3894,10 +3951,12 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     } = opaque_gate(ob)?;
     // The items, converted — the half `opaque_gate` deliberately does NOT do.
     // `iter(o)` is asked again rather than carried across, because the gate
-    // may have walked the first one to check the cap; the object is
-    // RE-iterable by construction (that is the gate's own first decline), so a
-    // second `iter(o)` yields the same elements and consumes nothing.
-    let items = if iterable {
+    // may have walked the first one to check the cap; a RE-iterable object
+    // yields the same elements again and consumes nothing. A ONE-SHOT
+    // iterator (`iter(o) is o`, admitted under ADR-027 — #2613) is left at
+    // `None`: the `{% for %}` sink consumes it once through the live handle.
+    let one_shot = ob.try_iter().is_ok_and(|it| it.as_any().is(ob));
+    let items = if iterable && !one_shot {
         let it = ob.try_iter().ok()?;
         let mut collected = Vec::with_capacity(len.unwrap_or(0).min(64));
         for item in it {

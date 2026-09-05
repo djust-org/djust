@@ -53,6 +53,7 @@ pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
+from django.utils.html import escape  # noqa: E402
 
 from adr027_flag import resolve_lazy  # noqa: E402
 
@@ -184,15 +185,17 @@ DECLINED: dict[str, str] = {
     "truthy-attrs": "a TRUTHY non-iterable object with public attributes",
 }
 
-#: The subset of ``DECLINED`` that ADR-027's flag moves (#2539 movement 3).
+#: The subset of ``DECLINED`` that ADR-027's flag moves (#2539 movement 3,
+#: widened by #2613).
 #:
-#: The other three rows are flag-INDEPENDENT and stay declined forever: a
-#: one-shot iterator must not be enumerated at CONVERSION whichever resolution
-#: mechanism runs (that decline is what keeps a generator from being consumed
-#: before ``{% for %}`` sees it), and the unbounded cap is a bound on reading,
-#: not a routing choice. Only the ``__dict__`` bulk-dump cell is a routing
-#: choice, and the flip makes it the other one.
-DECLINED_ONLY_ON_THE_HATCH = frozenset({"truthy-attrs"})
+#: A one-shot iterator is still never enumerated at CONVERSION — that is what
+#: keeps a generator from being consumed before ``{% for %}`` sees it — but
+#: under the default it is now CARRIED with a live handle and ``items: None``,
+#: and the ``{% for %}`` sink consumes it once (Django's ``list(values)``,
+#: ADR-027 row V, #2613). On the eager escape hatch there is no handle to
+#: consume later, so the decline stands there. The unbounded cap stays
+#: flag-INDEPENDENT: it is a bound on reading, not a routing choice.
+DECLINED_ONLY_ON_THE_HATCH = frozenset({"truthy-attrs", "one-shot-generator", "one-shot-falsy"})
 
 EARLIER: dict[str, str] = {
     "bytes": "PyO3's sequence extraction — a Value::List of its ints",
@@ -495,11 +498,12 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         """The flip's effect on this table, per row (#2539 movement 3).
 
         Both directions, so the split is a claim rather than a label: the
-        ``__dict__`` bulk-dump row IS carried under the shipped default, and
-        the three flag-independent rows are STILL declined. If the flip had
-        also lifted the one-shot decline it would enumerate a caller's
-        generator at conversion — a new wrong answer rather than a fix — and
-        this test is where that shows up.
+        ``__dict__`` bulk-dump row and (since #2613) the two one-shot rows
+        ARE carried under the shipped default — carried, not enumerated: the
+        conversion still reads nothing from a generator, and the sibling
+        ``test_a_one_shot_iterator_is_not_consumed_by_the_conversion`` is
+        where that shows up. The unbounded-cap row is flag-independent and
+        STILL declined.
         """
         for key, value in declined_values().items():
             carried = _rust.crosses_as_encoded(value)
@@ -545,24 +549,34 @@ class TestTheDeclinesAreRecordedInTheDivergingDirection:
     """Each decline is an UNFIXED cell, pinned so it cannot be widened silently."""
 
     def test_a_one_shot_iterator_is_not_consumed_by_the_conversion(self) -> None:
-        """The reason for the decline, asserted rather than argued.
+        """Conversion never reads a generator (#2613 keeps this half).
 
         Reading a generator to build the items would empty the caller's object.
-        The gate is ``iter(o) is o``, and this is the test that it holds: after
-        a full render the generator still yields everything it was going to.
+        A render that never LOOPS over it must leave it whole: after a full
+        render of ``{{ p }}`` the generator still yields everything it was
+        going to. The ``{% for %}`` sink is the ONE consumer, below.
         """
         gen = _one_shot()
-        _rust.render_template("{% for x in p %}[{{ x }}]{% endfor %}", {"p": gen})
+        _rust.render_template("{{ p }}|{% if p %}T{% endif %}", {"p": gen})
         assert list(gen) == [PAYLOAD], "the conversion consumed the generator"
 
-    def test_a_one_shot_iterator_still_renders_its_repr(self) -> None:
-        """Pinned DIVERGING: Django iterates it, djust reads the text."""
+    def test_a_one_shot_iterator_is_consumed_once_by_the_for_sink(self) -> None:
+        """Django's ``list(values)`` in ``ForNode.render`` (#2613, ADR-027 row V).
+
+        The loop renders the items, not the repr's characters, and the
+        generator is spent afterwards — as it is in Django.
+        """
+        gen = _one_shot()
+        got = _rust.render_template("{% for x in p %}[{{ x }}]{% endfor %}", {"p": gen})
+        assert got == f"[{escape(PAYLOAD)}]", got
+        assert list(gen) == [], "the for sink did not consume the generator"
+
+    def test_a_one_shot_iterator_answers_djangos_length(self) -> None:
+        """``len(generator)`` raises TypeError, and Django's ``length`` returns 0."""
         gen = _one_shot()
         got = _rust.render_template("{{ p|length }}", {"p": gen})
-        assert got != "0", (
-            "a one-shot iterator now answers Django's length — the decline was "
-            "lifted, so delete this pin and record what carries it"
-        )
+        assert got == "0", got
+        assert list(gen) == [PAYLOAD], "`length` must not consume the generator"
 
     def test_an_unbounded_reiterable_is_declined_rather_than_hanging(self) -> None:
         """`itertools.count()` behind a re-iterable `__iter__`.
