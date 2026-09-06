@@ -4647,11 +4647,19 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                 // does: `{% if 1 in g %}{{ g|join:"," }}` over `iter([1, 2])`
                 // is `T|2` in Django, and consuming the whole iterator to
                 // answer the membership test would make it `T|`.
+                //
+                // FAILS SOFT, like every other arm here and like Django:
+                // `smartif`'s `infix.eval` wraps the operator in a bare
+                // `except Exception: return False`, so a raising `__next__`
+                // or an iterable past the cap makes `{% if x in g %}` False
+                // rather than 500-ing the page. The first version of this arm
+                // propagated, which contradicted the comment six lines above
+                // it — the operand that used to reach `_ => false` now had a
+                // path that raised (PR #2691 review).
                 Value::Encoded(ref e) if e.items.is_none() && e.live.is_some() => {
                     match e.consume_live_match(|item| values_equal(&needle, item)) {
                         Some(Ok(found)) => Ok(found),
-                        Some(Err(err)) => return Err(DjangoRustError::PythonException(err)),
-                        None => Ok(false),
+                        Some(Err(_)) | None => Ok(false),
                     }
                 }
                 Value::Encoded(ref e) if e.items.is_some() => Ok(e

@@ -27,14 +27,66 @@ so a future divergence in either direction reddens.
 from __future__ import annotations
 
 import itertools
+import re
 import shutil
+import subprocess
+import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
 from django.template import Context, Engine
 
+from adr027_flag import resolve_lazy
+
 from djust import _rust
+
+#: A render that must TERMINATE, run where a hang is reportable.
+#:
+#: `#2678`'s defect is a render that never returns, and pytest cannot fail on
+#: that — it stalls until the whole run is killed, which reads as
+#: infrastructure trouble rather than as this test. The child gives it an
+#: exit code (mirrors `test_value_conversion_crashes_2555_2624_2572.py`).
+_CHILD = textwrap.dedent(
+    """
+    import sys
+    import django
+    from django.conf import settings
+
+    settings.configure(
+        SECRET_KEY="x",
+        DEBUG=False,
+        TEMPLATES=[{
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [],
+        }],
+        LIVEVIEW_CONFIG={},
+    )
+    django.setup()
+    from djust import _rust
+
+    class Liar:
+        def __len__(self): return 10**9
+        def __getitem__(self, i): return "x"
+
+    VALUES = {"liar": Liar()}
+    sys.stdout.write(_rust.render_template(sys.argv[1], {"v": VALUES[sys.argv[2]]}))
+
+    """
+)
+
+
+def _render_in_child(source: str, value: str, timeout: int = 25) -> str:
+    result = subprocess.run(
+        [sys.executable, "-c", _CHILD, source, value],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
+    return result.stdout
+
 
 # --------------------------------------------------------------------- setup
 
@@ -107,13 +159,16 @@ class TestEveryItemSinkConsumesAOneShotIterator2674:
 
     def test_an_unbounded_iterator_raises_rather_than_hanging(self):
         """The cap is the same one `{% for %}` uses — a decline, never a
-        truncated (silently wrong) join."""
+        truncated (silently wrong) join.
+
+        `|join` RAISES rather than failing soft, and that is Django's split
+        rather than an inconsistency: its `join` catches `TypeError` only, so
+        an error out of the iteration propagates there too. `{% if %}` is the
+        opposite — see `TestInFailsSoftLikeDjangosSmartIf`."""
         with pytest.raises(Exception, match="more than"):
             _rust.render_template('{{ g|join:"," }}', {"g": itertools.count()})
-        # A needle that is never found — `1 in count()` short-circuits at the
-        # second element in Python too, and must NOT raise.
-        with pytest.raises(Exception, match="more than"):
-            _rust.render_template("{% if -1 in g %}T{% endif %}", {"g": itertools.count()})
+        # `1 in count()` short-circuits at the second element in Python too,
+        # so this reaches no cap and must simply be True.
         assert _rust.render_template("{% if 1 in g %}T{% endif %}", {"g": itertools.count()}) == "T"
 
     def test_a_raising_next_propagates(self):
@@ -191,26 +246,59 @@ class Liar:
         return "x"
 
 
-#: ONE instance for both engines: `{{ v }}` renders `str(v)`, which for a
-#: default `__repr__` includes the object's ADDRESS — two instances differ in
-#: their rendering for a reason that has nothing to do with the engines.
-_LIAR = Liar()
-
-
 class TestAStatedBoundIsTrustedOnlyToTheCap2678:
+    """EVERY liar row runs in a bounded CHILD, not in-process.
+
+    The defect is a render that never returns, so an in-process row cannot
+    fail — it stalls the runner. That is not a theoretical objection: the
+    first version of this class rendered the liar in-process, and gating the
+    bound off did not redden it, it hung pytest for the full 900-second
+    harness timeout. Every row here that touches the liar therefore compares
+    Django (computed in-process, where `str(v)` is instant) against a djust
+    render with an exit code and a deadline.
+    """
+
+    @staticmethod
+    def _normalize(out: str) -> str:
+        """A default `__repr__` carries the defining MODULE and the object's
+        ADDRESS, and the child defines its own `Liar` — so those two fields
+        differ between the processes for reasons that have nothing to do with
+        the engines. Everything else must match byte for byte."""
+        return re.sub(r"[\w.]*Liar object at 0x[0-9a-f]+", "<Liar>", out)
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "{{ v }}",
+            "{{ v.0 }}",
+            "{{ v|length }}",
+            "{% if v %}T{% else %}F{% endif %}",
+        ],
+    )
+    def test_the_liar_agrees_with_django(self, src):
+        django = Engine().from_string(src).render(Context({"v": Liar()}))
+        djust = _render_in_child(src, "liar")
+        assert self._normalize(djust) == self._normalize(django), (
+            f"{src!r}: django={django!r} djust={djust!r}"
+        )
+
     @pytest.mark.parametrize(
         "src,ctx",
         [
-            ("{{ v }}", lambda: {"v": _LIAR}),
-            ("{{ v.0 }}", lambda: {"v": _LIAR}),
-            ("{{ v|length }}", lambda: {"v": _LIAR}),
-            ("{% if v %}T{% else %}F{% endif %}", lambda: {"v": _LIAR}),
-            # The honest builtin twin the issue names.
-            ("{{ v.0 }}", lambda: {"v": range(10**9)}),
-            ("{{ v|length }}", lambda: {"v": range(10**9)}),
-            ("{{ v.999999999 }}", lambda: {"v": range(10**9)}),
-            # Still a plain list under the cap — the fix is a ceiling, not a
-            # change of carrier for ordinary sequences.
+            # NOT `range(10**9)`, the "honest builtin twin" #2678 mentions in
+            # passing. That one terminates, so it is not the shape this fix
+            # bounds (see `stated_bound_is_unverifiable`), and putting it in a
+            # context still materialises it exactly as on main — a
+            # pre-existing cost, unchanged here and NOT fixed by this PR.
+            # It was in this table once and passed only because the first
+            # version of the fix capped on LENGTH, which is the same
+            # over-reach that broke `{% for %}` over a 100,001-item list.
+            # Fixing it means not materialising ANY sized sequence at
+            # conversion, which changes `|first`, `|slice` and `in` for every
+            # collection in the codebase: its own change, tracked separately.
+            #
+            # Still a plain list under the cap — the fix is a shape rule, not
+            # a change of carrier for ordinary sequences.
             ("{% for x in v %}{{ x }}{% endfor %}", lambda: {"v": range(5)}),
             ("{{ v|join:',' }}", lambda: {"v": range(5)}),
         ],
@@ -219,22 +307,118 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         assert_agree(template_dir, src, ctx)
 
     def test_a_render_that_used_to_hang_now_returns(self):
-        """Termination is the whole of the bug. The render is `str(v)`, as
-        Django's is."""
-        out = _rust.render_template("{{ v }}", {"v": Liar()})
-        assert "Liar object at" in out
+        """Termination is the whole of the bug (the `_render_in_child`
+        pattern from `test_value_conversion_crashes_2555_2624_2572.py`: a
+        regression comes back as a non-zero exit, which pytest can report)."""
+        out = _render_in_child("{{ v }}", "liar", timeout=25)
+        assert "Liar object at" in out, out
 
-    def test_an_over_cap_sequence_is_not_materialised_by_for(self):
-        """`{% for %}` over it raises at the cap rather than building a
-        hundred-million-element list."""
-        with pytest.raises(Exception, match="more than"):
-            _rust.render_template("{% for x in v %}{{ x }}{% endfor %}", {"v": range(10**9)})
+    def test_only_the_unverifiable_shape_is_bounded(self):
+        """The scope of the cap, stated as the two shapes it separates.
 
-    def test_a_sequence_at_the_cap_still_crosses_as_a_list(self):
-        """The boundary itself: `OPAQUE_ITEM_CAP` items is a list, one past
-        it is the carrier."""
-        assert _rust.crosses_as_encoded(range(100_000)) is False
-        assert _rust.crosses_as_encoded(range(100_001)) is True
+        `Liar` states `10**9` and has no `__iter__`, so nothing can end its
+        walk short of paying it — it is carried. A `list` of the same length
+        class states a length its own iterator honours, so it is enumerated
+        exactly as before, at any size. The first version of this fix keyed on
+        the NUMBER and claimed both, which turned `{% for %}` over a
+        100,001-item list into a `RuntimeError` (PR #2691 review)."""
+        assert _rust.crosses_as_encoded(Liar()) is True
+        assert _rust.crosses_as_encoded(list(range(100_001))) is False
+        assert _rust.crosses_as_encoded(range(10**9)) is False
+        assert _rust.crosses_as_encoded(list(range(10))) is False
+
+
+#: A collection ONE past `OPAQUE_ITEM_CAP` that genuinely terminates. This is
+#: the variant 18,021 green tests never exercised: every earlier case was
+#: either well under the cap or an endless iterator, so a cap that claimed
+#: honest collections looked exactly like a cap that did not (v1.0.0rc4
+#: finding #1 — a suite must enumerate every variant of the surface, and
+#: "just past the boundary" is a variant of every boundary).
+CAP = 100_000
+
+
+class _FakeQuerySet:
+    """`__len__` + `__iter__` and no `__getitem__` — the QuerySet shape, which
+    is the one a real project hits with more than 100,000 rows."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+#: One row per sink. The expected value is computed rather than written into
+#: a parametrize id — `"." * 100_001` as an id makes the report unreadable.
+PAST_CAP_SINKS = {
+    "for": ("{% for x in v %}.{% endfor %}", lambda n: "." * n),
+    "join": ('{{ v|join:"" }}', lambda n: "".join(str(i) for i in range(n))),
+    "length": ("{{ v|length }}", lambda n: str(n)),
+    "index": ("{{ v.0 }}", lambda n: "0"),
+    "first": ("{{ v|first }}", lambda n: "0"),
+    "in-hit": ("{% if 5 in v %}T{% else %}F{% endif %}", lambda n: "T"),
+    "in-miss": ("{% if -1 in v %}T{% else %}F{% endif %}", lambda n: "F"),
+}
+
+#: A QuerySet-shaped object has no `__getitem__`, so the two subscript sinks
+#: are not its axis.
+NOT_SUBSCRIPTABLE = {"index", "first"}
+
+
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("sink", sorted(PAST_CAP_SINKS))
+@pytest.mark.parametrize("shape", ["list", "queryset"])
+class TestATerminatingCollectionPastTheCapIsUntouched:
+    """Every sink, both shapes, both flag settings, for a collection just past
+    the cap.
+
+    Both settings, because the first version of the #2678 fix was wrong in
+    DIFFERENT ways on each: under the shipped default it raised
+    (`'list' object yielded more than 100000 items`), and on the eager hatch
+    it answered from the REPR — `{% for %}` rendered 688,898 dots for a
+    100,001-item list, `{{ v.0 }}` rendered `[`, `{% if 5 in v %}` was False.
+    A test on one setting could not tell those two apart from correct.
+    """
+
+    def test_agrees_with_django(self, template_dir, lazy, sink, shape):
+        if shape == "queryset" and sink in NOT_SUBSCRIPTABLE:
+            pytest.skip("a QuerySet-shaped object has no __getitem__")
+        src, expected_for = PAST_CAP_SINKS[sink]
+        factory = list if shape == "list" else _FakeQuerySet
+        with resolve_lazy(lazy):
+            django, djust = render_both(template_dir, src, lambda: {"v": factory(range(CAP + 1))})
+        assert djust == django, (
+            f"{sink} on {shape} (lazy={lazy}): django={django[:40]!r}... djust={djust[:40]!r}..."
+        )
+        assert django == expected_for(CAP + 1), "the Django reference itself moved"
+
+
+class TestInFailsSoftLikeDjangosSmartIf:
+    """`smartif`'s `infix.eval` wraps the operator in `except Exception:
+    return False`, so `{% if x in y %}` never 500s a page. The first version
+    of the live-handle `in` arm propagated both the cap and a raising
+    `__next__` (PR #2691 review)."""
+
+    def test_a_raising_next_is_false_not_a_500(self, template_dir):
+        def boom():
+            yield 1
+            raise ValueError("boom")
+
+        # Needle 9, not 1: `in` short-circuits, so a needle that matches the
+        # first element never reaches the raise and the case is vacuous.
+        assert_agree(template_dir, "{% if 9 in g %}T{% else %}F{% endif %}", lambda: {"g": boom()})
+
+    def test_an_unbounded_iterable_is_false_not_a_500(self):
+        """Asked of djust alone: `-1 in itertools.count()` never returns in
+        Django, so there is no reference answer — only the requirement that
+        djust neither hangs nor raises."""
+        out = _rust.render_template(
+            "{% if -1 in g %}T{% else %}F{% endif %}", {"g": itertools.count()}
+        )
+        assert out == "F", out
 
 
 # --------------------------------------------------------------------- #2657
