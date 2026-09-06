@@ -456,6 +456,19 @@ def reassert() -> None:
             elif isinstance(handler, LibraryBlockTagHandler):
                 register_block_tag_handler(name, handler.end_name, handler)
                 unregister_tag_handler(name)
+            elif name in _BESPOKE_BLOCK_TAGS:
+                # The SAME dispatch `_bridge_bespoke_block_tag` made (#1646).
+                # A bespoke handler is its own class, so neither `isinstance`
+                # arm above matches it and it fell to the inline branch: `cache`
+                # was re-registered as an INLINE tag and its block handler
+                # unregistered, so `{% cache %}…{% endcache %}` stopped parsing
+                # as a block for the rest of the worker. Silent until #2658 —
+                # `CacheTagHandler` had a `render` the inline registry accepted;
+                # once it became a two-phase `LAZY_BODY` handler with no
+                # `render`, the same line raised `TypeError` out of `reassert`
+                # and took test isolation with it.
+                register_block_tag_handler(name, _BESPOKE_BLOCK_TAGS[name], handler)
+                unregister_tag_handler(name)
             else:
                 register_tag_handler(name, handler)
                 unregister_block_tag_handler(name)
@@ -1165,12 +1178,21 @@ def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
 class CacheTagHandler:
     """``{% cache expiry fragment [vary…] [using="alias"] %}…{% endcache %}``.
 
-    Django's ``CacheNode`` renders its nodelist and stores the result; djust's
-    block-handler protocol hands the body over ALREADY rendered, so this
-    handler is the store/lookup half only. The observable difference is that a
-    cache HIT still paid to render the body — the OUTPUT is the cached one
-    either way, which is what the tag's semantics are about, but the
-    performance win is not there yet (#2658).
+    A LAZY-BODY handler (#2658): it is called as ``before_body(args, context)``
+    BEFORE the body exists and answers a cache HIT with the stored fragment, so
+    the render the tag is there to avoid is genuinely not paid for. Only a MISS
+    reaches ``after_body``, which stores what the body produced. The ordinary
+    block contract hands ``render()`` a body that has ALREADY been rendered,
+    which made this tag correct and pointless: the output on a hit was the
+    cached one either way, and the work had been done regardless. See
+    ``read_lazy_body`` in ``crates/djust_templates/src/registry.rs`` for the
+    protocol.
+
+    That is Django's own order — ``CacheNode.render`` resolves its operands,
+    computes the key and consults the cache, and only then touches
+    ``self.nodelist`` — and it carries Django's consequences: a body with side
+    effects (a ``{% cycle %}``, an ``as``-binding, a lazily-evaluated queryset)
+    no longer runs on a hit, because in Django it never did.
 
     Argument handling is Django's, token for token (``defaulttags`` has no say
     here; this is ``django/templatetags/cache.py``):
@@ -1198,6 +1220,9 @@ class CacheTagHandler:
     fragment (#2658).
     """
 
+    #: Two-phase: this handler decides whether the body renders at all (#2658).
+    LAZY_BODY: bool = True
+
     #: Raw tokens: this handler resolves what Django resolves and leaves the
     #: fragment name alone, which no positional policy can express.
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
@@ -1212,7 +1237,41 @@ class CacheTagHandler:
             _stamp(exc)
             raise
 
-    def render(self, args: List[str], content: str, context: Dict[str, Any]) -> str:
+    def before_body(self, args: List[str], context: Dict[str, Any]) -> Tuple[Optional[str], Any]:
+        """Phase one: the key, and the stored fragment if there is one.
+
+        Returns ``(output, state)``. ``output`` is the cached fragment on a
+        HIT — and the body is then never rendered — or ``None`` to ask for it.
+        ``state`` is the ``(backend, key, expire_time)`` :meth:`after_body`
+        stores under, carried across the body render so phase two does not
+        resolve every operand a second time.
+        """
+        from django.utils.safestring import mark_safe
+
+        backend, key, expire_time = self._plan(args, context)
+        cached = backend.get(key)
+        if cached is None:
+            return None, (backend, key, expire_time)
+        # A stored fragment is rendered markup — the same thing the miss path
+        # returns, which the bridge hands over already ``mark_safe``'d — so it
+        # is inserted raw rather than escaped a second time. Locmem happens to
+        # round-trip the ``SafeString`` through pickle; Redis and memcached do
+        # not, and the tag must not emit ``&lt;b&gt;`` on the backends that
+        # store bytes.
+        return mark_safe(cached), (backend, key, expire_time)
+
+    def after_body(self, args: List[str], content: str, context: Dict[str, Any], state: Any) -> str:
+        """Phase two, reached on a MISS only: store what the body rendered.
+
+        The stored bytes are the body's, unchanged — the same fragment the
+        single-phase version stored.
+        """
+        backend, key, expire_time = state
+        backend.set(key, content, expire_time)
+        return content
+
+    def _plan(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, str, Any]:
+        """The backend, the fragment key and the expiry, as Django computes them."""
         from django.core.cache import InvalidCacheBackendError, caches
         from django.core.cache.utils import make_template_fragment_key
         from django.template import TemplateSyntaxError
@@ -1271,13 +1330,7 @@ class CacheTagHandler:
         # Django: `vary_on = [var.resolve(context) for var in self.vary_on]` —
         # the same resolution as everything else, NOT `ignore_failures`.
         vary_on = [_resolve_cache_operand(token, context) for token in vary_tokens]
-        key = make_template_fragment_key(fragment_name, vary_on)
-
-        cached = cache_backend.get(key)
-        if cached is not None:
-            return cached
-        cache_backend.set(key, content, expire_time)
-        return content
+        return cache_backend, make_template_fragment_key(fragment_name, vary_on), expire_time
 
 
 def _resolve_cache_operand(token: str, context: Dict[str, Any]) -> Any:

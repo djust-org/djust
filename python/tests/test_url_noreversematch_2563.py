@@ -414,7 +414,7 @@ class TestStructuralPins:
         assert "logger.warning" not in src
 
     def test_no_sidecar_site_stringifies_the_exception(self):
-        """All three `call_*_with_py_sidecar` functions route the handler's
+        """Every handler-calling registry function routes the handler's
         exception through ONE mapping (#1646); the pre-#2563 `format!` arms
         are gone."""
         src = (REPO / "crates/djust_templates/src/registry.rs").read_text()
@@ -424,13 +424,17 @@ class TestStructuralPins:
             "Assign handler '{}' raised exception",
         ):
             assert arm not in src, arm
-        assert src.count(".map_err(handler_exception)") == 3
+        # The three `call_*_with_py_sidecar` functions (#2563), plus the two
+        # lazy-body block phases (#2658) — `before_body` and `after_body` are
+        # sidecar-shaped calls into a handler and cross the same way.
+        assert src.count(".map_err(handler_exception)") == 5
         assert "DjangoRustError::PythonException(err)" in src
 
     def test_renderer_routes_all_sidecar_sites_through_one_mapping(self):
         src = (REPO / "crates/djust_templates/src/renderer.rs").read_text()
-        # 2 assign sites + custom + block = 4 call sites, one definition.
-        assert src.count("handler_call_error(") == 5
+        # 2 assign sites + custom + block = 4 call sites, one definition,
+        # plus the 2 lazy-body phases (#2658) = 7.
+        assert src.count("handler_call_error(") == 7
         assert "DjangoRustError::PythonException(_) => err" in src
 
     def test_noreversematch_is_user_raised_by_provenance_not_type(self):
