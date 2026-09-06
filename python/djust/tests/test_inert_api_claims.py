@@ -95,13 +95,19 @@ def test_a_marker_elsewhere_in_the_file_does_not_discharge_the_mention(tmp_path:
     left the checker green, because ``@debounce``'s marker 28 lines earlier —
     inside the SAME code fence — satisfied the file-level rule. That shape is
     the one #2680 was about: siblings labelled inert, this one not.
+
+    The sibling was ``@debounce`` when this case was written; it is
+    ``@optimistic`` now, because #2656 made "``@debounce`` — no client impl"
+    a false statement, and the STALE_INERT_CLAIMS arm added by the #2700
+    review correctly fails any fixture that still makes it. The shape under
+    test — a marker on a SIBLING line inside the same fence — is unchanged.
     """
     mod = _load_checker()
     same_fence = (
         "# Decorators\n\n"
         "## Usage\n\n"
         "```python\n"
-        "@debounce(wait=0.5)  # INERT — no client impl (#2656)\n"
+        "@optimistic  # INERT — no client impl (#2699)\n"
         "def search(self, **kwargs): ...\n"
         "\n"
         '@client_state(keys=["active_tab"])\n'
@@ -254,6 +260,68 @@ def test_the_checker_does_not_fire_on_the_corrections_themselves(tmp_path: Path)
                     "docs/fix.md": (
                         "# Fix\n\n> There is no `djustSecurity` global; use textContent.\n"
                         "> `StateBus` was deleted in #2680.\n"
+                    )
+                },
+            )
+        )
+        == []
+    )
+
+
+def test_the_checker_catches_a_stale_inert_claim_about_a_wired_decorator(
+    tmp_path: Path,
+) -> None:
+    """The mirror-image failure, in PROSE this time (#2700 review).
+
+    ``test_wired_decorators_are_not_marked_inert`` below pins the same
+    invariant, but only for ``schema.py``'s ``DECORATORS``. The #2656 sweep
+    left three lines in ``docs/state-management/STATE_MANAGEMENT_API.md`` —
+    the file ``docs/README.md`` calls the *complete* decorator reference —
+    still saying ``@debounce`` is "a marker with no client implementation",
+    five lines under a banner the same PR had corrected to say the opposite.
+    Neither guard could see them, so the checker grew a third arm.
+
+    The three cases below are the three real lines, verbatim.
+    """
+    mod = _load_checker()
+    for label, body in (
+        (
+            "prose",
+            "**Result**: the server validates/corrects on the event. (The 500ms wait is "
+            "NOT applied — `@debounce` is a marker with no client implementation, so the "
+            "handler fires per keystroke.)\n",
+        ),
+        ("debounce table row", "| `@debounce` | (marker only — client not implemented) |\n"),
+        ("throttle table row", "| `@throttle` | (marker only — client not implemented) |\n"),
+    ):
+        failures = mod.check(_tree(tmp_path / label.replace(" ", "_"), {"docs/api.md": body}))
+        assert failures, f"the {label} shape did not fail the checker:\n{body}"
+        assert "WIRED decorator" in failures[0], failures[0]
+
+
+def test_the_stale_inert_arm_does_not_fire_on_correct_prose(tmp_path: Path) -> None:
+    """Scope discipline: it must not become the ~230-site explosion.
+
+    The arm matches a line that NAMES a wired decorator *and* ASSERTS it does
+    nothing. Ordinary use, an accurate description, and — the case that
+    actually appears in ``docs/README.md:62`` — a list of working decorators
+    followed by "and the inert `@optimistic` / `@client_state`", where the
+    adjective qualifies the SIBLINGS, must all stay green.
+    """
+    mod = _load_checker()
+    assert (
+        mod.check(
+            _tree(
+                tmp_path,
+                {
+                    "docs/ok.md": (
+                        "# Decorators\n\n"
+                        "- Complete reference (@debounce, @throttle, @cache, and the "
+                        "inert @optimistic / @client_state — see #2699)\n"
+                        "- `@debounce(wait=0.5)` collapses a burst into one send "
+                        "(`05-handler-rate-limit.js`).\n"
+                        "- `@throttle(interval=0.1)` caps sends at one per interval.\n"
+                        "- `@optimistic` is a no-op today (#2699).\n"
                     )
                 },
             )

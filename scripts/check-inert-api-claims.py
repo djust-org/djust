@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Refuse docs and code that prescribe an API which does not exist (#2679, #2680).
+"""Refuse docs and code that misdescribe an API's reality (#2679, #2680, #2700).
 
-Two failure modes, both found by the #2690 review after a first pass claimed —
-by hand-counting — to have fixed "four places":
+Three failure modes. The first two were found by the #2690 review after a first
+pass claimed — by hand-counting — to have fixed "four places":
 
 1. **A deleted global still prescribed as the remedy.** `security.js` was never
    loaded by anything, so `window.djustSecurity` was `undefined` in every
@@ -27,6 +27,16 @@ by hand-counting — to have fixed "four places":
    users to it — decision guides, cheat sheets, an MCP tool description, and a
    `window.StateBus.subscribe(...)` snippet against a class that no longer
    exists.
+
+3. **A WIRED feature still taught as inert — the same failure with the sign
+   flipped** (#2700 review). #2656 implemented `@debounce` / `@throttle` on the
+   client and swept their INERT caveats out of the docs; the sweep missed three
+   lines of `docs/state-management/STATE_MANAGEMENT_API.md`, five lines under a
+   banner the same PR had corrected to say the opposite, in the file
+   `docs/README.md` advertises as the *complete* decorator reference. Neither
+   guard could see them: the schema pin reads only `schema.py`, and
+   `INERT_DECORATOR_USE` above matches `@client_state` only. See
+   `STALE_INERT_CLAIMS`.
 
 The bar is mechanical, because the thing that failed was a human claim of
 completeness (#1859: a pin nobody can drift past beats a promise). A file may
@@ -99,6 +109,64 @@ DELETED_STATEBUS_USE = re.compile(
 # `@optimistic` is out of scope here on purpose — see the module docstring.
 INERT_DECORATOR_USE = re.compile(
     r"@client_state\s*\(|from\s+djust[\w.]*\s+import\s+[^\n]*\bclient_state\b"
+)
+
+# --- The INVERSE claim (#2700 review) -------------------------------------
+#
+# Everything above catches "an inert thing taught as working". The #2700
+# review caught the sign flipped: `@debounce` / `@throttle` were implemented
+# in #2656, and the sweep that removed their INERT caveats missed three lines
+# in `docs/state-management/STATE_MANAGEMENT_API.md` — the file `docs/README.md`
+# advertises as the *complete* decorator reference — which still said they were
+# "a marker with no client implementation". They sat five lines under a banner
+# this same PR had corrected to say the opposite.
+#
+# Neither existing guard could see them. `test_wired_decorators_are_not_marked_inert`
+# reads only `schema.py`'s `DECORATORS`, and `INERT_DECORATOR_USE` above matches
+# `@client_state` only. A stale inert claim about a NOW-WIRED decorator is a
+# worse failure than the forward one it mirrors: it tells a reader (or an agent)
+# to route around a feature that works.
+#
+# Scope is deliberately narrow, for the same reason `@optimistic` is left out of
+# `INERT_DECORATOR_USE`: this does NOT match every mention of `@debounce`, only
+# a line that both NAMES a wired decorator and ASSERTS it does nothing. That is
+# ~4 lines repo-wide, not the ~230-site explosion a use-site match would give.
+WIRED_DECORATORS = ("debounce", "throttle")
+
+_WIRED_NAME = r"@?\b(?:" + "|".join(WIRED_DECORATORS) + r")\b"
+
+# The assertions that were actually used across the docs before #2656, plus the
+# obvious synonyms. Present tense: a historical note phrased in the past is not
+# a claim about today.
+_INERT_ASSERTION = (
+    r"(?:marker[ \-—]*only"
+    r"|marker with no client"
+    r"|no client implementation"
+    r"|client (?:is )?not implemented"
+    r"|not implemented (?:on|in) the client"
+    r"|\bno-op\b"
+    r"|\binert\b"
+    r"|does nothing"
+    r"|has no effect"
+    r"|fires (?:on|per) (?:every|each)"
+    r"|is NOT applied"
+    r"|no rate control"
+    r"|stamps metadata)"
+)
+
+# The name and the assertion must be NEAR each other, with no OTHER decorator's
+# name between them — otherwise "unlike `@debounce`, `@optimistic` is a no-op"
+# reads as a claim about `@debounce`.
+_TEMPERED_GAP = r"(?:(?!optimistic|client_state)[^\n]){0,80}?"
+
+# ...and the assertion must not itself be QUALIFYING a still-inert sibling:
+# "the inert `@optimistic` / `@client_state`" is a correct sentence that happens
+# to follow a list naming `@debounce`.
+_NOT_QUALIFYING_A_SIBLING = r"(?!\W{0,3}(?:\w+\W{1,3}){0,2}@?(?:optimistic|client_state)\b)"
+
+STALE_INERT_CLAIMS = (
+    re.compile(_WIRED_NAME + _TEMPERED_GAP + _INERT_ASSERTION + _NOT_QUALIFYING_A_SIBLING, re.I),
+    re.compile(_INERT_ASSERTION + _NOT_QUALIFYING_A_SIBLING + _TEMPERED_GAP + _WIRED_NAME, re.I),
 )
 
 # Any of these anywhere in the file discharges the requirement.
@@ -280,6 +348,19 @@ def check(root: Path = ROOT) -> list[str]:
                     f"{rel}:{lineno}: uses `StateBus` as a live object — that class was "
                     f"deleted in #2680 (it had zero consumers).\n    {line.strip()}"
                 )
+            for pat in STALE_INERT_CLAIMS:
+                hit = pat.search(line)
+                if hit:
+                    failures.append(
+                        f"{rel}:{lineno}: still says a WIRED decorator does nothing "
+                        f'("{hit.group(0).strip()}"). `@debounce` and `@throttle` were '
+                        f"implemented on the client in #2656 "
+                        f"(`static/djust/src/05-handler-rate-limit.js`, configured from the "
+                        f"mount frame's `handler_config`). A stale inert claim routes a "
+                        f"reader — or an agent — around a feature that works.\n"
+                        f"    {line.strip()}"
+                    )
+                    break
 
         if not INERT_DECORATOR_USE.search(text):
             continue

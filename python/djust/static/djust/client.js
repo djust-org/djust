@@ -3124,6 +3124,13 @@ window.djust.applyHandlerRateLimit = applyHandlerRateLimit;
  * which is a separate timer set and would otherwise still be pending.
  */
 function flushHandlerRateLimit() {
+    // Validate BEFORE destroying anything (#2700 review). The clears below are
+    // irreversible: bailing out after them would drop every pending event
+    // instead of flushing it. Unreachable in the shipped bundle —
+    // 11-event-handler.js assigns `handleEvent` at load — so this is shape,
+    // not a live bug.
+    if (!window.djust.handleEvent) return;
+
     // Snapshot first: dispatching re-enters handleEvent, which may write to
     // these maps (a throttled handler opens a fresh window).
     const debouncePending = [];
@@ -3140,7 +3147,6 @@ function flushHandlerRateLimit() {
     });
     throttleState.clear();
 
-    if (!window.djust.handleEvent) return;
     debouncePending.concat(throttlePending).forEach(([eventName, pending]) => {
         window.djust.handleEvent(eventName, pending, true);
     });

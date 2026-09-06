@@ -253,6 +253,39 @@ describe('#2656 — @throttle client gate', () => {
         expect(sent[1].params.y).toBe(9); // trailing carries the LAST payload
     });
 
+    it('8b. arms ONE trailing timer per window, not one per in-window event', async () => {
+        // The #2700 review's gate-off M10: flipping the scheduling guard at
+        // 05-handler-rate-limit.js `if (state.timeoutId === null || ...)` to
+        // `if (true)` survived the whole suite. It is not a semantic no-op —
+        // it leaks a timer per in-window event, and once the duplicates drain
+        // the `else` branch DELETES the state entry, so the NEXT event reads
+        // as a fresh leading edge and sends immediately, breaking the cap.
+        //
+        // Nothing saw it because two mechanisms shadow each other: the
+        // `if (pending)` null-guard in the timer callback absorbs every
+        // duplicate, so `sent` looks identical either way. This case asserts
+        // on the TIMER COUNT instead, which is the only place the scheduling
+        // guard is observable — it is the test that makes that mechanism
+        // independently reachable (#2135).
+        const { window, sent, clock } = createHarness({
+            m: { throttle: { interval: 1.0, leading: true, trailing: true } },
+        });
+        await window.djust.handleEvent('m', { n: 1 }); // leading edge, sends
+        expect(sent).toHaveLength(1);
+        expect(clock.pending()).toBe(0);
+
+        for (let i = 2; i <= 6; i++) {
+            await window.djust.handleEvent('m', { n: i });
+            clock.advance(50);
+        }
+        expect(clock.pending()).toBe(1); // one trailing timer, not five
+
+        clock.advance(1000);
+        expect(sent).toHaveLength(2);
+        expect(sent[1].params.n).toBe(6);
+        expect(clock.pending()).toBe(0);
+    });
+
     it('9. leading edge fires immediately; trailing carries the last payload', async () => {
         const { window, sent, clock } = createHarness({
             move: { throttle: { interval: 0.5, leading: true, trailing: true } },
