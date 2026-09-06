@@ -120,6 +120,79 @@ def test_a_marker_elsewhere_in_the_file_does_not_discharge_the_mention(tmp_path:
     assert mod.check(_tree(tmp_path / "b", {"docs/d.md": marked})) == []
 
 
+def test_a_marked_sibling_entry_does_not_discharge_an_unmarked_one(tmp_path: Path) -> None:
+    """The `python/djust/schema.py` shape — an UNBROKEN literal (#2692 review).
+
+    The case above separates its two snippets with a BLANK LINE, so it only
+    ever exercised the blank-line half of the rule (v1.0.0rc4 finding #1). A
+    dict literal has no blank lines in it: `schema.py`'s decorator schema is
+    one ~135-line expression, so under a purely blank-line-delimited block
+    `@debounce`'s marker discharged `@client_state` 46 and 56 lines away —
+    further than the 28 lines of the `BEST_PRACTICES_AI.md` hole this checker
+    was written for, and the same sibling-list shape: siblings labelled inert,
+    this one not.
+
+    What bounds it is dedent: the `{` opening each entry is shallower than the
+    entry's keys, so a neighbour's marker cannot reach across it.
+    """
+    mod = _load_checker()
+    entries = (
+        "SCHEMA = [\n"
+        "    {\n"
+        '        "name": "@debounce",\n'
+        '        "description": "INERT — no client implementation (#2656).",\n'
+        '        "usage": ["@debounce(wait=0.5)"],\n'
+        "    },\n"
+        "    {\n"
+        '        "name": "@client_state",\n'
+        '        "import": "from djust.decorators import client_state",\n'
+        '        "description": "Coordinate state across components.",\n'
+        "    },\n"
+        "]\n"
+    )
+    assert "\n\n" not in entries, "the whole point is that there is no blank line"
+    found = mod.check(_tree(tmp_path / "unmarked", {"docs/schema.py": entries}))
+    assert any("schema.py" in f and "client_state" in f for f in found), (
+        f"a marked SIBLING entry discharged an unmarked one: {found}"
+    )
+
+    # The MIRROR: the unmarked entry FIRST, the marked sibling below it. The
+    # backward and forward walks are independent halves, so each needs its own
+    # red case — gating off only the forward bound left the suite green until
+    # this one existed.
+    reversed_order = (
+        "SCHEMA = [\n"
+        "    {\n"
+        '        "name": "@client_state",\n'
+        '        "import": "from djust.decorators import client_state",\n'
+        '        "description": "Coordinate state across components.",\n'
+        "    },\n"
+        "    {\n"
+        '        "name": "@debounce",\n'
+        '        "description": "INERT — no client implementation (#2656).",\n'
+        "    },\n"
+        "]\n"
+    )
+    assert "\n\n" not in reversed_order
+    found_below = mod.check(_tree(tmp_path / "below", {"docs/schema.py": reversed_order}))
+    assert any("schema.py" in f and "client_state" in f for f in found_below), (
+        f"a marked sibling entry BELOW discharged an unmarked one: {found_below}"
+    )
+
+    # A marker inside the entry's OWN block does discharge it...
+    marked = entries.replace(
+        '        "description": "Coordinate state across components.",\n',
+        '        "description": "MARKER ONLY — inert, publishes nothing (#2656).",\n',
+    )
+    assert marked != entries
+    assert mod.check(_tree(tmp_path / "marked", {"docs/schema.py": marked})) == []
+
+    # ...and so does a caveat introducing a MORE-indented snippet, which is
+    # why the bounding line is included rather than excluded.
+    dedented_caveat = 'USAGE = [\n    # INERT (#2656)\n        "@client_state(keys=[])",\n]\n'
+    assert mod.check(_tree(tmp_path / "dedent", {"docs/u.py": dedented_caveat})) == []
+
+
 def test_a_header_banner_discharges_every_mention_in_the_file(tmp_path: Path) -> None:
     """The banner escape hatch, which the doc corpus relies on.
 
@@ -145,6 +218,29 @@ def test_a_header_banner_discharges_every_mention_in_the_file(tmp_path: Path) ->
     # Leading `{# ... #}` template comment, for the .html arm.
     html_banner = '{# @client_state is INERT (#2656) #}\n<div>@client_state(keys=["a"])</div>\n'
     assert mod.check(_tree(tmp_path / "html", {"docs/t.html": html_banner})) == []
+
+
+def test_a_banner_below_the_mention_does_not_discharge_it(tmp_path: Path) -> None:
+    """The banner arm's justification is order, so the rule must check order.
+
+    A `.md` with no `##` heading and no fence has NO end to its preamble, so
+    the header zone is the whole file — and without an ordering condition a
+    marker at the BOTTOM would discharge a mention at the top, which is the
+    opposite of "a reader meets it before any example" (#2692 review).
+    """
+    mod = _load_checker()
+    body = '# Notes\n\n@client_state(keys=["a"])\n'
+    assert "##" not in body and "```" not in body, "the whole file must be header zone"
+
+    above = (
+        '# Notes\n\n> Inert: `@client_state` does nothing (#2656).\n\n@client_state(keys=["a"])\n'
+    )
+    assert mod.check(_tree(tmp_path / "above", {"docs/n.md": above})) == []
+
+    below = body + "\n> Inert: `@client_state` does nothing (#2656).\n"
+    assert mod.check(_tree(tmp_path / "below", {"docs/n.md": below})), (
+        "a marker BELOW the mention discharged it via the banner arm"
+    )
 
 
 def test_the_checker_does_not_fire_on_the_corrections_themselves(tmp_path: Path) -> None:

@@ -901,7 +901,10 @@ DECORATORS: List[Dict[str, Any]] = [
             "keys": "List[str] — state keys to publish/subscribe",
         },
         "usage": [
-            "@client_state(keys=['filter'])\ndef update_filter(self, filter: str = '', **kwargs):",
+            # INERT (#2656) — repeated here because this snippet is what an
+            # agent copies; the entry's `description` is a separate block.
+            "@client_state(keys=['filter'])  # INERT (#2656): publishes nothing\n"
+            "def update_filter(self, filter: str = '', **kwargs):",
         ],
     },
     {

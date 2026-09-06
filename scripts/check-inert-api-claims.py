@@ -61,16 +61,20 @@ SCAN_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".html", ".txt", ".js"}
 # `djustSecurity.` call with nothing to catch it (#2692).
 ROOT_EXTRA_FILES = ("llms.txt",)
 
-# This file explains the rules, and the changelog / CONTRIBUTING / retro
-# records the deletions in prose. Their mentions are the audit trail, not
-# prescriptions.
+# This file explains the rules, and the changelog records the deletions in
+# prose. Their mentions are the audit trail, not prescriptions — `CHANGELOG.md`
+# is exempt because an already-shipped section is immutable (#2028), so a
+# historical entry naming `client_state` can never be corrected in place.
+#
+# `RETRO.md` and `ROADMAP.md` were exempt in the first version of this list and
+# are NOT any more (#2692 review): neither matches anything today, so the
+# exemptions bought nothing — and the ROADMAP is precisely where a future
+# "use `@client_state` to…" plan would land uncaveated.
 EXEMPT = {
     "scripts/check-inert-api-claims.py",
     "python/djust/tests/test_inert_api_claims.py",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
-    "RETRO.md",
-    "ROADMAP.md",
 }
 
 # A CALL on the deleted global. `djustSecurity` bare is fine — that is how the
@@ -184,13 +188,42 @@ def _header_zone(text: str, suffix: str) -> int:
     return zone
 
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
 def _block_bounds(lines: list[str], lineno: int) -> tuple[int, int]:
-    """The maximal run of consecutive non-blank lines containing `lineno` (1-based)."""
+    """The mention's own block: consecutive non-blank lines, bounded by dedent.
+
+    A blank line ends the block, and so does the first line — in either
+    direction — indented LESS than the mention itself. That second bound is
+    what makes this a block rather than a region: without it, a long unbroken
+    literal is one block however far apart its entries are.
+
+    `python/djust/schema.py`'s decorator schema is the case that proves it
+    (#2692 review). It is a single dict literal spanning ~135 lines with no
+    blank line in it, so the blank-line rule alone made `@debounce`'s
+    `INERT … #2656` discharge `@client_state` **46 and 56 lines away** — the
+    same sibling-list shape as the `docs/BEST_PRACTICES_AI.md` hole this
+    checker exists to catch, and further apart than the 28 lines that one
+    spanned. Dedent stops the walk at the `{` opening `@client_state`'s own
+    entry, so its neighbours no longer speak for it.
+
+    The bounding line itself is INCLUDED, so a caveat introducing an indented
+    block (`# INERT (#2656)` above an indented snippet) still discharges it.
+    At indent 0 — prose, and the top level of a fenced snippet — nothing can
+    be shallower, so the rule degrades to the blank-line one.
+    """
+    depth = _indent(lines[lineno - 1])
     start = end = lineno - 1
     while start > 0 and lines[start - 1].strip():
         start -= 1
+        if _indent(lines[start]) < depth:
+            break  # the bounding line is included, but the walk stops here
     while end + 1 < len(lines) and lines[end + 1].strip():
         end += 1
+        if _indent(lines[end]) < depth:
+            break
     return start + 1, end + 1
 
 
@@ -223,11 +256,20 @@ def check(root: Path = ROOT) -> list[str]:
             continue
         lines = text.splitlines()
         banner = _header_zone(text, path.suffix)
-        if any(INERT_MARKER.search(ln) for ln in lines[:banner]):
-            continue  # the file opens by saying it is inert — every mention is covered
+        # The FIRST marker in the header zone, or None. A line number rather
+        # than a boolean because the banner arm's whole justification is that
+        # a reader meets the marker BEFORE any example — for a `.md` with no
+        # `##` and no fence the zone is the whole file, and without this the
+        # arm would let a marker BELOW a mention discharge it, which is the
+        # opposite of what it claims (#2692 review).
+        banner_at = next(
+            (i for i, ln in enumerate(lines[:banner], 1) if INERT_MARKER.search(ln)), None
+        )
         for lineno, line in enumerate(lines, 1):
             if not INERT_DECORATOR_USE.search(line):
                 continue
+            if banner_at is not None and banner_at < lineno:
+                continue  # the file opened by saying it is inert
             start, end = _block_bounds(lines, lineno)
             if any(INERT_MARKER.search(lines[k - 1]) for k in range(start, end + 1)):
                 continue
