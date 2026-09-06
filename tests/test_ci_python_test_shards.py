@@ -26,7 +26,10 @@ on top of it.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -155,3 +158,101 @@ def test_aggregate_gate_still_ands_the_matrix_wide_python_result(job: str) -> No
     cond = re.search(r"if \[(.*?)\]; then", run, re.S)
     assert cond, "could not find the aggregate if-condition"
     assert 'needs.python-tests.result }}" == "success"' in cond.group(1)
+
+
+# --------------------------------------------------------------------------- #
+# staleness / balance (#2703)
+# --------------------------------------------------------------------------- #
+#
+# The pin above proves `.test_durations` EXISTS, parses, and holds no foreign
+# roots. None of that can fail when the file is merely OUT OF DATE — and that
+# is the state that actually broke CI: 20% of collected tests had no recorded
+# duration, so pytest-split count-balanced that fifth of the suite and dealt
+# shard 3 **9909 tests against shard 2's 1898**. Shard 3/4 then died on all
+# three interpreters, on five consecutive `main` runs, with
+# `The runner has received a shutdown signal` and zero failing tests.
+#
+# A pin that cannot go red on the condition that broke production is
+# decorative (#1859). These two can.
+
+STALE_FRACTION_MAX = 0.10  # CONTRIBUTING: regenerate past ~10% shift
+IMBALANCE_RATIO_MAX = 2.0  # largest shard vs smallest, by recorded time
+
+
+def _collected_nodeids(group: int | None = None, splits: int | None = None) -> list[str]:
+    """The exact ids CI shards, collected the way CI collects them.
+
+    With `group`/`splits`, returns just that shard's share — pytest-split's
+    own answer, not a reimplementation of it.
+    """
+    shard = (
+        ["--splits", str(splits), "--group", str(group), "--durations-path", str(DURATIONS)]
+        if group is not None
+        else []
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/",
+            "python/tests/",
+            "python/djust/tests/",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:randomly",
+            "-o",
+            "addopts=",
+            *shard,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": "."},
+    )
+    return [ln.strip() for ln in proc.stdout.splitlines() if "::" in ln]
+
+
+@pytest.mark.slow
+def test_durations_file_is_not_stale() -> None:
+    collected = _collected_nodeids()
+    assert collected, "collection produced no ids — the harness is broken, not the file"
+    data = json.loads(DURATIONS.read_text())
+    missing = [t for t in collected if t not in data]
+    fraction = len(missing) / len(collected)
+    assert fraction <= STALE_FRACTION_MAX, (
+        f"{len(missing)} of {len(collected)} collected tests ({fraction:.0%}) have no "
+        f"recorded duration, over the {STALE_FRACTION_MAX:.0%} threshold. pytest-split "
+        f"count-balances those, which unbalances the shards until one is killed by the "
+        f"runner. Run `make test-durations` and commit .test_durations (#2703).\n"
+        f"first missing: {missing[:3]}"
+    )
+
+
+@pytest.mark.slow
+def test_shards_are_balanced_by_recorded_time() -> None:
+    """Staleness is the usual cause of imbalance, but not the only one — a
+    single very slow new module skews the split with every duration present.
+    Assert the OUTCOME directly.
+
+    Asks pytest-split itself what each group contains rather than
+    reimplementing its algorithm. The first version of this test did
+    reimplement it, got a different answer, and passed green while the real
+    split was dealing shard 3 5.2x shard 2 — a pin that cannot see the
+    condition it exists for (#1859).
+    """
+    n = len(_matrix_groups())
+    per_group = [_collected_nodeids(group=g, splits=n) for g in range(1, n + 1)]
+    counts = [len(g) for g in per_group]
+    assert all(counts), f"a shard would collect nothing: {counts}"
+    data = json.loads(DURATIONS.read_text())
+    default = (sum(data.values()) / len(data)) if data else 0.0
+    times = [sum(data.get(t, default) for t in g) for g in per_group]
+    lo, hi = min(times), max(times)
+    assert hi / lo <= IMBALANCE_RATIO_MAX, (
+        f"pytest-split would deal these shards {counts} tests / "
+        f"{[round(t) for t in times]}s — the largest is {hi / lo:.1f}x the "
+        f"smallest, over {IMBALANCE_RATIO_MAX}x. One overloaded shard is what "
+        f"gets killed by the runner. Run `make test-durations` (#2703)."
+    )
