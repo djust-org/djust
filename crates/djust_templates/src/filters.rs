@@ -3010,6 +3010,22 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
             // the populated one (#2321).
             Ok(rebuild_like(value, picked))
         }
+        // A carrier whose items were NOT enumerated is sliced on the LIVE
+        // object, which is Django's `value[slice(*bits)]` verbatim (#2695).
+        // Without this arm the fallback below returns the WHOLE value, so
+        // `{{ v|slice:":3" }}` over a `list(range(100_001))` — which the
+        // conversion now declines to enumerate — rendered a hundred thousand
+        // items where Django renders three.
+        //
+        // Python raising is Django's own `except (ValueError, TypeError,
+        // KeyError): return value`, so a `generator` comes back unchanged on
+        // both engines.
+        Value::Encoded(e) if e.items.is_none() && e.live.is_some() => {
+            match e.live_get_slice(start, stop, step) {
+                Some(Ok(sliced)) => Ok(sliced),
+                Some(Err(_)) | None => Ok(value.clone()),
+            }
+        }
         // Django slices whatever it is handed; an int, a float, `None`, a dict
         // and a bool all raise `TypeError` and come back unchanged.
         _ => Ok(value.clone()),
@@ -6696,6 +6712,36 @@ pub(crate) fn python_getitem(
         }
         // Iterable, not subscriptable (#2340).
         Value::DictView { .. } => Err(ValueOpError::NotSubscriptable),
+        // A carrier whose items were NOT enumerated is subscripted on the
+        // LIVE object, which is Django's own `value[0]` / `value[-1]`
+        // (#2695). Before this arm every `Encoded` fell to the refusal
+        // below, so `{{ v|first }}` over a `range(10**9)` raised where
+        // Django answers `0` in constant time — and the only way to answer
+        // it from carried data would have been to enumerate a billion items
+        // at the conversion, which is the hang the conversion now declines.
+        //
+        // A `set`, a `frozenset` and a `dict_keys` carry `items` and keep
+        // the refusal: they are iterable and genuinely not subscriptable, so
+        // this arm must not claim them.
+        Value::Encoded(e) if e.items.is_none() && e.live.is_some() => {
+            match e.live_get_item(index) {
+                // `IndexError` — Django's `except IndexError: return ""`.
+                Some(Ok(found)) => Ok(found),
+                Some(Err(err)) => Err(pyo3::Python::attach(|py| {
+                    if err.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
+                        ValueOpError::MissingKey(index)
+                    } else {
+                        // `TypeError: 'generator' object is not
+                        // subscriptable` is the shape that reaches here, and
+                        // it is the one this variant already spells. Anything
+                        // rarer is reported the same way rather than given a
+                        // variant no other caller can produce.
+                        ValueOpError::NotSubscriptable
+                    }
+                })),
+                None => Err(ValueOpError::NotSubscriptable),
+            }
+        }
         _ => Err(ValueOpError::NotSubscriptable),
     }
 }
