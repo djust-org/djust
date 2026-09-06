@@ -38,6 +38,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import textwrap
@@ -575,6 +576,25 @@ class TestEmpiricalCanary:
 # crash isolation
 # --------------------------------------------------------------------------- #
 
+# The child kills itself to prove the runner isolates a native death. The
+# runner branches on `returncode < 0` and formats `-returncode` into the
+# message (`scripts/run-django-template-suite.py`) — it never inspects WHICH
+# signal, so any signal exercises the identical path.
+#
+# That freedom matters on macOS: SIGSEGV/SIGBUS/SIGABRT are fatal-exception
+# signals, so ReportCrash writes a full .ips report per death to
+# ~/Library/Logs/DiagnosticReports (and can raise a dialog). These fixtures
+# produced ~37 in a day, which buries real crashes in fixture noise. SIGKILL
+# takes the same runner branch and is not reported. Linux has no such reporter,
+# so CI keeps SIGSEGV and the closest-to-native-death coverage stays where it
+# costs nothing.
+#
+# SIGKILL is also the STRICTER death: uncatchable, so faulthandler never runs
+# and the child cannot flush buffered output — if the runner's finished-test
+# accounting depended on a dying child's cooperation, the macOS runs are the
+# ones that would catch it. Pinned by test_no_reported_crash_signals_2699.py.
+CRASH_SIGNAL = signal.SIGKILL if sys.platform == "darwin" else signal.SIGSEGV
+
 CRASH_MODULE = textwrap.dedent(
     """
     import os
@@ -589,12 +609,12 @@ CRASH_MODULE = textwrap.dedent(
             pass
 
         def test_b_segfault(self):
-            os.kill(os.getpid(), signal.SIGSEGV)
+            os.kill(os.getpid(), signal.{sig})
 
         def test_c_after(self):
             pass
     """
-)
+).format(sig=CRASH_SIGNAL.name)
 
 HANG_MODULE = textwrap.dedent(
     """
@@ -636,12 +656,12 @@ CRASH_IN_SETUPCLASS_MODULE = textwrap.dedent(
         @classmethod
         def setUpClass(cls):
             super().setUpClass()
-            os.kill(os.getpid(), signal.SIGSEGV)
+            os.kill(os.getpid(), signal.{sig})
 
         def test_c(self):
             pass
     """
-)
+).format(sig=CRASH_SIGNAL.name)
 
 
 class TestCrashIsolation:
@@ -691,7 +711,8 @@ class TestCrashIsolation:
         lines = parsed_lines(out_txt.read_text(encoding="utf-8"))
         assert lines["crash_tests.Crashy.test_a_before"].startswith("OK    ")
         assert lines["crash_tests.Crashy.test_b_segfault"].startswith(
-            "ERROR crash_tests.Crashy.test_b_segfault | process crashed (signal 11)"
+            "ERROR crash_tests.Crashy.test_b_segfault | process crashed "
+            f"(signal {CRASH_SIGNAL.value})"
         )
         assert lines["crash_tests.Crashy.test_c_after"].startswith("OK    ")
         data = json.loads(out_json.read_text("utf-8"))
