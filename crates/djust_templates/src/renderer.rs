@@ -2535,9 +2535,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     } else {
                         format!("-{namespace}")
                     };
+                    // The include-site path (#2689) is the same idea again,
+                    // on the third axis: two `{% include %}`s of one fragment
+                    // in one page render the same parsed template into one
+                    // buffer, so both emit `if-<hash>-0`. Segments are
+                    // `-i<hex>_<n>`, disjoint from the loop path's pure-digit
+                    // segments, so the two concatenate unambiguously.
+                    let include_path = context.dj_if_include_path();
                     let loop_path = context.dj_if_loop_path();
                     return Ok(format!(
-                        "<!--dj-if id=\"{id}{namespace}{loop_path}\"-->{body}<!--/dj-if-->"
+                        "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->{body}<!--/dj-if-->"
                     ));
                 }
             }
@@ -3256,6 +3263,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             template,
             with_vars,
             only,
+            site_id,
         } => {
             // Load and render the included template
             if let Some(loader) = loader {
@@ -3356,6 +3364,22 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 // Resolved here rather than in the loader: the chain needs the
                 // render context (a variable parent name) and the loader is
                 // also the parse cache, which is shared across renders.
+                // This include site's contribution to the dj-if marker-id
+                // path (#2689), composed onto whatever chain reached here so
+                // nested includes nest. `site_id` is LEXICAL (the including
+                // template's source hash plus this tag's document-order
+                // ordinal), so a conditional sibling include cannot renumber
+                // it and the ids stay stable across renders — which is what
+                // the client needs, since it keys DOM subtrees on them.
+                let parent_include_path = context.dj_if_include_path().to_string();
+                let child_include_path = match site_id {
+                    Some(site) => format!("{parent_include_path}-i{site}"),
+                    // Hand-built or reconstructed `Include` nodes never went
+                    // through the parser's assignment pass; add no suffix,
+                    // which is exactly the pre-#2689 behaviour.
+                    None => parent_include_path.clone(),
+                };
+
                 // Create context for included template
                 let mut fresh_context = if *only {
                     Some({
@@ -3376,6 +3400,11 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // inside a component's `{% include … only %}` still
                         // belongs to that component's namespace (#2686).
                         fresh.set_dj_if_id_namespace(context.dj_if_id_namespace());
+                        // ...and the include-site path of the chain that
+                        // reached here, extended by THIS site (#2689). Set on
+                        // the fresh context for the same reason the two above
+                        // are: `only` drops context, not render-time switches.
+                        fresh.set_dj_if_include_path(child_include_path.clone());
                         // Django's `context.new()` is `copy(self)`, so the
                         // `{% autoescape %}` policy crosses an `only` include
                         // (#2556, `include14`).
@@ -3452,7 +3481,13 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 if let Some(fresh) = fresh_context.as_mut() {
                     render_include(fresh)
                 } else {
-                    context.with_scope(render_include)
+                    // `with_scope` pushes a context FRAME; the marker-id path
+                    // is a context FIELD, so restore it by hand on the way out
+                    // exactly as the `{% for %}` arm does for the loop path.
+                    context.set_dj_if_include_path(child_include_path);
+                    let rendered = context.with_scope(render_include);
+                    context.set_dj_if_include_path(parent_include_path);
+                    rendered
                 }
             } else {
                 // No loader available — silently omit ({% include %} without a loader
@@ -6348,6 +6383,7 @@ mod tests {
             template: "\"boom.html\"".to_string(),
             with_vars: Vec::new(),
             only: false,
+            site_id: None,
         }
     }
 

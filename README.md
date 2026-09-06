@@ -333,8 +333,6 @@ pip install djust
 
 ```bash
 # Clone the repository
-
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
 git clone https://github.com/djust-org/djust.git
 cd djust
 
@@ -723,7 +721,7 @@ See the [State Management Quick Start](docs/STATE_MANAGEMENT_QUICKSTART.md).
 | `@throttle(interval)` | Rapid events | Scroll, resize |
 | `@optimistic` | Instant feedback | Counter, toggle |
 | `@cache(ttl, key_params)` | Repeated queries | Autocomplete |
-| `@client_state(keys)` | Multi-component | Dashboard filters |
+| `@client_state(keys)` | INERT (#2656) — stamps metadata nothing in the shipped client reads; the handler behaves as if undecorated | Dashboard filters |
 | `@background` | Long operations | AI generation, file processing |
 | `DraftModeMixin` | Auto-save forms | Contact form |
 
@@ -733,7 +731,7 @@ Quick decision guide:
 - Scrolling/resizing? → `@throttle(0.1)`
 - Need an instant UI update? → `@optimistic`
 - Same query multiple times? → `@cache(ttl)`
-- Multiple components? → `@client_state([keys])`
+- Multiple components? → update both in ONE handler; `@client_state([keys])` is INERT (#2656) and coordinates nothing
 - Long-running work? → `@background` or `self.start_async(callback)`
 - Auto-save forms? → `DraftModeMixin`
 

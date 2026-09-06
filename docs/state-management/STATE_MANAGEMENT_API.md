@@ -4,6 +4,10 @@
 > server-side MARKERS: the decorator stamps metadata and nothing in the shipped
 > client reads it, so the handler runs on every event. Harmless and
 > forward-compatible, but not rate control today. `@cache` IS wired end-to-end.
+>
+> **`@client_state` is INERT too (#2656)** — every example below that uses it
+> works because the server re-renders, not because anything is published. The
+> `StateBus` these examples credit was deleted in #2680.
 
 
 **Status:** ✅ Implemented (Phase 5 Complete: @cache, @client_state, DraftModeMixin, @loading)

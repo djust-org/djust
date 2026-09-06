@@ -1170,7 +1170,7 @@ class CacheTagHandler:
     handler is the store/lookup half only. The observable difference is that a
     cache HIT still paid to render the body — the OUTPUT is the cached one
     either way, which is what the tag's semantics are about, but the
-    performance win is not there yet (tracked with the row).
+    performance win is not there yet (#2658).
 
     Argument handling is Django's, token for token (``defaulttags`` has no say
     here; this is ``django/templatetags/cache.py``):
@@ -1183,6 +1183,19 @@ class CacheTagHandler:
     * the rest vary the key, and each IS resolved.
     * ``using="alias"`` selects the cache; an unknown alias is a
       ``TemplateSyntaxError``, not a fallback.
+
+    EVERY resolved operand goes through :func:`_resolve_cache_operand`, which
+    is `FilterExpression.resolve(context)` against a ``Context`` bound to the
+    active backend's engine — the same call ``CacheNode.render`` makes, with
+    no ``ignore_failures``. An earlier version had its own miss policy (a
+    sentinel mapped to ``None`` for the vary operands and to an
+    "unknown variable" error for the expiry), and its comment said Django
+    resolves the vary operands with ``ignore_failures``. Django's source says
+    otherwise — `vary_on = [var.resolve(context) for var in self.vary_on]` —
+    and the divergence was not cosmetic: an unresolvable vary operand became
+    ``None`` here and ``string_if_invalid`` (``''``) in Django, so the two
+    engines hashed DIFFERENT `make_template_fragment_key` keys for the same
+    fragment (#2658).
     """
 
     #: Raw tokens: this handler resolves what Django resolves and leaves the
@@ -1215,7 +1228,7 @@ class CacheTagHandler:
         # not a cache selector. Popping it there left one operand and raised
         # `IndexError` — an unhandled crash on input Django renders.
         if len(tokens) > 2 and tokens[-1].startswith("using="):
-            cache_name = _literal_or_resolve(tokens.pop()[len("using=") :], context)
+            cache_name = _resolve_cache_operand(tokens.pop()[len("using=") :], context)
 
         expire_token, fragment_name, vary_tokens = tokens[0], tokens[1], tokens[2:]
 
@@ -1223,8 +1236,10 @@ class CacheTagHandler:
             try:
                 cache_backend = caches[cache_name]
             except InvalidCacheBackendError as exc:
+                # `%r`, as Django writes it — the bare name read as though a
+                # cache called `nosuch` might exist under another spelling.
                 raise TemplateSyntaxError(
-                    f"Invalid cache name specified for cache tag: {cache_name}"
+                    f"Invalid cache name specified for cache tag: {cache_name!r}"
                 ) from exc
         else:
             # Django's `CacheNode.render`: a cache named `template_fragments`
@@ -1234,26 +1249,28 @@ class CacheTagHandler:
             except InvalidCacheBackendError:
                 cache_backend = caches["default"]
 
-        expire_time = _literal_or_resolve(expire_token, context)
-        if expire_time is _MISSING:
-            # Django resolves the expiry WITHOUT `ignore_failures`, so an
-            # unresolvable operand is an error rather than "cache forever" —
-            # `{% cache foo bar %}` with no `foo` raises. The literal `None`
-            # is a different thing and does mean forever.
-            raise TemplateSyntaxError(f"'cache' tag got an unknown variable: {expire_token!r}")
+        # Unresolvable is NOT its own error case. `FilterExpression.resolve`
+        # substitutes `string_if_invalid` (`''` by default) and the `int()`
+        # below then refuses it, which is how Django reports
+        # `{% cache nope "f" %}` — as a non-integer timeout of `''`, never as
+        # an unknown variable. (`CacheNode.render` does carry an
+        # unknown-variable branch, but `FilterExpression` never propagates
+        # `VariableDoesNotExist` to it, so it is unreachable there too.) The
+        # literal `None` is a different thing and does mean forever.
+        expire_time = _resolve_cache_operand(expire_token, context)
         if expire_time is not None:
             try:
                 expire_time = int(expire_time)
             except (ValueError, TypeError) as exc:
+                # Django double-quotes the tag name in BOTH timeout messages
+                # while single-quoting it in the arity ones. Verbatim (#2581).
                 raise TemplateSyntaxError(
-                    f"'cache' tag got a non-integer timeout value: {expire_time!r}"
+                    f'"cache" tag got a non-integer timeout value: {expire_time!r}'
                 ) from exc
 
-        # The vary operands ARE `ignore_failures`, so a miss is `None` there.
-        vary_on = [
-            None if (v := _literal_or_resolve(token, context)) is _MISSING else v
-            for token in vary_tokens
-        ]
+        # Django: `vary_on = [var.resolve(context) for var in self.vary_on]` —
+        # the same resolution as everything else, NOT `ignore_failures`.
+        vary_on = [_resolve_cache_operand(token, context) for token in vary_tokens]
         key = make_template_fragment_key(fragment_name, vary_on)
 
         cached = cache_backend.get(key)
@@ -1263,56 +1280,30 @@ class CacheTagHandler:
         return content
 
 
-#: "no such variable" — distinct from the literal ``None`` a `{% cache %}`
-#: expiry may legitimately carry.
-_MISSING = object()
+def _resolve_cache_operand(token: str, context: Dict[str, Any]) -> Any:
+    """One ``{% cache %}`` operand, resolved exactly as ``CacheNode`` resolves it.
 
+    Django's own ``FilterExpression`` — through the same synthetic parser the
+    rest of this module uses, so a literal, a dotted lookup and a FILTER chain
+    (``{% cache 2|noop:"x y" k %}``) all behave as Django behaves, with its
+    libraries in scope — resolved against a ``Context`` BOUND to the active
+    backend's engine.
 
-def _literal_or_resolve(token: str, context: Dict[str, Any]) -> Any:
-    """A ``{% cache %}`` operand: a literal if it looks like one, else a lookup.
-
-    Deliberately small — it covers what the tag's operands actually are
-    (a number, a quoted string, ``None``, or a dotted context path) rather
-    than re-implementing ``FilterExpression``. A miss returns
-    :data:`_MISSING`, which the caller maps: `None` for the vary operands
-    (Django's ``ignore_failures``) and an error for the expiry (Django
-    resolves that one without it). The literal ``None`` is distinct from a
-    miss and means "cache forever".
+    The binding is what makes this Django's semantics rather than an
+    approximation: `FilterExpression.resolve` reads `string_if_invalid` off
+    `context.template.engine` when a lookup fails, and reaching for it on an
+    unbound `Context` is an `AttributeError` — which is why the version this
+    replaces passed `ignore_failures=True` and then had to invent a miss policy
+    of its own. That policy disagreed with Django twice (#2658): it turned an
+    unresolvable vary operand into `None` rather than `''`, changing the
+    `make_template_fragment_key` HASH, and it reported an unresolvable expiry
+    as an unknown variable rather than as a non-integer timeout.
     """
     from django.template import Context as DjangoContext
-    from django.template.base import VariableDoesNotExist
 
-    token = token.strip()
-    # Django's OWN `FilterExpression`, through the same synthetic parser the
-    # rest of this module uses — so a literal, a dotted lookup, and a FILTER
-    # chain (`{% cache 2|noop:"x y" k %}`) all resolve the way Django resolves
-    # them, with its libraries in scope. Re-implementing this was wrong twice
-    # over: it missed filters, and it had its own opinion about literals.
-    try:
-        expression = _parser([]).compile_filter(token)
-    except Exception:
-        return _MISSING
-    try:
-        resolved = expression.resolve(DjangoContext(dict(context)), ignore_failures=True)
-    except VariableDoesNotExist:
-        return _MISSING
-    # `ignore_failures=True` answers `None` for BOTH "no such variable" and "the
-    # variable is None". Collapsing them made `{% cache t "f" %}` with `t=None`
-    # raise where Django caches forever, so the two are separated structurally:
-    # a name that does not resolve is a miss, a name that resolves to None is
-    # the value None.
-    if resolved is not None:
-        return resolved
-    if token == "None":
-        return None
-    try:
-        # Django's own miss signal, without the ignore_failures collapse.
-        expression.resolve(DjangoContext(dict(context)))
-    except VariableDoesNotExist:
-        return _MISSING
-    except Exception:
-        return _MISSING
-    return None
+    ctx = DjangoContext(dict(context))
+    ctx.template = _stub_template_with(*_render_engine_options())
+    return _parser([]).compile_filter(token.strip()).resolve(ctx)
 
 
 def _bridge_bespoke_block_tag(label: str, name: str) -> None:

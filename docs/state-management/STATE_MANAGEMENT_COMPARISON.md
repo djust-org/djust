@@ -1,5 +1,7 @@
 # State Management Framework Comparison
 
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+
 **Date**: January 2025
 **Version**: djust 0.4.0 vs Phoenix LiveView 0.20 vs Laravel Livewire 3.0
 
