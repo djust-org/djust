@@ -1907,6 +1907,29 @@ fn apply_builtin_filter(
                     Some(n) => dictsort_by_index(items, n),
                     None => dictsort_by_key(items, sort_key),
                 },
+                // A CARRIED collection, through the same `iter_values` sink
+                // `{% for %}` / `|join` / `in` use (#2693, link N+1 of
+                // #2674). `sorted()` takes ANY iterable, so Django sorts a
+                // generator, a `map`, a `zip` and a one-shot `iter([...])`
+                // — and this arm answered `''` for every one of them,
+                // because it fell to the `_ => None` below. Routing it here
+                // consumes a one-shot handle exactly once, at whichever sink
+                // reaches it first, with the same cap semantics.
+                Value::Encoded(_) => match iter_values(value) {
+                    Ok(Some(items)) => match index {
+                        Some(n) => dictsort_by_index(&items, n),
+                        None => dictsort_by_key(&items, sort_key),
+                    },
+                    // Not iterable — `sorted()` raises `TypeError`, which
+                    // Django's own `except TypeError: return ""` catches.
+                    Ok(None) => None,
+                    // A raising `__next__`, or an unbounded walk past the
+                    // cap: propagated, as `|join` propagates it. `Some(..)`
+                    // because this function's return type is
+                    // `Option<Result<Value>>` and a bare `Err` would target
+                    // the Option.
+                    Err(err) => return Some(Err(err)),
+                },
                 // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };
