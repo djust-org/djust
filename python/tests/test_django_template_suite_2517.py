@@ -592,7 +592,7 @@ class TestEmpiricalCanary:
 # SIGKILL is also the STRICTER death: uncatchable, so faulthandler never runs
 # and the child cannot flush buffered output — if the runner's finished-test
 # accounting depended on a dying child's cooperation, the macOS runs are the
-# ones that would catch it. Pinned by test_no_reported_crash_signals_2699.py.
+# ones that would catch it. Pinned by test_no_reported_crash_signals_2701.py.
 CRASH_SIGNAL = signal.SIGKILL if sys.platform == "darwin" else signal.SIGSEGV
 
 CRASH_MODULE = textwrap.dedent(

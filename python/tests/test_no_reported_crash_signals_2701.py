@@ -53,7 +53,7 @@ def test_no_fixture_sends_itself_a_reported_crash_signal() -> None:
     assert not offenders, (
         "these send a signal macOS writes a crash report for; use signal.SIGKILL "
         "— the runner branches on `returncode < 0` and cannot tell the "
-        "difference (#2699):\n  " + "\n  ".join(offenders)
+        "difference (#2701):\n  " + "\n  ".join(offenders)
     )
 
 
