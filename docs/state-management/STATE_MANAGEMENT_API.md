@@ -134,7 +134,9 @@ def search(self, query: str = "", **kwargs):
 def update_value(self, value: int = 0, **kwargs):
     self.value = max(0, min(100, value))  # Server validates range
 ```
-**Result**: the server validates/corrects on the event. (The 500ms wait is NOT applied — `@debounce` is a marker with no client implementation, so the handler fires per keystroke.) (adding `@optimistic` does
+**Result**: the 500ms wait IS applied in the browser (#2656) — a burst of
+keystrokes reaches the server as ONE event carrying the last value, which the
+server then validates/corrects. (adding `@optimistic` does
 not change this today — the client-side instant update is not implemented)
 
 ---
@@ -179,8 +181,8 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 
 | Decorator | Client Overhead | Server Impact | Network Impact |
 |-----------|----------------|---------------|----------------|
-| `@debounce` | (marker only — client not implemented) | ⬇️ Reduces calls | ⬇️ Fewer requests |
-| `@throttle` | (marker only — client not implemented) | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@debounce` | ~0.6 KB gz — one gate module (`05-handler-rate-limit.js`) shared with `@throttle`, plus one timer per pending handler | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@throttle` | ~0.6 KB gz — the same shared gate module, plus one timer per open window | ⬇️ Reduces calls | ⬇️ Fewer requests |
 | `@optimistic` | 0 (no-op today) | ➡️ Same calls | ➡️ Same requests |
 | `@cache` | ~1ms lookup | ⬇️⬇️ Eliminates repeat calls | ⬇️⬇️ Zero for cache hits |
 | `@client_state` | ~2ms | ➡️ Same calls | ➡️ Same requests |

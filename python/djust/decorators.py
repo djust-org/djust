@@ -803,6 +803,14 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     attribute is the element-level one; they compose (the attribute decides
     when the handler is called, this decides when that call is sent).
 
+    A pending send IS flushed when the user submits a ``dj-submit`` form
+    (#1278), so a debounced field edited immediately before submit is not
+    lost. It is NOT flushed when the socket closes or the page unloads: the
+    pending event is dropped, and the trade you are buying is "the last edit
+    of a burst can be lost to a connection blip" in exchange for one send
+    instead of N. The element-level ``dj-debounce`` has the same gap; both
+    are tracked in #2705.
+
     Intended for input events where you want to wait until the user stops
     typing.
 
