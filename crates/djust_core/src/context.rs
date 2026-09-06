@@ -523,16 +523,44 @@ impl Context {
         self.autoescape
     }
 
+    /// The innermost template-render frame identity (`0` for the top-level
+    /// template) — Django's `render_context.dicts[-1]`, which
+    /// `Template.render` pushes fresh for every included template render
+    /// (`push_state`) and which `RenderContext.__getitem__` alone reads.
+    fn render_scope(&self) -> u64 {
+        self.stack
+            .iter()
+            .rev()
+            .find_map(|frame| frame.render_scope)
+            .unwrap_or(0)
+    }
+
+    /// The key a `{% cycle %}` node's iterator lives under: the node id
+    /// scoped to the current render frame (#2657). Django keys on
+    /// `render_context[node]`, and `render_context` reads only the frame the
+    /// current `Template.render` pushed — so a `{% cycle %}` inside an
+    /// included template starts fresh on EVERY execution of the include,
+    /// plain or `only`, and the parent's own cycles resume untouched when the
+    /// include returns. Until #2657 the store was keyed on the node alone and
+    /// shared into both include forms, so `{% for x in v %}{% include
+    /// 'cyc.html' %}{% endfor %}` rendered `abc` where Django renders `aaa`.
+    /// ONE mechanism for both include forms, the same frame `{% ifchanged %}`
+    /// scopes by, so the two stores cannot drift again (#1646).
+    fn cycle_key(&self, id: &str) -> String {
+        format!("{}:{id}", self.render_scope())
+    }
+
     /// Advance one `{% cycle %}` node's per-render iterator and return the
     /// index it was AT (#2556) — Django's `next(itertools.cycle(values))`
     /// on `render_context[node]`. The first call for an id returns `0`.
     /// `len == 0` is the caller's problem; this only counts.
     pub fn cycle_advance(&self, id: &str) -> usize {
+        let key = self.cycle_key(id);
         let mut state = self
             .cycle_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let slot = state.entry(id.to_string()).or_insert(0);
+        let slot = state.entry(key).or_insert(0);
         let at = *slot;
         *slot += 1;
         at
@@ -541,21 +569,12 @@ impl Context {
     /// `{% resetcycle %}`: `CycleNode.reset` replaces the iterator with a
     /// fresh `itertools.cycle`, so the next advance yields the first value.
     pub fn cycle_reset(&self, id: &str) {
+        let key = self.cycle_key(id);
         let mut state = self
             .cycle_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.insert(id.to_string(), 0);
-    }
-
-    /// Make this context share `other`'s per-render `{% cycle %}` store.
-    ///
-    /// For the ONE derived context that is not a `Clone`: the fresh
-    /// `Context::new()` an `{% include … only %}` builds. Django's
-    /// `Context.new()` is `copy(self)` with the dicts replaced, so
-    /// `render_context` is still the same object there (`cycle24`).
-    pub fn share_cycle_state_from(&mut self, other: &Context) {
-        self.cycle_state = std::sync::Arc::clone(&other.cycle_state);
+        state.insert(key, 0);
     }
 
     /// Enter a new `{% for %}` execution: mint a fresh `{% ifchanged %}`
@@ -657,11 +676,7 @@ impl Context {
     pub fn ifchanged_step_in_template(&self, id: &str, origin: Option<&str>, value: &str) -> bool {
         let loop_scope = self.loop_scope();
         let render_scope = if loop_scope == 0 {
-            self.stack
-                .iter()
-                .rev()
-                .find_map(|frame| frame.render_scope)
-                .unwrap_or(0)
+            self.render_scope()
         } else {
             0
         };

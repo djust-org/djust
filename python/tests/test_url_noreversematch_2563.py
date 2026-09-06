@@ -433,20 +433,45 @@ class TestStructuralPins:
         assert src.count("handler_call_error(") == 5
         assert "DjangoRustError::PythonException(_) => err" in src
 
-    def test_noreversematch_is_user_raised(self):
+    def test_noreversematch_is_user_raised_by_provenance_not_type(self):
+        """#2605: user-raised means "arrived whole via
+        `DjangoRustError::PythonException`" — the stamp — not membership of a
+        type allow-list. A bare, unstamped instance of the SAME type is not
+        one that crossed the boundary, and an engine `RuntimeError` never is."""
         from djust.template.rendering import _is_user_raised
 
-        assert _is_user_raised(NoReverseMatch("x"))
+        stamped = NoReverseMatch("x")
+        stamped._djust_python_exception = True
+        assert _is_user_raised(stamped)
+        assert not _is_user_raised(NoReverseMatch("x"))
         assert not _is_user_raised(RuntimeError("engine"))
 
-    def test_template_syntax_error_is_user_raised(self):
-        """A handler's own `TemplateSyntaxError` is user-raised BY
-        CONSTRUCTION — the Rust engine never builds one — so
-        `DjustTemplate.render` must not flatten it (#2563 review, #2605)."""
+    def test_template_syntax_error_is_user_raised_by_provenance_not_type(self):
+        """A handler's own `TemplateSyntaxError` reaches the render stamped,
+        so `DjustTemplate.render` must not flatten it (#2563 review, #2605);
+        the type alone decides nothing."""
         from djust.template.rendering import _is_user_raised
 
-        assert _is_user_raised(TemplateSyntaxError("'url' takes at least one argument"))
-        assert not _is_user_raised(RuntimeError("engine"))
+        stamped = TemplateSyntaxError("'url' takes at least one argument")
+        stamped._djust_python_exception = True
+        assert _is_user_raised(stamped)
+        assert not _is_user_raised(TemplateSyntaxError("'url' takes at least one argument"))
+
+    def test_no_type_allow_list_remains(self):
+        """The structural pin for #2605: the predicate names no exception
+        TYPE. A future "just add one more type" edit trips here."""
+        src = (REPO / "python/djust/template/rendering.py").read_text()
+        start = src.index("def _is_user_raised(")
+        body = src[start : src.index("\nclass ", start)]
+        for name in (
+            "Http404",
+            "PermissionDenied",
+            "MultiPartParserError",
+            "BadRequest",
+            "SuspiciousOperation",
+            "isinstance(",
+        ):
+            assert name not in body.split('"""')[2], f"{name} is back in _is_user_raised"
 
     def test_exactly_one_site_decides_whether_there_is_an_as_tail(self):
         """Django asks `bits[-2] == "as"` ONCE, of the raw tokens. So does

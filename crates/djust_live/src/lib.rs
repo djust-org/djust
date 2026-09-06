@@ -125,8 +125,7 @@ fn guard_panic<T>(entry: &'static str, f: impl FnOnce() -> PyResult<T>) -> PyRes
 /// Using Arc<Template> for cheap cloning across threads
 static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap::new);
 /// Registry generation each `TEMPLATE_CACHE` entry was validated under, written
-/// only by `compile_template`. Kept beside the cache rather than inside its
-/// value so the six render-path readers stay untouched.
+/// only by `cached_template` (#2669) — the one inserter for both maps.
 static COMPILED_AT_GENERATION: Lazy<DashMap<String, u64>> = Lazy::new(DashMap::new);
 
 /// Global supervisor for managing actor lifecycle
@@ -673,15 +672,9 @@ impl RustLiveViewBackend {
             self.last_html = None; // Invalidate text fast path cache
             self.text_node_index = None; // Invalidate text-region fast-path index
 
-            // Get template from cache or parse and cache it
-            let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
-                cached.clone()
-            } else {
-                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
-                let arc = Arc::new(template);
-                TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
-                arc
-            };
+            // Get template from cache or parse and cache it (#2669: the ONE
+            // generation-gated entry into `TEMPLATE_CACHE`).
+            let template_arc = cached_template(&self.template_source)?;
 
             let mut context = Context::from_dict(self.state.clone());
             for key in &self.safe_keys {
@@ -720,15 +713,9 @@ impl RustLiveViewBackend {
 
             let t_start = Instant::now();
 
-            // Get template from cache or parse and cache it
-            let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
-                cached.clone()
-            } else {
-                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
-                let arc = Arc::new(template);
-                TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
-                arc
-            };
+            // Get template from cache or parse and cache it (#2669: the ONE
+            // generation-gated entry into `TEMPLATE_CACHE`).
+            let template_arc = cached_template(&self.template_source)?;
 
             let mut context = Context::from_dict(self.state.clone());
             for key in &self.safe_keys {
@@ -1151,15 +1138,9 @@ impl RustLiveViewBackend {
 
             let t_start = Instant::now();
 
-            // Get template from cache or parse and cache it
-            let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
-                cached.clone()
-            } else {
-                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
-                let arc = Arc::new(template);
-                TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
-                arc
-            };
+            // Get template from cache or parse and cache it (#2669: the ONE
+            // generation-gated entry into `TEMPLATE_CACHE`).
+            let template_arc = cached_template(&self.template_source)?;
 
             let mut context = Context::from_dict(self.state.clone());
             for key in &self.safe_keys {
@@ -2171,15 +2152,8 @@ fn render_template(
         let state: HashMap<String, Value> =
             snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
         let sidecar = entry_sidecar(context);
-        // Get template from cache or parse and cache it
-        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
-            cached.clone()
-        } else {
-            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
-            let arc = Arc::new(template);
-            TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
-            arc
-        };
+        // Get template from cache or parse and cache it (#2669).
+        let template_arc = cached_template(&template_source)?;
 
         let mut ctx = Context::from_dict(state);
         ctx.set_autoescape(autoescape);
@@ -2249,19 +2223,7 @@ fn compile_template(
         // parsed under this generation has already been validated against
         // exactly this library set; re-parsing it per request re-lexed the
         // whole source on every HTTP GET (review of #2665, finding 2).
-        let generation = djust_templates::registry::registry_generation();
-        let cached = TEMPLATE_CACHE.get(&template_source).map(|c| c.clone());
-        let validated_at = COMPILED_AT_GENERATION.get(&template_source).map(|g| *g);
-        let template = match (cached, validated_at) {
-            (Some(template), Some(at)) if at == generation => template,
-            _ => {
-                let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
-                let template = Arc::new(template);
-                TEMPLATE_CACHE.insert(template_source.clone(), template.clone());
-                COMPILED_AT_GENERATION.insert(template_source, generation);
-                template
-            }
-        };
+        let template = cached_template(&template_source)?;
         // Relative-reference validation is per template NAME, which can differ
         // for the same source, so it runs on hits too (it is a cheap walk).
         if let Some(name) = template_name.as_deref() {
@@ -2271,6 +2233,36 @@ fn compile_template(
         }
         Ok(return_template.then_some(CompiledTemplate { template }))
     })
+}
+
+/// The ONE way a parse enters `TEMPLATE_CACHE` (#2669).
+///
+/// A cache hit is reused only when the entry was validated under the CURRENT
+/// tag/filter registry generation; otherwise the source is re-parsed and both
+/// maps are written. The generation is read BEFORE the parse so a registry
+/// mutation racing the parse leaves the entry stale (a re-parse next time),
+/// never falsely current.
+///
+/// Until #2669 only `compile_template` did this; the five render entry points
+/// (`render`, `render_with_diff`, `render_binary_diff`, `render_template`,
+/// `render_template_with_dirs`) inserted straight into `TEMPLATE_CACHE` and a
+/// template first parsed through one of them was served forever, across an
+/// `unregister_custom_filter` — exactly the class the gate exists to prevent,
+/// one path over (#1646). Pinned by `template_cache_insert_has_one_site` in
+/// `crates/djust_templates/tests/registry_generation_pin.rs`.
+fn cached_template(template_source: &str) -> PyResult<Arc<Template>> {
+    let generation = djust_templates::registry::registry_generation();
+    let cached = TEMPLATE_CACHE.get(template_source).map(|c| c.clone());
+    let validated_at = COMPILED_AT_GENERATION.get(template_source).map(|g| *g);
+    if let (Some(template), Some(at)) = (cached, validated_at) {
+        if at == generation {
+            return Ok(template);
+        }
+    }
+    let template = Arc::new(Template::new(template_source).map_err(span_aware_pyerr)?);
+    TEMPLATE_CACHE.insert(template_source.to_owned(), template.clone());
+    COMPILED_AT_GENERATION.insert(template_source.to_owned(), generation);
+    Ok(template)
 }
 
 /// Convert a template error to a `PyErr`, preserving its source span (#2557).
@@ -2359,13 +2351,9 @@ fn render_template_with_dirs(
         // Get template from cache or parse and cache it
         let template_arc = if let Some(compiled) = compiled_template {
             compiled.template.clone()
-        } else if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
-            cached.clone()
         } else {
-            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
-            let arc = Arc::new(template);
-            TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
-            arc
+            // #2669: generation-gated like every other entry point.
+            cached_template(&template_source)?
         };
 
         let mut ctx = Context::from_dict(state);
@@ -5263,7 +5251,7 @@ mod span_aware_call_sites_2557 {
 
     #[test]
     fn every_template_new_is_span_aware() {
-        let total = SRC.matches("Template::new(&").count();
+        let total = SRC.matches("Template::new(").count();
         let wrapped = SRC.matches(").map_err(span_aware_pyerr)?").count();
         assert!(total > 0, "the grep found no `Template::new` at all");
         assert_eq!(

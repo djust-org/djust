@@ -93,6 +93,28 @@ fn generation_is_readable_and_monotonic() {
 }
 
 #[test]
+fn template_cache_insert_has_one_site() {
+    // #2669: five render entry points inserted straight into `TEMPLATE_CACHE`
+    // without recording `COMPILED_AT_GENERATION`, so a template first parsed
+    // through one of them bypassed the generation gate forever. The cure is
+    // ONE inserter (`cached_template`) that writes both maps; this pins it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../djust_live/src/lib.rs");
+    let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let inserts = src.matches("TEMPLATE_CACHE.insert(").count();
+    assert_eq!(
+        inserts, 1,
+        "`TEMPLATE_CACHE.insert(` must appear exactly once in djust_live/src/lib.rs \
+         (inside `cached_template`); found {inserts} — a second inserter bypasses \
+         the registry-generation gate (#2669, #1646)"
+    );
+    let gen_inserts = src.matches("COMPILED_AT_GENERATION.insert(").count();
+    assert_eq!(
+        gen_inserts, 1,
+        "`COMPILED_AT_GENERATION.insert(` must appear exactly once, beside the cache insert"
+    );
+}
+
+#[test]
 fn the_guard_bumps_directly_and_never_constructs_itself() {
     // A blanket "replace every `bump_registry_generation();` with the guard"
     // edit once rewrote the guard's OWN drop body into `let _bump =

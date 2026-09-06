@@ -193,9 +193,22 @@ DECLINED: dict[str, str] = {
 #: under the default it is now CARRIED with a live handle and ``items: None``,
 #: and the ``{% for %}`` sink consumes it once (Django's ``list(values)``,
 #: ADR-027 row V, #2613). On the eager escape hatch there is no handle to
-#: consume later, so the decline stands there. The unbounded cap stays
-#: flag-INDEPENDENT: it is a bound on reading, not a routing choice.
-DECLINED_ONLY_ON_THE_HATCH = frozenset({"truthy-attrs", "one-shot-generator", "one-shot-falsy"})
+#: consume later, so the decline stands there.
+#:
+#: #2670/#2678 moved the unbounded-cap row here for exactly the same reason,
+#: and by the same mechanism: it is CARRIED with a live handle and no items,
+#: never enumerated at conversion. Measured against Django 5.2 for both
+#: shapes (an unsized `__getitem__`-only class and an `__iter__` returning
+#: `itertools.count()`), every terminating sink now AGREES where the decline
+#: diverged — `{{ v }}` `str(v)`, `{{ v.0 }}` one `__getitem__` call (`'x'`,
+#: where the decline indexed `str(v)` and rendered `'n'`), `{{ v|length }}`
+#: `0`, `{% if v %}` `T`. The two Django HANGS (`{% for %}` / `|join`, both
+#: `list(v)` there) raise at the cap instead, which is the answer #2613
+#: already chose for a one-shot iterator: a decline-not-truncate rule, so a
+#: short collection is still impossible.
+DECLINED_ONLY_ON_THE_HATCH = frozenset(
+    {"truthy-attrs", "one-shot-generator", "one-shot-falsy", "unbounded-reiterable"}
+)
 
 EARLIER: dict[str, str] = {
     "bytes": "PyO3's sequence extraction — a Value::List of its ints",
@@ -502,8 +515,8 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         ARE carried under the shipped default — carried, not enumerated: the
         conversion still reads nothing from a generator, and the sibling
         ``test_a_one_shot_iterator_is_not_consumed_by_the_conversion`` is
-        where that shows up. The unbounded-cap row is flag-independent and
-        STILL declined.
+        where that shows up — and since #2670/#2678 the unbounded-cap row is
+        carried on the same terms.
         """
         for key, value in declined_values().items():
             carried = _rust.crosses_as_encoded(value)
@@ -578,19 +591,26 @@ class TestTheDeclinesAreRecordedInTheDivergingDirection:
         assert got == "0", got
         assert list(gen) == [PAYLOAD], "`length` must not consume the generator"
 
-    def test_an_unbounded_reiterable_is_declined_rather_than_hanging(self) -> None:
+    def test_an_unbounded_reiterable_is_carried_rather_than_hanging(self) -> None:
         """`itertools.count()` behind a re-iterable `__iter__`.
 
         The one-shot guard does not catch this shape — ``iter(o)`` is a fresh
         ``count()`` each time, so ``iter(o) is not o`` — and enumerating it
-        would never return. ``OPAQUE_ITEM_CAP`` bounds the read and DECLINES
-        at it; the value keeps the string path it already had, so the cap can
-        never produce a short collection.
+        would never return. ``OPAQUE_ITEM_CAP`` bounds the read; past it the
+        items are never enumerated at conversion, and since #2670/#2678 the
+        object is CARRIED with a live handle instead of declined, so the
+        sinks read it lazily. ``{{ p }}`` is ``str(o)`` either way — that is
+        Django's answer and the assertion below is unchanged — and the
+        difference is ``{{ p.0 }}``, which now walks the real object.
         """
         value = declined_values()["unbounded-reiterable"]
         got = _rust.render_template("{{ p }}", {"p": value})
         assert got == "Unbounded()", got
-        assert not _rust.crosses_as_encoded(value)
+        assert _rust.crosses_as_encoded(value)
+        # The cap is a bound on READING, still never a truncation: the sink
+        # that needs every item raises rather than answering short.
+        with pytest.raises(Exception, match="more than"):
+            _rust.render_template("{% for x in p %}{{ x }}{% endfor %}", {"p": value})
 
     def test_a_truthy_attribute_object_still_crosses_as_its_attribute_map(self) -> None:
         """The `__dict__` bulk-dump arm, untouched.

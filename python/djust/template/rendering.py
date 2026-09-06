@@ -120,56 +120,36 @@ def _missing_template_exception(error: Exception, backend: Any) -> TemplateDoesN
 
 
 def _is_user_raised(exc: BaseException) -> bool:
+    """Did this exception arrive WHOLE from code the render called (#2605)?
+
+    Two stamps, no type allow-list. An exception is user-raised by
+    PROVENANCE, not by what class it happens to be:
+
+    * ``_djust_python_exception`` — set by ``DjangoRustError::PythonException``'s
+      ``PyErr`` conversion (``crates/djust_core/src/errors.rs``) on every
+      exception that crossed PyO3 whole: a property or nullary method that
+      raised during a lookup (#2508, #2568), a `{% url %}` handler's
+      ``NoReverseMatch`` (#2563), a tag handler's own ``TemplateSyntaxError``.
+    * ``raised_by_library`` — set by the bridge on an exception that came out
+      of a bridged Django template library's own code, Django's
+      ``TemplateSyntaxError`` from ``parse_bits``, or the `{% load %}` loader
+      (#2547). See ``template_libraries._raised_by_library``.
+
+    Everything else reaching the two ``except`` blocks is an ENGINE failure —
+    a ``DjangoRustError`` that arrives as an untyped ``RuntimeError`` — and is
+    what the wrapping below exists for. Until #2605 a five-type allow-list
+    (``Http404``, ``PermissionDenied``, ``MultiPartParserError``,
+    ``BadRequest``, ``SuspiciousOperation``) plus ``NoReverseMatch`` and
+    ``TemplateSyntaxError`` sat beside the stamps; every member was already
+    stamped on every path it can actually reach these blocks by, and a list
+    of types someone thought of is exactly the shape that misses the next
+    custom exception (#2568 measured ``ApplicationError``).
+    """
     if getattr(exc, "_djust_python_exception", False):
         return True
-
-    from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
-    from django.http import Http404
-    from django.http.multipartparser import MultiPartParserError
-    from django.template import TemplateSyntaxError
-    from django.urls import NoReverseMatch
-
-    # An exception that came out of a bridged Django template library — the
-    # library's own code (`RuntimeError("I am a bad tag")`), Django's
-    # `TemplateSyntaxError` from `parse_bits`, or the `{% load %}` loader's
-    # unknown-library / refused-block-tag error — crosses back WHOLE, as it
-    # does on Django's own engine (#2547). The bridge stamps it so this
-    # passthrough needs no allowlist of types; see
-    # ``template_libraries._raised_by_library``.
     from ..template_libraries import raised_by_library
 
-    # `NoReverseMatch` (#2563): `{% url %}` on a missing pattern is a
-    # project-code condition Django reports BY TYPE — its own suite asserts
-    # `assertRaises(NoReverseMatch)` — and the DEBUG page names the pattern
-    # only if the type survives. Reached from BOTH url paths: the Python
-    # pre-pass raises it directly, and the Rust `CustomTag` handler's raise
-    # crosses the boundary whole (`DjangoRustError::PythonException`).
-    #
-    # `TemplateSyntaxError` (#2563 review) is user-raised BY CONSTRUCTION, not
-    # by allow-list judgement: the Rust engine never constructs one — its own
-    # failures are `DjangoRustError`, which reaches here as the untyped
-    # `Exception` this function is deciding whether to wrap — so a Django
-    # `TemplateSyntaxError` arriving out of a djust render can only have come
-    # from Python code the render CALLED: a bridged library's `parse_bits`
-    # (already whole via `raised_by_library`) or a tag handler's own raise,
-    # such as `UrlTagHandler`'s `'url' takes at least one argument`. Django
-    # never wraps one either. This is the same structural rule #2605 will
-    # generalize to the whole list — "it arrived through
-    # `DjangoRustError::PythonException`, therefore it is user-raised" — which
-    # is why it is stated as a rule here rather than added as one more type
-    # someone thought of.
-    return raised_by_library(exc) or isinstance(
-        exc,
-        (
-            Http404,
-            PermissionDenied,
-            MultiPartParserError,
-            BadRequest,
-            SuspiciousOperation,
-            NoReverseMatch,
-            TemplateSyntaxError,
-        ),
-    )
+    return raised_by_library(exc)
 
 
 class DjustTemplate:

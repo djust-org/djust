@@ -3076,7 +3076,8 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                         // attacker-controlled keys — and it never
                                         // descends into a `str` at all. Over-escaping
                                         // is the direction to fail in.
-                                        let parts = filters::iter_values(other).unwrap_or_default();
+                                        let parts =
+                                            filters::iter_values(other)?.unwrap_or_default();
                                         for (var_name, part) in var_names.iter().zip(parts) {
                                             ctx.set(var_name.clone(), part);
                                             ctx.set_safety(var_name, false);
@@ -3293,7 +3294,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 } else {
                     // Django consumes iterable candidates once. Unlike a
                     // string operand, their names are not made relative.
-                    filters::iter_values(&value).ok_or_else(|| {
+                    filters::iter_values(&value)?.ok_or_else(|| {
                         DjangoRustError::PythonException(pyo3::exceptions::PyTypeError::new_err(
                             format!(
                                 "'{}' object is not iterable",
@@ -3380,20 +3381,24 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         // (#2556, `include14`).
                         fresh.set_autoescape(context.autoescape());
                         fresh.set_string_if_invalid(context.string_if_invalid());
-                        // Django's `context.new()` keeps the parent's
-                        // `render_context`, so a `{% cycle %}` in an `only`
-                        // include advances the parent render's iterator (#2556).
-                        fresh.share_cycle_state_from(context);
-                        // `{% ifchanged %}` state is deliberately NOT shared here.
-                        // A first pass shared it "for symmetry with `{% cycle %}`";
-                        // measured against Django, an `{% ifchanged %}` in an
-                        // `only` include starts CLEAN each render (`CCC`, where a
-                        // shared frame gives `Css`) because `Template.render`
-                        // pushes a fresh `render_context` state for the included
-                        // template. The fresh `Context` built here already has an
-                        // empty store, so the parity is the absence of a call.
-                        // (A PLAIN include shares, via the lexical context scope in the
-                        // other branch — and Django agrees there. Both measured.)
+                        // Neither `{% cycle %}` nor `{% ifchanged %}` state is
+                        // carried across here, and NOT for the reason a first
+                        // pass gave. Django's `context.new()` does keep the
+                        // parent's `render_context` OBJECT — but `Template.render`
+                        // then `push_state`s a fresh frame onto it for the
+                        // included render, and `RenderContext` reads only that
+                        // frame. So a `{% cycle %}` in an include (plain or
+                        // `only`) starts fresh on every execution — measured:
+                        // `{% for x in v %}{% include 'cyc.html' %}{% endfor %}`
+                        // is `aaa` on Django 5.2 — and so does an
+                        // `{% ifchanged %}` outside a loop. Both stores are
+                        // keyed on the render frame `begin_template_render`
+                        // mints below (`Context::cycle_key`, #2657), which is
+                        // what makes the plain-include branch — a scope on the
+                        // SAME context — isolate too. A comment here once said
+                        // the opposite of a `{% cycle %}`, and it motivated an
+                        // equally wrong `{% ifchanged %}` share in the #2650
+                        // review rounds; the measurement is the rule.
                         fresh
                     })
                 } else {
@@ -4635,6 +4640,28 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                 // a zero-`__len__` class) falls through to `_ => false`, which
                 // is what `x in dt` does in Python: `TypeError`, and djust's
                 // `if` fails soft rather than raising.
+                //
+                // A live handle with no items — a one-shot iterator, an
+                // unbounded collection — is walked here through the handle
+                // (#2674), stopping at the FIRST match as Python's `in`
+                // does: `{% if 1 in g %}{{ g|join:"," }}` over `iter([1, 2])`
+                // is `T|2` in Django, and consuming the whole iterator to
+                // answer the membership test would make it `T|`.
+                //
+                // FAILS SOFT, like every other arm here and like Django:
+                // `smartif`'s `infix.eval` wraps the operator in a bare
+                // `except Exception: return False`, so a raising `__next__`
+                // or an iterable past the cap makes `{% if x in g %}` False
+                // rather than 500-ing the page. The first version of this arm
+                // propagated, which contradicted the comment six lines above
+                // it — the operand that used to reach `_ => false` now had a
+                // path that raised (PR #2691 review).
+                Value::Encoded(ref e) if e.items.is_none() && e.live.is_some() => {
+                    match e.consume_live_match(|item| values_equal(&needle, item)) {
+                        Some(Ok(found)) => Ok(found),
+                        Some(Err(_)) | None => Ok(false),
+                    }
+                }
                 Value::Encoded(ref e) if e.items.is_some() => Ok(e
                     .items
                     .as_ref()
@@ -7718,7 +7745,9 @@ mod tests {
             };
             let rendered = render_node_with_loader::<NoOpLoader>(&node, &ctx, None);
             let refuses = rendered.is_err();
-            let for_iterable = filters::iter_values(value).is_some()
+            let for_iterable = filters::iter_values(value)
+                .expect("no live handle")
+                .is_some()
                 || matches!(value, Value::None)
                 || matches!(value, Value::Encoded(e) if e.len == Some(0) || e.items.is_some());
             let expected = !for_iterable;
