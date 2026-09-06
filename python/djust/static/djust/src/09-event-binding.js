@@ -690,6 +690,11 @@ async function _handleDjSubmit(element, e) {
     // typed values, but views that depend on dj-input updating server state
     // per-keystroke (e.g., WizardMixin's wizard_step_data) see stale data.
     _flushPendingDebouncesInForm(element);
+    // #2656 — same race, other timer set: `_flushPendingDebouncesInForm`
+    // only flushes the element-level `dj-debounce` wrappers. A handler
+    // carrying `@debounce` / `@throttle` has its pending send parked in the
+    // handler-level gate, which this drains.
+    flushHandlerRateLimit();
 
     // Read attribute at fire time so morphElement attribute updates take effect
     const submitHandler = element.getAttribute('dj-submit');

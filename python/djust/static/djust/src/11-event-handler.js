@@ -5,9 +5,22 @@
 let _djustHttpFallbackWarned = false;
 
 // Main Event Handler
-async function handleEvent(eventName, params = {}) {
+//
+// `_rateBypass` (#2656) is the re-entry flag for the @debounce / @throttle
+// gate: the deferred send calls back in with it set so the gate does not
+// re-defer its own timer's dispatch. It is a THIRD ARGUMENT rather than a
+// params key on purpose — anything written into `params` would have to be
+// stripped again before the payload is serialized to the server.
+async function handleEvent(eventName, params = {}, _rateBypass = false) {
     if (globalThis.djustDebug) {
         djLog(`[LiveView] Handling event: ${eventName}`, params);
+    }
+
+    // @debounce / @throttle: collapse or cap the outbound send. Runs before
+    // anything else so a deferred event costs no loading state, no cache
+    // lookup and no DOM work.
+    if (!_rateBypass && applyHandlerRateLimit(eventName, params, handleEvent)) {
+        return;
     }
 
     // Extract client-only properties before sending to server.

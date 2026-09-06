@@ -535,6 +535,13 @@ class LiveViewWebSocket {
                     setCacheConfig(data.cache_config);
                 }
 
+                // #2656 — @debounce / @throttle configuration. Same route as
+                // cache_config: no inline <script>, so it survives the #1610
+                // mount morph and works identically over SSE.
+                if (data.handler_config) {
+                    setHandlerConfig(data.handler_config);
+                }
+
                 // Initialize optimistic UI rules from descriptor components (DEP-002)
                 if (data.optimistic_rules) {
                     window.djust._optimisticRules = data.optimistic_rules;
