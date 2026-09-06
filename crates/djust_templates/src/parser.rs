@@ -58,6 +58,24 @@ pub enum Node {
         template: String,
         with_vars: Vec<(String, String)>, // key=value assignments
         only: bool,                       // if true, only pass with_vars, not parent context
+        /// Stable identity of THIS `{% include %}` tag, `<prefix>_<n>` where
+        /// `<prefix>` is the including template's source hash and `<n>` its
+        /// document-order ordinal among that template's includes. Assigned by
+        /// [`assign_if_marker_ids`], the one pass that already walks every
+        /// node with the prefix in hand.
+        ///
+        /// The renderer composes it into `Context::dj_if_include_path` so the
+        /// `<!--dj-if id=…-->` markers of an included fragment differ per
+        /// include SITE (#2689). The prefix is load-bearing, not decoration:
+        /// `{% extends %}` composes two SEPARATELY PARSED templates into one
+        /// buffer, so a bare ordinal would give the base's include #0 and the
+        /// child's include #0 the same suffix — the same reason the `{% if %}`
+        /// id carries it.
+        ///
+        /// `None` for `Include` nodes built by hand (tests) or reconstructed
+        /// outside `parse()`; the renderer then adds no suffix, which is the
+        /// pre-#2689 behaviour.
+        site_id: Option<String>,
     },
     Comment,
     /// {% load library_name %} — preserved so inheritance reconstruction can
@@ -618,9 +636,26 @@ pub fn template_hash_hex(source: &str) -> String {
 /// ReactComponent children. Variants that can't hold child Nodes
 /// (Text, Variable, Static, etc.) are leaves and don't recurse.
 pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
+    let mut includes = 0usize;
+    assign_marker_ids_inner(nodes, prefix, counter, &mut includes);
+}
+
+fn assign_marker_ids_inner(
+    nodes: &mut [Node],
+    prefix: &str,
+    counter: &mut usize,
+    includes: &mut usize,
+) {
     for node in nodes.iter_mut() {
         match node {
-            Node::Located { nodes, .. } => assign_if_marker_ids(nodes, prefix, counter),
+            // Its own tag identity, for `Context::dj_if_include_path` (#2689).
+            Node::Include { site_id, .. } => {
+                *site_id = Some(format!("{prefix}_{includes}"));
+                *includes += 1;
+            }
+            Node::Located { nodes, .. } => {
+                assign_marker_ids_inner(nodes, prefix, counter, includes)
+            }
             Node::If {
                 marker_id,
                 true_nodes,
@@ -629,43 +664,43 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             } => {
                 *marker_id = Some(format!("if-{}-{}", prefix, *counter));
                 *counter += 1;
-                assign_if_marker_ids(true_nodes, prefix, counter);
-                assign_if_marker_ids(false_nodes, prefix, counter);
+                assign_marker_ids_inner(true_nodes, prefix, counter, includes);
+                assign_marker_ids_inner(false_nodes, prefix, counter, includes);
             }
             Node::For {
                 nodes: body,
                 empty_nodes,
                 ..
             } => {
-                assign_if_marker_ids(body, prefix, counter);
-                assign_if_marker_ids(empty_nodes, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
+                assign_marker_ids_inner(empty_nodes, prefix, counter, includes);
             }
             Node::Block { nodes: body, .. } => {
-                assign_if_marker_ids(body, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
             }
             Node::With { nodes: body, .. } => {
-                assign_if_marker_ids(body, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
             }
             Node::Spaceless { nodes: body, .. } | Node::AutoEscape { nodes: body, .. } => {
-                assign_if_marker_ids(body, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
             }
             Node::Filter { nodes: body, .. } => {
-                assign_if_marker_ids(body, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
             }
             Node::IfChanged {
                 nodes: body,
                 else_nodes,
                 ..
             } => {
-                assign_if_marker_ids(body, prefix, counter);
-                assign_if_marker_ids(else_nodes, prefix, counter);
+                assign_marker_ids_inner(body, prefix, counter, includes);
+                assign_marker_ids_inner(else_nodes, prefix, counter, includes);
             }
             Node::BlockSuperScope { super_nodes, nodes } => {
-                assign_if_marker_ids(super_nodes, prefix, counter);
-                assign_if_marker_ids(nodes, prefix, counter);
+                assign_marker_ids_inner(super_nodes, prefix, counter, includes);
+                assign_marker_ids_inner(nodes, prefix, counter, includes);
             }
             Node::BlockCustomTag { children, .. } => {
-                assign_if_marker_ids(children, prefix, counter);
+                assign_marker_ids_inner(children, prefix, counter, includes);
             }
             // Scope nodes (#2558) carry children; `RawBlockCustomTag` does
             // not (its body is a source string, never parsed here).
@@ -673,10 +708,10 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             | Node::Timezone { children, .. }
             | Node::Localize { children, .. }
             | Node::LocalTime { children, .. } => {
-                assign_if_marker_ids(children, prefix, counter);
+                assign_marker_ids_inner(children, prefix, counter, includes);
             }
             Node::ReactComponent { children, .. } => {
-                assign_if_marker_ids(children, prefix, counter);
+                assign_marker_ids_inner(children, prefix, counter, includes);
             }
             // Leaf or non-AST-bearing variants — no recursion needed.
             _ => {}
@@ -1354,6 +1389,7 @@ fn parse_token_inner(
                         template,
                         with_vars,
                         only,
+                        site_id: None,
                     }))
                 }
 
@@ -5841,6 +5877,7 @@ mod dep_tests {
                 template: "\"x.html\"".into(),
                 with_vars: vec![],
                 only: false,
+                site_id: None,
             },
             Node::Comment,
             Node::Load(vec!["mytags".into()]),

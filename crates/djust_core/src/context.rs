@@ -251,6 +251,26 @@ pub struct Context {
     /// and by `{% include … only %}`'s fresh context so a marker nested inside
     /// a component's include keeps the component's namespace.
     dj_if_id_namespace: String,
+    /// Per-include-SITE path for dj-if marker ids (#2689). The third known
+    /// instance of the same class as `dj_if_loop_path` (#1832) and
+    /// `dj_if_id_namespace` (#2686): `if-<hash>-N` is derived from the
+    /// template SOURCE, so two `{% include %}`s of one fragment in one page
+    /// emit the identical id and the client resolves subtree patches by FIRST
+    /// match — a toggle in the second include lands on the first.
+    ///
+    /// Written ONLY by the renderer's `{% include %}` arm, from the parse-time
+    /// `Node::Include::site_id`, and never by a context key — the #2529 lesson
+    /// that put the other two here applies verbatim. Each segment is
+    /// `-i<hex>_<digits>` (the including template's source hash and the tag's
+    /// document-order ordinal), so the path composes down a chain of nested
+    /// includes and stays stable across renders: it is LEXICAL, not an
+    /// execution counter, so a `{% if %}` that skips a sibling include cannot
+    /// renumber it.
+    ///
+    /// The grammar is disjoint from the loop path (segments of pure digits),
+    /// so the two compose without ambiguity. Copied by `Clone` and by
+    /// `{% include ... only %}`'s fresh context.
+    dj_if_include_path: String,
     /// Django's `Context.autoescape` (#2556). Default `true`; plain render APIs
     /// accept explicit policy, lexical autoescape bodies restore it on exit,
     /// and `{% include … only %}` copies it into its fresh context. Context
@@ -330,6 +350,7 @@ impl Clone for Context {
             emit_dj_if_markers: self.emit_dj_if_markers,
             dj_if_loop_path: self.dj_if_loop_path.clone(),
             dj_if_id_namespace: self.dj_if_id_namespace.clone(),
+            dj_if_include_path: self.dj_if_include_path.clone(),
             autoescape: self.autoescape,
             // SHARED, not copied: Django's `Context.__copy__` shallow-copies
             // `render_context`, so a `{% for %}` / `{% with %}` clone
@@ -391,6 +412,34 @@ pub enum Walked<'py> {
     Invalid,
 }
 
+/// `(-i<hex>_<digits>)*` — the grammar of `Context::dj_if_include_path`.
+///
+/// Segments are tagged `i` and always contain `_`, so they can never be
+/// mistaken for a `dj_if_loop_path` segment (pure digits, #1832), which is what
+/// lets the two suffixes be concatenated into one opaque marker id.
+fn is_dj_if_include_path(path: &str) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix('-') else {
+        return false;
+    };
+    rest.split('-').all(|segment| {
+        let Some(body) = segment.strip_prefix('i') else {
+            return false;
+        };
+        match body.split_once('_') {
+            Some((hash, ordinal)) => {
+                !hash.is_empty()
+                    && hash.chars().all(|c| c.is_ascii_hexdigit())
+                    && !ordinal.is_empty()
+                    && ordinal.chars().all(|c| c.is_ascii_digit())
+            }
+            None => false,
+        }
+    })
+}
+
 impl Context {
     pub fn new() -> Self {
         Self {
@@ -401,6 +450,7 @@ impl Context {
             emit_dj_if_markers: true,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
+            dj_if_include_path: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -429,6 +479,7 @@ impl Context {
             emit_dj_if_markers: true,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
+            dj_if_include_path: String::new(),
             autoescape: true,
             cycle_state: std::sync::Arc::default(),
             ifchanged_state: std::sync::Arc::default(),
@@ -507,6 +558,31 @@ impl Context {
     /// embedding host set one.
     pub fn dj_if_id_namespace(&self) -> &str {
         &self.dj_if_id_namespace
+    }
+
+    /// Set the per-include-site dj-if id path for renders under this context
+    /// (#2689). Written ONLY by the renderer's `{% include %}` arm — once per
+    /// include, restored on exit — and never by a context key.
+    ///
+    /// The grammar is `(-i<hex>_<digits>)*`; anything else is refused and the
+    /// path left unchanged, for the same reason `set_dj_if_loop_path` refuses
+    /// non-`(-<digits>)*` input (#2529): the value is interpolated raw into a
+    /// marker comment, and `-->` in it would forge live markup.
+    pub fn set_dj_if_include_path(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        if is_dj_if_include_path(&path) {
+            self.dj_if_include_path = path;
+        } else {
+            debug_assert!(
+                false,
+                "dj-if include path is not `(-i<hex>_<digits>)*`: {path:?}"
+            );
+        }
+    }
+
+    /// The dj-if include-site path (#2689) — empty outside any `{% include %}`.
+    pub fn dj_if_include_path(&self) -> &str {
+        &self.dj_if_include_path
     }
 
     /// Set Django's `Context.autoescape` for renders under this context
@@ -2379,6 +2455,55 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+
+    /// #2689 / #2529 — the include path is interpolated RAW into a marker
+    /// comment, so its grammar is a refusal, not an escape.
+    #[test]
+    fn dj_if_include_path_grammar_accepts_only_tagged_segments() {
+        for good in ["", "-ia1b2c3d4_0", "-ia1b2c3d4_0-ideadbeef_12", "-i0_0"] {
+            assert!(is_dj_if_include_path(good), "rejected {good:?}");
+        }
+        for bad in [
+            "-i-->x_0",        // a comment terminator
+            "-ia1b2c3d4_0-->", // ...trailing
+            "ia1b2c3d4_0",     // no leading separator
+            "-a1b2c3d4_0",     // untagged
+            "-i_0",            // empty hash
+            "-ia1b2c3d4_",     // empty ordinal
+            "-ia1b2c3d4",      // no ordinal at all
+            "-ig1_0",          // non-hex hash
+            "-ia1_x",          // non-digit ordinal
+            "-i a1_0",         // a space
+            "-1",              // a LOOP-path segment must not validate here
+        ] {
+            assert!(!is_dj_if_include_path(bad), "accepted {bad:?}");
+        }
+    }
+
+    /// The two suffix axes concatenate into one opaque id, so their segment
+    /// alphabets must be disjoint or the composition is not injective (#2689).
+    #[test]
+    fn include_path_and_loop_path_segments_cannot_be_confused() {
+        // Every loop-path segment is pure digits; no include segment is.
+        for loop_path in ["-0", "-12", "-3-4"] {
+            assert!(
+                loop_path.chars().all(|c| c == '-' || c.is_ascii_digit()),
+                "not a loop path: {loop_path:?}"
+            );
+            assert!(
+                !is_dj_if_include_path(loop_path),
+                "a loop path validated as an include path: {loop_path:?}"
+            );
+        }
+        // ...and no include segment is a valid loop path.
+        for include_path in ["-ia1b2c3d4_0", "-i0_0-i1_2"] {
+            assert!(is_dj_if_include_path(include_path));
+            assert!(
+                !include_path.chars().all(|c| c == '-' || c.is_ascii_digit()),
+                "an include path validated as a loop path: {include_path:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_context_simple_get() {

@@ -60,10 +60,16 @@ fn strip_prefix(rendered: &str) -> String {
     re.replace_all(rendered, r#"id="if-$1""#).to_string()
 }
 
-/// Return all `if-<prefix>-N` IDs present in the rendered output,
+/// Return all `if-<prefix>-N…` IDs present in the rendered output,
 /// preserving order of first occurrence.
+///
+/// The trailing group is the render-time suffix chain — `dj_if_loop_path`
+/// (#1832), `dj_if_id_namespace` (#2686) and `dj_if_include_path` (#2689).
+/// The id is opaque; matching only the parse-time head silently dropped every
+/// suffixed marker from the sample, which is how this helper started failing
+/// when #2689 gave every `{% include %}` site its own suffix.
 fn extract_marker_ids(rendered: &str) -> Vec<String> {
-    let re = regex::Regex::new(r#"id="(if-[0-9a-f]{8}-\d+)""#).expect("regex");
+    let re = regex::Regex::new(r#"id="(if-[0-9a-f]{8}-\d+[0-9A-Za-z_-]*)""#).expect("regex");
     let mut seen = Vec::new();
     let mut set = HashSet::new();
     for cap in re.captures_iter(rendered) {

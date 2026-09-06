@@ -423,12 +423,20 @@ mod feature_on_default_context {
             render_with_loader("{% include 'inc_false_if_text.html' only %}", &ctx),
             "<!--dj-if-->"
         );
-        assert_eq!(
-            strip_prefix(&render_with_loader(
-                "{% include 'inc_false_if.html' only %}",
-                &ctx
-            )),
-            "<!--dj-if id=\"if-0\"--><!--/dj-if-->"
+        // The `-i<hex>_<n>` suffix is this include SITE's identity (#2689):
+        // two `{% include %}`s of one fragment would otherwise emit the same
+        // id into one buffer, and the client resolves subtree patches by first
+        // match. What this test pins is that the marker survives `only` at
+        // all; the id shape is pinned in
+        // `python/djust/tests/test_include_marker_id_namespace_2689.py`.
+        let rendered = strip_prefix(&render_with_loader(
+            "{% include 'inc_false_if.html' only %}",
+            &ctx,
+        ));
+        assert!(
+            rendered.starts_with("<!--dj-if id=\"if-0-i")
+                && rendered.ends_with("\"--><!--/dj-if-->"),
+            "got {rendered:?}"
         );
     }
 
