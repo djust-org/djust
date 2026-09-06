@@ -1,1 +1,0 @@
-- **Template include resolution**: Resolve relative include paths against their defining template, preserve origins through inheritance, select the first available iterable candidate, and report invalid relative paths and included-template syntax errors with Django-compatible exceptions.

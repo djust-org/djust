@@ -1,1 +1,0 @@
-- **Template parent expressions:** Resolve complete `extends` filter chains, including quoted operands, and preserve exceptions raised during parent selection. Reject malformed parent expressions at compile time. Django conformance reaches 951 of 1,047 engine tests without status regressions.

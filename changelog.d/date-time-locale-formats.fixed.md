@@ -1,1 +1,0 @@
-- **Localized date and time filters:** Resolve Django format settings and translated month, weekday, AM/PM, noon, and midnight names using the active language at render time, including grammatical month names and cached templates. Standalone Rust rendering retains English defaults without requiring Python.

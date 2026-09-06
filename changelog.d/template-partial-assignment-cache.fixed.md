@@ -1,1 +1,0 @@
-- **Partial template rendering**: Refresh dynamic output after context-mutating tags so cached HTML cannot retain a previous assignment's value.
