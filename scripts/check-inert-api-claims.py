@@ -95,6 +95,25 @@ INERT_DECORATOR_USE = re.compile(
 INERT_MARKER = re.compile(r"#2656|\bINERT\b|\binert\b")
 
 
+# Generated or vendored trees that contain COPIES of source, not source. A
+# nested `examples/*/.venv/…/site-packages/djust/decorators.py` and a
+# `collectstatic` output under `examples/*/staticfiles/` are both build
+# artifacts: nothing a reader edits, and both carry whatever djust version was
+# installed when they were made. Scanning them makes the check fail on any
+# machine that has run the examples while CI, which has not, stays green.
+SKIP_PARTS = {
+    "__pycache__",
+    ".venv",
+    "venv",
+    "site-packages",
+    "staticfiles",
+    "node_modules",
+    ".tox",
+    "build",
+    "dist",
+}
+
+
 def _files(root: Path = ROOT) -> list[Path]:
     out: list[Path] = []
     for d in SCAN_DIRS:
@@ -102,7 +121,7 @@ def _files(root: Path = ROOT) -> list[Path]:
         if not base.is_dir():
             continue
         for p in base.rglob("*"):
-            if p.is_file() and p.suffix in SCAN_SUFFIXES and "__pycache__" not in p.parts:
+            if p.is_file() and p.suffix in SCAN_SUFFIXES and not (SKIP_PARTS & set(p.parts)):
                 out.append(p)
     for p in root.glob("*.md"):
         if p.is_file():
