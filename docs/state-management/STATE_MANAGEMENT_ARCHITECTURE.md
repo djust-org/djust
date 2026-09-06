@@ -1,10 +1,14 @@
 # State Management Architecture
 
-> **`@debounce`, `@throttle` and `@optimistic` are INERT.** They record
-> handler metadata but have no client-side implementation — the counterpart
-> state in `static/djust/src/` is declared and never populated, so applying
-> them changes nothing at runtime. Examples below that use them still work,
-> but without the timing or optimistic-update behaviour they describe. Tracked in issue #2656.
+> **`@optimistic` is INERT.** It records handler metadata that nothing in the
+> shipped client reads, so applying it changes nothing at runtime — a bare
+> `@optimistic` declares no DOM change for a client to apply. Examples below
+> that use it still work, but without the optimistic-update behaviour they
+> describe. Tracked in issue #2699.
+>
+> `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
+> `static/djust/src/05-handler-rate-limit.js`, configured from the mount
+> frame's `handler_config`.
 
 
 **Status**: Specification

@@ -1,6 +1,6 @@
 # State Management Framework Comparison
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2656), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
 
 **Date**: January 2025
 **Version**: djust 0.4.0 vs Phoenix LiveView 0.20 vs Laravel Livewire 3.0
@@ -293,7 +293,7 @@ window.addEventListener("phx:category-changed", e => {
 
 - **djust**: coordinate in the view — one handler updates both pieces of state,
   and the single server render sends both. `@client_state` is NOT this
-  mechanism: it is an inert marker (#2656).
+  mechanism: it is an inert marker (#2680).
 - **LiveView**: Manual JS or server PubSub
 - **Livewire**: Requires AlpineJS
 

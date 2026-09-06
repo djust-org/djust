@@ -790,20 +790,18 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     """
     Declare a client-side debounce for this handler.
 
-    .. warning::
+    The client delays the send until ``wait`` seconds after the LAST event,
+    so a burst of keystrokes reaches the server as ONE event carrying the
+    last payload. ``max_wait`` bounds the total delay measured from the first
+    event of the burst, so a user who never pauses still gets a send.
 
-       **Server-side marker only — the client half is not implemented.**
-       The decorator stamps metadata on the handler, and nothing in the
-       shipped client reads it: ``debounceTimers`` is declared in
-       ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
-       and ``window.handlerMetadata`` has no readers. So the handler runs on
-       every event exactly as an undecorated one would.
+    Implemented client-side in ``static/djust/src/05-handler-rate-limit.js``
+    (#2656); the configuration reaches the browser on the mount frame as
+    ``handler_config``, the same route ``@cache`` uses for ``cache_config``.
 
-       Applying it is harmless and forward-compatible — it is the declaration
-       the client would consume — but do not rely on it for rate control
-       today. ``@cache`` is the one decorator in this family that IS wired
-       end-to-end (``runtime.py`` reads its metadata and the client honours
-       the TTL).
+    This is the HANDLER-level control. The ``dj-debounce="500"`` HTML
+    attribute is the element-level one; they compose (the attribute decides
+    when the handler is called, this decides when that call is sent).
 
     Intended for input events where you want to wait until the user stops
     typing.
@@ -835,20 +833,16 @@ def throttle(
     """
     Declare a client-side throttle for this handler.
 
-    .. warning::
+    The client sends at most one event per ``interval``. Both edges are
+    honoured by default: the first event of a window is sent immediately
+    (leading), and every event inside the window collapses into a single
+    trailing send carrying the LAST payload. ``leading=False`` suppresses the
+    immediate send; ``trailing=False`` drops everything after it.
 
-       **Server-side marker only — the client half is not implemented.**
-       The decorator stamps metadata on the handler, and nothing in the
-       shipped client reads it: ``throttleState`` is declared in
-       ``static/djust/src/04-cache.js`` and only ever CLEARED, never written,
-       and ``window.handlerMetadata`` has no readers. So the handler runs on
-       every event exactly as an undecorated one would.
-
-       Applying it is harmless and forward-compatible — it is the declaration
-       the client would consume — but do not rely on it for rate control
-       today. ``@cache`` is the one decorator in this family that IS wired
-       end-to-end (``runtime.py`` reads its metadata and the client honours
-       the TTL).
+    Implemented client-side in ``static/djust/src/05-handler-rate-limit.js``
+    (#2656); the configuration reaches the browser on the mount frame as
+    ``handler_config``. When a handler carries both ``@debounce`` and
+    ``@throttle``, ``@debounce`` wins.
 
     Intended for scroll, resize or mouse-move events where you want to limit
     how often the handler runs.
@@ -887,7 +881,13 @@ def optimistic(func: F) -> F:
        ``static/djust/src/``, so no optimistic update is ever applied and
        there is no revert path. Applying this decorator changes nothing at
        runtime; it records a declaration a future client would consume.
-       Tracked in issue #2656.
+
+       Unlike ``@debounce`` / ``@throttle``, which #2656 implemented, a bare
+       ``@optimistic`` takes no arguments and so declares NO DOM change for a
+       client to apply — which is why it was not implemented alongside them.
+       The already-wired DEP-002 ``optimistic_rules`` path (descriptor
+       components, applied in ``11-event-handler.js``) does have that
+       declaration. Tracked in issue #2699.
 
     Usage:
         class MyView(LiveView):
@@ -948,36 +948,37 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
     MARKER ONLY — this decorator does nothing at runtime.
 
     .. warning::
-        Like ``@debounce`` / ``@throttle`` / ``@optimistic`` (#2656), this
-        stamps metadata that **nothing in the shipped client reads**, so a
-        handler decorated with it behaves exactly like an undecorated one.
-        The ``StateBus`` class that was meant to consume it lived at
+        Like ``@optimistic`` (#2699), this stamps metadata that **nothing in
+        the shipped client reads**, so a handler decorated with it behaves
+        exactly like an undecorated one. (``@debounce`` / ``@throttle`` were
+        in this family until #2656 implemented them.) The ``StateBus`` class
+        that was meant to consume it lived at
         ``static/djust/src/05-state-bus.js`` with zero consumers in the
         bundle and was deleted as dead code in #2680; whether to implement
-        the client half is tracked in #2656.
+        the client half is tracked in #2680.
 
         To coordinate two pieces of state today, update both in ONE handler:
         the single server render sends both, with no client-side bus to keep
         in sync.
 
-    The intended semantics, for whoever implements #2656: when this handler
+    The intended semantics, for whoever implements it: when this handler
     executes, the specified keys are published to a client-side bus, and
     other handlers subscribed to the same keys are notified of changes.
 
     Usage (the shape the metadata records — not working behaviour):
         class DashboardView(LiveView):
-            @client_state(keys=["filter"])  # INERT (#2656)
+            @client_state(keys=["filter"])  # INERT (#2680)
             def update_filter(self, filter: str = "", **kwargs):
                 # WOULD publish "filter" — today this comment is the
                 # only thing that happens.
                 self.filter = filter
 
-            @client_state(keys=["filter"])  # INERT (#2656)
+            @client_state(keys=["filter"])  # INERT (#2680)
             def on_filter_change(self, filter: str = "", **kwargs):
                 # WOULD be called when "filter" changes; it is not.
                 self.apply_filter()
 
-            @client_state(keys=["filter", "sort"])  # INERT (#2656)
+            @client_state(keys=["filter", "sort"])  # INERT (#2680)
             def apply_filters(self, filter: str = "", sort: str = "", **kwargs):
                 # WOULD publish both "filter" and "sort".
                 self.filter = filter

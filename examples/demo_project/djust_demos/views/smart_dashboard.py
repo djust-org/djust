@@ -6,15 +6,16 @@ docstring used to give. Every handler computes its derived values server-side
 and djust's single re-render updates all four panels. That is the whole
 mechanism.
 
-Of the five decorators used below, only @cache is wired end-to-end.
-@client_state, @optimistic, @throttle and @debounce are INERT (#2656): they
-stamp metadata nothing in the shipped client reads, so each handler behaves
-exactly as it would undecorated. The StateBus this demo used to credit had
-zero consumers and was deleted in #2680.
+Of the five decorators used below, @cache, @debounce and @throttle are wired
+end-to-end — the last two as of #2656, whose client gate is
+static/djust/src/05-handler-rate-limit.js. @client_state and @optimistic are
+still INERT (#2680, #2699): they stamp metadata nothing in the shipped client
+reads, so those handlers behave exactly as they would undecorated. The
+StateBus this demo used to credit had zero consumers and was deleted in #2680.
 
-Left in place because the decision on whether to implement them is #2656;
-the prose is corrected so the demo no longer teaches a mechanism that does
-not run.
+The two inert ones are left in place because the decision on whether to
+implement them is #2699; the prose is corrected so the demo no longer teaches
+a mechanism that does not run.
 """
 
 import random

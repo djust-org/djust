@@ -1,7 +1,7 @@
 """Regression tests for #1489 — top-level re-export of four decorators.
 
 `optimistic`, `cache`, `client_state`, and `background` are stable
-(importability only — `optimistic` and `client_state` are INERT, #2656)
+(importability only — `optimistic` and `client_state` are INERT: #2699, #2680)
 public-API decorators that live in ``djust.decorators``. Issue #1489
 (API-stability audit finding F3) asked for them to also be reachable from
 the top-level ``djust`` package so the canonical import path is

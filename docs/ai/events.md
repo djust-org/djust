@@ -22,14 +22,14 @@ def delete(self, item_id: int = 0, **kwargs):
 def save(self, **form_data):
     name = form_data.get("name")
 
-# Debounce — INERT: no client implementation (#2656), does NOT wait
+# Debounce — the client waits 0.5s after the last keystroke, then sends once
 @event_handler()
 @debounce(wait=0.5)
 def search(self, value: str = "", **kwargs):
     self.query = value
     self._refresh()
 
-# Throttle — INERT: no client implementation (#2656), does NOT limit
+# Throttle — the client sends at most once per second
 @event_handler()
 @throttle(interval=1.0)
 def on_scroll(self, position: int = 0, **kwargs):

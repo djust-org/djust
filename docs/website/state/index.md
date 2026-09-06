@@ -1,10 +1,14 @@
 # State Management
 
-> **`@debounce`, `@throttle` and `@optimistic` are INERT.** They record
-> handler metadata but have no client-side implementation — the counterpart
-> state in `static/djust/src/` is declared and never populated, so applying
-> them changes nothing at runtime. Examples below that use them still work,
-> but without the timing or optimistic-update behaviour they describe. Tracked in issue #2656.
+> **`@optimistic` is INERT.** It records handler metadata that nothing in the
+> shipped client reads, so applying it changes nothing at runtime — a bare
+> `@optimistic` declares no DOM change for a client to apply. Examples below
+> that use it still work, but without the optimistic-update behaviour they
+> describe. Tracked in issue #2699.
+>
+> `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
+> `static/djust/src/05-handler-rate-limit.js`, configured from the mount
+> frame's `handler_config`.
 
 
 djust's state management decorators replace patterns that traditionally require JavaScript — debouncing, throttling, loading indicators, optimistic updates, caching, and more. All in Python.
@@ -16,7 +20,7 @@ User is typing?           → @debounce(wait=0.5)
 Rapid scroll/resize?      → @throttle(interval=0.1)
 Need instant UI feedback? → @optimistic
 Same query repeated?      → @cache(ttl=300)
-Coordinating components?  → one handler, one re-render (@client_state is INERT, #2656)
+Coordinating components?  → one handler, one re-render (@client_state is INERT, #2680)
 Auto-save forms?          → DraftModeMixin
 ```
 
@@ -116,7 +120,7 @@ def search(self, value: str = "", **kwargs):
 
 ## Client State
 
-> **`@client_state` is INERT (#2656).** It stamps metadata nothing in the
+> **`@client_state` is INERT (#2680).** It stamps metadata nothing in the
 > shipped client reads, so the handler below behaves exactly as it would
 > undecorated. Nothing is stored client-side and nothing is synced; the
 > `StateBus` this section used to describe was deleted in #2680.
@@ -179,7 +183,7 @@ You'll see logs like:
 | `@background`             | —                                       | API calls, AI gen    |
 | `@optimistic`             | —                                       | Toggles, counters    |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
-| `@client_state(keys)`     | `keys`: list[str]                       | *(INERT — no client impl, #2656)* |
+| `@client_state(keys)`     | `keys`: list[str]                       | *(INERT — no client impl, #2680)* |
 | `DraftModeMixin`          | `draft_fields`, `draft_ttl`             | Auto-save forms      |
 
 For detailed API docs, see [API Reference: Decorators](../api-reference/decorators.md).

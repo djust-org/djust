@@ -1,13 +1,16 @@
 # State Management API Reference
 
-> **Not implemented client-side.** `@debounce`, `@throttle` and `@optimistic` are
-> server-side MARKERS: the decorator stamps metadata and nothing in the shipped
-> client reads it, so the handler runs on every event. Harmless and
-> forward-compatible, but not rate control today. `@cache` IS wired end-to-end.
+> **`@debounce`, `@throttle` and `@cache` are wired end-to-end.** The client
+> gate for the first two is `static/djust/src/05-handler-rate-limit.js`,
+> configured from the mount frame's `handler_config` (#2656).
 >
-> **`@client_state` is INERT too (#2656)** — every example below that uses it
-> works because the server re-renders, not because anything is published. The
-> `StateBus` these examples credit was deleted in #2680.
+> **`@optimistic` is INERT (#2699)** — it stamps metadata nothing in the
+> shipped client reads, and a bare `@optimistic` declares no DOM change to
+> apply, so the UI does not update before the server responds.
+>
+> **`@client_state` is INERT too (#2680)** — every example below that
+> uses it works because the server re-renders, not because anything is
+> published. The `StateBus` these examples credit was deleted in #2680.
 
 
 **Status:** ✅ Implemented (Phase 5 Complete: @cache, @client_state, DraftModeMixin, @loading)
@@ -70,11 +73,11 @@ djust's State Management API provides Python-only abstractions for common client
 
 | Decorator | When to Use | Typical Wait/Interval | Bundle Impact |
 |-----------|-------------|----------------------|---------------|
-| `@debounce(wait)` | *(inert — no client impl, #2656)* | — | 0 KB |
-| `@throttle(interval)` | *(inert — no client impl, #2656)* | — | 0 KB |
-| `@optimistic` | (marker only — client not implemented) | N/A | +0 KB |
+| `@debounce(wait)` | User is typing | 0.3-0.5s | +0.6 KB |
+| `@throttle(interval)` | Rapid scroll/resize | 0.1-1.0s | *(shared)* |
+| `@optimistic` | *(inert — no client impl, #2699)* | — | 0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
-| `@client_state(keys)` | *(inert — no client impl, #2656)* | — | 0 KB |
+| `@client_state(keys)` | *(inert — no client impl, #2680)* | — | 0 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
 | `@background` | Long-running operations | API calls, AI, file processing | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
@@ -97,7 +100,7 @@ djust's State Management API provides Python-only abstractions for common client
    → @cache(ttl=60, key_params=["query"])
 
 ❓ Multiple components need to share state?
-   → one handler setting both (@client_state is INERT, #2656)
+   → one handler setting both (@client_state is INERT, #2680)
 
 ❓ Auto-save form drafts to localStorage?
    → DraftModeMixin
@@ -149,7 +152,7 @@ def update_filter(self, filter: str = "", **kwargs):
 def on_filter_change(self, filter: str = "", **kwargs):
     self.results = self.apply_filter(filter)
 ```
-**Result**: nothing of the sort. `@client_state` is INERT (#2656) and the
+**Result**: nothing of the sort. `@client_state` is INERT (#2680) and the
 state bus was deleted (#2680) — Component B is never called. What actually
 coordinates these is the server re-render, so put both updates in ONE handler.
 

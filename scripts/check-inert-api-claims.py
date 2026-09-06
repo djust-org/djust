@@ -12,9 +12,18 @@ by hand-counting — to have fixed "four places":
    `djustSecurity.safeSetInnerHTML()`.
 
 2. **An inert decorator taught as a working feature.** `@client_state` stamps
-   metadata that nothing in the shipped client reads (#2656, same class as
-   `@debounce` / `@throttle` / `@optimistic`), and the `StateBus` that was to
-   consume it was deleted in #2680. Roughly a hundred doc lines still routed
+   metadata that nothing in the shipped client reads (#2680), and the
+   `StateBus` that was to consume it was deleted in the same PR. It was one of
+   four in that class; `@debounce` / `@throttle` were implemented in #2656 and
+   are no longer inert, and `@optimistic` is tracked separately in #2699.
+
+   `@optimistic` is deliberately NOT in `INERT_DECORATOR_USE`. Adding it
+   reports ~230 sites — the N-point-fix antipattern #2656 was explicitly
+   filed to avoid, and pointless if #2699 removes the decorator. Its
+   machine-facing surface (the `schema.py` `usage` snippet an agent pastes)
+   is pinned instead by
+   `python/djust/tests/test_inert_api_claims.py::test_inert_decorator_usage_snippets_carry_the_marker`
+   (#2696). Roughly a hundred doc lines still routed
    users to it — decision guides, cheat sheets, an MCP tool description, and a
    `window.StateBus.subscribe(...)` snippet against a class that no longer
    exists.
@@ -87,12 +96,13 @@ DELETED_STATEBUS_USE = re.compile(
 )
 
 # Teaching the inert decorator: a decoration or an import of it.
+# `@optimistic` is out of scope here on purpose — see the module docstring.
 INERT_DECORATOR_USE = re.compile(
     r"@client_state\s*\(|from\s+djust[\w.]*\s+import\s+[^\n]*\bclient_state\b"
 )
 
 # Any of these anywhere in the file discharges the requirement.
-INERT_MARKER = re.compile(r"#2656|\bINERT\b|\binert\b")
+INERT_MARKER = re.compile(r"#2656|#2680|#2699|\bINERT\b|\binert\b")
 
 
 # Generated or vendored trees that contain COPIES of source, not source. A
@@ -295,10 +305,10 @@ def check(root: Path = ROOT) -> list[str]:
             failures.append(
                 f"{rel}:{lineno}: teaches `@client_state` with no marker on this line or "
                 f"anywhere in its block (lines {start}-{end}), and no header banner. It "
-                f"stamps metadata nothing in the shipped client reads (#2656) — a handler "
+                f"stamps metadata nothing in the shipped client reads (#2680) — a handler "
                 f"decorated with it behaves exactly like an undecorated one. A marker "
                 f"elsewhere in the file does NOT cover this mention (#2692): add one "
-                f"mentioning #2656 (or the word INERT) here.\n    {line.strip()}"
+                f"mentioning #2680 (or the word INERT) here.\n    {line.strip()}"
             )
     return failures
 
@@ -311,7 +321,7 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
         print(
             "\nEach of these tells a reader (or an AI agent) to use something that "
-            "does not do what it says. See #2679 / #2680 / #2656.",
+            "does not do what it says. See #2679 / #2680 / #2699.",
             file=sys.stderr,
         )
         return 1

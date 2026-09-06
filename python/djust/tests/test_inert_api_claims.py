@@ -260,3 +260,75 @@ def test_the_checker_does_not_fire_on_the_corrections_themselves(tmp_path: Path)
         )
         == []
     )
+
+
+# --- #2696: the schema.py `usage` snippet is what an agent PASTES -----------
+#
+# `check-inert-api-claims.py` cannot see this. `INERT_DECORATOR_USE` matches
+# `@client_state` only, and extending it to `@optimistic` reports ~230 sites —
+# the N-point-fix antipattern #2656 was filed to avoid, and wasted work if
+# #2699 removes the decorator. So the machine-facing surface gets its own pin
+# instead: whatever an AI agent copies out of `DECORATORS` must carry the
+# marker IN THE COPIED TEXT, not in a sibling `description` field it may not
+# read (the argument #2694 made for `@client_state`, which #2696 found had not
+# been applied to the other three).
+
+#: Decorators that still stamp metadata nothing in the shipped client reads.
+#: `@debounce` / `@throttle` left this set in #2656 — the client gate is
+#: `static/djust/src/05-handler-rate-limit.js` — so they are deliberately
+#: absent, and `test_wired_decorators_are_not_marked_inert` holds that line.
+STILL_INERT = {"@optimistic": "#2699", "@client_state": "#2680"}
+
+#: Decorators whose client half IS implemented, keyed by the module that
+#: implements it. A stale INERT marker on one of these is the mirror-image
+#: failure: an agent avoids a working feature because a doc says not to.
+NOW_WIRED = {
+    "@debounce": "05-handler-rate-limit.js",
+    "@throttle": "05-handler-rate-limit.js",
+    "@cache": "04-cache.js",
+}
+
+
+def _entry(name: str) -> Any:
+    from djust.schema import DECORATORS
+
+    matches = [d for d in DECORATORS if d.get("name") == name]
+    assert len(matches) == 1, f"expected exactly one {name} entry, got {len(matches)}"
+    return matches[0]
+
+
+def test_inert_decorator_usage_snippets_carry_the_marker() -> None:
+    """The marker must travel with the paste (#2694, #2696)."""
+    for name, issue in STILL_INERT.items():
+        entry = _entry(name)
+        for snippet in entry["usage"]:
+            assert "INERT" in snippet, (
+                f"{name}'s schema.py `usage` snippet is what an agent copies, and it "
+                f"says nothing about the decorator doing nothing at runtime "
+                f"({issue}). A marker in a sibling `description` does not travel "
+                f"with the paste. Snippet: {snippet!r}"
+            )
+        assert "INERT" in entry["description"], f"{name}'s description lost its marker"
+
+
+def test_wired_decorators_are_not_marked_inert() -> None:
+    """The inverse pin: a stale caveat is as wrong as a missing one.
+
+    `@debounce` and `@throttle` were marked INERT in #2655 and implemented in
+    #2656. If a future edit re-adds the caveat — or the implementation is
+    reverted without updating the schema — an agent is told to avoid a
+    working feature, which is the #2656 failure with the sign flipped.
+    """
+    for name, module in NOW_WIRED.items():
+        entry = _entry(name)
+        blob = entry["description"] + " ".join(entry["usage"])
+        assert "INERT" not in blob and "inert" not in blob, (
+            f"{name} is implemented ({module}) but its schema.py entry still calls "
+            f"it inert — see #2656"
+        )
+
+    for name in ("@debounce", "@throttle"):
+        assert "05-handler-rate-limit.js" in _entry(name)["description"], (
+            f"{name}'s schema.py description should name the module that implements "
+            "it, so the claim is checkable rather than merely asserted"
+        )
