@@ -20,8 +20,16 @@ it needs off the live handle.
 
 The bound then moves to where it belongs. The conversion asks "is the stated
 length too large to spend HERE"; the SINKS ask "can this walk end at all"
-(``Encoded::live_walk_terminates``) — which is why ``list(range(100_001))``
-still renders every item at ``{% for %}`` while #2678's liar still raises.
+(``Encoded::live_walk_terminates``) — which is why
+``collections.deque(range(100_001))`` still renders every item at
+``{% for %}`` while #2678's liar still raises.
+
+The conversion's question has a second half, added by the #2695 review: an
+object whose items ALREADY EXIST has nothing to decline, because the decline
+only avoids the cost of BUILDING them. A ``list`` holds its elements and
+``QuerySet.__len__`` calls ``_fetch_all()``, so both are exempt at any length
+— see ``TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap`` for the 66 MB
+of serialization dicts that exemption prevents.
 
 Every claim above is checked against REAL Django 5.2, in a subprocess, on both
 settings of ``template_resolve_lazy``: #2691 was reverted once for verifying
