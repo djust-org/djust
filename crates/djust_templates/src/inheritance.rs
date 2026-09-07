@@ -15,60 +15,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-// Physical child lists shared by the immutable discovery walk and mutable
-// override walk. Exhaustive matching makes new node variants require a
-// traversal decision; no catch-all may silently hide a new container.
-macro_rules! child_lists {
-    ($node:expr) => {
-        match $node {
-            Node::If {
-                true_nodes,
-                false_nodes,
-                ..
-            } => [Some(true_nodes), Some(false_nodes)],
-            Node::For {
-                nodes, empty_nodes, ..
-            } => [Some(nodes), Some(empty_nodes)],
-            Node::IfChanged {
-                nodes, else_nodes, ..
-            } => [Some(nodes), Some(else_nodes)],
-            Node::BlockSuperScope { super_nodes, nodes } => [Some(super_nodes), Some(nodes)],
-            Node::Located { nodes, .. }
-            | Node::Block { nodes, .. }
-            | Node::With { nodes, .. }
-            | Node::Spaceless { nodes }
-            | Node::AutoEscape { nodes, .. }
-            | Node::Filter { nodes, .. } => [Some(nodes), None],
-            Node::ReactComponent { children, .. }
-            | Node::BlockCustomTag { children, .. }
-            | Node::Language { children, .. }
-            | Node::Timezone { children, .. }
-            | Node::Localize { children, .. }
-            | Node::LocalTime { children, .. } => [Some(children), None],
-            Node::Text(_)
-            | Node::Variable(..)
-            | Node::Extends(_)
-            | Node::Include { .. }
-            | Node::Comment
-            | Node::Load(_)
-            | Node::CsrfToken
-            | Node::Static(_)
-            | Node::RustComponent { .. }
-            | Node::CustomTag { .. }
-            | Node::WidthRatio { .. }
-            | Node::FirstOf { .. }
-            | Node::TemplateTag(_)
-            | Node::Cycle { .. }
-            | Node::ResetCycle { .. }
-            | Node::Now(_)
-            | Node::UnsupportedTag { .. }
-            | Node::AssignTag { .. }
-            | Node::InlineIf { .. }
-            | Node::RawBlockCustomTag { .. } => [None, None],
-        }
-    };
-}
-
 /// Validate literal path syntax before any branch can be selected.
 pub fn validate_relative_references(nodes: &[Node], name: &str) -> Result<()> {
     for node in nodes {
@@ -88,7 +34,7 @@ pub fn validate_relative_references(nodes: &[Node], name: &str) -> Result<()> {
                 construct_relative_path_allow_recursion(Some(origin), token, allow_recursion)?;
             }
         }
-        for children in child_lists!(node).into_iter().flatten() {
+        for children in node.child_lists().into_iter().flatten() {
             validate_relative_references(children, name)?;
         }
     }
@@ -110,7 +56,7 @@ fn attach_include_origins(nodes: &mut [Node], name: &str) {
                 *origin = Some(name.to_string());
             }
         }
-        for children in child_lists!(node).into_iter().flatten() {
+        for children in node.child_lists_mut().into_iter().flatten() {
             attach_include_origins(children, name);
         }
     }
@@ -126,7 +72,7 @@ pub fn set_ifchanged_origins(nodes: &mut [Node], template_origin: &str) {
                 *origin = Some(template_origin.to_string());
             }
         }
-        for children in child_lists!(node).into_iter().flatten() {
+        for children in node.child_lists_mut().into_iter().flatten() {
             set_ifchanged_origins(children, template_origin);
         }
     }
@@ -148,7 +94,7 @@ pub fn set_node_sources(nodes: &mut [Node], source: &Arc<str>, origin: Option<&s
                 *name = origin.map(str::to_owned);
             }
         }
-        for children in child_lists!(node).into_iter().flatten() {
+        for children in node.child_lists_mut().into_iter().flatten() {
             set_node_sources(children, source, origin);
         }
     }
@@ -278,7 +224,7 @@ impl InheritanceChain {
             Node::Extends(_) => return Node::Comment,
             _ => node.clone(),
         };
-        for children in child_lists!(&mut overridden).into_iter().flatten() {
+        for children in overridden.child_lists_mut().into_iter().flatten() {
             *children = self.apply_block_overrides(children);
         }
         overridden
@@ -448,7 +394,7 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
     if let Node::Block { name, nodes } = node {
         blocks.insert(name.clone(), nodes.clone());
     }
-    for children in child_lists!(node).into_iter().flatten() {
+    for children in node.child_lists().into_iter().flatten() {
         for child in children {
             extract_blocks_recursive(child, blocks);
         }

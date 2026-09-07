@@ -412,7 +412,74 @@ pub const TEMPLATETAG_NAMES: [&str; 8] = [
     "closecomment",
 ];
 
+// Physical child lists shared by the immutable discovery walk and mutable
+// override walk. Exhaustive matching makes new node variants require a
+// traversal decision; no catch-all may silently hide a new container.
+macro_rules! child_lists {
+    ($node:expr) => {
+        match $node {
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => [Some(true_nodes), Some(false_nodes)],
+            Node::For {
+                nodes, empty_nodes, ..
+            } => [Some(nodes), Some(empty_nodes)],
+            Node::IfChanged {
+                nodes, else_nodes, ..
+            } => [Some(nodes), Some(else_nodes)],
+            Node::BlockSuperScope { super_nodes, nodes } => [Some(super_nodes), Some(nodes)],
+            Node::Located { nodes, .. }
+            | Node::Block { nodes, .. }
+            | Node::With { nodes, .. }
+            | Node::Spaceless { nodes }
+            | Node::AutoEscape { nodes, .. }
+            | Node::Filter { nodes, .. } => [Some(nodes), None],
+            Node::ReactComponent { children, .. }
+            | Node::BlockCustomTag { children, .. }
+            | Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => [Some(children), None],
+            Node::Text(_)
+            | Node::Variable(..)
+            | Node::Extends(_)
+            | Node::Include { .. }
+            | Node::Comment
+            | Node::Load(_)
+            | Node::CsrfToken
+            | Node::Static(_)
+            | Node::RustComponent { .. }
+            | Node::CustomTag { .. }
+            | Node::WidthRatio { .. }
+            | Node::FirstOf { .. }
+            | Node::TemplateTag(_)
+            | Node::Cycle { .. }
+            | Node::ResetCycle { .. }
+            | Node::Now(_)
+            | Node::UnsupportedTag { .. }
+            | Node::AssignTag { .. }
+            | Node::InlineIf { .. }
+            | Node::RawBlockCustomTag { .. } => [None, None],
+        }
+    };
+}
+
 impl Node {
+    /// Physical children only; callers decide evaluation order and scope semantics.
+    /// Structural children without executing them (parent-super body before child).
+    /// Analyses must
+    /// still handle scope boundaries (loops, includes, parent blocks) explicitly.
+    /// Evaluation and cache eligibility intentionally keep their own semantics.
+    pub fn child_lists(&self) -> [Option<&Vec<Node>>; 2] {
+        child_lists!(self)
+    }
+    /// Mutable counterpart used when annotating or rewriting the AST in place.
+    pub fn child_lists_mut(&mut self) -> [Option<&mut Vec<Node>>; 2] {
+        child_lists!(self)
+    }
+
     pub fn unlocated(&self) -> &Node {
         match self {
             Self::Located { nodes, .. } => nodes[0].unlocated(),
@@ -2732,47 +2799,7 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
 ) {
     for node in nodes {
         match node {
-            Node::Located { nodes, .. } => {
-                collect_dj_model_fields_depth(nodes, loader, fields, depth)
-            }
-            // The immune source: developer template text literals.
             Node::Text(text) => scan_dj_model_in_text(text, fields),
-
-            // Recurse into every child-bearing variant so a `dj-model` binding
-            // inside an `{% if %}`/`{% for %}`/`{% block %}`/etc. is captured.
-            // Mirrors the recursion set in `assign_if_marker_ids`.
-            Node::If {
-                true_nodes,
-                false_nodes,
-                ..
-            } => {
-                collect_dj_model_fields_depth(true_nodes, loader, fields, depth);
-                collect_dj_model_fields_depth(false_nodes, loader, fields, depth);
-            }
-            Node::For {
-                nodes: body,
-                empty_nodes,
-                ..
-            } => {
-                collect_dj_model_fields_depth(body, loader, fields, depth);
-                collect_dj_model_fields_depth(empty_nodes, loader, fields, depth);
-            }
-            Node::Block { nodes: body, .. }
-            | Node::With { nodes: body, .. }
-            | Node::Spaceless { nodes: body, .. }
-            | Node::AutoEscape { nodes: body, .. }
-            | Node::Filter { nodes: body, .. } => {
-                collect_dj_model_fields_depth(body, loader, fields, depth);
-            }
-            Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
-                collect_dj_model_fields_depth(children, loader, fields, depth);
-            }
-            Node::Language { children, .. }
-            | Node::Timezone { children, .. }
-            | Node::Localize { children, .. }
-            | Node::LocalTime { children, .. } => {
-                collect_dj_model_fields_depth(children, loader, fields, depth);
-            }
 
             // `{% include "child.html" %}` — load and walk the included
             // template's own text so its `dj-model` bindings are covered. The
@@ -2805,7 +2832,11 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             // Leaf / non-child variants carry no template Text. Note
             // `RustComponent`, `CustomTag`, `AssignTag`, `Variable`, etc. never
             // hold raw `dj-model=` markup, so there is nothing to scan.
-            _ => {}
+            _ => {
+                for children in node.child_lists().into_iter().flatten() {
+                    collect_dj_model_fields_depth(children, loader, fields, depth);
+                }
+            }
         }
     }
 }
@@ -4500,6 +4531,31 @@ mod tests {
         let mut got = fields(src);
         got.sort();
         assert_eq!(got, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_ifchanged_branches_inside_wrappers() {
+        let src = r#"{% for item in items %}{% with value=item %}
+            {% ifchanged value %}<input dj-model="changed">
+            {% else %}<input dj-model="unchanged">{% endifchanged %}
+            {% endwith %}{% endfor %}"#;
+        let mut got = fields(src);
+        got.sort();
+        assert_eq!(got, vec!["changed", "unchanged"]);
+    }
+
+    #[test]
+    fn dj_model_super_scope_walks_both_literal_bodies() {
+        let nodes = vec![Node::BlockSuperScope {
+            nodes: vec![Node::Text(r#"<input dj-model="child">"#.into())],
+            super_nodes: vec![Node::Text(r#"<input dj-model="parent">"#.into())],
+        }];
+        let mut got = HashSet::new();
+        collect_dj_model_fields::<NoIncludeLoader>(&nodes, None, &mut got);
+        assert_eq!(
+            got,
+            HashSet::from(["child".to_string(), "parent".to_string()])
+        );
     }
 
     #[test]
