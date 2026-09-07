@@ -290,8 +290,9 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
             # passing: it terminates, so it was not the shape THIS fix bounds
             # and putting it in a context still materialised it. That was
             # closed separately by #2695, which moved the conversion's bound
-            # onto the stated length for every sized sequence and gave the
-            # SINKS their own termination rule — see
+            # onto the stated length for every sized sequence whose items do
+            # not already exist, and gave the SINKS their own termination
+            # rule — see
             # `test_sized_sequence_conversion_2695_2693.py`. Its cells live
             # there rather than here, so this table stays the liar's.
             #
