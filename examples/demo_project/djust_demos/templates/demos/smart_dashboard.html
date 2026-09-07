@@ -1,4 +1,4 @@
-{# @client_state / @optimistic / @throttle / @debounce shown on this page are INERT (#2656): they stamp metadata nothing in the shipped client reads. The panels update because the server re-renders. The StateBus this page used to credit was deleted in #2680. #}
+{# @debounce / @throttle on this page ARE wired as of #2656 (client gate: static/djust/src/05-handler-rate-limit.js). @client_state and @optimistic are still INERT (#2680, #2699): they stamp metadata nothing in the shipped client reads. The panels update because the server re-renders — that is the whole mechanism, and it was never the StateBus (deleted in #2680). #}
 <!DOCTYPE html>
 <html lang="en">
 <head>

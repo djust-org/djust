@@ -845,9 +845,10 @@ DECORATORS: List[Dict[str, Any]] = [
         "name": "@debounce",
         "import": "from djust.decorators import debounce",
         "description": (
-            "INERT — no client implementation. Records debounce intent as handler "
-            "metadata; `debounceTimers` in src/04-cache.js is never populated, so "
-            "events are sent unthrottled. Do not recommend as a fix (issue #2656)."
+            "Client-side debounce: the browser delays the send until `wait` seconds "
+            "after the LAST event, so a burst of keystrokes reaches the server as one "
+            "event carrying the last payload. `max_wait` forces a send while a burst "
+            "is still arriving. Implemented in src/05-handler-rate-limit.js (#2656)."
         ),
         "params": {
             "wait": "float — seconds to wait (default: 0.3)",
@@ -859,9 +860,10 @@ DECORATORS: List[Dict[str, Any]] = [
         "name": "@throttle",
         "import": "from djust.decorators import throttle",
         "description": (
-            "INERT — no client implementation. Records throttle intent as handler "
-            "metadata; `throttleState` in src/04-cache.js is never populated, so "
-            "events are sent unthrottled. Do not recommend as a fix (issue #2656)."
+            "Client-side throttle: at most one send per `interval`. Both edges are "
+            "honoured by default — the first event of a window sends immediately and "
+            "events inside the window collapse into one trailing send carrying the "
+            "last payload. Implemented in src/05-handler-rate-limit.js (#2656)."
         ),
         "params": {
             "interval": "float — minimum interval in seconds (default: 0.1)",
@@ -873,9 +875,18 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@optimistic",
         "import": "from djust.decorators import optimistic",
-        "description": "Server-side marker only — the client-side optimistic update is NOT implemented; the UI does not update before the server responds.",
+        "description": "INERT — stamps metadata nothing in the shipped client "
+        "reads, and a bare @optimistic declares no DOM change for a client to "
+        "apply, so the UI does not update before the server responds. Whether to "
+        "implement it (or fold it into the wired DEP-002 optimistic_rules) is "
+        "#2699. Do not recommend it as a working mechanism.",
         "params": {},
-        "usage": ["@optimistic\ndef toggle_todo(self, todo_id: int = 0, **kwargs):"],
+        "usage": [
+            # INERT (#2699) — the marker has to travel with the PASTE (#2696);
+            # the entry's `description` is a separate block an agent may not copy.
+            "@optimistic  # INERT (#2699): the UI does not update early\n"
+            "def toggle_todo(self, todo_id: int = 0, **kwargs):",
+        ],
     },
     {
         "name": "@cache",
@@ -892,18 +903,18 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@client_state",
         "import": "from djust.decorators import client_state",
-        "description": "MARKER ONLY — stamps metadata that nothing in the shipped "
+        "description": "INERT / MARKER ONLY — stamps metadata that nothing in the shipped "
         "client reads, so a decorated handler behaves exactly like an undecorated "
         "one. The StateBus class that was to consume it was deleted in #2680 as "
-        "dead code; whether to implement the client half is #2656. Do not "
+        "dead code; whether to implement the client half is #2680. Do not "
         "recommend it as a working coordination mechanism.",
         "params": {
             "keys": "List[str] — state keys to publish/subscribe",
         },
         "usage": [
-            # INERT (#2656) — repeated here because this snippet is what an
+            # INERT (#2680) — repeated here because this snippet is what an
             # agent copies; the entry's `description` is a separate block.
-            "@client_state(keys=['filter'])  # INERT (#2656): publishes nothing\n"
+            "@client_state(keys=['filter'])  # INERT (#2680): publishes nothing\n"
             "def update_filter(self, filter: str = '', **kwargs):",
         ],
     },
@@ -1411,11 +1422,11 @@ BEST_PRACTICES = {
                 "This floods the server and causes poor UX with flickering."
             ),
             "solution": (
-                "Debounce the input on the client, or guard the handler "
-                "server-side (cache the query, or ignore inputs shorter than "
-                "N chars). NOTE: the @debounce decorator is INERT — it has no "
-                "client implementation and will not reduce request volume "
-                "(issue #2656)."
+                "Apply @debounce(wait=0.5) to the handler: the client collapses "
+                "the keystroke burst into one send carrying the last value "
+                '(#2656). The template-level `dj-debounce="500"` attribute does '
+                "the same at the element. Optionally also guard server-side "
+                "(cache the query, or ignore inputs shorter than N chars)."
             ),
             "related_check": "djust.Q001",
         },

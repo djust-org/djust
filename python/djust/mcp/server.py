@@ -102,10 +102,10 @@ def create_server() -> "FastMCP":
     def get_decorators() -> str:
         """Get all available djust decorators with usage examples.
 
-        Returns @event_handler, @cache, @rate_limit, @permission_required,
-        @reactive, state() and @computed — and, marked inert (#2656),
-        @debounce/@throttle/@optimistic/@client_state, which stamp metadata
-        nothing in the shipped client reads.
+        Returns @event_handler, @debounce, @throttle, @cache, @rate_limit,
+        @permission_required, @reactive, state() and @computed — and, marked
+        inert, @optimistic (#2699) and @client_state (#2680), which stamp
+        metadata nothing in the shipped client reads.
         Each entry carries its parameters and import path.
         """
         from djust.schema import DECORATORS

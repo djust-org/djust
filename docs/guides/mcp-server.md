@@ -100,9 +100,9 @@ Returns all djust decorators with import paths, parameters, and usage examples:
 
 - `@event_handler` — mark methods as event handlers
 - `@debounce` / `@throttle` — client-side rate control
-- `@optimistic` — instant UI updates, server corrects
+- `@optimistic` — INERT (#2699); stamps metadata nothing in the client reads
 - `@cache` — client-side response caching
-- `@client_state` — INERT (#2656); stamps metadata nothing in the client reads
+- `@client_state` — INERT (#2680); stamps metadata nothing in the client reads
 - `@rate_limit` — server-side rate limiting
 - `@permission_required` — handler-level auth
 - `@reactive` / `@computed` / `state()` — reactive state primitives

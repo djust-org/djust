@@ -190,6 +190,10 @@ class LiveViewSSE {
                 if (data.cache_config) {
                     setCacheConfig(data.cache_config);
                 }
+                // #2656 — @debounce / @throttle configuration (WS parity).
+                if (data.handler_config) {
+                    setHandlerConfig(data.handler_config);
+                }
 
                 if (data.html) {
                     // #2632: the PAGE container — a sticky/embedded root

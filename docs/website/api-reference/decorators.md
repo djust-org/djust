@@ -1,10 +1,14 @@
 # Decorators API Reference
 
-> **`@debounce`, `@throttle` and `@optimistic` are INERT.** They record
-> handler metadata but have no client-side implementation — the counterpart
-> state in `static/djust/src/` is declared and never populated, so applying
-> them changes nothing at runtime. Examples below that use them still work,
-> but without the timing or optimistic-update behaviour they describe. Tracked in issue #2656.
+> **`@optimistic` is INERT.** It records handler metadata that nothing in the
+> shipped client reads, so applying it changes nothing at runtime — a bare
+> `@optimistic` declares no DOM change for a client to apply. Examples below
+> that use it still work, but without the optimistic-update behaviour they
+> describe. Tracked in issue #2699.
+>
+> `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
+> `static/djust/src/05-handler-rate-limit.js`, configured from the mount
+> frame's `handler_config`.
 
 
 ```python
@@ -78,7 +82,7 @@ def raw_handler(self, value: str = "", **kwargs):
 
 ## `@debounce`
 
-Debounce event handler calls on the client side. The handler fires only after the specified delay has elapsed since the last event.
+Debounce the handler on the client. The browser delays the SEND until `wait` seconds after the last event, so a burst of keystrokes reaches the server as one event carrying the last payload. Implemented in `static/djust/src/05-handler-rate-limit.js`; the config rides the mount frame as `handler_config`.
 
 ```python
 @debounce(wait=0.3, max_wait=None)
@@ -87,7 +91,7 @@ Debounce event handler calls on the client side. The handler fires only after th
 **Parameters:**
 
 - `wait` (`float`) — Seconds to wait after the last event before firing. Default `0.3`.
-- `max_wait` (`float | None`) — Maximum seconds to wait even if events keep firing. Default `None` (unlimited).
+- `max_wait` (`float | None`) — Upper bound on the total delay, measured from the FIRST event of the burst, so a user who never pauses still gets a send. Default `None` (unlimited).
 
 **Usage:**
 
@@ -111,7 +115,7 @@ Must be applied **inside** `@event_handler()` (closer to the function).
 
 ## `@throttle`
 
-Limit how often a handler fires. Useful for scroll, resize, or mouse-move events.
+Cap how often the handler is SENT — at most once per `interval`. With both edges on (the default) the first event of a window goes immediately and everything inside the window collapses into one trailing send carrying the last payload. Useful for scroll, resize, or mouse-move events. When a handler carries both `@debounce` and `@throttle`, `@debounce` wins.
 
 ```python
 @throttle(interval=0.1, leading=True, trailing=True)
@@ -185,7 +189,7 @@ def search(self, value: str = "", **kwargs):
 
 ## `@client_state`
 
-> **INERT (#2656)** — stamps metadata nothing in the shipped client reads, so a
+> **INERT (#2680)** — stamps metadata nothing in the shipped client reads, so a
 > decorated handler behaves exactly like an undecorated one. The `StateBus` it
 > named was deleted in #2680.
 

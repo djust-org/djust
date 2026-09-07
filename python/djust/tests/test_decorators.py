@@ -306,12 +306,12 @@ class TestDecoratorMetadata:
     def test_client_state_metadata(self):
         """Test @client_state attaches correct metadata.
 
-        Metadata only — @client_state is INERT (#2656): nothing in the shipped
+        Metadata only — @client_state is INERT (#2680): nothing in the shipped
         client reads this, so a decorated handler behaves exactly like an
         undecorated one. This pins the stamp, not any behaviour.
         """
 
-        @client_state(keys=["filter", "sort"])  # INERT (#2656)
+        @client_state(keys=["filter", "sort"])  # INERT (#2680)
         def handler(self, **kwargs):
             pass
 

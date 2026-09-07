@@ -304,24 +304,25 @@ def delete_item(self, item_id: int, **kwargs):
 
 ### Decorator Usage
 
-> `@debounce` / `@throttle` / `@optimistic` are markers with no client
-> implementation — the handler still fires on every event. `@cache` is wired.
+> `@debounce`, `@throttle` and `@cache` are wired end-to-end. `@optimistic`
+> and `@client_state` are markers with no client implementation — the
+> handler still fires exactly as an undecorated one would (#2699, #2680).
 
 ```python
-# Debouncing (declared; the client half is not implemented)
+# Debouncing — the client waits 0.5s after the last keystroke, then sends once
 @event_handler()
-@debounce(wait=0.5)  # INERT — no client impl (#2656); does NOT delay
+@debounce(wait=0.5)
 def search(self, value: str = "", **kwargs):
     self.search_query = value
     self._refresh_results()
 
-# Throttling (declared; the client half is not implemented)
+# Throttling — the client sends at most once per second
 @event_handler()
-@throttle(interval=1.0)  # INERT — no client impl (#2656); does NOT limit
+@throttle(interval=1.0)
 def track_scroll(self, position: int = 0, **kwargs):
     self.scroll_position = position
 
-# Optimistic updates (INERT — no client impl, #2656; UI does not update early)
+# Optimistic updates (INERT — no client impl, #2699; UI does not update early)
 @event_handler()
 @optimistic
 def like_post(self, post_id: int, **kwargs):
@@ -335,7 +336,7 @@ def like_post(self, post_id: int, **kwargs):
 def autocomplete(self, query: str = "", **kwargs):
     return City.objects.filter(name__istartswith=query)[:10]
 
-# Client state sync (INERT — no client impl, #2656; coordinates nothing.
+# Client state sync (INERT — no client impl, #2680; coordinates nothing.
 # The tab switch works because the server re-renders.)
 @event_handler()
 @client_state(keys=["active_tab"])
@@ -687,7 +688,7 @@ def autocomplete(self, query: str = "", **kwargs):
         name__istartswith=query
     )[:10]
 
-# Cached filter. NOTE: @client_state is INERT (#2656) and the StateBus it
+# Cached filter. NOTE: @client_state is INERT (#2680) and the StateBus it
 # named was deleted (#2680) — only @cache does anything here.
 @event_handler()
 @client_state(keys=["filter"])
@@ -879,7 +880,7 @@ Scroll tracking?       → @throttle(interval=1.0)
 Like button?           → @optimistic
 Autocomplete?          → @cache(ttl=300)
 Multi-component sync?  → one handler updating both; the single server
-                         re-render carries both. (@client_state is INERT, #2656.)
+                         re-render carries both. (@client_state is INERT, #2680.)
 Draft saving?          → DraftModeMixin
 ```
 

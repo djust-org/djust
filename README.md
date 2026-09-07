@@ -719,9 +719,9 @@ See the [State Management Quick Start](docs/STATE_MANAGEMENT_QUICKSTART.md).
 |-----------|----------|---------|
 | `@debounce(wait)` | User is typing | Search, autosave |
 | `@throttle(interval)` | Rapid events | Scroll, resize |
-| `@optimistic` | Instant feedback | Counter, toggle |
+| `@optimistic` | INERT (#2699) — stamps metadata nothing in the shipped client reads; the UI does not update before the server responds | — |
 | `@cache(ttl, key_params)` | Repeated queries | Autocomplete |
-| `@client_state(keys)` | INERT (#2656) — stamps metadata nothing in the shipped client reads; the handler behaves as if undecorated | Dashboard filters |
+| `@client_state(keys)` | INERT (#2680) — stamps metadata nothing in the shipped client reads; the handler behaves as if undecorated | — |
 | `@background` | Long operations | AI generation, file processing |
 | `DraftModeMixin` | Auto-save forms | Contact form |
 
@@ -729,9 +729,9 @@ Quick decision guide:
 
 - Typing in an input? → `@debounce(0.5)`
 - Scrolling/resizing? → `@throttle(0.1)`
-- Need an instant UI update? → `@optimistic`
+- Need an instant UI update? → not yet; `@optimistic` is INERT (#2699). Use `dj-disable-with` or a loading state.
 - Same query multiple times? → `@cache(ttl)`
-- Multiple components? → update both in ONE handler; `@client_state([keys])` is INERT (#2656) and coordinates nothing
+- Multiple components? → update both in ONE handler; `@client_state([keys])` is INERT (#2680) and coordinates nothing
 - Long-running work? → `@background` or `self.start_async(callback)`
 - Auto-save forms? → `DraftModeMixin`
 

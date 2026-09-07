@@ -2618,6 +2618,16 @@ class ViewRuntime:
         if cache_config:
             mount_msg["cache_config"] = cache_config
 
+        # handler_config (#2656) — @debounce / @throttle metadata for the
+        # client-side rate-limit gate in src/05-handler-rate-limit.js. Same
+        # transport as cache_config deliberately: the mount frame is
+        # CSP-strict (no inline <script>) and survives the #1610 mount morph,
+        # unlike the `window.handlerMetadata` script tag, which the client
+        # now reads only as an HTTP-path fallback.
+        handler_config = self._extract_handler_config(view_instance)
+        if handler_config:
+            mount_msg["handler_config"] = handler_config
+
         # optimistic_rules (DEP-002, WS websocket.py:2823-2826) — descriptor
         # components with tier="optimistic" ship their client-side rules on the
         # mount frame so the client can apply an optimistic UI update before the
@@ -4146,6 +4156,39 @@ class ViewRuntime:
                     if cache_info:
                         cache_config[attr_name] = cache_info
             return cache_config or None
+        except Exception:
+            return None
+
+    #: Decorator keys the client rate-limit gate consumes (#2656). Kept
+    #: narrow on purpose — the mount frame ships only what a client module
+    #: actually reads, so a new metadata-only decorator cannot silently
+    #: start costing every mount bytes it has no consumer for.
+    _CLIENT_RATE_LIMIT_KEYS = ("debounce", "throttle")
+
+    def _extract_handler_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
+        """Extract @debounce / @throttle metadata from the view's handlers.
+
+        Mirrors :meth:`_extract_cache_config`; ships on the mount frame as
+        ``handler_config`` and is consumed by ``setHandlerConfig`` in
+        ``static/djust/src/05-handler-rate-limit.js`` (#2656).
+        """
+        try:
+            handler_config: Dict[str, Any] = {}
+            for attr_name in dir(type(view_instance)):
+                if attr_name.startswith("_"):
+                    continue
+                method = getattr(view_instance, attr_name, None)
+                decorators = getattr(method, "_djust_decorators", None)
+                if not decorators:
+                    continue
+                entry = {
+                    key: decorators[key]
+                    for key in self._CLIENT_RATE_LIMIT_KEYS
+                    if decorators.get(key)
+                }
+                if entry:
+                    handler_config[attr_name] = entry
+            return handler_config or None
         except Exception:
             return None
 

@@ -42,6 +42,12 @@ describe('handleEvent strips internal params before sending', () => {
                 stopLoading: () => {},
             },
 
+            // @debounce / @throttle gate (#2656, src/05-handler-rate-limit.js).
+            // Always "not rate-limited" here: this file is about param
+            // stripping, and the gate has its own suite in
+            // handler_rate_limit_2656.test.js.
+            applyHandlerRateLimit: () => false,
+
             // VDOM stubs
             applyPatches: () => {},
             initReactCounters: () => {},
