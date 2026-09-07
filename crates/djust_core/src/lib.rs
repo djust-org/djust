@@ -656,22 +656,28 @@ pub struct Encoded {
     /// **What can never acquire one.** `crosses_as_encoded` / the
     /// `FromPyObject` impl claim a `dict`, a tuple, anything with
     /// `__djust_serialize__` and any `Model` in arms ABOVE [`opaque_value`],
-    /// so no dict, model or manager reaches this field. That is enforced by
-    /// the existing ordering rather than by a new rule.
+    /// so no dict, model or manager reaches this field. A `list` and an
+    /// evaluated `QuerySet` are also excluded, but by a RULE rather than by
+    /// the ordering: [`len_call_already_materialised_the_items`] exempts them
+    /// from the conversion's decline at any length, because for those two the
+    /// items exist by the time the length is known and declining could only
+    /// change the spelling (#2695 review — it changed it to 66 MB of djust's
+    /// own serialization dicts).
     ///
-    /// A `list` or an evaluated `QuerySet` used to be on that list too, and
-    /// since #2695 it is not: past [`OPAQUE_ITEM_CAP`] the sequence arm
-    /// declines to enumerate and the object arrives HERE, so
-    /// `{{ rows.0.password }}` over a 100,001-row list is answered by
-    /// [`Context::walk_live`] rather than by a `Value::List` whose elements
-    /// were already denylist-filtered at the conversion. The floor is the
-    /// same either way — `protect_sidecar_strict` re-wraps after every
+    /// An ordinary sized sequence — a `deque`, an `array`, a `range`, a duck
+    /// type with a stated `__len__` — DOES arrive here past
+    /// [`OPAQUE_ITEM_CAP`], and that is what #2695 changed: over a
+    /// 100 001-element `deque` of models `{{ rows.0.password }}` is answered
+    /// by [`Context::walk_live`] rather than by a `Value::List` whose
+    /// elements were already denylist-filtered at the conversion. The floor
+    /// is the same either way — `protect_sidecar_strict` re-wraps after every
     /// segment — and that is a MEASUREMENT rather than an inference:
     /// `TestTheSerializationFloorHoldsOnTheNewHandle` in
-    /// `python/tests/test_sized_sequence_conversion_2695_2693.py` renders
-    /// the denylisted field on both sides of the cap and asserts both are
-    /// empty, with a non-vacuity case proving the padded list really is a
-    /// carrier.
+    /// `python/tests/test_sized_sequence_conversion_2695_2693.py` renders the
+    /// denylisted field on both sides of the cap and asserts both are empty,
+    /// with a non-vacuity case proving the padded collection really is a
+    /// carrier — the case that caught the `list` exemption making the class
+    /// vacuous.
     ///
     /// [`Context::walk_live`]: crate::Context::walk_live
     ///
@@ -3533,8 +3539,9 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   belongs on BOTH halves of the same rule and this is only the first:
 ///   the conversion declines, and the SINKS then walk the live object under
 ///   [`Encoded::live_walk_terminates`], which is where "can the walk end"
-///   is asked. `list(range(100_001))` crosses as a carrier here and still
-///   renders every item at `{% for %}`, because its walk terminates.
+///   is asked. `collections.deque(range(100_001))` crosses as a carrier here
+///   and still renders every item at `{% for %}`, because its walk
+///   terminates.
 ///
 /// * **`resolve_lazy()` is on** — the shipped default. The decline only
 ///   improves on the hang because ADR-027's carrier holds a LIVE HANDLE, so
@@ -3546,8 +3553,60 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   had a slow-but-correct one, so the hatch keeps enumerating in full and
 ///   both #2678's and #2695's hangs stay unfixed there. An unfixed cell
 ///   beats a wrong one.
-fn stated_len_is_too_large_to_enumerate(len: usize) -> bool {
-    len > OPAQUE_ITEM_CAP && resolve_lazy()
+///
+/// * **Asking the length did not ALREADY materialise the items**
+///   ([`len_call_already_materialised_the_items`], #2695 review). The decline
+///   exists to avoid PAYING to build items the object only DESCRIBES —
+///   `range(10**9)` states a billion and holds none of them. When the items
+///   already exist the decline saves nothing, and it is not free: the
+///   carrier it falls back to spells `str(o)` AND `repr(o)`, each of which
+///   enumerates the whole collection anyway.
+fn stated_len_is_too_large_to_enumerate(ob: &Bound<'_, PyAny>, len: usize) -> bool {
+    len > OPAQUE_ITEM_CAP && resolve_lazy() && !len_call_already_materialised_the_items(ob)
+}
+
+/// Are this object's items ALREADY built by the time its length is known?
+/// (#2695 review.)
+///
+/// The question [`stated_len_is_too_large_to_enumerate`] has to ask before
+/// declining, because the decline's whole justification is the cost of
+/// materialising — and for these two shapes that cost is already sunk, so
+/// declining only changes the SPELLING:
+///
+/// * A **`list`** holds its elements: `len()` is O(1) and creates nothing.
+/// * A Django **`QuerySet`**: `__len__` calls `_fetch_all()`, so the row
+///   objects are in `_result_cache` the moment the length is known.
+///
+/// The shape that found it is one object wearing both hats. A 100 001-row
+/// `QuerySet` in a template context is auto-serialised by
+/// `DjustTemplate.render` into a `list` of djust's own identity dicts;
+/// declining that list spelled `{{ rows }}` as
+/// `[{'id': 1, 'pk': 1, '__str__': 'qs0', '__model__': 'User', …}]` — 66 MB —
+/// where the same queryset one row shorter renders `[qs0, qs1, qs2]`, and
+/// declining the QuerySet itself answered `{{ rows.0 }}` with `''` because
+/// `_SidecarQuerySetProxy` has no `__getitem__` for the live walk to use.
+/// Neither is a floor breach — the rows are denylist-filtered on both sides,
+/// pinned by `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` — but
+/// both are a content and payload change on the exact shape
+/// [`Encoded::live`]'s doc names.
+///
+/// Nothing else is exempt, and that is the point of asking about
+/// materialisation rather than listing types: a `tuple` never reaches here
+/// (the tuple arm above [`bounded_sequence_items`] claims it), and `range` /
+/// `bytes` / `array` / `deque` / a numpy array / a duck type with a stated
+/// `__len__` all DESCRIBE or PACK their items, so the decline is a real
+/// saving for them and they keep it.
+fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_instance_of::<PyList>() {
+        return true;
+    }
+    // A cached `sys.modules` lookup, and only ever reached once the stated
+    // length is already past the cap — never on the hot path.
+    ob.py()
+        .import("django.db.models")
+        .and_then(|m| m.getattr("QuerySet"))
+        .and_then(|cls| ob.is_instance(&cls))
+        .unwrap_or(false)
 }
 
 fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
@@ -3560,7 +3619,7 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
         return None;
     }
     let len = ob.len().ok()?;
-    if stated_len_is_too_large_to_enumerate(len) {
+    if stated_len_is_too_large_to_enumerate(ob, len) {
         return None;
     }
     let mut items = Vec::with_capacity(len.min(OPAQUE_ITEM_CAP));
@@ -3783,6 +3842,15 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     // or list-of-dicts (queryset) — recurse via Value so both
                     // shapes convert (Object / List). The result carries no
                     // proxies, so this does not re-enter this branch.
+                    //
+                    // The list-of-dicts converts IN FULL at any length, and
+                    // that is not a second rule: it is a `list`, and
+                    // `stated_len_is_too_large_to_enumerate` exempts a `list`
+                    // because its items are already materialised (#2695
+                    // review — see that function). Before the exemption a
+                    // 100 001-row queryset's rows were declined HERE and
+                    // spelled `{{ rows }}` as `str()` of djust's own identity
+                    // dicts.
                     if let Ok(v) = result.extract::<Value>() {
                         return Ok(v);
                     }
@@ -3957,11 +4025,13 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         // marked unbounded so `opaque_value` leaves `items` at `None` rather
         // than paying the billion reads that are the reported hang — for a
         // `range(10**9)` as much as for the liar whose `__getitem__` never
-        // raises. Every sized collection UNDER the cap — `list`, `set`,
-        // `range(3)`, an evaluated `QuerySet` — is enumerated in full exactly
-        // as before. Over it, the ITEMS are read at the sink instead, from
-        // the live handle, under the sink's own termination rule
-        // ([`Encoded::live_walk_terminates`]).
+        // raises. Every sized collection UNDER the cap — `set`, `range(3)`,
+        // a `deque` — is enumerated in full exactly as before, and so is a
+        // `list` / an evaluated `QuerySet` at ANY length (their items are
+        // already built, so the decline could only change the spelling —
+        // `len_call_already_materialised_the_items`). Over the cap the ITEMS
+        // are read at the sink instead, from the live handle, under the
+        // sink's own termination rule ([`Encoded::live_walk_terminates`]).
         //
         // Without a `__len__` there is no bound at all, so walk to the cap: a
         // class whose `__iter__` returns `itertools.count()` is RE-iterable,
@@ -3978,7 +4048,7 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         //
         // Counted, not collected: the items are not converted here.
         match len {
-            Some(n) if stated_len_is_too_large_to_enumerate(n) => {
+            Some(n) if stated_len_is_too_large_to_enumerate(ob, n) => {
                 unbounded = true;
             }
             Some(_) => {}
@@ -4055,8 +4125,8 @@ impl Encoded {
     ///   the walk and must not.
     ///
     /// When both hold the walk is Django's own: `{% for %}` over
-    /// `list(range(100_001))` renders all 100 001 items, and `{% for %}`
-    /// over `range(10**9)` does not come back — which is measured Django
+    /// `collections.deque(range(100_001))` renders all 100 001 items, and
+    /// `{% for %}` over `range(10**9)` does not come back — which is measured Django
     /// behaviour for that same input, not a djust limitation (see the
     /// differential table in `python/tests/test_sized_sequence_conversion_2695_2693.py`).
     ///
@@ -4245,8 +4315,9 @@ impl Encoded {
     ///
     /// Load-bearing because the conversion now declines to enumerate a sized
     /// sequence past [`OPAQUE_ITEM_CAP`]: without this arm
-    /// `{{ v|slice:":3" }}` over `list(range(100_001))` returned the WHOLE
-    /// carrier unchanged — 100 001 items where Django renders three.
+    /// `{{ v|slice:":3" }}` over `collections.deque(range(100_001))` — or over
+    /// `range(10**9)` — returned the WHOLE carrier unchanged, where Django
+    /// renders three items.
     pub fn live_get_slice(
         &self,
         start: Option<isize>,

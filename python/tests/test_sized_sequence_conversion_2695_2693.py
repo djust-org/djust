@@ -34,6 +34,7 @@ are pinned, so adding a divergence and removing one are equally loud.
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import subprocess
@@ -149,6 +150,11 @@ _CHILD = textwrap.dedent(
         "zip": lambda: zip([3, 1], [2, 0]),
         "queryset": lambda: QuerySetShape([3, 1, 2]),
         "liar": lambda: Liar(),
+        # NOT in the matrix (Django never returns from any sink over it) —
+        # the shape that covers `live_walk_terminates`'s OTHER half, the one
+        # a gate-off of `self.len.is_some()` leaves green everywhere else.
+        # A one-shot iterator with an endless `__next__` and NO `__len__`.
+        "count": lambda: __import__("itertools").count(),
         "dict_list": lambda: list(D),
         "dict_gen": lambda: (d for d in D),
         "dict_iter": lambda: iter(list(D)),
@@ -590,13 +596,20 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         assert answers[("list_big", "for")].startswith("<588897 chars>0,1,2,3,")
         assert answers[("list_big", "join")].startswith("<588896 chars>0,1,2,3,")
 
-    def test_a_list_past_the_cap_slices_to_three_items(self) -> None:
+    @pytest.mark.parametrize("shape", ["list_big", "range_big"])
+    def test_a_collection_past_the_cap_slices_to_three_items(self, shape: str) -> None:
         """``|slice`` had to grow a live arm with the conversion change: the
-        fallback returns the value UNCHANGED, so a carried 100 001-item list
-        rendered all of them where Django renders three."""
-        answers, reason = _render_in_child("djust", True, [("list_big", "slice")], deadline=20)
+        fallback returns the value UNCHANGED, so a CARRIED 100 001-item
+        sequence rendered all of them where Django renders three.
+
+        Both shapes, because they take different arms since the #2695 review:
+        a `list` is exempt from the decline and reaches `apply_slice`'s
+        `Value::List` arm, while `range(10**9)` is carried and reaches the
+        live one. Only the second exercises `Encoded::live_get_slice`.
+        """
+        answers, reason = _render_in_child("djust", True, [(shape, "slice")], deadline=20)
         assert reason is None, reason
-        assert answers[("list_big", "slice")] == "[0, 1, 2]"
+        assert answers[(shape, "slice")] == "[0, 1, 2]"
 
     def test_the_liar_still_raises_rather_than_walking_forever(self) -> None:
         """#2678 must survive #2695. The liar states a billion and has no
@@ -604,6 +617,48 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         answers, reason = _render_in_child("djust", True, [("liar", "for")], deadline=20)
         assert reason is None, f"the liar walked instead of raising: {reason}"
         assert "yielded more than 100000 items" in answers[("liar", "for")]
+
+
+class TestBothHalvesOfTheSinkTerminationRuleAreCovered:
+    """``Encoded::live_walk_terminates`` is a conjunction, and each half needs
+    a test that goes RED when only that half is removed (#2129).
+
+    The PR shipped one: the liar covers the ``__iter__`` half. Gating off the
+    OTHER half — ``self.len.is_some()`` — left the whole file green, and the
+    only signal was a *hang in a different file* (the #2695 review, finding
+    3). ``itertools.count()`` is the shape that half exists for: an endless
+    iterator that never stated a length, so nothing bounds its walk but the
+    cap.
+
+    Both cells run in a child with a deadline AND an RSS ceiling, because the
+    failure they guard against is a NON-RETURN — an in-process assertion
+    cannot report "did not hang", it just never reports.
+    """
+
+    @pytest.mark.parametrize(
+        ("shape", "half"),
+        [
+            ("count", "self.len.is_some()"),
+            ("liar", "the `__iter__` half"),
+        ],
+    )
+    def test_an_unbounded_walk_raises_at_the_cap(self, shape: str, half: str) -> None:
+        answers, reason = _render_in_child("djust", True, [(shape, "for")], deadline=20)
+        assert reason is None, (
+            f"{shape} did not return from `{{% for %}}` ({reason}) — with "
+            f"{half} gone the sink walks it forever instead of raising"
+        )
+        assert "yielded more than 100000 items" in answers[(shape, "for")], answers[(shape, "for")]
+
+    def test_django_does_not_return_from_the_same_count(self) -> None:
+        """The reason an error is the right answer rather than a limitation:
+        Django's own ``{% for %}`` over ``itertools.count()`` never comes
+        back."""
+        _, reason = _render_in_child("django", True, [("count", "for")], deadline=8)
+        assert reason in ("HANG", "RUNAWAY-MEMORY"), (
+            "Django ANSWERED `{% for %}` over itertools.count() — if it now "
+            "terminates, djust's RuntimeError is no longer the better answer"
+        )
 
 
 class TestNeitherEngineReturnsFromAWalkOfAStatedBillion:
@@ -672,34 +727,49 @@ class TestTheEagerHatchStillEnumerates:
         )
 
 
-class TestTheSerializationFloorHoldsOnTheNewHandle:
-    """A `list` past the cap now reaches `Encoded::live`, which it never did
-    before — so the floor has to be re-checked rather than assumed.
+def _model_rows(padding: int) -> list:
+    """Three real `User`s carrying a denylisted field, plus `None` padding.
 
-    Under the cap a list is a `Value::List` whose `Model` elements went
-    through `normalize_django_value`, and the denylist was applied at the
-    CONVERSION. Past it the list crosses as a carrier and `{{ v.0.password }}`
-    is answered by `Context::walk_live` over the RAW list instead — a
-    different mechanism, so "unchanged in kind" would be a guess.
+    The padding puts a collection past the cap without building 100 000
+    models; only element 0 is ever read.
+    """
+    from django.contrib.auth.models import User
+
+    rows = []
+    for i in range(3):
+        user = User(username="alice", password="pbkdf2_sha256$SECRET", email="a@b.c")
+        user.pk = i
+        rows.append(user)
+    return rows + [None] * padding
+
+
+class TestTheSerializationFloorHoldsOnTheNewHandle:
+    """A sized sequence of `Model`s past the cap now reaches `Encoded::live`,
+    which it never did before — so the floor has to be re-checked rather than
+    assumed.
+
+    Under the cap the collection is a `Value::List` whose `Model` elements
+    went through `normalize_django_value`, and the denylist was applied at the
+    CONVERSION. Past it it crosses as a carrier and `{{ v.0.password }}` is
+    answered by `Context::walk_live` over the RAW object instead — a different
+    mechanism, so "unchanged in kind" would be a guess.
 
     It is protected by `Context::protect_sidecar_strict`, which re-wraps after
-    EVERY segment; this is the measurement that says so. `Encoded::live`'s own
-    doc claimed no list could reach the field, and #2695 made that claim
-    false — the claim is corrected there and pinned here.
+    EVERY segment; this is the measurement that says so.
+
+    A `deque` and not a `list`: the #2695 review found that declining a
+    `list` spends more than it saves (its items are already built, and the
+    carrier then has to spell `str()` and `repr()` of all of them), so
+    `len_call_already_materialised_the_items` exempts `list` and `QuerySet`
+    and this class would be vacuous on either — see
+    `test_the_carrier_really_is_the_path_being_tested`, which is what would
+    have caught the substitution. A `deque` is the ordinary sized-sequence
+    case and is carried.
     """
 
     @staticmethod
     def _rows(padding: int):
-        from django.contrib.auth.models import User
-
-        rows = []
-        for i in range(3):
-            user = User(username="alice", password="pbkdf2_sha256$SECRET", email="a@b.c")
-            user.pk = i
-            rows.append(user)
-        # `None` padding puts the list past the cap without building 100 000
-        # models; only element 0 is ever read.
-        return rows + [None] * padding
+        return collections.deque(_model_rows(padding))
 
     @pytest.mark.parametrize(
         ("label", "padding"), [("under the cap", 0), ("past the cap", 100_001 - 3)]
@@ -722,13 +792,133 @@ class TestTheSerializationFloorHoldsOnTheNewHandle:
         assert "SECRET" not in out
 
     def test_the_carrier_really_is_the_path_being_tested(self) -> None:
-        """Non-vacuity: if the padded list did NOT cross as a carrier, the
-        three cells above would be testing the old `Value::List` path twice
-        and the class would prove nothing (#1200)."""
+        """Non-vacuity: if the padded collection did NOT cross as a carrier,
+        the three cells above would be testing the old `Value::List` path
+        twice and the class would prove nothing (#1200)."""
         from djust import _rust
 
         assert _rust.crosses_as_encoded(self._rows(100_001 - 3)) is True
         assert _rust.crosses_as_encoded(self._rows(0)) is False
+
+
+class TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap:
+    """#2695 review, finding 2 — a REAL `django.db.models.QuerySet`, not the
+    3-element duck type the differential grid carries.
+
+    The security section names *"a `list` or an evaluated `QuerySet`"*, and
+    neither the grid (`QuerySetShape`, always 3 elements) nor the floor class
+    above (a collection of `Model`s) ever rendered one past the cap. Doing it
+    found a content and payload change on both of the two paths a queryset
+    reaches the engine by, and they are separate mechanisms (#1646):
+
+    * ``render_template`` protects the queryset into a
+      ``_SidecarQuerySetProxy``, whose ``__djust_serialize__`` hands back a
+      `list` of identity dicts — declined past the cap, so ``{{ rows }}``
+      became ``str()`` of djust's OWN dicts (66 MB) instead of the rows.
+      And the RAW queryset was declined too, so ``{{ rows.0 }}`` answered
+      ``''``: the live walk subscripts the proxy, which has no
+      ``__getitem__``.
+    * ``DjustTemplate.render`` auto-serialises the queryset to that same list
+      BEFORE Rust sees it, so it hit the identical decline one layer up.
+
+    Both are closed by `len_call_already_materialised_the_items`: a `list`
+    holds its elements and `QuerySet.__len__` calls `_fetch_all()`, so past
+    the cap the decline can only change the spelling. Not a floor breach on
+    either side — asserted here as well, since the whole point is that the
+    fix moves the rows back onto the `Value::List` path.
+    """
+
+    @staticmethod
+    def _queryset(padding: int):
+        """A real ``QuerySet`` with its result cache stuffed.
+
+        ``_result_cache`` is what ``_fetch_all`` fills, so this is the exact
+        state an evaluated queryset is in — no database, and `None` padding
+        for the same reason the floor class uses it.
+        """
+        from django.contrib.auth.models import User
+
+        qs = User.objects.all()
+        qs._result_cache = _model_rows(padding)
+        return qs
+
+    #: How many rows each container sink spells the identity map of. ``{{ v }}``
+    #: renders a model row as its ``__str__``, so the map never shows; the two
+    #: dump filters do show it, once per REAL row (the padding is ``None``).
+    #: The bug spelled `{{ v }}` with the map too — that is what made it 66 MB.
+    _IDENTITY_MAPS_PER_SINK = {
+        "{{ v }}": 0,
+        "{{ v|pprint }}": 3,
+        '{{ v|json_script:"x" }}': 3,
+    }
+
+    @pytest.mark.parametrize("src", sorted(_IDENTITY_MAPS_PER_SINK))
+    def test_the_container_sinks_use_the_same_spelling_on_both_sides(self, src: str) -> None:
+        """The 66 MB cell, and the one the duck type could never reach.
+
+        Asserted as "the same spelling either side of the cap" rather than as
+        two expected strings: the point is not what a queryset renders as —
+        djust has never matched Django's ``<QuerySet [...]>`` here — but that
+        crossing 100 000 rows does not CHANGE it.
+        """
+        from djust import _rust
+
+        under = _rust.render_template(src, {"v": self._queryset(0)})
+        past = _rust.render_template(src, {"v": self._queryset(100_001 - 3)})
+        assert "SECRET" not in under and "SECRET" not in past
+        expected = self._IDENTITY_MAPS_PER_SINK[src]
+        assert under.count("__model__") == expected, f"under the cap: {under[:200]!r}"
+        assert past.count("__model__") == expected, (
+            f"past the cap {src} spells {past.count('__model__')} identity maps where "
+            f"under the cap it spells {expected} — the decline put djust's own "
+            f"serialization dicts on screen: {past[:200]!r}"
+        )
+        # And the payload is the padding, not a re-spelling of every row: the
+        # measured regression was 66 MB for `{{ v }}` / 75 MB for `|pprint` /
+        # 43 MB for `|json_script` against ~0.6-0.7 MB here.
+        assert len(past) < 5_000_000, f"{src} rendered {len(past)} bytes past the cap"
+
+    @pytest.mark.parametrize(
+        ("label", "padding"), [("under the cap", 0), ("past the cap", 100_001 - 3)]
+    )
+    @pytest.mark.parametrize(
+        ("src", "expected"),
+        [
+            ("{{ v.0.password }}", ""),
+            ("{{ v.0.username }}", "alice"),
+            ("{{ v.0 }}", "alice"),
+            ("{{ v|first }}", "alice"),
+        ],
+    )
+    def test_the_item_sinks_answer_the_same_on_both_sides(
+        self, label: str, padding: int, src: str, expected: str
+    ) -> None:
+        from djust import _rust
+
+        out = _rust.render_template(src, {"v": self._queryset(padding)})
+        assert out == expected, f"{label}: {src} rendered {out!r}"
+        assert "SECRET" not in out
+
+    def test_the_padded_queryset_really_is_past_the_cap(self) -> None:
+        """Non-vacuity for the two classes above: the padded queryset has to
+        be the shape that WOULD have been declined, or both are measuring the
+        under-cap path twice (#1200)."""
+        assert len(self._queryset(100_001 - 3)) == 100_001
+        assert len(self._queryset(0)) == 3
+
+    def test_a_queryset_is_exempt_from_the_conversion_decline_at_any_length(
+        self,
+    ) -> None:
+        """The mechanism, named: `QuerySet.__len__` calls `_fetch_all()`, so
+        by the time the length is known every row exists and the decline can
+        only change the spelling."""
+        from djust import _rust
+
+        assert _rust.crosses_as_encoded(self._queryset(100_001 - 3)) is False
+        assert _rust.crosses_as_encoded(self._queryset(0)) is False
+        # And the duck type that merely LOOKS like one is not exempt — the
+        # exemption is about the `__len__` contract, not the shape.
+        assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
 
 
 class TestEverySequenceArmDecidesTheCarrier:
@@ -741,10 +931,26 @@ class TestEverySequenceArmDecidesTheCarrier:
     sink, not for the callers you expect" shape: the next filter written the
     same way inherits the same bug silently.
 
-    So the rule is mechanical: any function in ``filters.rs`` that matches a
-    sequence by hand must also NAME ``Value::Encoded``, i.e. must have made a
-    decision about the carrier — routing it to ``iter_values``, reading it off
-    the live handle, or refusing it deliberately. Four functions do today.
+    So the rule is mechanical: every ``match`` in ``filters.rs`` that matches
+    a sequence by hand must also NAME ``Value::Encoded`` IN THAT SAME MATCH,
+    i.e. must have made a decision about the carrier — routing it to
+    ``iter_values``, reading it off the live handle, or refusing it
+    deliberately.
+
+    **Per MATCH, not per function**, and that correction is the whole of the
+    #2695 review's finding 4. The first version scanned per top-level
+    function, and every one of the ~56 builtin filters lives inside
+    ``apply_builtin_filter`` — which already contained an unrelated
+    ``Value::Encoded`` line (the ``datetime.date`` guard). So the assertion
+    was satisfied for that function no matter what any individual filter arm
+    did: the reviewer's canary showed that DELETING #2693's arm outright, and
+    ADDING a new filter in #2693's exact shape, both left the pin green. A pin
+    that cannot fail is worse than none, because it makes the class look
+    handled (#1859).
+
+    The enclosing match is found by INDENTATION, which `cargo fmt` makes
+    reliable: the nearest preceding ``match`` line indented less than the
+    hand-matching arm, ending where the indentation returns to that level.
     """
 
     #: Every function allowed to hand-match a sequence, and what it decided.
@@ -758,7 +964,21 @@ class TestEverySequenceArmDecidesTheCarrier:
         "value_to_json": "has its own `Value::Encoded` arm above (#2448)",
     }
 
-    def test_the_owner_set_is_exactly_what_is_pinned(self) -> None:
+    #: The signature of a hand-written sequence arm: destructuring the ITEMS
+    #: out of all three sequence variants. ``rebuild_like`` matches
+    #: ``Value::NamedTuple { .. }`` WITHOUT them — it builds a sequence rather
+    #: than reading one — so it is correctly not a hand-matcher.
+    HAND_MATCH = "Value::NamedTuple { items, .. }"
+
+    @staticmethod
+    def _production_lines() -> list[str]:
+        """``filters.rs`` with its ``#[cfg(test)]`` modules removed.
+
+        The file interleaves SIX of them with production code, so splitting at
+        the first would hide two thirds of it — including ``python_getitem``.
+        Each block is dropped from its attribute to the ``}`` that closes the
+        module at column 0.
+        """
         source = (
             __import__("pathlib")
             .Path(__file__)
@@ -767,11 +987,7 @@ class TestEverySequenceArmDecidesTheCarrier:
             .joinpath("crates/djust_templates/src/filters.rs")
             .read_text()
         )
-        # `filters.rs` interleaves SIX `#[cfg(test)] mod` blocks with its
-        # production code, so splitting at the first one would hide two
-        # thirds of the file — including `python_getitem`. Drop each block
-        # from its attribute to the `}` that closes the module at column 0.
-        production_lines: list[str] = []
+        kept: list[str] = []
         in_tests = False
         for line in source.splitlines():
             if not in_tests and line == "#[cfg(test)]":
@@ -781,11 +997,39 @@ class TestEverySequenceArmDecidesTheCarrier:
                 if line == "}":
                     in_tests = False
                 continue
-            production_lines.append(line)
-        assert len(production_lines) > 4000, (
-            "the test-module stripper dropped the file — the scan below would "
-            f"then be vacuous (kept {len(production_lines)} lines)"
+            kept.append(line)
+        assert len(kept) > 4000, (
+            "the test-module stripper dropped the file — every scan below "
+            f"would then be vacuous (kept {len(kept)} lines)"
         )
+        return kept
+
+    @staticmethod
+    def _indent(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    @classmethod
+    def _enclosing_match(cls, lines: list[str], i: int) -> tuple[int, int]:
+        """``(start, end)`` of the ``match`` block containing line ``i``."""
+        arm_indent = cls._indent(lines[i])
+        start = None
+        for j in range(i - 1, -1, -1):
+            if lines[j].strip() and "match " in lines[j] and cls._indent(lines[j]) < arm_indent:
+                start = j
+                break
+        assert start is not None, f"no enclosing `match` for line {i}: {lines[i]!r}"
+        base = cls._indent(lines[start])
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if lines[j].strip() and cls._indent(lines[j]) <= base:
+                end = j
+                break
+        return start, end
+
+    def test_the_owner_set_is_exactly_what_is_pinned(self) -> None:
+        """Half one, unchanged and load-bearing: a NEW top-level function that
+        hand-matches a sequence has to be declared here."""
+        production_lines = self._production_lines()
         owners: dict[str, list[str]] = {}
         current = None
         for line in production_lines:
@@ -796,14 +1040,8 @@ class TestEverySequenceArmDecidesTheCarrier:
                 owners.setdefault(current, [])
             if current is not None:
                 owners[current].append(line)
-        # The signature of a hand-written sequence arm is destructuring the
-        # ITEMS out of all three sequence variants. `rebuild_like` matches
-        # `Value::NamedTuple { .. }` without them — it BUILDS a sequence
-        # rather than reading one — so it is correctly not an owner.
         hand_matchers = {
-            name
-            for name, body in owners.items()
-            if any("Value::NamedTuple { items, .. }" in line for line in body)
+            name for name, body in owners.items() if any(self.HAND_MATCH in line for line in body)
         }
         assert hand_matchers == set(self.SEQUENCE_ARM_OWNERS), {
             "new hand-matching functions — route the carrier through "
@@ -812,11 +1050,27 @@ class TestEverySequenceArmDecidesTheCarrier:
             ),
             "gone": sorted(set(self.SEQUENCE_ARM_OWNERS) - hand_matchers),
         }
-        for name in hand_matchers:
-            assert any("Value::Encoded" in line for line in owners[name]), (
-                f"{name} matches a sequence by hand and never names "
-                f"Value::Encoded — a carried collection falls to its "
-                f"catch-all, which is exactly #2693"
+
+    def test_every_hand_matching_MATCH_names_the_carrier(self) -> None:
+        """Half two, the one the #2695 review proved decorative when it was
+        scoped per FUNCTION: the decision has to live in the SAME ``match`` as
+        the sequence arm, so a new filter inside ``apply_builtin_filter``
+        cannot ride on a neighbour's ``Value::Encoded`` line."""
+        production_lines = self._production_lines()
+        sites = [i for i, line in enumerate(production_lines) if self.HAND_MATCH in line]
+        assert len(sites) >= 5, (
+            f"only {len(sites)} hand-matching arms found — the scan is looking "
+            f"for {self.HAND_MATCH!r} and something renamed it"
+        )
+        for i in sites:
+            start, end = self._enclosing_match(production_lines, i)
+            block = production_lines[start:end]
+            assert any("Value::Encoded" in line for line in block), (
+                f"the match at line {start + 1} of filters.rs "
+                f"({production_lines[start].strip()!r}) matches a sequence by "
+                f"hand and never names Value::Encoded in the same match — a "
+                f"carried collection falls to its catch-all, which is exactly "
+                f"#2693"
             )
 
 

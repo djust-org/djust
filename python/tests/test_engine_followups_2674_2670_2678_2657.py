@@ -26,6 +26,7 @@ so a future divergence in either direction reddens.
 
 from __future__ import annotations
 
+import collections
 import itertools
 import re
 import shutil
@@ -324,14 +325,27 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         `TestATerminatingCollectionPastTheCapIsUntouched` below).
 
         So the carried set is now "anything whose stated length exceeds the
-        cap", the liar included, and nothing under it moved.
+        cap AND has not already materialised its items" — the liar and a
+        `range` included, a `list` and a `QuerySet` excluded, because for
+        those two the decline saves nothing (a `list` holds its elements
+        already; `QuerySet.__len__` calls `_fetch_all()`). See
+        `len_call_already_materialised_the_items` and, for the content change
+        that exemption prevents,
+        `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` in
+        `test_sized_sequence_conversion_2695_2693.py`.
         """
         assert _rust.crosses_as_encoded(Liar()) is True
-        assert _rust.crosses_as_encoded(list(range(100_001))) is True
         assert _rust.crosses_as_encoded(range(10**9)) is True
+        # A `deque` past the cap DESCRIBES nothing it has not built, but
+        # nothing about `len(deque)` builds it either — it is the ordinary
+        # sized-sequence case, and it is carried.
+        assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
+        # Already materialised: exempt at any length (#2695 review).
+        assert _rust.crosses_as_encoded(list(range(100_001))) is False
         # Under the cap: unchanged, on both the sized and the ordinary shape.
         assert _rust.crosses_as_encoded(list(range(10))) is False
         assert _rust.crosses_as_encoded(range(10)) is False
+        assert _rust.crosses_as_encoded(collections.deque(range(100_000))) is False
         assert _rust.crosses_as_encoded(list(range(100_000))) is False
 
 
