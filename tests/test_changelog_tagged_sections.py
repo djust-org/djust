@@ -2,7 +2,7 @@
 
 A stray branch merge can silently rewrite an already-shipped ``## [X.Y.Z]``
 section (the v1.1.0rc5 consolidation incident). ``check-changelog-tagged-sections.py``
-catches it by comparing every superseded section against the newest release
+catches it by comparing every shipped section against the newest release
 tag's frozen ``CHANGELOG.md`` snapshot.
 
 These tests run against the REAL repo + tags (the check reads git tags from the
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,26 @@ class TestChangelogTaggedSectionPin:
         copy = tmp_path / "CHANGELOG.md"
         copy.write_text(CHANGELOG.read_text(encoding="utf-8"), encoding="utf-8")
         assert check.check_changelog(copy) == 0
+
+
+@requires_shipped
+@pytest.mark.parametrize("target", ["heading", "body"])
+def test_newest_shipped_section_is_frozen(tmp_path, target):
+    sections = check._split_sections(CHANGELOG.read_text(encoding="utf-8"))
+    newest = next(ver for ver, _ in sections if check._tag_exists(f"v{ver}"))
+    text = CHANGELOG.read_text(encoding="utf-8")
+    heading = f"## [{newest}]"
+    if target == "heading":
+        text = text.replace(heading, heading + " CORRUPTED", 1)
+    else:
+        pos = text.index("\n", text.index(heading)) + 1
+        text = text[:pos] + "\n- CORRUPTED shipped content.\n" + text[pos:]
+    copy = tmp_path / "CHANGELOG.md"
+    copy.write_text(text, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(copy)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert f"Section '## [{newest}]' was rewritten" in result.stderr

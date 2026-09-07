@@ -1,31 +1,11 @@
 #!/usr/bin/env python3
 """Pin already-shipped ``CHANGELOG.md`` sections against the newest release tag.
 
-Once a version's section is superseded by a newer release, it is *frozen* —
-a later branch merge must never rewrite it. But a 3-way merge of ``CHANGELOG.md``
-across branches that diverged around a release cut can do exactly that with ZERO
-conflicts (git's diff3 has no notion that a version heading is immutable),
-silently moving genuinely-unreleased content into an already-shipped section —
-see the v1.1.0rc5 consolidation incident (CLAUDE.md "Process canonicalizations
-from the v1.1.0rc5 retro").
-
-Neither ``check-changelog-test-counts.py`` nor ``make check-adr-status`` catches
-this class — both validate the diff's own numeric/version-line claims, not
-whether an already-shipped section changed at all.
-
-**Why not pin each section against its OWN tag?** This repo uses rolling-rc
-sections: a ``## [X.Y.ZrcN]`` heading keeps accumulating entries *after*
-``vX.Y.ZrcN`` is tagged, until the next rc/release renames ``[Unreleased]``. So
-a section is NOT frozen at its own tag — it's frozen once a *newer* release
-supersedes it. The authoritative frozen record of every superseded section is
-therefore the **newest release tag's** ``CHANGELOG.md``.
-
-The check: find the newest release (the top-most ``## [X.Y.Z]`` section in the
-working tree whose tag ``vX.Y.Z`` exists — the CHANGELOG is maintained
-newest-first). For every section BELOW it that also appears in that tag's
-``CHANGELOG.md``, assert the working-tree body is byte-identical to the tag's.
-The newest tagged section itself (may still be accumulating) and any newer,
-not-yet-tagged sections above it are skipped.
+A tagged section is frozen, including the newest release. Compare every
+section at or below the newest tagged heading with that tag's CHANGELOG.
+Unreleased and newer untagged sections remain editable. Comparing with one
+snapshot also preserves the historical rolling-RC sections as they stood
+when the latest release shipped.
 
 Exits 0 on match or when there's nothing to check (no tagged section, or git
 unavailable). Exits 1 with a per-section diff on any mismatch.
@@ -121,10 +101,8 @@ def check_changelog(changelog_path: Path) -> int:
 
     mismatches: list[str] = []
     checked = 0
-    # Everything BELOW the anchor (older, superseded) is frozen in the anchor's
-    # snapshot. The anchor itself + anything above it (newer/untagged/Unreleased)
-    # is skipped.
-    for ver, body in working[anchor_index + 1 :]:
+    # The anchor itself is shipped too. Only newer untagged sections may change.
+    for ver, body in working[anchor_index:]:
         if ver not in snapshot:
             continue  # not present in the anchor snapshot — can't pin
         checked += 1
