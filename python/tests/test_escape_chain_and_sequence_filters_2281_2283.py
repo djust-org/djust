@@ -522,7 +522,16 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     # the pin reported that a filter had stopped routing through the sink when
     # it had not. A delimiter cannot drift that way, and it is strictly TIGHTER
     # than a window: it can never reach into a NEIGHBOURING arm's call either.
-    arm_starts = [(m.start(), m.group(1)) for m in re.finditer(r'\n        "(\w+)" =>', body)]
+    # A MULTI-NAME arm (`"dictsort" | "dictsortreversed" =>`) is an arm start
+    # too. It was not matched until #2693 routed `dictsort` through the sink,
+    # and the effect was the drift this pin's own comments warn about one more
+    # time: the call landed inside the window of the previous single-name arm,
+    # so the pin reported `time` as a caller of `iter_values`. The arm is
+    # keyed on its FIRST name, which is the one the assertions below spell.
+    arm_starts = [
+        (m.start(), m.group(1))
+        for m in re.finditer(r'\n        "(\w+)"(?:\s*\|\s*"\w+")* =>', body)
+    ]
     raw: set[str] = set()
     wrapped: set[str] = set()
     subscripted: set[str] = set()
@@ -535,9 +544,14 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
             wrapped.add(name)
         if "python_getitem(value" in arm_body:
             subscripted.add(name)
-    # The RAW sink, for the one filter that must FAIL SOFT: Django's `join` has
-    # `except TypeError: return value`, so it needs the `None` rather than a raise.
-    assert raw == {"join"}, raw
+    # The RAW sink, for the filters that must FAIL SOFT: Django's `join` has
+    # `except TypeError: return value` and its `dictsort` /
+    # `dictsortreversed` have `except (TypeError, VariableDoesNotExist):
+    # return ""`, so both need the `None` rather than a raise. `dictsort`
+    # joined them in #2693 — it had iteration of its OWN and so answered
+    # `''` for every carried collection, which is the omission the sink
+    # exists to prevent.
+    assert raw == {"join", "dictsort"}, raw
     # The WRAPPED sink, for the three whose Django bodies have no `except` at
     # all — `python_iter` is `iter_values` plus the name of the exception Python
     # raises where it answers `None` (#2451).

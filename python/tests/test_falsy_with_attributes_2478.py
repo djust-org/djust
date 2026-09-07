@@ -1233,10 +1233,15 @@ class TestThePreFixTableIsNOTVacuous:
                 "answers — either the fix regressed or PRE_FIX is recording "
                 "the CURRENT build"
             )
-        # 131 for the four shapes #2478 claimed, plus 32 for the fifth that
+        # 132 for the four shapes #2478 claimed, plus 32 for the fifth that
         # #2477/#2489 added — `LenTwoBoolFalseWithAttrs`, which moved off the
         # `Value::Object` of its attributes and onto the carrier.
-        assert sum(len(v) for v in moved.values()) == 163, (
+        #
+        # 131 until #2693 routed `dictsort` through `iter_values`: that moved
+        # one more cell, `{{ p|dictsort:'a' }}` on `LenZeroWithAttrsAndIter`,
+        # from `''` to `[]` — which is Django's own answer for it, verified
+        # rather than assumed.
+        assert sum(len(v) for v in moved.values()) == 164, (
             "the total cell movement changed; re-measure with "
             "`scratch/sweep_2478.py` before editing this number"
         )
