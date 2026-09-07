@@ -212,12 +212,13 @@ class TestPromotedToParseTime:
             _rust.unregister_tag_handler("late_2549_tag")
 
     def test_parser_no_longer_builds_unsupported_tag(self):
-        """Structural pin: outside ``#[cfg(test)]`` the only ``UnsupportedTag`` in
-        parser.rs is the enum variant — no arm constructs it any more."""
+        """No production parser arm constructs UnsupportedTag. The enum and
+        exhaustive structural match patterns remain valid references."""
         src = PARSER_RS.read_text(encoding="utf-8")
         production = src.split("#[cfg(test)]", 1)[0]
         assert "Ok(Some(Node::UnsupportedTag" not in production
-        assert re.findall(r"Node::UnsupportedTag\s*\{", production) == []
+        # A `{ .. }` match is not a value constructor (the shared AST walk).
+        assert re.findall(r"Node::UnsupportedTag\s*\{(?!\s*\.\.\s*\})", production) == []
         assert len(re.findall(r"^\s*UnsupportedTag\s*\{", production, re.MULTILINE)) == 1, (
             "expected exactly the enum declaration"
         )
