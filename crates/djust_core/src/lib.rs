@@ -654,10 +654,32 @@ pub struct Encoded {
     /// GIL — the same shape `Context::raw_py_objects` already uses.
     ///
     /// **What can never acquire one.** `crosses_as_encoded` / the
-    /// `FromPyObject` impl claim a `list`, a `dict`, a tuple, anything with
+    /// `FromPyObject` impl claim a `dict`, a tuple, anything with
     /// `__djust_serialize__` and any `Model` in arms ABOVE [`opaque_value`],
-    /// so no list, dict, model, manager or queryset reaches this field. That
-    /// is enforced by the existing ordering rather than by a new rule.
+    /// so no dict, model or manager reaches this field. A `list` and an
+    /// evaluated `QuerySet` are also excluded, but by a RULE rather than by
+    /// the ordering: [`len_call_already_materialised_the_items`] exempts them
+    /// from the conversion's decline at any length, because for those two the
+    /// items exist by the time the length is known and declining could only
+    /// change the spelling (#2695 review — it changed it to 66 MB of djust's
+    /// own serialization dicts).
+    ///
+    /// An ordinary sized sequence — a `deque`, an `array`, a `range`, a duck
+    /// type with a stated `__len__` — DOES arrive here past
+    /// [`OPAQUE_ITEM_CAP`], and that is what #2695 changed: over a
+    /// 100 001-element `deque` of models `{{ rows.0.password }}` is answered
+    /// by [`Context::walk_live`] rather than by a `Value::List` whose
+    /// elements were already denylist-filtered at the conversion. The floor
+    /// is the same either way — `protect_sidecar_strict` re-wraps after every
+    /// segment — and that is a MEASUREMENT rather than an inference:
+    /// `TestTheSerializationFloorHoldsOnTheNewHandle` in
+    /// `python/tests/test_sized_sequence_conversion_2695_2693.py` renders the
+    /// denylisted field on both sides of the cap and asserts both are empty,
+    /// with a non-vacuity case proving the padded collection really is a
+    /// carrier — the case that caught the `list` exemption making the class
+    /// vacuous.
+    ///
+    /// [`Context::walk_live`]: crate::Context::walk_live
     ///
     /// **When it is `Some`, [`Encoded::attrs`] is EMPTY** — see
     /// [`opaque_value`]. The handle is the authority for attribute lookups,
@@ -3477,9 +3499,10 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 /// can never produce a short list (#2129: a rule about the operation, not a
 /// list of shapes). A `list`, `tuple`, `range`, `bytes`, `deque`, `array`,
 /// numpy array and evaluated `QuerySet` all state a length and cross exactly
-/// as they did — including past [`OPAQUE_ITEM_CAP`]. See
-/// [`stated_bound_is_unverifiable`] for the one shape whose stated bound is
-/// NOT trusted, and for why the cap is scoped that narrowly (#2678).
+/// as they did — up to [`OPAQUE_ITEM_CAP`]. See
+/// [`stated_len_is_too_large_to_enumerate`] for what happens past it and why
+/// enumerating a stated billion at BINDING time is the wrong half of the
+/// rule (#2678, #2695).
 ///
 /// A `str` is refused, as PyO3's `Vec` extraction refuses it: the `str` arm
 /// sits above the sequence arm and claims every string first.
@@ -3490,8 +3513,8 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 /// stricter test would silently move every unregistered user class with
 /// `__getitem__` and `__len__` out of the list arm, which is a second
 /// behaviour change this fix has no reason to make.
-/// Is this object's stated `__len__` one we cannot afford to take on trust?
-/// (#2678, corrected by the PR #2691 review.)
+/// Is this object's stated `__len__` too large to spend at the CONVERSION?
+/// (#2678, widened to every sized sequence by #2695.)
 ///
 /// The ONE statement of that question, read by both sites that would
 /// otherwise pay `len` calls up front — [`bounded_sequence_items`] and
@@ -3500,21 +3523,25 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///
 /// TWO conditions, and both are load-bearing:
 ///
-/// * **The object has no `__iter__` of its own.** Then PyO3's iteration is
-///   CPython's legacy sequence protocol — `o[0]`, `o[1]`, … until
-///   `IndexError` — and nothing connects that walk to the stated `__len__`:
-///   a class returning `10**9` from `__len__` with a never-raising
-///   `__getitem__` is read a billion times, which is the hang #2678 reports.
-///   An object WITH `__iter__` has a real iterator whose own exhaustion ends
-///   the walk, and its length is as honest as any `list`'s.
+/// * **The stated length is past [`OPAQUE_ITEM_CAP`].** Then materialising
+///   the object costs one `Value` per item before the template has said what
+///   it wants, and `range(10**9)` is thirty gigabytes for a `{{ v.0 }}` that
+///   Django answers with a single `__getitem__` (#2695). Django never
+///   enumerates at binding time — `{{ v.0 }}`, `{{ v|length }}` and
+///   `{{ v }}` are `current[0]`, `len(v)` and `str(v)` — so declining here
+///   is what Django parity looks like, not a safeguard against it.
 ///
-///   The first version of this fix capped on `len` ALONE, and that claimed
-///   every `list`, `set`, `deque`, `range`, `bytes` and `QuerySet` past the
-///   cap — collections that terminate, that Django renders in ~0.1s, and
-///   that had crossed as real items since forever. Measured on that version:
-///   `{% for %}` over `list(range(100_001))` RAISED, `|first` raised,
-///   `|join` raised. A bound on the wrong axis is a regression, not a
-///   safeguard: the axis is "can the walk end", not "is the number big".
+///   #2678's first version capped on `len` alone and REGRESSED
+///   `list(range(100_001))`: `{% for %}` raised, `|first` raised, `|join`
+///   raised. Its second version therefore also required the object to have
+///   no `__iter__` — which fixed the regression by never claiming `range`
+///   at all, and so left #2695's hang exactly as it found it. The bound
+///   belongs on BOTH halves of the same rule and this is only the first:
+///   the conversion declines, and the SINKS then walk the live object under
+///   [`Encoded::live_walk_terminates`], which is where "can the walk end"
+///   is asked. `collections.deque(range(100_001))` crosses as a carrier here
+///   and still renders every item at `{% for %}`, because its walk
+///   terminates.
 ///
 /// * **`resolve_lazy()` is on** — the shipped default. The decline only
 ///   improves on the hang because ADR-027's carrier holds a LIVE HANDLE, so
@@ -3524,14 +3551,83 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   from the REPR — `{{ v.0 }}` renders `[`, `|length` counts repr
 ///   characters. That is a silently wrong answer where the hatch previously
 ///   had a slow-but-correct one, so the hatch keeps enumerating in full and
-///   #2678's hang stays unfixed there. An unfixed cell beats a wrong one.
-fn stated_bound_is_unverifiable(ob: &Bound<'_, PyAny>, len: usize) -> bool {
-    len > OPAQUE_ITEM_CAP
-        && resolve_lazy()
-        && !ob
-            .get_type()
-            .hasattr(pyo3::intern!(ob.py(), "__iter__"))
-            .unwrap_or(false)
+///   both #2678's and #2695's hangs stay unfixed there. An unfixed cell
+///   beats a wrong one.
+///
+/// * **The object is not one whose declined SPELLING would be wrong**
+///   ([`len_call_already_materialised_the_items`], #2695 review). A `list`
+///   and a Django `QuerySet` are exempt at any length. That exemption is a
+///   TRADE and not a free one — read that function before assuming the
+///   decline costs those two shapes nothing.
+fn stated_len_is_too_large_to_enumerate(ob: &Bound<'_, PyAny>, len: usize) -> bool {
+    len > OPAQUE_ITEM_CAP && resolve_lazy() && !len_call_already_materialised_the_items(ob)
+}
+
+/// Are this object's items ALREADY built by the time its length is known?
+/// (#2695 review.)
+///
+/// True for a **`list`** (it holds its elements; `len()` is O(1) and creates
+/// nothing) and for a Django **`QuerySet`** (`__len__` calls `_fetch_all()`,
+/// so the row objects are in `_result_cache` the moment the length is
+/// known). [`stated_len_is_too_large_to_enumerate`] asks it and exempts both
+/// from the decline at any length.
+///
+/// **The exemption is a TRADE, and the price is NOT zero.** An earlier
+/// version of this comment said the cost was "already sunk, so declining only
+/// changes the SPELLING". That is false, by about 4 GB, and the measurement
+/// is the re-review's (#2706): an UNEVALUATED `User.objects.all()` over a
+/// real 150 000-row table, rendering `{{ v|length }}` —
+///
+/// ```text
+/// exemption ON  (as shipped)      4 650 MB peak, 13.45 s
+/// exemption OFF (decline applies)   593 MB peak,  9.74 s
+/// ```
+///
+/// `len()` sinks the cost of `_fetch_all()` — about 140 MB of row objects —
+/// and NOT the conversion of those rows into [`Value`]s, which is the other
+/// ~4 GB. So what the exemption buys is a correct spelling, and what it pays
+/// is a real per-row conversion the decline would have avoided.
+///
+/// It is taken anyway, for two reasons that are about correctness rather than
+/// cost: the declined spelling is WRONG (below), and the exempted cost is not
+/// new — `main` never declined a `list` or a `QuerySet` either
+/// (`stated_bound_is_unverifiable` required the object to have NO `__iter__`),
+/// so this restores exactly the cost those two shapes already had rather than
+/// adding one. Getting both — decline the carrier AND spell it correctly at
+/// the sink — is filed as its own change (#2717); doing it here would have
+/// meant designing a lazy QuerySet carrier inside a review fix-pass.
+///
+/// The shape that found the spelling defect is one object wearing both hats.
+/// A 100 001-row
+/// `QuerySet` in a template context is auto-serialised by
+/// `DjustTemplate.render` into a `list` of djust's own identity dicts;
+/// declining that list spelled `{{ rows }}` as
+/// `[{'id': 1, 'pk': 1, '__str__': 'qs0', '__model__': 'User', …}]` — 66 MB —
+/// where the same queryset one row shorter renders `[qs0, qs1, qs2]`, and
+/// declining the QuerySet itself answered `{{ rows.0 }}` with `''` because
+/// `_SidecarQuerySetProxy` has no `__getitem__` for the live walk to use.
+/// Neither is a floor breach — the rows are denylist-filtered on both sides,
+/// pinned by `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` — but
+/// both are a content and payload change on the exact shape
+/// [`Encoded::live`]'s doc names.
+///
+/// Nothing else is exempt, and that is the point of asking about
+/// materialisation rather than listing types: a `tuple` never reaches here
+/// (the tuple arm above [`bounded_sequence_items`] claims it), and `range` /
+/// `bytes` / `array` / `deque` / a numpy array / a duck type with a stated
+/// `__len__` all DESCRIBE or PACK their items, so the decline is a real
+/// saving for them and they keep it.
+fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_instance_of::<PyList>() {
+        return true;
+    }
+    // A cached `sys.modules` lookup, and only ever reached once the stated
+    // length is already past the cap — never on the hot path.
+    ob.py()
+        .import("django.db.models")
+        .and_then(|m| m.getattr("QuerySet"))
+        .and_then(|cls| ob.is_instance(&cls))
+        .unwrap_or(false)
 }
 
 fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
@@ -3544,7 +3640,7 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
         return None;
     }
     let len = ob.len().ok()?;
-    if stated_bound_is_unverifiable(ob, len) {
+    if stated_len_is_too_large_to_enumerate(ob, len) {
         return None;
     }
     let mut items = Vec::with_capacity(len.min(OPAQUE_ITEM_CAP));
@@ -3767,6 +3863,15 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     // or list-of-dicts (queryset) — recurse via Value so both
                     // shapes convert (Object / List). The result carries no
                     // proxies, so this does not re-enter this branch.
+                    //
+                    // The list-of-dicts converts IN FULL at any length, and
+                    // that is not a second rule: it is a `list`, and
+                    // `stated_len_is_too_large_to_enumerate` exempts a `list`
+                    // because its items are already materialised (#2695
+                    // review — see that function). Before the exemption a
+                    // 100 001-row queryset's rows were declined HERE and
+                    // spelled `{{ rows }}` as `str()` of djust's own identity
+                    // dicts.
                     if let Ok(v) = result.extract::<Value>() {
                         return Ok(v);
                     }
@@ -3936,13 +4041,18 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         }
         // An object that states a `__len__` has stated its own bound, and the
         // walk is skipped — which is what keeps this gate O(1) for a `set`
-        // and a `dict_keys`. The ONE exception is the shape whose stated
-        // bound cannot end the walk ([`stated_bound_is_unverifiable`], #2678):
-        // it is marked unbounded so `opaque_value` leaves `items` at `None`
-        // rather than paying the billion `__getitem__` calls that are the
-        // reported hang. Every honest sized collection — `list`, `set`,
-        // `range`, `QuerySet` — is enumerated in full exactly as before, at
-        // any length.
+        // and a `dict_keys`. The exception is a bound too large to SPEND here
+        // ([`stated_len_is_too_large_to_enumerate`], #2678 + #2695): it is
+        // marked unbounded so `opaque_value` leaves `items` at `None` rather
+        // than paying the billion reads that are the reported hang — for a
+        // `range(10**9)` as much as for the liar whose `__getitem__` never
+        // raises. Every sized collection UNDER the cap — `set`, `range(3)`,
+        // a `deque` — is enumerated in full exactly as before, and so is a
+        // `list` / an evaluated `QuerySet` at ANY length (their items are
+        // already built, so the decline could only change the spelling —
+        // `len_call_already_materialised_the_items`). Over the cap the ITEMS
+        // are read at the sink instead, from the live handle, under the
+        // sink's own termination rule ([`Encoded::live_walk_terminates`]).
         //
         // Without a `__len__` there is no bound at all, so walk to the cap: a
         // class whose `__iter__` returns `itertools.count()` is RE-iterable,
@@ -3959,7 +4069,7 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         //
         // Counted, not collected: the items are not converted here.
         match len {
-            Some(n) if stated_bound_is_unverifiable(ob, n) => {
+            Some(n) if stated_len_is_too_large_to_enumerate(ob, n) => {
                 unbounded = true;
             }
             Some(_) => {}
@@ -4009,6 +4119,57 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
 }
 
 impl Encoded {
+    /// Does a full walk of the live object END BY ITSELF? (#2695)
+    ///
+    /// The SINK half of the conversion's [`stated_len_is_too_large_to_enumerate`]
+    /// — the two questions that #2678's second version tried to answer with
+    /// one predicate, which is why it could only fix one of the two hangs.
+    ///
+    /// * The conversion asks "is the stated length too large to spend HERE",
+    ///   and declines every sized sequence past [`OPAQUE_ITEM_CAP`].
+    /// * This asks "can the walk end at all", and is what decides whether a
+    ///   sink that genuinely needs every item may exceed the cap.
+    ///
+    /// TWO conditions, and both are load-bearing:
+    ///
+    /// * **`len(o)` succeeded at the conversion.** An object that never
+    ///   stated a length has stated no bound: `itertools.count()`, a
+    ///   generator, a class whose `__iter__` is endless. Those keep the cap
+    ///   and RAISE past it — Django hangs on them, and an error is the
+    ///   strictly better answer.
+    /// * **The type has a real `__iter__`.** Without one, PyO3's iteration
+    ///   is CPython's legacy sequence protocol — `o[0]`, `o[1]`, … until
+    ///   `IndexError` — and nothing connects that walk to the stated
+    ///   `__len__`. #2678's liar (a `__len__` of `10**9` over a
+    ///   never-raising `__getitem__`) is exactly this shape and must keep
+    ///   the cap; a `range` has a real iterator whose own exhaustion ends
+    ///   the walk and must not.
+    ///
+    /// When both hold the walk is Django's own: `{% for %}` over
+    /// `collections.deque(range(100_001))` renders all 100 001 items, and
+    /// `{% for %}` over `range(10**9)` does not come back — which is measured Django
+    /// behaviour for that same input, not a djust limitation (see the
+    /// differential table in `python/tests/test_sized_sequence_conversion_2695_2693.py`).
+    ///
+    /// **The limit of the claim, stated rather than assumed.** Two conditions
+    /// are what CPython lets us ask; they are not a proof. A class that
+    /// states a `__len__` and whose `__iter__` never ends — a lying length —
+    /// passes both and is walked without a bound. That shape does not come
+    /// back today either: [`opaque_value`]'s enumeration has no cap of its
+    /// own, so before #2695 it failed to return at the CONVERSION, for
+    /// `{{ v|length }}` as much as for `{% for %}`. Moving the walk to the
+    /// sink makes it strictly rarer (only a template that asks for every
+    /// item pays it) and changes nothing else, so it is unfixed rather than
+    /// newly broken — pinned as a measurement by
+    /// `TestALyingLengthIsUnfixedRatherThanNewlyBroken`.
+    fn live_walk_terminates(&self, ob: &Bound<'_, PyAny>) -> bool {
+        self.len.is_some()
+            && ob
+                .get_type()
+                .hasattr(pyo3::intern!(ob.py(), "__iter__"))
+                .unwrap_or(false)
+    }
+
     /// Consume a ONE-SHOT iterator carried by the live handle into its items
     /// (#2613) — Django's `list(values)` in `ForNode.render`, run at the
     /// `{% for %}` sink rather than at conversion so that a generator the
@@ -4016,11 +4177,11 @@ impl Encoded {
     ///
     /// `None` when there is nothing to consume: no handle (eager path, or a
     /// wire round-trip), not iterable, or the items were already enumerated
-    /// at conversion (a re-iterable object). Bounded by [`OPAQUE_ITEM_CAP`]:
-    /// past it the render RAISES rather than truncating — Django would hang
-    /// on the same `itertools.count()`, so an error is the strictly better
-    /// answer and a short list would be a silently wrong one. A raising
-    /// `__next__` propagates as Django propagates it.
+    /// at conversion (a re-iterable object). Bounded by [`OPAQUE_ITEM_CAP`]
+    /// UNLESS [`Encoded::live_walk_terminates`] — past it the render RAISES
+    /// rather than truncating, because Django would hang on the same
+    /// `itertools.count()` and a short list would be a silently wrong
+    /// answer. A raising `__next__` propagates as Django propagates it.
     ///
     /// A second call after exhaustion yields an empty list, exactly as a
     /// second `{% for %}` over the same generator is empty in Django.
@@ -4031,15 +4192,12 @@ impl Encoded {
         let handle = self.live.as_ref()?;
         Some(Python::attach(|py| {
             let ob = handle.bind(py);
+            let capped = !self.live_walk_terminates(ob);
             let mut collected = Vec::new();
             for item in ob.try_iter()? {
                 collected.push(item?.extract::<Value>()?);
-                if collected.len() > OPAQUE_ITEM_CAP {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                        "'{}' object yielded more than {} items — \
-                         an unbounded iterable cannot be rendered",
-                        self.type_name, OPAQUE_ITEM_CAP
-                    )));
+                if capped && collected.len() > OPAQUE_ITEM_CAP {
+                    return Err(self.unbounded_error());
                 }
             }
             Ok(collected)
@@ -4057,6 +4215,12 @@ impl Encoded {
     /// the stopping rule differs, which is why it is a sibling of that
     /// method rather than a caller-side `take_while`.
     ///
+    /// This is the walk Python falls back to when the type has no
+    /// `__contains__`; [`Encoded::live_contains`] is the other half and must
+    /// be tried FIRST, or `{% if 987654321 in range(10**9) %}` walks nine
+    /// hundred million items to reach an answer `range.__contains__` has in
+    /// constant time (#2695).
+    ///
     /// `None` when there is nothing to consume, exactly as its sibling.
     pub fn consume_live_match(
         &self,
@@ -4068,22 +4232,144 @@ impl Encoded {
         let handle = self.live.as_ref()?;
         Some(Python::attach(|py| {
             let ob = handle.bind(py);
+            let capped = !self.live_walk_terminates(ob);
             let mut seen = 0usize;
             for item in ob.try_iter()? {
                 if matches(&item?.extract::<Value>()?) {
                     return Ok(true);
                 }
                 seen += 1;
-                if seen > OPAQUE_ITEM_CAP {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                        "'{}' object yielded more than {} items — \
-                         an unbounded iterable cannot be rendered",
-                        self.type_name, OPAQUE_ITEM_CAP
-                    )));
+                if capped && seen > OPAQUE_ITEM_CAP {
+                    return Err(self.unbounded_error());
                 }
             }
             Ok(false)
         }))
+    }
+
+    /// Python's own `needle in o`, for a type that answers it WITHOUT
+    /// iterating (#2695).
+    ///
+    /// `range(10**9).__contains__(987654321)` is arithmetic; `set` and
+    /// `dict_keys` hash. Django evaluates `x in value` in Python and gets
+    /// those answers for free, so walking the object here is not merely slow
+    /// — for a stated billion it is the reported hang, on a cell Django
+    /// renders instantly.
+    ///
+    /// Gated on the type actually defining `__contains__`, and that gate is
+    /// what keeps this safe for a one-shot iterator: without the slot,
+    /// CPython's `in` falls back to iterating and CONSUMES the caller's
+    /// generator up to the match, which is precisely the behaviour
+    /// [`Encoded::consume_live_match`] already reproduces with djust's own
+    /// element comparison. So the two are exclusive rather than layered —
+    /// this arm handles the objects Python answers without a walk, its
+    /// sibling handles the ones it answers with one.
+    ///
+    /// `None` when there is nothing to ask: no handle, not iterable, items
+    /// already enumerated, no `__contains__`, or a needle that has no
+    /// faithful Python spelling.
+    pub fn live_contains(&self, needle: &Value) -> Option<PyResult<bool>> {
+        if !self.iterable || self.items.is_some() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let ob = handle.bind(py);
+            if !ob
+                .get_type()
+                .hasattr(pyo3::intern!(py, "__contains__"))
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            // A needle that cannot cross back exactly is left to the walking
+            // sibling: `Value`'s `IntoPyObject` spells a carried object as a
+            // string, and `"<map object …>" in o` is a different question.
+            let py_needle = match needle {
+                Value::None
+                | Value::Bool(_)
+                | Value::Integer(_)
+                | Value::Float(_)
+                | Value::String(_)
+                | Value::SafeString(_) => needle.into_pyobject(py).ok()?,
+                _ => return None,
+            };
+            Some(ob.contains(py_needle))
+        })
+    }
+
+    /// Python's `o[index]` over the live handle — Django's `first` / `last`
+    /// filters and its `Variable._resolve_lookup` integer step (#2695).
+    ///
+    /// `Ok(None)` is an `IndexError`, which is the ONE exception Django's
+    /// `first` and `last` catch (`except IndexError: return ""`). Every
+    /// other Python failure is the caller's to spell, and the caller has
+    /// only [`crate::Value`]-level error variants — so a `TypeError` (`o` is
+    /// not subscriptable) and a `KeyError` are told apart here and anything
+    /// else is reported as the not-subscriptable case.
+    ///
+    /// Only ever reached for a carrier whose items were NOT enumerated: a
+    /// `set` or a `dict_keys` keeps the inert `items` path and its existing
+    /// refusal. For `range(10**9)` this is `{{ v|first }}` -> `0` and
+    /// `{{ v|last }}` -> `999999999`, both in constant time, both Django's
+    /// own answers.
+    pub fn live_get_item(&self, index: i64) -> Option<PyResult<Option<Value>>> {
+        if self.items.is_some() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Some(Python::attach(|py| match handle.bind(py).get_item(index) {
+            Ok(found) => Ok(Some(found.extract::<Value>()?)),
+            Err(e) if e.is_instance_of::<pyo3::exceptions::PyIndexError>(py) => Ok(None),
+            Err(e) => Err(e),
+        }))
+    }
+
+    /// Python's `o[start:stop:step]` over the live handle — Django's `slice`
+    /// filter, which is a bare `value[slice(*bits)]` passthrough (#2695).
+    ///
+    /// `None` when there is nothing to slice (no handle, items already
+    /// enumerated) and `Some(Err(..))` when Python raises — both of which the
+    /// caller answers with Django's `except (ValueError, TypeError,
+    /// KeyError): return value`, i.e. the input unchanged. That is what a
+    /// `generator` gets, on both engines.
+    ///
+    /// Load-bearing because the conversion now declines to enumerate a sized
+    /// sequence past [`OPAQUE_ITEM_CAP`]: without this arm
+    /// `{{ v|slice:":3" }}` over `collections.deque(range(100_001))` — or over
+    /// `range(10**9)` — returned the WHOLE carrier unchanged, where Django
+    /// renders three items.
+    pub fn live_get_slice(
+        &self,
+        start: Option<isize>,
+        stop: Option<isize>,
+        step: Option<isize>,
+    ) -> Option<PyResult<Value>> {
+        if self.items.is_some() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Some(Python::attach(|py| {
+            // Built through Python's own `slice(...)` rather than
+            // `PySlice::new`, which cannot spell `None`. The difference is
+            // observable for a negative step: `o[::-1]` starts at the END
+            // while `o[0::-1]` is a single element, so substituting `0` for
+            // an absent start would answer a different question.
+            let slice = py
+                .get_type::<pyo3::types::PySlice>()
+                .call1((start, stop, step))?;
+            handle.bind(py).get_item(slice)?.extract::<Value>()
+        }))
+    }
+
+    /// The ONE spelling of "this object yielded more than the cap", shared by
+    /// the two walking sinks so their messages cannot drift (#1646).
+    fn unbounded_error(&self) -> PyErr {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "'{}' object yielded more than {} items — \
+             an unbounded iterable cannot be rendered",
+            self.type_name, OPAQUE_ITEM_CAP
+        ))
     }
 }
 

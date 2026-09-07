@@ -4760,8 +4760,18 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                 // propagated, which contradicted the comment six lines above
                 // it — the operand that used to reach `_ => false` now had a
                 // path that raised (PR #2691 review).
+                //
+                // Asked of PYTHON first when the type defines `__contains__`
+                // (#2695): `987654321 in range(10**9)` is arithmetic there
+                // and nine hundred million element comparisons here, so the
+                // walk below is the fallback for objects Python itself would
+                // walk — which is also what keeps the one-shot behaviour
+                // above exactly as described.
                 Value::Encoded(ref e) if e.items.is_none() && e.live.is_some() => {
-                    match e.consume_live_match(|item| values_equal(&needle, item)) {
+                    match e
+                        .live_contains(&needle)
+                        .or_else(|| e.consume_live_match(|item| values_equal(&needle, item)))
+                    {
                         Some(Ok(found)) => Ok(found),
                         Some(Err(_)) | None => Ok(false),
                     }

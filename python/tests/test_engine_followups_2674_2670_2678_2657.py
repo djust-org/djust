@@ -26,6 +26,7 @@ so a future divergence in either direction reddens.
 
 from __future__ import annotations
 
+import collections
 import itertools
 import re
 import shutil
@@ -286,16 +287,14 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         "src,ctx",
         [
             # NOT `range(10**9)`, the "honest builtin twin" #2678 mentions in
-            # passing. That one terminates, so it is not the shape this fix
-            # bounds (see `stated_bound_is_unverifiable`), and putting it in a
-            # context still materialises it exactly as on main — a
-            # pre-existing cost, unchanged here and NOT fixed by this PR.
-            # It was in this table once and passed only because the first
-            # version of the fix capped on LENGTH, which is the same
-            # over-reach that broke `{% for %}` over a 100,001-item list.
-            # Fixing it means not materialising ANY sized sequence at
-            # conversion, which changes `|first`, `|slice` and `in` for every
-            # collection in the codebase: its own change, tracked separately.
+            # passing: it terminates, so it was not the shape THIS fix bounds
+            # and putting it in a context still materialised it. That was
+            # closed separately by #2695, which moved the conversion's bound
+            # onto the stated length for every sized sequence whose items do
+            # not already exist, and gave the SINKS their own termination
+            # rule — see
+            # `test_sized_sequence_conversion_2695_2693.py`. Its cells live
+            # there rather than here, so this table stays the liar's.
             #
             # Still a plain list under the cap — the fix is a shape rule, not
             # a change of carrier for ordinary sequences.
@@ -313,19 +312,42 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         out = _render_in_child("{{ v }}", "liar", timeout=25)
         assert "Liar object at" in out, out
 
-    def test_only_the_unverifiable_shape_is_bounded(self):
-        """The scope of the cap, stated as the two shapes it separates.
+    def test_the_conversion_bound_is_the_stated_length(self):
+        """The scope of the cap, as #2695 left it.
 
-        `Liar` states `10**9` and has no `__iter__`, so nothing can end its
-        walk short of paying it — it is carried. A `list` of the same length
-        class states a length its own iterator honours, so it is enumerated
-        exactly as before, at any size. The first version of this fix keyed on
-        the NUMBER and claimed both, which turned `{% for %}` over a
-        100,001-item list into a `RuntimeError` (PR #2691 review)."""
+        This fix keyed on TWO conditions — past the cap AND no `__iter__` —
+        because its first version keyed on the number alone and turned
+        `{% for %}` over a 100,001-item list into a `RuntimeError` (PR #2691
+        review). #2695 showed the number really is the conversion's axis, and
+        that the earlier version's mistake was applying it at the SINK too:
+        a `list` past the cap is carried here and still renders every item,
+        because `Encoded::live_walk_terminates` asks the other question
+        (`{% for %}` over 100 001 items is pinned by
+        `TestATerminatingCollectionPastTheCapIsUntouched` below).
+
+        So the carried set is now "anything whose stated length exceeds the
+        cap AND has not already materialised its items" — the liar and a
+        `range` included, a `list` and a `QuerySet` excluded, because for
+        those two the decline saves nothing (a `list` holds its elements
+        already; `QuerySet.__len__` calls `_fetch_all()`). See
+        `len_call_already_materialised_the_items` and, for the content change
+        that exemption prevents,
+        `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` in
+        `test_sized_sequence_conversion_2695_2693.py`.
+        """
         assert _rust.crosses_as_encoded(Liar()) is True
+        assert _rust.crosses_as_encoded(range(10**9)) is True
+        # A `deque` past the cap DESCRIBES nothing it has not built, but
+        # nothing about `len(deque)` builds it either — it is the ordinary
+        # sized-sequence case, and it is carried.
+        assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
+        # Already materialised: exempt at any length (#2695 review).
         assert _rust.crosses_as_encoded(list(range(100_001))) is False
-        assert _rust.crosses_as_encoded(range(10**9)) is False
+        # Under the cap: unchanged, on both the sized and the ordinary shape.
         assert _rust.crosses_as_encoded(list(range(10))) is False
+        assert _rust.crosses_as_encoded(range(10)) is False
+        assert _rust.crosses_as_encoded(collections.deque(range(100_000))) is False
+        assert _rust.crosses_as_encoded(list(range(100_000))) is False
 
 
 #: A collection ONE past `OPAQUE_ITEM_CAP` that genuinely terminates. This is
