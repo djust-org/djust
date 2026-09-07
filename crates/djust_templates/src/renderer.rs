@@ -1131,6 +1131,11 @@ fn resolve_block_tag_args(name: &str, args: &[String], context: &Context) -> Vec
 
 /// Render a [`Node::BlockCustomTag`]'s body and call its handler — the ONE
 /// site for both the standalone arm and `sibling_updates` (#2547).
+///
+/// The body is rendered FIRST, which is what every wrapper handler wants and
+/// what `{% cache %}` cannot live with — a handler declaring `LAZY_BODY` takes
+/// the two-phase path instead and may decline the render outright (#2658; see
+/// [`crate::registry::read_lazy_body`]).
 fn call_block_custom_tag<L: TemplateLoader>(
     name: &str,
     args: &[String],
@@ -1138,6 +1143,9 @@ fn call_block_custom_tag<L: TemplateLoader>(
     context: &mut Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<SiblingBinding>)> {
+    if crate::registry::block_handler_lazy_body(name) {
+        return call_lazy_body_block_tag(name, args, children, context, loader);
+    }
     // Render children first to get block content
     let content = render_nodes_with_loader_mut(children, context, loader)?;
     let resolved_args = resolve_block_tag_args(name, args, context);
@@ -1165,6 +1173,67 @@ fn call_block_custom_tag<L: TemplateLoader>(
         &context_map,
         raw_py.as_deref(),
         context.autoescape(),
+    )
+    .map_err(|e| handler_call_error("Block tag", name, e))?;
+    Ok((html, Vec::new()))
+}
+
+/// The two-phase arm of [`call_block_custom_tag`] for a `LAZY_BODY` handler
+/// (#2658).
+///
+/// `before_body` is asked FIRST, with the args resolved and the context
+/// snapshotted but the children untouched. `Some(html)` ends it — the body is
+/// never rendered, which is the whole point: `{% cache %}` on a hit stops
+/// paying for the fragment it is caching, and a body with side effects (a
+/// `{% cycle %}`, an `as`-binding, a lazily-evaluated queryset) stops running,
+/// exactly as it stops running inside Django's `CacheNode`.
+///
+/// Resolving the args before the body is a DIFFERENCE from the eager path,
+/// which resolves them after, and it is the Django-faithful order:
+/// `CacheNode.render` resolves its operands and consults the cache before it
+/// touches `self.nodelist`. It also has to be this way — args resolved after a
+/// body that declined to render would be resolved against a context the body
+/// never got to write.
+fn call_lazy_body_block_tag<L: TemplateLoader>(
+    name: &str,
+    args: &[String],
+    children: &[Node],
+    context: &mut Context,
+    loader: Option<&L>,
+) -> Result<(String, Vec<SiblingBinding>)> {
+    let resolved_args = resolve_block_tag_args(name, args, context);
+    let context_map = context.to_hashmap();
+    let raw_py = context.render_raw_py_objects();
+    let autoescape = context.autoescape();
+
+    let (answered, state) = crate::registry::call_block_handler_before_body(
+        name,
+        &resolved_args,
+        &context_map,
+        raw_py.as_deref(),
+        autoescape,
+    )
+    .map_err(|e| handler_call_error("Block tag", name, e))?;
+    if let Some(html) = answered {
+        return Ok((html, Vec::new()));
+    }
+
+    // Declined: the body renders, and the handler is called back with it.
+    // `resolved_args`, `context_map` and `raw_py` are deliberately the SAME
+    // pre-body snapshot `before_body` answered against, so a handler that
+    // re-reads them in phase two reads what it decided on. Rebuilding them
+    // here would let the body's own writes change the answer between the two
+    // halves of one call — a `{% cache %}` looking a key up under one context
+    // and storing under another would store a key nobody can find again.
+    let content = render_nodes_with_loader_mut(children, context, loader)?;
+    let html = crate::registry::call_block_handler_after_body(
+        name,
+        &resolved_args,
+        &content,
+        &context_map,
+        raw_py.as_deref(),
+        &state,
+        autoescape,
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
     Ok((html, Vec::new()))

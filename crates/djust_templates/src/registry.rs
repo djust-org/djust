@@ -293,6 +293,8 @@ struct BlockHandlerEntry {
     returns_bindings: bool,
     /// See [`read_wants_autoescape`] (#2556).
     wants_autoescape: bool,
+    /// See [`read_lazy_body`] (#2658).
+    lazy_body: bool,
 }
 
 /// Global registry for block tag handlers (tags with children).
@@ -404,6 +406,59 @@ fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
         return Ok(false);
     }
     handler.getattr("WANTS_AUTOESCAPE")?.is_truthy()
+}
+
+/// The handler's opt-in "let ME decide whether the body renders at all"
+/// declaration (#2658).
+///
+/// The block-handler contract is `render(args, content, context)` with
+/// `content` the body ALREADY rendered — [`crate::renderer`]'s
+/// `call_block_custom_tag` renders the children as its first statement. That
+/// is right for every wrapper tag djust ships (`modal`, `card`, a bridged
+/// `simple_block_tag`), which want the markup and only decorate it. It is
+/// wrong for `{% cache %}`, whose entire purpose is to NOT do the work: the
+/// output was correct on a hit and the render had already been paid for, so
+/// the tag was correct and pointless.
+///
+/// A handler that sets `LAZY_BODY = True` is called in TWO phases instead:
+///
+/// * `before_body(args, context) -> (str | None, state)` — the finished
+///   output when the handler can answer without the body (a cache hit), or
+///   `None` for "render it and call me back", plus whatever it wants handed
+///   back in phase two;
+/// * `after_body(args, content, context, state) -> str` — the ordinary
+///   `render`-shaped call plus that state, reached only when `before_body`
+///   declined.
+///
+/// Two phases rather than a callback the handler invokes: a re-entrant
+/// callback would have Python calling back into the renderer while Rust holds
+/// `&mut Context`, which the borrow is not going to allow and which would put
+/// the renderer's re-entrancy on the handler's honesty.
+///
+/// `state` is opaque to the renderer — an arbitrary Python object, carried by
+/// value across the body render and never inspected. It exists so phase two
+/// does not have to REDO phase one's work: `{% cache %}` computes a backend, a
+/// key and an expiry to decide the hit, and `after_body` stores under that
+/// same key rather than resolving every operand a second time. A recompute
+/// would agree (both phases see the same context snapshot, below) but it would
+/// call each vary operand's `__str__` twice where Django calls it once, and
+/// stashing the state on the handler is not available — a registered handler
+/// is one shared instance serving nested tags on pooled threads.
+///
+/// The args are resolved and the context snapshotted BEFORE `before_body`,
+/// which is also what Django does — `CacheNode.render` resolves its expiry and
+/// vary operands, computes the key and consults the cache, all before it
+/// touches `self.nodelist`.
+///
+/// Absent or falsy = the historical single-phase contract, untouched for every
+/// existing handler. Block-registry only: an inline tag has no body to be lazy
+/// about. Refused in combination with `RETURNS_BINDINGS` / `WANTS_AUTOESCAPE`
+/// at registration — see [`register_block_tag_handler`].
+fn read_lazy_body(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("LAZY_BODY")? {
+        return Ok(false);
+    }
+    handler.getattr("LAZY_BODY")?.is_truthy()
 }
 
 /// A registered inline-tag handler plus its arg-resolution policy (#2423).
@@ -699,7 +754,12 @@ pub fn register_block_tag_handler(
 ) -> PyResult<()> {
     let _bump = BumpOnReturn;
     let handler_ref = handler.bind(py);
-    if !handler_ref.hasattr("render")? {
+    // A `LAZY_BODY` handler is called through `before_body`/`after_body` and
+    // never through `render` (#2658), so requiring one would only get it
+    // written as a shim nothing calls — dead code free to drift from the two
+    // methods that are live (#1646). Its own two-method requirement is
+    // enforced below.
+    if !handler_ref.hasattr("render")? && !read_lazy_body(handler_ref)? {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
             "Block tag handler must have a 'render' method",
         ));
@@ -711,6 +771,34 @@ pub fn register_block_tag_handler(
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    let lazy_body = read_lazy_body(handler_ref)?;
+
+    // The two-phase contract is TOTAL or it is not a contract (#2658): a
+    // handler that declares it must carry both halves, and the combinations
+    // that have no defined meaning are refused HERE rather than half-honoured
+    // at render time. `RETURNS_BINDINGS` would need both phases to return
+    // 2-tuples and `WANTS_AUTOESCAPE` is a signature change to a `render` the
+    // lazy path never calls; neither has a caller, and inventing an untested
+    // shape for zero callers is how a protocol ends up half-built. Relaxing
+    // either is a one-line change plus the tests that would justify it.
+    if lazy_body {
+        for method in ["before_body", "after_body"] {
+            if !handler_ref.hasattr(method)? {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                    "Block tag handler '{name}' declares LAZY_BODY but has no \
+                     '{method}' method (the two-phase contract needs both \
+                     'before_body' and 'after_body')"
+                )));
+            }
+        }
+        if returns_bindings || wants_autoescape {
+            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "Block tag handler '{name}' declares LAZY_BODY with \
+                 RETURNS_BINDINGS/WANTS_AUTOESCAPE, which is not a supported \
+                 combination"
+            )));
+        }
+    }
 
     let validator = read_parse_validator(handler_ref)?;
 
@@ -730,6 +818,7 @@ pub fn register_block_tag_handler(
             resolve_positions,
             returns_bindings,
             wants_autoescape,
+            lazy_body,
         },
     );
     Ok(())
@@ -1168,6 +1257,116 @@ pub fn block_handler_returns_bindings(name: &str) -> bool {
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
         .unwrap_or(false)
+}
+
+/// Whether this block handler takes the two-phase lazy-body path (#2658).
+///
+/// See [`read_lazy_body`]. Same shape as
+/// [`block_handler_returns_bindings`] — a missing tag reads as `false`, and
+/// the renderer's ordinary "no handler registered" error reports it.
+pub fn block_handler_lazy_body(name: &str) -> bool {
+    BLOCK_TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.lazy_body))
+        .unwrap_or(false)
+}
+
+/// Phase one of the lazy-body contract (#2658): ask the handler whether it can
+/// answer WITHOUT the body.
+///
+/// The first element of the returned pair is `Some(html)` for a finished
+/// answer — the renderer returns it and never renders the children — and
+/// `None` for "render the body and call [`call_block_handler_after_body`]".
+/// The second is the handler's opaque phase-two state, carried either way.
+///
+/// The output is escaped by the same [`escape_handler_return`] the
+/// single-phase path uses, so a `SafeString` (which is what a stored
+/// `{% cache %}` fragment is) is inserted raw and a bare `str` is escaped —
+/// one rule for both phases and for the historical `render`.
+pub fn call_block_handler_before_body(
+    name: &str,
+    args: &[TagArg],
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    autoescape: bool,
+) -> Result<(Option<String>, Py<PyAny>), DjangoRustError> {
+    let handler = clone_block_handler(name)?;
+    Python::attach(|py| {
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
+        let result = handler
+            .bind(py)
+            .call_method1("before_body", (py_args, py_context))
+            .map_err(handler_exception)?;
+        let (output, state) = result.extract::<(Py<PyAny>, Py<PyAny>)>().map_err(|_| {
+            DjangoRustError::TemplateError(format!(
+                "Block handler '{name}' before_body() must return a 2-tuple \
+                 (output-or-None, state)"
+            ))
+        })?;
+        let output = output.bind(py);
+        if output.is_none() {
+            return Ok((None, state));
+        }
+        let html = escape_handler_return(output, "Block handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)?;
+        Ok((Some(html), state))
+    })
+}
+
+/// Phase two of the lazy-body contract (#2658): the body rendered, hand it
+/// over.
+///
+/// Identical in shape and escaping to
+/// [`call_block_handler_with_py_sidecar`] — including the `mark_safe` on the
+/// body, which is the same `SafeData` grant and for the same reason (#2379) —
+/// differing only in the method name it calls.
+pub fn call_block_handler_after_body(
+    name: &str,
+    args: &[TagArg],
+    content: &str,
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    state: &Py<PyAny>,
+    autoescape: bool,
+) -> Result<String, DjangoRustError> {
+    let handler = clone_block_handler(name)?;
+    Python::attach(|py| {
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_content = mark_safe_str(py, content).map_err(|e| {
+            DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+        })?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
+        let result = handler
+            .bind(py)
+            .call_method1(
+                "after_body",
+                (py_args, py_content, py_context, state.clone_ref(py)),
+            )
+            .map_err(handler_exception)?;
+        escape_handler_return(&result, "Block handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
+    })
+}
+
+/// One registry read for both lazy-body phases (#2658): take the read lock,
+/// find the entry, clone the handler out, drop the lock before any Python
+/// runs.
+///
+/// The two single-phase block callers spell the same read inline;
+/// `call_block_handler_with_bindings` additionally reads `wants_autoescape`
+/// under the same lock, so they are not all one helper today.
+fn clone_block_handler(name: &str) -> Result<Py<PyAny>, DjangoRustError> {
+    let registry = BLOCK_TAG_HANDLERS
+        .read()
+        .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+    let entry = registry.get(name).ok_or_else(|| {
+        DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+    })?;
+    Ok(Python::attach(|py| entry.handler.clone_ref(py)))
 }
 
 // ============================================================================
@@ -2192,30 +2391,35 @@ mod tests {
             tests.contains("every_registry_builds_its_args_through_the_one_builder"),
             "the split landed in the wrong place"
         );
-        // Six call sites since #2558: tag, block, assign, the two
+        // Eight call sites since #2658: tag, block, assign, the two
         // bindings-returning variants (`call_handler_with_bindings`,
-        // `call_block_handler_with_bindings`) and the raw-block registry
-        // (`call_raw_block_handler_with_bindings`).
+        // `call_block_handler_with_bindings`), the raw-block registry
+        // (`call_raw_block_handler_with_bindings`) and the two phases of the
+        // lazy-body block contract (`call_block_handler_before_body`,
+        // `call_block_handler_after_body`).
         assert_eq!(
             src.matches("build_py_args(py, args)").count(),
-            6,
-            "the tag, block, assign, both bindings and the raw-block registries must all build args here"
+            8,
+            "the tag, block, assign, both bindings, the raw-block and both lazy-body \
+             phases must all build args here"
         );
         assert!(
             !src.contains("PyList::new(py, args)"),
             "a registry is building its args list without the marker again"
         );
         // And the builder is the only place `mark_safe_str` reaches an
-        // ARGUMENT: the block body's own call (#2379), its bindings twin and
-        // the marked-context re-mint (#2547) are the other three, and there
-        // must be exactly those four.
-        assert_eq!(src.matches("mark_safe_str(py, ").count(), 4);
+        // ARGUMENT: the block body's own call (#2379), its bindings twin, the
+        // marked-context re-mint (#2547) and the lazy-body `after_body` body
+        // (#2658 — the same `SafeData` grant on the same bytes) are the other
+        // four, and there must be exactly those five.
+        assert_eq!(src.matches("mark_safe_str(py, ").count(), 5);
         // The context dict is built in ONE place for every registry (#2547):
-        // the five call paths above plus no inline copy.
+        // the call paths above plus no inline copy. Eight since #2658 added
+        // the two lazy-body phases.
         assert_eq!(
             src.matches("build_py_context(py, context, raw_py_objects)")
                 .count(),
-            6,
+            8,
             "every registry call path builds its context dict through the one builder"
         );
         assert_eq!(

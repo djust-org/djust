@@ -22,8 +22,10 @@ asserted from the issue text:
 * the arity errors (``test_cache11`` / ``test_cache12``) already raise at PARSE
   time, with Django's exact text — ``CacheTagHandler.validate_at_parse`` calls
   Django's own ``do_cache``;
-* the body still renders on a cache HIT, which needs a lazy-body block-handler
-  protocol and is deliberately NOT attempted here (see the issue).
+* the body still rendered on a cache HIT when this file was written; the
+  lazy-body block-handler protocol that fixes it landed afterwards, and
+  :class:`TestTheBodyDoesNotRenderOnAHit` below pins the new behaviour where
+  ``TestTheBodyStillRendersOnAHit`` pinned the gap.
 """
 
 from __future__ import annotations
@@ -65,6 +67,33 @@ def backend() -> Any:
 @pytest.fixture
 def django_engine() -> Any:
     return Engine(libraries=_LIB)
+
+
+@pytest.fixture
+def body_probe() -> Any:
+    """A tag that records every time it renders, for use INSIDE a cache body.
+
+    The observable side effect has to be a tag rather than a ``__str__`` on a
+    context value: the handler is handed a snapshot of the context on every
+    render, so a ``__str__`` probe counts the snapshot too and cannot tell "the
+    body ran" from "the tag was reached at all" (#2658).
+    """
+    from djust._rust import register_tag_handler, unregister_tag_handler
+
+    calls: List[int] = []
+
+    class Probe:
+        RESOLVE_ARG_POSITIONS = frozenset()
+
+        def render(self, args: List[str], context: Dict[str, Any]) -> str:
+            calls.append(1)
+            return "X"
+
+    register_tag_handler("body_probe_2658", Probe())
+    try:
+        yield calls
+    finally:
+        unregister_tag_handler("body_probe_2658")
 
 
 def _django(engine: Any, src: str, ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -212,6 +241,35 @@ class TestCacheKeyMatchesDjango:
         )
 
 
+class TestReassertKeepsCacheABlockTag:
+    """``reassert()`` must re-register ``cache`` the way it was registered.
+
+    ``djust.test_isolation`` calls ``reassert()`` before each test, and it
+    dispatched on ``isinstance`` of the two generic library handler classes —
+    so ``CacheTagHandler``, which is neither, fell to the INLINE branch:
+    ``cache`` was re-registered as an inline tag and its block handler
+    unregistered, and ``{% cache %}…{% endcache %}`` stopped parsing as a block
+    for the rest of the worker. Silent while the handler still had a ``render``
+    the inline registry accepted; a ``TypeError`` out of ``reassert`` once it
+    became a two-phase ``LAZY_BODY`` handler (#2658, #1646).
+    """
+
+    def test_a_bridged_cache_survives_a_reassert(self, backend: Any) -> None:
+        from djust import template_libraries
+        from djust._rust import has_block_tag_handler, has_tag_handler
+
+        src = '{% load cache %}{% cache 300 "reassert2658" %}ok{% endcache %}'
+        assert str(backend.from_string(src).render({})) == "ok"
+        assert "cache" in template_libraries.owned_tags()
+
+        template_libraries.reassert()
+
+        assert has_block_tag_handler("cache"), "reassert dropped the block handler"
+        assert not has_tag_handler("cache"), "reassert re-registered cache as an inline tag"
+        caches["default"].clear()
+        assert str(backend.from_string(src + " ").render({})) == "ok "
+
+
 class TestArityIsAlreadyRefusedAtParseTime:
     """#2658 item 2 was fixed before this PR; pinned so it cannot regress.
 
@@ -229,60 +287,146 @@ class TestArityIsAlreadyRefusedAtParseTime:
         assert "requires at least 2 arguments" in str(caught.value)
 
 
-class TestTheBodyStillRendersOnAHit:
-    """#2658 item 1 is NOT fixed here — pinned as a known gap, not as correct.
+class TestTheBodyDoesNotRenderOnAHit:
+    """#2658 item 1, now fixed: a HIT does not pay for the body.
 
-    The block-handler protocol hands ``render()`` a body that is already a
-    string, so the handler cannot decide *whether* to render. Making the tag
-    actually save the work needs a lazy-body protocol; this test exists so that
-    when one lands, it fails and is updated deliberately rather than the gap
-    being rediscovered.
+    Was ``TestTheBodyStillRendersOnAHit``, which pinned the gap as a gap and
+    failed with an instruction the moment a lazy body landed. The lazy-body
+    block-handler protocol (``LAZY_BODY`` +
+    ``before_body``/``after_body``) landed, so the same scenarios are pinned
+    here as CORRECT behaviour instead.
+
+    The side effect has to be a TAG, not a ``__str__`` on a context value: the
+    context is snapshotted for the handler on every render, so a ``__str__``
+    probe counts the snapshot as well as the body and cannot tell the two
+    apart. That is what the old test measured, which is why it went on passing
+    for a render or two after the body had in fact stopped running.
     """
 
-    def test_a_hit_returns_the_cached_output_but_still_paid_for_the_body(
-        self, backend: Any
+    def test_the_body_side_effect_happens_once_across_two_renders(
+        self, backend: Any, body_probe: List[int]
     ) -> None:
-        renders: List[int] = []
-
-        class Probe:
-            def __str__(self) -> str:
-                renders.append(1)
-                return "body"
-
-        src = '{% load cache %}{% cache 300 "hitprobe" %}{{ probe }}{% endcache %}'
+        src = '{% load cache %}{% cache 300 "hitprobe" %}[{% body_probe_2658 %}]{% endcache %}'
         template = backend.from_string(src)
 
-        assert str(template.render({"probe": Probe()})) == "body"
-        after_miss = len(renders)
-        assert after_miss > 0, "the body must render on a MISS"
+        assert str(template.render({})) == "[X]"
+        assert len(body_probe) == 1, "the body must render on a MISS"
 
-        assert str(template.render({"probe": Probe()})) == "body"
-        assert len(renders) > after_miss, (
-            "the body no longer renders on a cache hit — #2658 item 1 is fixed; "
-            "delete this test and assert the new behaviour instead."
+        assert str(template.render({})) == "[X]", "the hit must still emit the fragment"
+        assert len(body_probe) == 1, (
+            f"the body ran {len(body_probe)} times; a cache HIT must not render it (#2658)"
         )
 
-    def test_item_4_is_now_only_a_consequence_of_item_1(
+    def test_a_miss_stores_the_bytes_the_body_produced(self, backend: Any) -> None:
+        """The stored fragment is byte-identical to the body's own output."""
+        from django.core.cache.utils import make_template_fragment_key
+
+        src = '{% load cache %}{% cache 300 "storebytes" %}<b>{{ p }}</b>{% endcache %}'
+        out = str(backend.from_string(src).render({"p": "<script>&x"}))
+
+        # The fragment name is the RAW token, quotes included — Django's
+        # `do_cache` passes `tokens[2]` straight through ("fragment_name can't
+        # be a variable"), which is why the keys read `template.cache."f"`.
+        stored = caches["default"].get(make_template_fragment_key('"storebytes"', []))
+        assert stored == out == "<b>&lt;script&gt;&amp;x</b>", (out, stored)
+
+    def test_the_hit_output_is_not_escaped_a_second_time(
         self, backend: Any, django_engine: Any
     ) -> None:
-        """#2658 item 4 no longer has the symptom the issue reported.
+        """A stored fragment is markup, and stays markup on the way back out."""
+        src = '{% load cache %}{% cache 300 "escapetwice" %}<b>{{ p }}</b>{% endcache %}'
+        ctx = {"p": "<script>&x"}
 
-        The issue showed ``{{ k }}`` rendering EMPTY after a
-        ``{% cycle … as k %}`` inside a ``{% cache %}`` body — an ``as``-binding
-        that never escaped the body's sub-scope::
+        caches["default"].clear()
+        expected = django_engine.from_string(src).render(DjangoContext(ctx))
+
+        caches["default"].clear()
+        template = backend.from_string(src)
+        assert str(template.render(ctx)) == expected
+        assert str(template.render(ctx)) == expected, "the HIT re-escaped the fragment"
+
+    def test_a_fragment_stored_as_a_plain_str_is_still_inserted_raw(self, backend: Any) -> None:
+        """The ``mark_safe`` on the hit path, exercised where it is load-bearing.
+
+        The hit returns what the CACHE BACKEND handed back. Locmem round-trips
+        the body's ``SafeString`` through pickle, so the previous test would
+        pass with or without the re-marking; a backend that stores bytes —
+        Redis, memcached — hands back a plain ``str``, and the fragment would
+        then be escaped a second time on every hit. Priming the cache with a
+        plain ``str`` is that backend's behaviour without needing one.
+        """
+        from django.core.cache.utils import make_template_fragment_key
+
+        src = '{% load cache %}{% cache 300 "plainstr" %}unused{% endcache %}'
+        caches["default"].set(make_template_fragment_key('"plainstr"', []), "<b>stored</b>")
+
+        assert str(backend.from_string(src).render({})) == "<b>stored</b>"
+
+    def test_nested_cache_blocks(self, backend: Any, body_probe: List[int]) -> None:
+        """An inner ``{% cache %}`` inside an outer one: both lazy, both keyed."""
+        src = (
+            '{% load cache %}{% cache 300 "outer2658" %}A'
+            '{% cache 300 "inner2658" %}{% body_probe_2658 %}{% endcache %}'
+            "B{% endcache %}"
+        )
+        template = backend.from_string(src)
+
+        assert str(template.render({})) == "AXB"
+        assert len(body_probe) == 1
+        assert str(template.render({})) == "AXB"
+        assert len(body_probe) == 1, "the outer hit re-rendered the nested body"
+
+    def test_cache_block_inside_a_for_loop(self, backend: Any, body_probe: List[int]) -> None:
+        """One key per iteration; the second pass is three hits, zero bodies."""
+        src = (
+            "{% load cache %}{% for i in v %}"
+            '{% cache 300 "loop2658" i %}{% body_probe_2658 %}{% endcache %}'
+            "{% endfor %}"
+        )
+        template = backend.from_string(src)
+
+        assert str(template.render({"v": [1, 2, 3]})) == "XXX"
+        assert len(body_probe) == 3, "one body per distinct vary operand"
+        assert str(template.render({"v": [1, 2, 3]})) == "XXX"
+        assert len(body_probe) == 3, "the second pass must be three hits"
+
+    def test_a_body_that_raises_propagates_and_stores_nothing(self, backend: Any) -> None:
+        """A failing body is not a fragment. Nothing is stored, and the next
+        render is still a MISS rather than a hit on a half-written entry."""
+        from djust._rust import register_tag_handler, unregister_tag_handler
+
+        class Boom:
+            RESOLVE_ARG_POSITIONS = frozenset()
+
+            def render(self, args: List[str], context: Dict[str, Any]) -> str:
+                raise RuntimeError("boom from the body")
+
+        register_tag_handler("boom_probe_2658", Boom())
+        try:
+            src = '{% load cache %}{% cache 300 "boom2658" %}{% boom_probe_2658 %}{% endcache %}'
+            template = backend.from_string(src)
+            with pytest.raises(Exception) as caught:
+                str(template.render({}))
+            assert "boom from the body" in str(caught.value)
+            assert _keys() == [], f"a failed body was stored anyway: {_keys()}"
+        finally:
+            unregister_tag_handler("boom_probe_2658")
+
+    def test_item_4_now_matches_django_exactly(self, backend: Any, django_engine: Any) -> None:
+        """#2658 item 4, resolved by item 1 exactly as the issue predicted.
+
+        The issue reported ``{{ k }}`` rendering EMPTY after a
+        ``{% cycle … as k %}`` inside a ``{% cache %}`` body and called it an
+        ``as``-binding that never escaped the body's sub-scope::
 
             django -> '<1>1|<1>1|<1>1|'
             djust  -> '<1>|<1>|<1>|'
 
-        Measured now, the binding escapes fine; what differs is only that
-        Django's iterations 2 and 3 are cache HITS, so its body — and its
-        ``{% cycle %}`` — never runs again and ``k`` keeps the value bound on
-        iteration 1. djust re-renders the body (item 1), so the cycle advances.
-
-        So item 4 is not a separate scope bug to fix; it resolves exactly when
-        item 1 does. Pinned rather than described, because the issue's
-        description is now wrong and a reader would otherwise go looking for a
-        scope bug that is not there.
+        There was no scope bug by the time it was measured — the binding
+        escaped fine, and djust rendered ``'<1>1|<1>2|<1>3|'`` because it
+        re-rendered the body on iterations 2 and 3 and the ``{% cycle %}``
+        advanced. With the body lazy, those iterations are hits, the cycle does
+        not advance, and the two engines agree.
         """
         src = (
             "{% load cache %}{% for i in v %}"
@@ -292,14 +436,8 @@ class TestTheBodyStillRendersOnAHit:
         ctx = {"v": [1, 2, 3]}
 
         caches["default"].clear()
-        assert django_engine.from_string(src).render(DjangoContext(ctx)) == "<1>1|<1>1|<1>1|"
+        expected = django_engine.from_string(src).render(DjangoContext(ctx))
+        assert expected == "<1>1|<1>1|<1>1|"
 
         caches["default"].clear()
-        out = str(backend.from_string(src).render(ctx))
-        assert "|" in out and out.split("|")[0].endswith("1"), out
-        assert out == "<1>1|<1>2|<1>3|", (
-            f"got {out!r}. Empty `{{{{ k }}}}` segments would be the ORIGINAL item-4 "
-            "report (the binding not escaping the body); '<1>1|<1>1|<1>1|' would "
-            "mean item 1 is fixed and this test should be replaced by an equality "
-            "assertion against Django."
-        )
+        assert str(backend.from_string(src).render(ctx)) == expected
