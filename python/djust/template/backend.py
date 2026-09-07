@@ -12,6 +12,8 @@ from typing import Any, Dict, List
 
 from django.template import TemplateDoesNotExist, Origin
 from django.conf import settings
+from django.core.exceptions import SuspiciousFileOperation
+from django.utils._os import safe_join
 from django.template.backends.base import BaseEngine
 
 from .rendering import DjustTemplate
@@ -142,8 +144,12 @@ class DjustTemplateBackend(BaseEngine):
         Raises:
             TemplateDoesNotExist: If template not found
         """
+        tried = []
         for template_dir in self.template_dirs:
-            template_path = template_dir / template_name
+            try:
+                template_path = Path(safe_join(template_dir, template_name))
+            except SuspiciousFileOperation:
+                continue
             if template_path.is_file():
                 try:
                     with open(template_path, "r", encoding="utf-8") as f:
@@ -157,14 +163,13 @@ class DjustTemplateBackend(BaseEngine):
                 except OSError as e:
                     raise TemplateDoesNotExist(template_name) from e
 
-        # Template not found in any directory
-        tried = [
-            (
-                Origin(name=abspath(d / template_name), template_name=template_name, loader=self),
-                "Source does not exist",
+            tried.append(
+                (
+                    Origin(name=abspath(template_path), template_name=template_name, loader=self),
+                    "Source does not exist",
+                )
             )
-            for d in self.template_dirs
-        ]
+
         raise TemplateDoesNotExist(
             template_name,
             tried=tried,
