@@ -79,9 +79,10 @@ class DjustTemplateBackend(BaseEngine):
         # the `{% load %}` name map; `builtins` are bridged now.
         self.template_libraries: Dict[str, str] = dict(options.pop("libraries", {}) or {})
         self.template_builtins: List[str] = list(options.pop("builtins", []) or [])
-        from ..template_libraries import register_backend_libraries
+        from ..template_libraries import register_backend_libraries, rendering_with_backend
 
-        register_backend_libraries(self.template_libraries, self.template_builtins)
+        with rendering_with_backend(self):
+            register_backend_libraries(self.template_libraries, self.template_builtins)
 
         # Build list of template directories
         self.template_dirs = self._get_template_dirs(

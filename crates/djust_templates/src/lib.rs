@@ -27,6 +27,7 @@ pub mod markdown;
 pub mod parser;
 pub mod pprint;
 pub mod registry;
+pub mod registry_scope;
 pub mod renderer;
 pub mod stringformat;
 pub mod tags;

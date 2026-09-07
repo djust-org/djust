@@ -730,7 +730,7 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
 }
 
 /// `(mtime-at-parse-time, parsed nodes)` — see [`PARSED_TEMPLATE_CACHE`].
-type ParsedTemplateEntry = (SystemTime, Arc<[Node]>);
+type ParsedTemplateEntry = (SystemTime, u64, Arc<[Node]>);
 
 /// Process-global cache of parsed `{% include %}`-able template bodies,
 /// keyed by the RESOLVED filesystem path and invalidated by mtime (#2074).
@@ -759,7 +759,7 @@ type ParsedTemplateEntry = (SystemTime, Arc<[Node]>);
 /// NEXT mtime change — a minor HVR-robustness regression vs the pre-#2074
 /// always-re-parse behavior. Acceptable because dev filesystems (APFS/ext4)
 /// are sub-second and production templates are immutable.
-static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<PathBuf, ParsedTemplateEntry>>> =
+static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<(u64, PathBuf), ParsedTemplateEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Is this template name contained within its search directory?
@@ -949,14 +949,15 @@ impl TemplateLoader for FilesystemTemplateLoader {
     /// for why this must be a process-global cache rather than a `&self`
     /// field. Keyed by the RESOLVED path (not the raw `name` argument) so
     /// two loader instances with different `template_dirs` search orders
-    /// that resolve to the SAME file share the cache entry; invalidated by
-    /// mtime so an on-disk edit (including a hot-reload save) is picked up
+    /// that resolve to the SAME file within one engine share the cache entry; invalidated by
+    /// registry generation and mtime so an on-disk edit (including a hot-reload save) is picked up
     /// on the next call without any explicit `clear()`/invalidation wiring.
     fn load_template_cached(&self, name: &str) -> Result<Arc<[Node]>> {
         use crate::lexer;
         use crate::parser;
 
         let path = self.find_template(name)?;
+        let generation = crate::registry::registry_generation();
         let mtime = std::fs::metadata(&path)
             .and_then(|m| m.modified())
             .map_err(|e| {
@@ -972,8 +973,10 @@ impl TemplateLoader for FilesystemTemplateLoader {
             let cache = PARSED_TEMPLATE_CACHE.read().map_err(|e| {
                 DjangoRustError::TemplateError(format!("Template parse cache lock: {e}"))
             })?;
-            if let Some((cached_mtime, nodes)) = cache.get(&path) {
-                if *cached_mtime == mtime {
+            if let Some((cached_mtime, cached_generation, nodes)) =
+                cache.get(&(crate::registry_scope::current(), path.clone()))
+            {
+                if *cached_mtime == mtime && *cached_generation == generation {
                     return Ok(nodes.clone());
                 }
             }
@@ -1006,7 +1009,10 @@ impl TemplateLoader for FilesystemTemplateLoader {
         let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {
             DjangoRustError::TemplateError(format!("Template parse cache lock: {e}"))
         })?;
-        cache.insert(path, (mtime, arc.clone()));
+        cache.insert(
+            (crate::registry_scope::current(), path),
+            (mtime, generation, arc.clone()),
+        );
         Ok(arc)
     }
 }
@@ -1397,6 +1403,13 @@ pub fn resolve_template_inheritance(
 
     // Convert AST back to template string (preserves {{ var }} syntax)
     Ok(nodes_to_template_string(&final_nodes))
+}
+
+/// Remove parsed includes belonging to a retired backend.
+pub fn release_registry_namespace(namespace: u64) {
+    if let Ok(mut cache) = PARSED_TEMPLATE_CACHE.write() {
+        cache.retain(|(scope, _), _| *scope != namespace);
+    }
 }
 
 #[cfg(test)]

@@ -46,9 +46,7 @@ use djust_core::Context;
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
 
 /// Django's own reading of "this value is already HTML" (#2290, #2379).
 ///
@@ -95,8 +93,8 @@ struct FilterEntry {
 /// `RwLock` (not `Mutex`): registration is one-time bootstrap; lookup is
 /// read-only and on the hot render path, so concurrent renders share the
 /// read lock.
-static FILTER_REGISTRY: Lazy<RwLock<HashMap<String, FilterEntry>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static FILTER_REGISTRY: Lazy<crate::registry_scope::ScopedMap<FilterEntry>> =
+    Lazy::new(crate::registry_scope::ScopedMap::new);
 
 /// Hot-path short-circuit guard: ``true`` once any custom filter has been
 /// registered in this process (ever).
@@ -703,3 +701,10 @@ fn format_py_err(py: Python<'_>, name: &str, err: &PyErr) -> String {
 // Functional cross-checks (registration → render → custom filter produces
 // output) live in the Python regression suite at
 // `tests/unit/test_rust_custom_filters_1121.py`.
+
+/// Drop filter references owned by a retired backend.
+pub fn release_namespace(namespace: u64) -> PyResult<()> {
+    FILTER_REGISTRY
+        .release(namespace)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}

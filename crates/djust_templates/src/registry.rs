@@ -273,8 +273,8 @@ fn as_var_name_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAn
 /// read-only and happens on every render, so concurrent renders share the
 /// read lock. Handlers must implement a `render(args, context)` method
 /// that returns a string.
-static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static TAG_HANDLERS: Lazy<crate::registry_scope::ScopedMap<TagHandlerEntry>> =
+    Lazy::new(crate::registry_scope::ScopedMap::new);
 
 /// A registered block-tag handler: its end tag, the handler, and the two
 /// opt-in policies the inline registry already carried (#2547).
@@ -302,8 +302,8 @@ struct BlockHandlerEntry {
 /// - `args`: list of strings from the opening tag
 /// - `content`: pre-rendered HTML string of the block body
 /// - `context`: dict of template context variables
-static BLOCK_TAG_HANDLERS: Lazy<RwLock<HashMap<String, BlockHandlerEntry>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static BLOCK_TAG_HANDLERS: Lazy<crate::registry_scope::ScopedMap<BlockHandlerEntry>> =
+    Lazy::new(crate::registry_scope::ScopedMap::new);
 
 /// The handler's opt-in arg-resolution policy, read at registration time.
 ///
@@ -534,8 +534,8 @@ struct AssignHandlerEntry {
 /// Handlers implement `render(args, context) -> dict[str, Any]`. The
 /// returned dict is merged into the template context for siblings
 /// following the tag in the same render iteration.
-static ASSIGN_TAG_HANDLERS: Lazy<RwLock<HashMap<String, AssignHandlerEntry>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static ASSIGN_TAG_HANDLERS: Lazy<crate::registry_scope::ScopedMap<AssignHandlerEntry>> =
+    Lazy::new(crate::registry_scope::ScopedMap::new);
 
 /// Register a Python tag handler for a custom template tag.
 ///
@@ -1688,8 +1688,8 @@ struct RawBlockHandlerEntry {
 
 /// Global registry for raw-block tag handlers (#2558). Same reader/writer
 /// shape as [`BLOCK_TAG_HANDLERS`].
-static RAW_BLOCK_HANDLERS: Lazy<RwLock<HashMap<String, RawBlockHandlerEntry>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static RAW_BLOCK_HANDLERS: Lazy<crate::registry_scope::ScopedMap<RawBlockHandlerEntry>> =
+    Lazy::new(crate::registry_scope::ScopedMap::new);
 
 /// Register a raw-block tag handler (#2558): the parser collects the body as
 /// SOURCE and the handler receives `render(args, body, context)` with the
@@ -2154,6 +2154,23 @@ pub fn timezone_scope_exit(token: Option<&Py<PyAny>>) -> Result<(), DjangoRustEr
             .map(|_| ())
             .map_err(DjangoRustError::PythonException)
     })
+}
+
+/// Drop all handler references owned by a retired backend.
+pub fn release_namespace(namespace: u64) -> PyResult<()> {
+    TAG_HANDLERS
+        .release(namespace)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    BLOCK_TAG_HANDLERS
+        .release(namespace)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    ASSIGN_TAG_HANDLERS
+        .release(namespace)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    RAW_BLOCK_HANDLERS
+        .release(namespace)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1330,6 +1330,9 @@ __all__ = [
     "CompiledTemplate",
     "template_cache_contains",
     "registry_generation",
+    "new_registry_namespace",
+    "release_registry_namespace",
+    "set_registry_namespace",
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
@@ -1417,3 +1420,9 @@ __all__ = [
     "active_unlocalized_number_format",
     "virtual_keyed_ops_enabled",
 ]
+
+def new_registry_namespace() -> int: ...
+def set_registry_namespace(namespace: int) -> int: ...
+def release_registry_namespace(namespace: int) -> None:
+    """Release caches and handlers for a retired nonzero backend namespace."""
+    ...
