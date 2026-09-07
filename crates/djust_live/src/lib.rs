@@ -123,11 +123,8 @@ fn guard_panic<T>(entry: &'static str, f: impl FnOnce() -> PyResult<T>) -> PyRes
 
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
-static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap::new);
-/// Registry generation each `TEMPLATE_CACHE` entry was validated under, written
-/// only by `cached_template` (#2669) — the one inserter for both maps.
-static COMPILED_AT_GENERATION: Lazy<DashMap<String, u64>> = Lazy::new(DashMap::new);
-
+type CachedTemplate = (Arc<Template>, u64);
+static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
 static SUPERVISOR: Lazy<Arc<ActorSupervisor>> =
@@ -2238,8 +2235,8 @@ fn compile_template(
 /// The ONE way a parse enters `TEMPLATE_CACHE` (#2669).
 ///
 /// A cache hit is reused only when the entry was validated under the CURRENT
-/// tag/filter registry generation; otherwise the source is re-parsed and both
-/// maps are written. The generation is read BEFORE the parse so a registry
+/// tag/filter registry generation; otherwise the source is re-parsed and the template and generation
+/// are published together in one cache entry. The generation is read BEFORE the parse so a registry
 /// mutation racing the parse leaves the entry stale (a re-parse next time),
 /// never falsely current.
 ///
@@ -2252,16 +2249,17 @@ fn compile_template(
 /// `crates/djust_templates/tests/registry_generation_pin.rs`.
 fn cached_template(template_source: &str) -> PyResult<Arc<Template>> {
     let generation = djust_templates::registry::registry_generation();
-    let cached = TEMPLATE_CACHE.get(template_source).map(|c| c.clone());
-    let validated_at = COMPILED_AT_GENERATION.get(template_source).map(|g| *g);
-    if let (Some(template), Some(at)) = (cached, validated_at) {
-        if at == generation {
-            return Ok(template);
+    let key = (
+        djust_templates::registry_scope::current(),
+        template_source.to_owned(),
+    );
+    if let Some(entry) = TEMPLATE_CACHE.get(&key) {
+        if entry.1 == generation {
+            return Ok(entry.0.clone());
         }
     }
     let template = Arc::new(Template::new(template_source).map_err(span_aware_pyerr)?);
-    TEMPLATE_CACHE.insert(template_source.to_owned(), template.clone());
-    COMPILED_AT_GENERATION.insert(template_source.to_owned(), generation);
+    TEMPLATE_CACHE.insert(key, (template.clone(), generation));
     Ok(template)
 }
 
@@ -2290,7 +2288,33 @@ fn span_aware_pyerr(err: djust_core::DjangoRustError) -> PyErr {
 /// `Template` instead of parsing again. Read-only.
 #[pyfunction]
 fn template_cache_contains(template_source: &str) -> bool {
-    TEMPLATE_CACHE.contains_key(template_source)
+    TEMPLATE_CACHE.contains_key(&(
+        djust_templates::registry_scope::current(),
+        template_source.to_owned(),
+    ))
+}
+
+/// Internal bridge probe: a global fallback cannot validate an engine binding.
+#[pyfunction]
+fn registry_entry_is_local(name: &str, kind: &str) -> bool {
+    if kind == "filter" {
+        djust_templates::filter_registry::has_local_filter(name)
+    } else {
+        djust_templates::registry::has_local_handler(name, kind)
+    }
+}
+
+/// Release storage when a Django backend and its compiled wrappers are gone.
+#[pyfunction]
+fn release_registry_namespace(namespace: u64) -> PyResult<()> {
+    if namespace == 0 {
+        return Ok(());
+    }
+    djust_templates::registry::release_namespace(namespace)?;
+    djust_templates::filter_registry::release_namespace(namespace)?;
+    djust_templates::inheritance::release_registry_namespace(namespace);
+    TEMPLATE_CACHE.retain(|(scope, _), _| *scope != namespace);
+    Ok(())
 }
 
 /// Current tag/filter registry generation (test-support probe, #2668).
@@ -2304,7 +2328,12 @@ fn registry_generation() -> u64 {
 /// `== registry_generation()` means the next `compile_template` is a hit.
 #[pyfunction]
 fn template_compiled_at_generation(template_source: &str) -> Option<u64> {
-    COMPILED_AT_GENERATION.get(template_source).map(|g| *g)
+    TEMPLATE_CACHE
+        .get(&(
+            djust_templates::registry_scope::current(),
+            template_source.to_owned(),
+        ))
+        .map(|entry| entry.1)
 }
 
 /// Fast template rendering with template directories for {% include %} support
@@ -4566,6 +4595,20 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;
     m.add_function(wrap_pyfunction!(template_cache_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry_scope::new_registry_namespace,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry_scope::set_registry_namespace,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry_scope::current,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(registry_entry_is_local, m)?)?;
+    m.add_function(wrap_pyfunction!(release_registry_namespace, m)?)?;
     m.add_function(wrap_pyfunction!(registry_generation, m)?)?;
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;

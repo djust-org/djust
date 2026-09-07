@@ -136,9 +136,12 @@ class TestConstructionTimeRefusal:
     def test_the_construction_parse_is_cached_for_the_render(self, backend):
         """One parse, not two: the render finds the construction's cache entry."""
         source = "{{ y }} unique-to-2549-cache-test"
-        assert _rust.template_cache_contains(source) is False
-        backend.from_string(source)
-        assert _rust.template_cache_contains(source) is True
+        from djust.template_libraries import rendering_with_backend
+
+        with rendering_with_backend(backend):
+            assert _rust.template_cache_contains(source) is False
+            backend.from_string(source)
+            assert _rust.template_cache_contains(source) is True
 
     def test_message_is_the_engine_text_unchanged(self, backend):
         """The Python exception preserves the native parser diagnostic."""

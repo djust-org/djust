@@ -97,7 +97,7 @@ fn template_cache_insert_has_one_site() {
     // #2669: five render entry points inserted straight into `TEMPLATE_CACHE`
     // without recording `COMPILED_AT_GENERATION`, so a template first parsed
     // through one of them bypassed the generation gate forever. The cure is
-    // ONE inserter (`cached_template`) that writes both maps; this pins it.
+    // ONE inserter (`cached_template`) that atomically writes the template and generation; this pins it.
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../djust_live/src/lib.rs");
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let inserts = src.matches("TEMPLATE_CACHE.insert(").count();
@@ -107,10 +107,9 @@ fn template_cache_insert_has_one_site() {
          (inside `cached_template`); found {inserts} — a second inserter bypasses \
          the registry-generation gate (#2669, #1646)"
     );
-    let gen_inserts = src.matches("COMPILED_AT_GENERATION.insert(").count();
-    assert_eq!(
-        gen_inserts, 1,
-        "`COMPILED_AT_GENERATION.insert(` must appear exactly once, beside the cache insert"
+    assert!(
+        !src.contains("static COMPILED_AT_GENERATION"),
+        "validation metadata must be stored with the template, not in a second map"
     );
 }
 

@@ -1330,6 +1330,11 @@ __all__ = [
     "CompiledTemplate",
     "template_cache_contains",
     "registry_generation",
+    "new_registry_namespace",
+    "registry_entry_is_local",
+    "current_registry_namespace",
+    "release_registry_namespace",
+    "set_registry_namespace",
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
@@ -1417,3 +1422,17 @@ __all__ = [
     "active_unlocalized_number_format",
     "virtual_keyed_ops_enabled",
 ]
+
+def new_registry_namespace() -> int: ...
+def set_registry_namespace(namespace: int) -> int: ...
+def release_registry_namespace(namespace: int) -> None:
+    """Release caches and handlers for a retired nonzero backend namespace."""
+    ...
+
+def current_registry_namespace() -> int:
+    """Internal active template registry namespace."""
+    ...
+
+def registry_entry_is_local(name: str, kind: str) -> bool:
+    """Internal probe distinguishing engine bindings from global fallbacks."""
+    ...

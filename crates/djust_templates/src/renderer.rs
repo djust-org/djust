@@ -576,8 +576,10 @@ fn render_effectful_node<L: TemplateLoader>(
         span,
         source,
         origin,
+        registry_namespace,
     } = node
     {
+        let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
         let rendered = render_effectful_node(&nodes[0], context, loader);
         context.replace_node_identity(previous);

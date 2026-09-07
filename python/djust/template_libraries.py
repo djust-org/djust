@@ -103,6 +103,8 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import inspect
+from weakref import WeakValueDictionary
+
 import logging
 import importlib
 import threading
@@ -194,11 +196,6 @@ _DJANGO_DEFAULT_BUILTINS = frozenset(
 #: in a bare ``Exception`` with an engine hint that would be wrong for it.
 _RAISED_BY_LIBRARY = "_djust_raised_by_library"
 
-#: The backend the CURRENT ``DjustTemplate.render`` is rendering through.
-_current_backend: contextvars.ContextVar[Any] = contextvars.ContextVar(
-    "djust_template_backend", default=None
-)
-
 _current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[bool]]] = (
     contextvars.ContextVar("djust_template_format_flags", default=(None, None))
 )
@@ -250,6 +247,28 @@ _tag_owner: Dict[str, str] = {}
 _filter_owner: Dict[str, str] = {}
 
 
+# Weak references keep node-level engine selection from extending backend lifetime.
+# Preserve live engine identities if the library bridge module is reloaded.
+_registry_backends: Any = globals().get("_registry_backends", WeakValueDictionary())
+
+
+def _active_backend() -> Any:
+    from ._rust import current_registry_namespace
+
+    return _registry_backends.get(current_registry_namespace())
+
+
+def _engine_state(name: str, default: Any) -> Any:
+    backend = _active_backend()
+    if backend is None:
+        return default
+    state = getattr(backend, "_djust_library_state", None)
+    if state is None:
+        state = {}
+        backend._djust_library_state = state
+    return state.setdefault(name, {})
+
+
 # ---------------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------------
@@ -280,13 +299,29 @@ def rendering_with_backend(
 ) -> Iterator[None]:
     """Make ``backend`` the one a bridged ``inclusion_tag`` renders through
     and a ``{% load %}`` resolves against, for the duration of a render."""
-    token = _current_backend.set(backend)
+    from weakref import finalize
+    from ._rust import new_registry_namespace, release_registry_namespace, set_registry_namespace
+
+    namespace = 0
+    if backend is not None:
+        namespace = getattr(backend, "_djust_registry_namespace", None)
+        if namespace is None:
+            with _lock:
+                namespace = getattr(backend, "_djust_registry_namespace", None)
+                if namespace is None:
+                    namespace = new_registry_namespace()
+                    backend._djust_registry_namespace = namespace
+                    _registry_backends[namespace] = backend
+                    finalize(backend, release_registry_namespace, namespace)
+    if backend is not None:
+        _registry_backends[namespace] = backend
+    previous_namespace = set_registry_namespace(namespace)
     flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
         yield
     finally:
         _current_format_flags.reset(flags_token)
-        _current_backend.reset(token)
+        set_registry_namespace(previous_namespace)
 
 
 def install_loader() -> bool:
@@ -399,7 +434,9 @@ def load_libraries(args: List[str]) -> None:
                 name = bits[-1]
                 library = _find_library(name)
                 key = (name, tuple(sorted(bits[1:-2])))
-                if _loaded_subsets.get(key) is library and _still_bridged(
+                if _engine_state("_loaded_subsets", _loaded_subsets).get(
+                    key
+                ) is library and _still_bridged(
                     name, load_from_library(library, name, bits[1:-2]), _library_module(library)
                 ):
                     # Same parent, same names: every tag is already bridged.
@@ -407,13 +444,13 @@ def load_libraries(args: List[str]) -> None:
                     # parse and demoted `_loaded[name]` to the subset.
                     return
                 subset = load_from_library(library, name, bits[1:-2])
-                parent_entry = _loaded.get(name)
+                parent_entry = _engine_state("_loaded", _loaded).get(name)
                 _bridge_library(name, subset)
-                _loaded_subsets[key] = library
+                _engine_state("_loaded_subsets", _loaded_subsets)[key] = library
                 if parent_entry is not None:
                     # Keep the FULL library as the label's entry — a later plain
                     # `{% load name %}` must still be a no-op, not a re-bridge.
-                    _loaded[name] = parent_entry
+                    _engine_state("_loaded", _loaded)[name] = parent_entry
             else:
                 for name in bits[1:]:
                     _bridge_library(name, _find_library(name))
@@ -448,7 +485,7 @@ def reassert() -> None:
             )
         except ImportError:
             return
-        for name, (_label, handler) in list(_owned_tags.items()):
+        for name, (_label, handler) in list(_engine_state("_owned_tags", _owned_tags).items()):
             if isinstance(handler, LibraryRawBlockTagHandler):
                 register_raw_block_tag_handler(name, handler.end_name, handler)
                 unregister_tag_handler(name)
@@ -476,7 +513,9 @@ def reassert() -> None:
 
 def owned_tags() -> Dict[str, str]:
     """Tag name → library label for every tag this module registered."""
-    return {name: label for name, (label, _handler) in _owned_tags.items()}
+    return {
+        name: label for name, (label, _handler) in _engine_state("_owned_tags", _owned_tags).items()
+    }
 
 
 def invalidate_installed_cache() -> None:
@@ -512,7 +551,7 @@ def _library_map() -> Dict[str, Any]:
     retains the process-wide library registrations when no backend is active.
     """
     global _installed_cache
-    backend = _current_backend.get()
+    backend = _active_backend()
     try:
         from django.template.engine import Engine
     except ImportError:  # pragma: no cover — Django is a hard dependency
@@ -581,30 +620,26 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
     about registration state: anything may `clear_*_handlers()` (test
     isolation does) and `_loaded` would not know.
     """
-    from djust._rust import (
-        has_block_tag_handler,
-        has_custom_filter,
-        has_raw_block_tag_handler,
-        has_tag_handler,
-    )
+    from djust._rust import registry_entry_is_local
 
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
     for name in library.tags:
         if name in native:
             continue
-        if _tag_owner.get(name) != label:
+        if _engine_state("_tag_owner", _tag_owner).get(name) != label:
             return False  # another library registered this name since
         if name in _RAW_BLOCK_TAGS:
-            ok = has_raw_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "raw")
         elif name in _BESPOKE_BLOCK_TAGS:
-            ok = has_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "block")
         else:
-            ok = has_tag_handler(name) or has_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "tag") or registry_entry_is_local(name, "block")
         if not ok:
             return False
     refused = refused_filters(module)
     return all(
-        _filter_owner.get(name) == label and has_custom_filter(name)
+        _engine_state("_filter_owner", _filter_owner).get(name) == label
+        and registry_entry_is_local(name, "filter")
         for name in library.filters
         if name not in refused
     )
@@ -619,7 +654,9 @@ def _bridge_library(label: str, library: Any) -> None:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
         return
-    if _loaded.get(label) is library and _still_bridged(label, library, module):
+    if _engine_state("_loaded", _loaded).get(label) is library and _still_bridged(
+        label, library, module
+    ):
         # Already bridged, same library object, and every registration is
         # still in place: re-registering every tag on every `{% load %}`
         # bumped the registry generation DURING the parse, so a template
@@ -643,12 +680,12 @@ def _bridge_library(label: str, library: Any) -> None:
             continue
         else:
             _bridge_tag(label, name, compile_func)
-        _tag_owner[name] = label
+        _engine_state("_tag_owner", _tag_owner)[name] = label
     refused = refused_filters(module)
     for name in library.filters:
         if name not in refused:
-            _filter_owner[name] = label
-    _loaded[label] = library
+            _engine_state("_filter_owner", _filter_owner)[name] = label
+    _engine_state("_loaded", _loaded)[label] = library
 
 
 def refused_filters(module: str) -> frozenset:
@@ -704,13 +741,13 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
             label,
         )
         return
-    handler = _handlers.get(compile_func)
+    handler = _engine_state("_handlers", _handlers).get(compile_func)
     if not isinstance(handler, LibraryRawBlockTagHandler) or handler.end_name != "end" + name:
         handler = LibraryRawBlockTagHandler(label, name, compile_func)
-        _handlers[compile_func] = handler
+        _engine_state("_handlers", _handlers)[compile_func] = handler
     register_raw_block_tag_handler(name, handler.end_name, handler)
     unregister_tag_handler(name)
-    _owned_tags[name] = (label, handler)
+    _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
 
 
 def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
@@ -738,7 +775,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
             label,
         )
         return
-    handler = _handlers.get(compile_func)
+    handler = _engine_state("_handlers", _handlers).get(compile_func)
     if kind == "simple_block_tag":
         # Per-NAME, not per-compile-function (#2558): decorator aliases
         # (`@register.simple_block_tag` + `@register.tag("other")`) share one
@@ -746,7 +783,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         # as the raw-block kind below needs its own end_name.
         if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
             handler = LibraryBlockTagHandler(label, name, compile_func)
-            _handlers[compile_func] = handler
+            _engine_state("_handlers", _handlers)[compile_func] = handler
         register_block_tag_handler(name, handler.end_name, handler)
         unregister_tag_handler(name)
     elif kind == "raw" and _consumes_body(compile_func):
@@ -755,7 +792,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         # `REFUSE_AT_PARSE` and raises Django's `TemplateSyntaxError`.
         if not isinstance(handler, RefusedTagHandler):
             handler = RefusedTagHandler(label, name)
-            _handlers[compile_func] = handler
+            _engine_state("_handlers", _handlers)[compile_func] = handler
         register_tag_handler(name, handler)
         unregister_block_tag_handler(name)
     else:
@@ -768,15 +805,15 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         # already keys on the name, so this widens nothing.
         if handler is None or isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
             handler = LibraryTagHandler(label, name, compile_func)
-            _handlers[compile_func] = handler
+            _engine_state("_handlers", _handlers)[compile_func] = handler
         register_tag_handler(name, handler)
         unregister_block_tag_handler(name)
-    _owned_tags[name] = (label, handler)
+    _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
 
 
 def _may_override(name: str) -> bool:
     """Collision policy: never displace a handler this module does not own."""
-    if name in _owned_tags:
+    if name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags:
         return True
     try:
         from djust._rust import has_assign_tag_handler, has_block_tag_handler, has_tag_handler
@@ -876,8 +913,10 @@ def _parser(tokens: List[Any]) -> Any:
     far (so a cross-library filter inside an operand resolves)."""
     from django.template.base import Parser
 
-    parser = Parser(tokens, libraries=dict(_loaded), builtins=_builtin_libraries())
-    for library in _loaded.values():
+    parser = Parser(
+        tokens, libraries=dict(_engine_state("_loaded", _loaded)), builtins=_builtin_libraries()
+    )
+    for library in _engine_state("_loaded", _loaded).values():
         parser.add_library(library)
     return parser
 
@@ -933,7 +972,7 @@ class _LoaderBackend:
 
 
 def _template_backend() -> Any:
-    backend = _current_backend.get()
+    backend = _active_backend()
     if backend is not None:
         return backend
     try:
@@ -1158,7 +1197,7 @@ class LibraryBlockTagHandler(LibraryTagHandler):
 
 
 def _render_engine_options() -> Tuple[str, bool]:
-    backend = _current_backend.get()
+    backend = _active_backend()
     return (
         str(getattr(backend, "string_if_invalid", "") or ""),
         bool(getattr(backend, "debug", False)),
@@ -1381,7 +1420,7 @@ def _bridge_bespoke_block_tag(label: str, name: str) -> None:
     handler = CacheTagHandler()
     register_block_tag_handler(name, _BESPOKE_BLOCK_TAGS[name], handler)
     unregister_tag_handler(name)
-    _owned_tags[name] = (label, handler)
+    _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
 
 
 class LibraryRawBlockTagHandler:
