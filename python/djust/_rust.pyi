@@ -1331,6 +1331,7 @@ __all__ = [
     "template_cache_contains",
     "registry_generation",
     "new_registry_namespace",
+    "registry_entry_is_local",
     "current_registry_namespace",
     "release_registry_namespace",
     "set_registry_namespace",
@@ -1430,4 +1431,8 @@ def release_registry_namespace(namespace: int) -> None:
 
 def current_registry_namespace() -> int:
     """Internal active template registry namespace."""
+    ...
+
+def registry_entry_is_local(name: str, kind: str) -> bool:
+    """Internal probe distinguishing engine bindings from global fallbacks."""
     ...

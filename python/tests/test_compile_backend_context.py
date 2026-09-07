@@ -19,15 +19,15 @@ def test_compile_load_error_uses_engine_libraries(load):
 
 
 def test_failed_nested_compilation_restores_backend():
-    from djust.template_libraries import _current_backend
+    from djust.template_libraries import _active_backend
 
     outer = Engine(libraries={"outer": "django.templatetags.static"})
     inner = Engine(libraries={"inner": "django.templatetags.static"})
     with rendering_with_backend(outer):
         with pytest.raises(TemplateSyntaxError, match="inner"):
             DjustTemplate("{% load not_registered %}", inner)
-        assert _current_backend.get() is outer
-    assert _current_backend.get() is None
+        assert _active_backend() is outer
+    assert _active_backend() is None
 
 
 def test_cached_source_still_checks_compiling_engine_libraries():

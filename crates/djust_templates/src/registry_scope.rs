@@ -67,6 +67,11 @@ impl<V> Read<'_, V> {
             .and_then(|m| m.get(name))
             .or_else(|| self.maps.get(&0).and_then(|m| m.get(name)))
     }
+    pub fn contains_local_key(&self, name: &str) -> bool {
+        self.maps
+            .get(&self.namespace)
+            .is_some_and(|map| map.contains_key(name))
+    }
     pub fn contains_key(&self, name: &str) -> bool {
         self.get(name).is_some()
     }

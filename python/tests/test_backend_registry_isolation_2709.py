@@ -186,3 +186,23 @@ def test_low_level_library_loading_does_not_claim_engine_bindings(engines):
     assert _rust.render_template(source, {}) == "B"
     assert engines[0].from_string(source).render({}) == "A"
     assert engines[1].from_string(source).render({}) == "B"
+
+
+@pytest.mark.parametrize(
+    "source,clear,suffix",
+    [
+        ("{% load isolated %}{% isolation_who %}", "clear_tag_handlers", ""),
+        ('{% load isolated %}{{ "x"|isolation_prefix }}', "clear_custom_filters", "x"),
+    ],
+)
+def test_load_restores_engine_bindings_after_clear_despite_global_fallback(
+    engines, source, clear, suffix
+):
+    from djust import _rust
+    from djust.template_libraries import rendering_with_backend
+
+    assert _rust.render_template(source, {}) == "B" + suffix
+    assert engines[0].from_string(source).render({}) == "A" + suffix
+    with rendering_with_backend(engines[0]):
+        getattr(_rust, clear)()
+    assert engines[0].from_string(source).render({}) == "A" + suffix

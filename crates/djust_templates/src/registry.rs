@@ -2156,6 +2156,22 @@ pub fn timezone_scope_exit(token: Option<&Py<PyAny>>) -> Result<(), DjangoRustEr
     })
 }
 
+/// Test ownership rather than visibility through the global fallback.
+pub fn has_local_handler(name: &str, kind: &str) -> bool {
+    match kind {
+        "tag" => TAG_HANDLERS
+            .read()
+            .is_ok_and(|map| map.contains_local_key(name)),
+        "block" => BLOCK_TAG_HANDLERS
+            .read()
+            .is_ok_and(|map| map.contains_local_key(name)),
+        "raw" => RAW_BLOCK_HANDLERS
+            .read()
+            .is_ok_and(|map| map.contains_local_key(name)),
+        _ => false,
+    }
+}
+
 /// Drop all handler references owned by a retired backend.
 pub fn release_namespace(namespace: u64) -> PyResult<()> {
     TAG_HANDLERS

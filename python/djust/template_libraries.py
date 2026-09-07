@@ -607,12 +607,7 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
     about registration state: anything may `clear_*_handlers()` (test
     isolation does) and `_loaded` would not know.
     """
-    from djust._rust import (
-        has_block_tag_handler,
-        has_custom_filter,
-        has_raw_block_tag_handler,
-        has_tag_handler,
-    )
+    from djust._rust import registry_entry_is_local
 
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
     for name in library.tags:
@@ -621,16 +616,17 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
         if _engine_state("_tag_owner", _tag_owner).get(name) != label:
             return False  # another library registered this name since
         if name in _RAW_BLOCK_TAGS:
-            ok = has_raw_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "raw")
         elif name in _BESPOKE_BLOCK_TAGS:
-            ok = has_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "block")
         else:
-            ok = has_tag_handler(name) or has_block_tag_handler(name)
+            ok = registry_entry_is_local(name, "tag") or registry_entry_is_local(name, "block")
         if not ok:
             return False
     refused = refused_filters(module)
     return all(
-        _engine_state("_filter_owner", _filter_owner).get(name) == label and has_custom_filter(name)
+        _engine_state("_filter_owner", _filter_owner).get(name) == label
+        and registry_entry_is_local(name, "filter")
         for name in library.filters
         if name not in refused
     )

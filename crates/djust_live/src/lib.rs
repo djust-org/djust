@@ -2294,6 +2294,16 @@ fn template_cache_contains(template_source: &str) -> bool {
     ))
 }
 
+/// Internal bridge probe: a global fallback cannot validate an engine binding.
+#[pyfunction]
+fn registry_entry_is_local(name: &str, kind: &str) -> bool {
+    if kind == "filter" {
+        djust_templates::filter_registry::has_local_filter(name)
+    } else {
+        djust_templates::registry::has_local_handler(name, kind)
+    }
+}
+
 /// Release storage when a Django backend and its compiled wrappers are gone.
 #[pyfunction]
 fn release_registry_namespace(namespace: u64) -> PyResult<()> {
@@ -4597,6 +4607,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         djust_templates::registry_scope::current,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(registry_entry_is_local, m)?)?;
     m.add_function(wrap_pyfunction!(release_registry_namespace, m)?)?;
     m.add_function(wrap_pyfunction!(registry_generation, m)?)?;
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;

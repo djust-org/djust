@@ -702,6 +702,13 @@ fn format_py_err(py: Python<'_>, name: &str, err: &PyErr) -> String {
 // output) live in the Python regression suite at
 // `tests/unit/test_rust_custom_filters_1121.py`.
 
+/// Test ownership rather than visibility through the global fallback.
+pub fn has_local_filter(name: &str) -> bool {
+    FILTER_REGISTRY
+        .read()
+        .is_ok_and(|map| map.contains_local_key(name))
+}
+
 /// Drop filter references owned by a retired backend.
 pub fn release_namespace(namespace: u64) -> PyResult<()> {
     FILTER_REGISTRY
