@@ -260,12 +260,20 @@ class TestReassertKeepsCacheABlockTag:
 
         src = '{% load cache %}{% cache 300 "reassert2658" %}ok{% endcache %}'
         assert str(backend.from_string(src).render({})) == "ok"
-        assert "cache" in template_libraries.owned_tags()
+        from djust._rust import registry_entry_is_local, unregister_block_tag_handler
 
-        template_libraries.reassert()
+        # Backend rendering restores the outer namespace on return. Inspect
+        # and mutate the owning engine, not any process-global fallback.
+        with template_libraries.rendering_with_backend(backend):
+            assert "cache" in template_libraries.owned_tags()
+            unregister_block_tag_handler("cache")
+            assert not registry_entry_is_local("cache", "block")
 
-        assert has_block_tag_handler("cache"), "reassert dropped the block handler"
-        assert not has_tag_handler("cache"), "reassert re-registered cache as an inline tag"
+            template_libraries.reassert()
+
+            assert registry_entry_is_local("cache", "block")
+            assert has_block_tag_handler("cache"), "reassert dropped the block handler"
+            assert not has_tag_handler("cache"), "reassert re-registered cache as an inline tag"
         caches["default"].clear()
         assert str(backend.from_string(src + " ").render({})) == "ok "
 
