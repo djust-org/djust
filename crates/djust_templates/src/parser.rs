@@ -12,6 +12,7 @@ pub enum Node {
     Located {
         nodes: Vec<Node>,
         span: Span,
+        registry_namespace: u64,
         source: std::sync::Arc<str>,
         origin: Option<String>,
     },
@@ -972,6 +973,7 @@ fn parse_token(
                         return Node::Located {
                             nodes: vec![node],
                             span: *span,
+                            registry_namespace: crate::registry_scope::current(),
                             source: std::sync::Arc::from(""),
                             origin: None,
                         };
@@ -5848,6 +5850,7 @@ mod dep_tests {
             Node::Located {
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
                 span: (0, 7),
+                registry_namespace: 0,
                 source: std::sync::Arc::from("{{ a }}"),
                 origin: None,
             },

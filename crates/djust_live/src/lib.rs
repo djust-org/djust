@@ -4593,6 +4593,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         djust_templates::registry_scope::set_registry_namespace,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry_scope::current,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(release_registry_namespace, m)?)?;
     m.add_function(wrap_pyfunction!(registry_generation, m)?)?;
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;

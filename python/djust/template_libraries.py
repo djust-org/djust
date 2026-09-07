@@ -103,6 +103,8 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import inspect
+from weakref import WeakValueDictionary
+
 import logging
 import importlib
 import threading
@@ -194,11 +196,6 @@ _DJANGO_DEFAULT_BUILTINS = frozenset(
 #: in a bare ``Exception`` with an engine hint that would be wrong for it.
 _RAISED_BY_LIBRARY = "_djust_raised_by_library"
 
-#: The backend the CURRENT ``DjustTemplate.render`` is rendering through.
-_current_backend: contextvars.ContextVar[Any] = contextvars.ContextVar(
-    "djust_template_backend", default=None
-)
-
 _current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[bool]]] = (
     contextvars.ContextVar("djust_template_format_flags", default=(None, None))
 )
@@ -250,8 +247,19 @@ _tag_owner: Dict[str, str] = {}
 _filter_owner: Dict[str, str] = {}
 
 
+# Weak references keep node-level engine selection from extending backend lifetime.
+# Preserve live engine identities if the library bridge module is reloaded.
+_registry_backends: Any = globals().get("_registry_backends", WeakValueDictionary())
+
+
+def _active_backend() -> Any:
+    from ._rust import current_registry_namespace
+
+    return _registry_backends.get(current_registry_namespace())
+
+
 def _engine_state(name: str, default: Any) -> Any:
-    backend = _current_backend.get()
+    backend = _active_backend()
     if backend is None:
         return default
     state = getattr(backend, "_djust_library_state", None)
@@ -303,15 +311,16 @@ def rendering_with_backend(
                 if namespace is None:
                     namespace = new_registry_namespace()
                     backend._djust_registry_namespace = namespace
+                    _registry_backends[namespace] = backend
                     finalize(backend, release_registry_namespace, namespace)
+    if backend is not None:
+        _registry_backends[namespace] = backend
     previous_namespace = set_registry_namespace(namespace)
-    token = _current_backend.set(backend)
     flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
         yield
     finally:
         _current_format_flags.reset(flags_token)
-        _current_backend.reset(token)
         set_registry_namespace(previous_namespace)
 
 
@@ -529,7 +538,7 @@ def _library_map() -> Dict[str, Any]:
     retains the process-wide library registrations when no backend is active.
     """
     global _installed_cache
-    backend = _current_backend.get()
+    backend = _active_backend()
     try:
         from django.template.engine import Engine
     except ImportError:  # pragma: no cover — Django is a hard dependency
@@ -795,7 +804,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
 
 def _may_override(name: str) -> bool:
     """Collision policy: never displace a handler this module does not own."""
-    if name in _engine_state("_owned_tags", _owned_tags):
+    if name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags:
         return True
     try:
         from djust._rust import has_assign_tag_handler, has_block_tag_handler, has_tag_handler
@@ -954,7 +963,7 @@ class _LoaderBackend:
 
 
 def _template_backend() -> Any:
-    backend = _current_backend.get()
+    backend = _active_backend()
     if backend is not None:
         return backend
     try:
@@ -1179,7 +1188,7 @@ class LibraryBlockTagHandler(LibraryTagHandler):
 
 
 def _render_engine_options() -> Tuple[str, bool]:
-    backend = _current_backend.get()
+    backend = _active_backend()
     return (
         str(getattr(backend, "string_if_invalid", "") or ""),
         bool(getattr(backend, "debug", False)),

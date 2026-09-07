@@ -1331,6 +1331,7 @@ __all__ = [
     "template_cache_contains",
     "registry_generation",
     "new_registry_namespace",
+    "current_registry_namespace",
     "release_registry_namespace",
     "set_registry_namespace",
     "template_compiled_at_generation",
@@ -1425,4 +1426,8 @@ def new_registry_namespace() -> int: ...
 def set_registry_namespace(namespace: int) -> int: ...
 def release_registry_namespace(namespace: int) -> None:
     """Release caches and handlers for a retired nonzero backend namespace."""
+    ...
+
+def current_registry_namespace() -> int:
+    """Internal active template registry namespace."""
     ...

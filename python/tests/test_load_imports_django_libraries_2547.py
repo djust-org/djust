@@ -463,7 +463,8 @@ def test_djangos_own_libraries_are_all_bridged_now():
     bridged, the check below fails and names it.
     """
     assert plain_render("{% load cache %}x-2547", {}) == "x-2547"
-    owned = template_libraries.owned_tags()
+    with template_libraries.rendering_with_backend(DJUST):
+        owned = template_libraries.owned_tags()
     assert owned.get("cache") == "cache", "the cache library must be bridged"
 
 
@@ -478,7 +479,8 @@ def test_static_library_is_bridged_but_the_native_static_tag_survives():
     """
     # Bridging happens at PARSE time, when `{% load %}` runs — ask only after.
     assert plain_render("{% load static %}{% get_static_prefix %}", {}) is not None
-    owned = template_libraries.owned_tags()
+    with template_libraries.rendering_with_backend(DJUST):
+        owned = template_libraries.owned_tags()
     assert owned.get("get_static_prefix") == "static"
     assert owned.get("get_media_prefix") == "static"
     assert "static" not in owned
@@ -526,21 +528,25 @@ def test_reassert_restores_bridged_tags_after_a_registry_clear():
     expected = django_render(source, {})
     template = DJUST.from_string(source)
     assert template.render({}) == expected  # parsed + cached now
-    owned = template_libraries.owned_tags()
-    assert owned["no_params2547"] == "lib2547_tags" and owned["div2547"] == "lib2547_tags"
-    _rust.clear_tag_handlers()
-    _rust.clear_block_tag_handlers()
-    assert not _rust.has_tag_handler("no_params2547")
-    assert not _rust.has_block_tag_handler("div2547")
-    with pytest.raises(Exception, match="No handler registered"):
-        template.render({})
-    template_libraries.reassert()
-    assert _rust.has_tag_handler("no_params2547")
-    assert _rust.has_block_tag_handler("div2547")
-    assert template.render({}) == expected
-    from djust.template_tags import reregister_builtins
-
-    reregister_builtins()  # restore djust's own built-ins for the tests that follow
+    # Earlier low-level cases can install the same library globally. Remove
+    # only these fallback names so this test observes the engine's clear.
+    with template_libraries.rendering_with_backend(None):
+        _rust.unregister_tag_handler("no_params2547")
+        _rust.unregister_block_tag_handler("div2547")
+    with template_libraries.rendering_with_backend(DJUST):
+        owned = template_libraries.owned_tags()
+        assert owned["no_params2547"] == "lib2547_tags" and owned["div2547"] == "lib2547_tags"
+        _rust.clear_tag_handlers()
+        _rust.clear_block_tag_handlers()
+        assert not _rust.has_tag_handler("no_params2547")
+        assert not _rust.has_block_tag_handler("div2547")
+        with pytest.raises(Exception, match="No handler registered"):
+            template.render({})
+        template_libraries.reassert()
+        assert _rust.has_tag_handler("no_params2547")
+        assert _rust.has_block_tag_handler("div2547")
+        assert template.render({}) == expected
+    template_libraries.reassert()  # restore the low-level library fallback
 
 
 def test_library_tag_never_displaces_a_djust_builtin():

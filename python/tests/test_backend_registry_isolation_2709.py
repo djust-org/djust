@@ -161,3 +161,28 @@ def test_retired_backend_releases_native_storage(engines):
         assert _rust.template_compiled_at_generation(source) is None
     finally:
         _rust.set_registry_namespace(previous)
+
+
+@pytest.mark.parametrize(
+    "body,suffix", [("{% isolation_who %}", ""), ('{{ "x"|isolation_prefix }}', "x")]
+)
+def test_compiled_parent_and_child_keep_different_bindings(engines, body, suffix):
+    parent = engines[0].from_string(
+        "{% load isolated %}" + body + "{% block main %}" + body + "{% endblock %}"
+    )
+    child = engines[1].from_string(
+        "{% extends parent %}{% load isolated %}{% block main %}"
+        + body
+        + "{{ block.super }}{% endblock %}"
+    )
+    assert child.render({"parent": parent}) == "A" + suffix + "B" + suffix + "A" + suffix
+
+
+def test_low_level_library_loading_does_not_claim_engine_bindings(engines):
+    from djust import _rust
+
+    source = "{% load isolated %}{% isolation_who %}"
+    # Low-level fallback resolves the last application's library mapping.
+    assert _rust.render_template(source, {}) == "B"
+    assert engines[0].from_string(source).render({}) == "A"
+    assert engines[1].from_string(source).render({}) == "B"

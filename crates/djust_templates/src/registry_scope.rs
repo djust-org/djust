@@ -16,6 +16,7 @@ pub fn new_registry_namespace() -> u64 {
 pub fn set_registry_namespace(namespace: u64) -> u64 {
     CURRENT.with(|v| v.replace(namespace))
 }
+#[pyfunction(name = "current_registry_namespace")]
 pub fn current() -> u64 {
     CURRENT.with(Cell::get)
 }
@@ -97,5 +98,18 @@ impl<V> Write<'_, V> {
     }
     pub fn clear(&mut self) {
         self.maps.remove(&self.namespace);
+    }
+}
+
+/// Restore the enclosing engine even when rendering returns early or unwinds.
+pub(crate) struct NamespaceGuard(u64);
+impl NamespaceGuard {
+    pub fn enter(namespace: u64) -> Self {
+        Self(set_registry_namespace(namespace))
+    }
+}
+impl Drop for NamespaceGuard {
+    fn drop(&mut self) {
+        set_registry_namespace(self.0);
     }
 }
