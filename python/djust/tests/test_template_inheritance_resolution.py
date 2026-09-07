@@ -1,16 +1,4 @@
-"""
-Test template inheritance resolution for Djust.
-
-Tests the Python-level template inheritance resolution that handles
-{% extends %} and {% block %} tags before passing to the Rust renderer.
-
-These tests verify:
-1. Single-level inheritance (child extends parent)
-2. Multi-level inheritance (grandchild extends child extends parent)
-3. Block override behavior
-4. Empty block handling
-5. Edge cases
-"""
+"""Backend integration coverage for native template inheritance and block overrides."""
 
 import re
 import tempfile
@@ -19,25 +7,17 @@ from pathlib import Path
 import pytest
 
 
-class MockBackend:
-    """Mock backend for testing template inheritance resolution."""
-
-    def __init__(self, template_dirs):
-        self.template_dirs = [Path(d) for d in template_dirs]
-
-
 class TestTemplateInheritanceResolution:
-    """Test the _resolve_template_inheritance method."""
+    """Test native inheritance through the public backend API."""
 
     def create_template(self, template_string, template_dirs):
         """Create a DjustTemplate instance for testing."""
-        from djust.template_backend import DjustTemplate
+        from djust.template import DjustTemplateBackend
 
-        backend = MockBackend(template_dirs)
-        template = DjustTemplate.__new__(DjustTemplate)
-        template.template_string = template_string
-        template.backend = backend
-        return template
+        backend = DjustTemplateBackend(
+            {"NAME": "inheritance", "DIRS": template_dirs, "APP_DIRS": False, "OPTIONS": {}}
+        )
+        return backend.from_string(template_string)
 
     def test_single_level_inheritance(self):
         """Test basic single-level inheritance (child extends parent)."""
@@ -60,7 +40,7 @@ class TestTemplateInheritanceResolution:
 {% block content %}My content{% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             assert "My Page" in resolved
             assert "My content" in resolved
@@ -103,7 +83,7 @@ class TestTemplateInheritanceResolution:
 {% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # Should have grandparent structure
             assert "<!DOCTYPE html>" in resolved
@@ -156,7 +136,7 @@ class TestTemplateInheritanceResolution:
 {% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # Should have the full hierarchy structure
             assert "<!DOCTYPE html>" in resolved
@@ -191,7 +171,7 @@ class TestTemplateInheritanceResolution:
 {% block content %}My Content{% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             assert "Default Header" not in resolved
             assert "My Content" in resolved
@@ -222,7 +202,7 @@ Default
 {%endblock%}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             assert "Multi-line" in resolved
             assert "Content" in resolved
@@ -248,7 +228,7 @@ Default
 {% block inner %}New Inner{% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # The outer block should be preserved, inner should be replaced
             assert "New Inner" in resolved
@@ -268,7 +248,7 @@ Default
             from django.template import TemplateDoesNotExist
 
             with pytest.raises(TemplateDoesNotExist):
-                template._resolve_template_inheritance()
+                template.render({})
 
     def test_block_preservation_through_inheritance(self):
         """Test that blocks are properly preserved through inheritance chain."""
@@ -291,7 +271,7 @@ Default
 {% block c %}C-LEAF{% endblock %}"""
 
             template = self.create_template(leaf_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # Verify the exact structure: block wrappers stripped, content preserved
             # The resolved output should be: <html>\nA\nB-MIDDLE\nC-LEAF\n</html>
@@ -321,13 +301,12 @@ class TestDjustOrgDocsInheritance:
 
     def create_template(self, template_string, template_dirs):
         """Create a DjustTemplate instance for testing."""
-        from djust.template_backend import DjustTemplate
+        from djust.template import DjustTemplateBackend
 
-        backend = MockBackend(template_dirs)
-        template = DjustTemplate.__new__(DjustTemplate)
-        template.template_string = template_string
-        template.backend = backend
-        return template
+        backend = DjustTemplateBackend(
+            {"NAME": "inheritance", "DIRS": template_dirs, "APP_DIRS": False, "OPTIONS": {}}
+        )
+        return backend.from_string(template_string)
 
     def test_docs_page_structure(self):
         """
@@ -383,7 +362,7 @@ class TestDjustOrgDocsInheritance:
 {% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # Should have base.html structure
             assert "<!DOCTYPE html>" in resolved
@@ -410,15 +389,13 @@ class TestBlockSuperSupport:
 
     def create_template(self, template_string, template_dirs):
         """Create a DjustTemplate instance for testing."""
-        from djust.template_backend import DjustTemplate
+        from djust.template import DjustTemplateBackend
 
-        backend = MockBackend(template_dirs)
-        template = DjustTemplate.__new__(DjustTemplate)
-        template.template_string = template_string
-        template.backend = backend
-        return template
+        backend = DjustTemplateBackend(
+            {"NAME": "inheritance", "DIRS": template_dirs, "APP_DIRS": False, "OPTIONS": {}}
+        )
+        return backend.from_string(template_string)
 
-    @pytest.mark.skip(reason="block.super not yet implemented in Python resolver")
     def test_block_super_basic(self):
         """Test basic {{ block.super }} functionality."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -440,7 +417,7 @@ class TestBlockSuperSupport:
 {% endblock %}"""
 
             template = self.create_template(child_source, [tmpdir])
-            resolved = template._resolve_template_inheritance()
+            resolved = template.render({})
 
             # Should have both parent and child content
             assert "Parent Content" in resolved
