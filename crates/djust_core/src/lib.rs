@@ -3554,13 +3554,11 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   both #2678's and #2695's hangs stay unfixed there. An unfixed cell
 ///   beats a wrong one.
 ///
-/// * **Asking the length did not ALREADY materialise the items**
-///   ([`len_call_already_materialised_the_items`], #2695 review). The decline
-///   exists to avoid PAYING to build items the object only DESCRIBES —
-///   `range(10**9)` states a billion and holds none of them. When the items
-///   already exist the decline saves nothing, and it is not free: the
-///   carrier it falls back to spells `str(o)` AND `repr(o)`, each of which
-///   enumerates the whole collection anyway.
+/// * **The object is not one whose declined SPELLING would be wrong**
+///   ([`len_call_already_materialised_the_items`], #2695 review). A `list`
+///   and a Django `QuerySet` are exempt at any length. That exemption is a
+///   TRADE and not a free one — read that function before assuming the
+///   decline costs those two shapes nothing.
 fn stated_len_is_too_large_to_enumerate(ob: &Bound<'_, PyAny>, len: usize) -> bool {
     len > OPAQUE_ITEM_CAP && resolve_lazy() && !len_call_already_materialised_the_items(ob)
 }
@@ -3568,16 +3566,39 @@ fn stated_len_is_too_large_to_enumerate(ob: &Bound<'_, PyAny>, len: usize) -> bo
 /// Are this object's items ALREADY built by the time its length is known?
 /// (#2695 review.)
 ///
-/// The question [`stated_len_is_too_large_to_enumerate`] has to ask before
-/// declining, because the decline's whole justification is the cost of
-/// materialising — and for these two shapes that cost is already sunk, so
-/// declining only changes the SPELLING:
+/// True for a **`list`** (it holds its elements; `len()` is O(1) and creates
+/// nothing) and for a Django **`QuerySet`** (`__len__` calls `_fetch_all()`,
+/// so the row objects are in `_result_cache` the moment the length is
+/// known). [`stated_len_is_too_large_to_enumerate`] asks it and exempts both
+/// from the decline at any length.
 ///
-/// * A **`list`** holds its elements: `len()` is O(1) and creates nothing.
-/// * A Django **`QuerySet`**: `__len__` calls `_fetch_all()`, so the row
-///   objects are in `_result_cache` the moment the length is known.
+/// **The exemption is a TRADE, and the price is NOT zero.** An earlier
+/// version of this comment said the cost was "already sunk, so declining only
+/// changes the SPELLING". That is false, by about 4 GB, and the measurement
+/// is the re-review's (#2706): an UNEVALUATED `User.objects.all()` over a
+/// real 150 000-row table, rendering `{{ v|length }}` —
 ///
-/// The shape that found it is one object wearing both hats. A 100 001-row
+/// ```text
+/// exemption ON  (as shipped)      4 650 MB peak, 13.45 s
+/// exemption OFF (decline applies)   593 MB peak,  9.74 s
+/// ```
+///
+/// `len()` sinks the cost of `_fetch_all()` — about 140 MB of row objects —
+/// and NOT the conversion of those rows into [`Value`]s, which is the other
+/// ~4 GB. So what the exemption buys is a correct spelling, and what it pays
+/// is a real per-row conversion the decline would have avoided.
+///
+/// It is taken anyway, for two reasons that are about correctness rather than
+/// cost: the declined spelling is WRONG (below), and the exempted cost is not
+/// new — `main` never declined a `list` or a `QuerySet` either
+/// (`stated_bound_is_unverifiable` required the object to have NO `__iter__`),
+/// so this restores exactly the cost those two shapes already had rather than
+/// adding one. Getting both — decline the carrier AND spell it correctly at
+/// the sink — is filed as its own change (#2717); doing it here would have
+/// meant designing a lazy QuerySet carrier inside a review fix-pass.
+///
+/// The shape that found the spelling defect is one object wearing both hats.
+/// A 100 001-row
 /// `QuerySet` in a template context is auto-serialised by
 /// `DjustTemplate.render` into a `list` of djust's own identity dicts;
 /// declining that list spelled `{{ rows }}` as
