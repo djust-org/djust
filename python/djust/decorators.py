@@ -808,8 +808,10 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     lost. Pending handler and element-level rate limits also flush through the
     CSRF-protected HTTP fallback on socket close and pagehide. These teardown
     requests use fetch keepalive; delivery still depends on network availability
-    and browser keepalive limits. A new mount cancels old-view timers and replaces
-    handler, cache, and optimistic configuration.
+    and browser keepalive limits. The PAGE view's own mount cancels old-view
+    timers and replaces handler, cache, and optimistic configuration; a
+    lazily-hydrated sibling view mounting on the same socket adds its own
+    configuration without disturbing the page view's (#2721).
 
     Intended for input events where you want to wait until the user stops
     typing.
