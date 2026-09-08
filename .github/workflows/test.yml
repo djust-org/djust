@@ -150,8 +150,10 @@ jobs:
   # duration; `-n auto` still parallelises inside the shard). When the file
   # is missing or stale, pytest-split falls back to splitting by test COUNT
   # — still correct, just less balanced — so a stale file degrades wall-clock,
-  # never coverage. Regenerate with `make test-durations` when the suite grows
-  # by more than ~10% (see CONTRIBUTING.md "CI shards").
+  # never coverage. Refresh it from a CI run with
+  # `make test-durations-from-ci RUN=<id>` (#2584) — `make test-durations`
+  # still works but records this machine's times, not the runner's. See
+  # CONTRIBUTING.md "CI shards".
   #
   # Every shard collects the FULL suite and deselects the other groups, so the
   # union of the four is exactly the unsharded collection (pinned by
@@ -280,9 +282,51 @@ jobs:
       # Sharded: `--splits 4 --group N` selects this shard's quarter of that
       # ONE collection; all three roots stay in the single invocation, so the
       # #2032 pin above still holds per shard.
+      #
+      # `--splitting-algorithm least_duration` (#2584). The default,
+      # `duration_based_chunks`, cuts the collection into four CONTIGUOUS
+      # runs, so two adjacent heavyweight files cannot be separated: it dealt
+      # shard 2 just 204 tests, 278s of which 186s was one file
+      # (test_differential_reachability_manifest_2345.py) whose other half
+      # landed in shard 3. `least_duration` bin-packs greedily instead —
+      # measured on the committed file, 280/278/328/193s (1.70x) becomes
+      # 270/270/270/270s (1.00x). Both algorithms give an unrecorded test the
+      # average duration, and both collect the whole suite and deselect the
+      # other groups, so the union of the four shards is unchanged.
+      #
+      # `--store-durations --clean-durations` records THIS RUNNER's times.
+      # The split reads the durations file at configure time and the cache
+      # plugin rewrites it at sessionfinish, so pointing both at
+      # `.test_durations` splits against the committed numbers and then
+      # overwrites the workspace copy (never committed) with the measured
+      # ones. `--clean-durations` makes that copy hold exactly this shard's
+      # tests, so the four upload artifacts union cleanly —
+      # `scripts/merge-test-durations.py` does the union and
+      # `make test-durations-from-ci RUN=<id>` closes the loop.
+      #
+      # WHY runner-recorded: the committed file was recorded on a 12-core
+      # macOS dev machine, and the local->runner slowdown is not one factor.
+      # On run 34173511325 the py3.12 shards took 182/235/584/204s of pytest
+      # against 280/278/328/193s recorded — per-shard factors of 2.6x to 7.1x
+      # and a 3.21x runner imbalance behind a 1.70x recorded one. No local
+      # recording can balance this runner; only this runner can.
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --splits 4 --group ${{ matrix.group }} --durations-path .test_durations
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+
+      # Ancillary to the gate, so it may never fail the job: the merge gate is
+      # the pytest step above, and a flaky artifact upload must not block a
+      # merge (#1534 applied to a new step on an existing blocking job).
+      # One interpreter only — the shards are dealt from one file, and three
+      # interpreters' worth of 4 MB artifacts buys nothing.
+      - name: Upload this shard's runner-recorded durations (#2584)
+        if: matrix.python-version == '3.12'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-durations-shard-${{ matrix.group }}
+          path: .test_durations
+          if-no-files-found: warn
 
       - name: Run Python linter
         if: matrix.group == 1
