@@ -86,20 +86,43 @@ def test_splits_flag_equals_the_number_of_matrix_groups() -> None:
     assert "--group ${{ matrix.group }}" in cmd, cmd
 
 
-def test_every_group_gated_step_names_a_group_that_exists() -> None:
-    """`if: matrix.group == K` with K outside the matrix never runs anywhere."""
+def _matrix_python_versions() -> list[str]:
+    """The interpreter list the matrix can produce.
+
+    The expression is a ternary over `github.event_name`, so both arms are
+    read out of the literal rather than evaluated.
+    """
+    raw = str(_python_tests()["strategy"]["matrix"]["python-version"])
+    return re.findall(r'"(\d+\.\d+[^"]*)"', raw)
+
+
+def test_every_gated_step_names_a_matrix_value_that_exists() -> None:
+    """A step gated on a value no cell produces never runs, and every one of
+    these steps is a merge gate or a diagnostic — decorative either way
+    (#1859). `matrix.group == K` with K outside the matrix, and
+    `matrix.python-version == 'X'` with X outside the interpreter list, are
+    both that failure.
+    """
     groups = set(_matrix_groups())
-    gated = []
+    versions = set(_matrix_python_versions())
+    assert versions, "could not read the python-version matrix"
+    gated_groups, gated_versions = [], []
     for step in _python_tests()["steps"]:
         cond = step.get("if")
         if not cond:
             continue
-        m = re.fullmatch(r"\s*matrix\.group\s*==\s*(\d+)\s*", str(cond))
-        assert m, f"unrecognised shard gate on step {step.get('name')!r}: {cond!r}"
-        gated.append((step.get("name") or step.get("uses"), int(m.group(1))))
-    assert gated, "expected the per-checkout checks to be gated onto one shard"
-    for name, k in gated:
+        name = step.get("name") or step.get("uses")
+        if m := re.fullmatch(r"\s*matrix\.group\s*==\s*(\d+)\s*", str(cond)):
+            gated_groups.append((name, int(m.group(1))))
+        elif m := re.fullmatch(r"\s*matrix\.python-version\s*==\s*'([^']+)'\s*", str(cond)):
+            gated_versions.append((name, m.group(1)))
+        else:
+            raise AssertionError(f"unrecognised gate on step {name!r}: {cond!r}")
+    assert gated_groups, "expected the per-checkout checks to be gated onto one shard"
+    for name, k in gated_groups:
         assert k in groups, f"step {name!r} is gated on group {k}, which no shard runs"
+    for name, v in gated_versions:
+        assert v in versions, f"step {name!r} is gated on py{v}, which no cell runs"
 
 
 def test_per_checkout_merge_gates_run_on_exactly_one_shard() -> None:
@@ -123,6 +146,72 @@ def test_rust_cache_is_shared_across_shards_and_saved_by_one() -> None:
     assert "matrix.python-version" in str(with_.get("shared-key")), with_
     m = re.search(r"matrix\.group\s*==\s*(\d+)", str(with_.get("save-if")))
     assert m and int(m.group(1)) in set(_matrix_groups()), with_
+
+
+def _splitting_algorithm() -> str:
+    m = re.search(r"--splitting-algorithm\s+(\S+)", _pytest_command())
+    assert m, (
+        "the pytest invocation names no --splitting-algorithm. pytest-split's "
+        "default, duration_based_chunks, cuts CONTIGUOUS runs and cannot "
+        "separate two adjacent heavyweight files — it dealt one shard 204 "
+        "tests and 278s (#2584)."
+    )
+    return m.group(1)
+
+
+def test_split_uses_the_bin_packing_algorithm() -> None:
+    """`least_duration` is the reason the shards balance at all.
+
+    `duration_based_chunks` (the default) splits the collection into four
+    contiguous runs, so a heavyweight file straddling a boundary pins two
+    shards together: measured on the committed durations it deals
+    280/278/328/193s (1.70x) where `least_duration` deals 270/270/270/270s
+    (1.00x). The balance assertion below cannot distinguish the two on its
+    own — it measures whatever algorithm this names — so the choice is
+    pinned here.
+    """
+    assert _splitting_algorithm() == "least_duration", _pytest_command()
+
+
+def test_shards_record_their_own_durations_for_upload() -> None:
+    """CI measures the durations CI splits on (#2584).
+
+    `--store-durations` alone MERGES into the file, leaving every id this
+    shard did not run at its stale value; `--clean-durations` makes the
+    written file hold exactly this shard's tests, which is what lets the four
+    uploads union without ambiguity (scripts/merge-test-durations.py refuses
+    a non-disjoint merge). Dropping either flag turns the artifacts back into
+    four near-copies of the committed file, and the union silently becomes
+    the local numbers again.
+    """
+    cmd = _pytest_command()
+    assert "--store-durations" in cmd, cmd
+    assert "--clean-durations" in cmd, cmd
+
+    uploads = [
+        s
+        for s in _python_tests()["steps"]
+        if "upload-artifact" in str(s.get("uses"))
+        and "durations" in str((s.get("with") or {}).get("path", ""))
+    ]
+    assert len(uploads) == 1, f"expected exactly one durations upload step, got {uploads}"
+    step = uploads[0]
+    with_ = step.get("with") or {}
+    # Ancillary to the gate: an upload hiccup must not fail a blocking job.
+    assert step.get("continue-on-error") is True, step
+    # The artifact name must vary by shard, or four uploads collide into one.
+    assert "matrix.group" in str(with_.get("name", "")), step
+    # `.test_durations` is a dotfile and upload-artifact drops hidden files
+    # by default. Without this the step is GREEN, runs in 0s, and uploads
+    # nothing — which is exactly how it first shipped, discovered only when
+    # `make test-durations-from-ci` reported no matching artifact.
+    assert with_.get("include-hidden-files") is True, (
+        "the durations file is a dotfile; without include-hidden-files the "
+        "upload silently produces no artifact and still reports success"
+    )
+    # The file is committed, so it is always present: `warn` could only ever
+    # hide a broken path. Silence already caused this once.
+    assert with_.get("if-no-files-found") == "error", with_
 
 
 def test_durations_file_is_committed_and_the_invocation_points_at_it() -> None:
@@ -183,10 +272,23 @@ def _collected_nodeids(group: int | None = None, splits: int | None = None) -> l
     """The exact ids CI shards, collected the way CI collects them.
 
     With `group`/`splits`, returns just that shard's share — pytest-split's
-    own answer, not a reimplementation of it.
+    own answer, not a reimplementation of it, and under the SAME
+    `--splitting-algorithm` the workflow passes. Measuring the default
+    algorithm's deal while CI runs another one is a pin on a different
+    program: `duration_based_chunks` and `least_duration` disagreed
+    1.70x vs 1.00x on the very file this asserts about (#2584).
     """
     shard = (
-        ["--splits", str(splits), "--group", str(group), "--durations-path", str(DURATIONS)]
+        [
+            "--splits",
+            str(splits),
+            "--group",
+            str(group),
+            "--splitting-algorithm",
+            _splitting_algorithm(),
+            "--durations-path",
+            str(DURATIONS),
+        ]
         if group is not None
         else []
     )

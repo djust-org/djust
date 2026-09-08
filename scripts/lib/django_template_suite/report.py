@@ -22,6 +22,7 @@ fail + error)`` rounded half-up to two decimals, ``0/0 → 0.00``.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -229,6 +230,74 @@ def build_result(
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+
+
+DOC_MARKER = "<!-- django-suite-claim -->"
+_PERCENT_RE = re.compile(r"\d+\.\d{2}(?=\s?%)")
+_COUNTS_RE = re.compile(r"(?<![\d,])(\d[\d,]*) of (the )?(\d[\d,]*)(?![\d,])")
+
+
+def _same_grouping(new: int, like: str) -> str:
+    """Render `new` with the thousands separators `like` used, or without."""
+    return f"{new:,}" if "," in like else str(new)
+
+
+def rewrite_doc_claim(text: str, result: dict[str, Any]) -> str:
+    """Retarget every `<!-- django-suite-claim -->` line at `result`.
+
+    The scoreboard headline lives in the baseline JSON and in prose in two
+    docs (#2561 generalised the pin to both). Regenerating it by hand is
+    three edits, and the issue that asked for this (#2615) counted three
+    such regenerations across two PRs — plus a stale-by-34-cells baseline
+    that passed green. So `--write-baseline` writes all three.
+
+    Both the percentage AND the `<ok> of <ran>` pair are rewritten. The
+    counts were prose nothing checked: `TestDocClaimMatchesBaseline`
+    compared only the percentage, so `1032 of 1047` could go stale while
+    the figure beside it stayed pinned and green. The comma grouping of
+    whatever was there is preserved, because README writes `1,047` and
+    `docs/TEMPLATE_BACKEND.md` writes `1047`.
+
+    Lines without the marker are untouched, so a percentage elsewhere in
+    the document is never rewritten by accident.
+    """
+    ok, ran = int(result["ok"]), int(result["ran"])
+    percent_text = format_percent(result["percent"]).rstrip("%")
+
+    out = []
+    for line in text.splitlines(keepends=True):
+        if DOC_MARKER not in line:
+            out.append(line)
+            continue
+        line = _PERCENT_RE.sub(lambda _m: percent_text, line)
+        line = _COUNTS_RE.sub(
+            lambda m: (
+                "%s of %s%s"
+                % (
+                    _same_grouping(ok, m.group(1)),
+                    m.group(2) or "",
+                    _same_grouping(ran, m.group(3)),
+                )
+            ),
+            line,
+        )
+        out.append(line)
+    return "".join(out)
+
+
+def rewrite_doc_claims(paths: Iterable[Path], result: dict[str, Any]) -> list[Path]:
+    """Apply `rewrite_doc_claim` in place; return the files that changed."""
+    changed = []
+    for path in paths:
+        try:
+            before = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        after = rewrite_doc_claim(before, result)
+        if after != before:
+            path.write_text(after, encoding="utf-8")
+            changed.append(path)
+    return changed
 
 
 def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[int, list[str]]:

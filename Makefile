@@ -324,7 +324,36 @@ test-durations: ## Regenerate .test_durations for the CI pytest-split shards (on
 	@$(PYTHON) -c "import pytest_split" 2>/dev/null || { echo "$(YELLOW)pytest-split missing — install the [dev] extra$(NC)"; exit 1; }
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q \
 		--store-durations --clean-durations --durations-path .test_durations
-	@echo "$(GREEN)Wrote .test_durations — commit it with your change.$(NC)"
+	@echo "$(YELLOW)NOTE: these are THIS machine's times. CI balances on the runner's —$(NC)"
+	@echo "$(YELLOW)prefer 'make test-durations-from-ci RUN=<id>' (#2584).$(NC)"
+
+# Rebuild .test_durations from a CI run's four shard artifacts (#2584).
+#
+# The committed file decides how CI deals its shards, so it has to be measured
+# on the runner: recorded locally, the py3.12 shards took 182/235/584/204s of
+# pytest against 280/278/328/193s recorded — per-shard factors of 2.6x to 7.1x,
+# so no local run can balance this runner. Every python-tests shard uploads
+# what it measured; this unions the four.
+#
+# RUN defaults to the newest completed test.yml run on main.
+RUN ?=
+.PHONY: test-durations-from-ci
+test-durations-from-ci: ## Rebuild .test_durations from a CI run's shard artifacts (RUN=<id>)
+	@command -v gh >/dev/null || { echo "$(RED)gh CLI not on PATH$(NC)"; exit 1; }
+	@RUN_ID="$(RUN)"; \
+	if [ -z "$$RUN_ID" ]; then \
+		RUN_ID=$$(gh run list --workflow=test.yml --branch=main --status=success \
+			--limit 1 --json databaseId --jq '.[0].databaseId'); \
+		echo "$(GREEN)Using the newest successful main run: $$RUN_ID$(NC)"; \
+	fi; \
+	TMP=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$TMP"' EXIT; \
+	gh run download "$$RUN_ID" --pattern 'test-durations-shard-*' --dir "$$TMP" || { \
+		echo "$(RED)No test-durations-shard-* artifacts on run $$RUN_ID.$(NC)"; \
+		echo "$(YELLOW)Artifacts expire; pick a newer run.$(NC)"; exit 1; }; \
+	$(PYTHON) scripts/merge-test-durations.py -o .test_durations \
+		"$$TMP"/test-durations-shard-*/.test_durations || exit 1; \
+	echo "$(GREEN)Wrote .test_durations from run $$RUN_ID — commit it.$(NC)"
 
 # Run one CI shard exactly as the workflow does (default: shard 1 of 4).
 # `make test-shard GROUP=3` for another shard.
@@ -332,7 +361,8 @@ GROUP ?= 1
 .PHONY: test-shard
 test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
-		--splits 4 --group $(GROUP) --durations-path .test_durations
+		--splits 4 --group $(GROUP) --splitting-algorithm least_duration \
+		--durations-path .test_durations
 
 .PHONY: test-js
 test-js: ## Run JavaScript tests

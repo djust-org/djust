@@ -213,6 +213,46 @@ Catches the two classes of bugs `make test` can miss:
   coverage; only caught by CI)
 - xdist-ordering issues that pass under sequential runs
 
+### How many times the suite runs, and where the time goes
+
+The full Python suite is ~27,000 tests. On the CI runner that is **3,105
+recorded seconds — a mean of 114 ms**; the same suite recorded on a 12-core
+Mac is 1,094s / 40 ms, which is the 2.8x that made the shards unbalanced
+below. Neither mean is slow. The cost is how often the suite runs and how
+unevenly that time is distributed.
+
+- **The pre-push hook is not the gate.** Since #2526 it runs only the tests
+  the pushed range can affect (`scripts/select-tests.py`), and falls back to
+  the whole suite for anything with whole-suite blast radius: any
+  `conftest.py`, `pyproject.toml`, `pytest.ini`, the pre-commit config, the
+  hook or the selector itself, the package roots, anything under
+  `crates/djust_core|djust_templates|djust_vdom/src/`, a branch named
+  `flip`/`routing`/`convergence`, or a selection that came out empty. It also
+  runs the whole suite whenever the selector cannot run at all.
+
+  That is a heuristic, not a proof: the selection is by changed test file, by
+  name or import of a changed module, and by basename mentions (which is what
+  catches the source-pin tests). A test that exercises a changed module
+  without naming or importing it can be missed. CI runs every root on every
+  PR and is the authoritative run — treat a green hook as "no obvious
+  breakage before the round-trip", never as a substitute. `DJUST_PREPUSH_FULL=1`
+  forces the whole suite.
+
+- **The tail is where the wall-clock is.** Measured from the committed
+  (runner-recorded) `.test_durations`: the slowest **50 of 27,263 tests are
+  59%** of the recorded time, and one file —
+  `python/tests/test_differential_reachability_manifest_2345.py` — is **35%**
+  on its own. Then `test_refusal_collapsed_agreement_2454.py` (7%),
+  `test_checks.py` (5%) and `test_make_doctor_2061.py` (4%). The slowest
+  single test is **205s**.
+
+  That last number is the ceiling on shard balancing: xdist cannot divide one
+  test, so the longest test is a floor for whatever shard holds it. With the
+  shards bin-packed on these numbers the *recorded* balance is exactly 1.00x
+  while the real steps still spread 1.45x — that gap is this tail, not the
+  split. Optimising broadly across 27,000 tests averaging 114 ms would buy
+  little; the top of this list is the lever. Tracked in #2723.
+
 ### CI shards — `.test_durations`
 
 CI runs the Python suite as **four `pytest-split` shards** (`--splits 4
@@ -226,15 +266,37 @@ one unsharded run (`tests/test_ci_python_test_shards.py` pins this).
   splitting by count for tests it has no timing for, so staleness only
   unbalances the shards (one runs longer than the others). You do not need to
   regenerate the file for every PR.
-- **Regenerate it when the suite grows or shifts by more than ~10%** (a large
-  new test module, a big deletion, a change that makes many tests much
-  slower/faster), or when one shard is visibly the straggler in CI:
+- **Regenerate it from a CI run, not from your machine** (#2584). Every
+  `python-tests` shard records what it measured (`--store-durations
+  --clean-durations`) and uploads it as `test-durations-shard-N`; the four are
+  disjoint and their union is the whole suite, timed on the runner:
 
   ```bash
-  make test-durations   # one full run, ~7-10 min; writes .test_durations
+  make test-durations-from-ci            # newest successful main run
+  make test-durations-from-ci RUN=<id>   # a specific run
   git add .test_durations
   ```
 
+  `make test-durations` still exists and still works, but it records *this*
+  machine. That is what the file used to hold, and it does not transfer: on
+  run 34173511325 the py3.12 shards took **182/235/584/204s** of pytest
+  against **280/278/328/193s** recorded on a 12-core Mac — per-shard slowdown
+  factors of 2.6x to 7.1x, so no single scale factor maps one to the other.
+  The recorded imbalance read 1.70x while the runner's was **3.21x**, which is
+  why balancing on local numbers looked fine and was not.
+
+- **Regenerate when the suite grows or shifts by more than ~10%** (a large new
+  test module, a big deletion, a change that makes many tests much
+  slower/faster), or when one shard is visibly the straggler in CI. The two
+  `@pytest.mark.slow` guards in `tests/test_ci_python_test_shards.py` fail on
+  either condition, so you normally find out from a red test rather than from
+  reading a chart.
+- **The shards are bin-packed** (`--splitting-algorithm least_duration`), not
+  cut into four contiguous runs. The default, `duration_based_chunks`, cannot
+  separate two adjacent heavyweight files: it dealt one shard 204 tests of
+  which 186s was half of a single file. Measured on the same durations,
+  contiguous chunks give 280/278/328/193s (1.70x) and bin-packing gives
+  270/270/270/270s (1.00x).
 - `make test-shard GROUP=2` runs a single shard exactly as CI does.
 - The lint/type/doc checks (ruff, mypy, ADR/doc-snippet/lockfile checks)
   run on shard 1 only; they are per-checkout, not per-shard.
