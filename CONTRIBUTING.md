@@ -215,9 +215,11 @@ Catches the two classes of bugs `make test` can miss:
 
 ### How many times the suite runs, and where the time goes
 
-The full Python suite is ~27,000 tests and ~1,094 recorded seconds — a mean
-of 40 ms, which is not slow. The cost is how often it runs and how unevenly
-that time is distributed.
+The full Python suite is ~27,000 tests. On the CI runner that is **3,105
+recorded seconds — a mean of 114 ms**; the same suite recorded on a 12-core
+Mac is 1,094s / 40 ms, which is the 2.8x that made the shards unbalanced
+below. Neither mean is slow. The cost is how often the suite runs and how
+unevenly that time is distributed.
 
 - **The pre-push hook is not the gate.** Since #2526 it runs only the tests
   the pushed range can affect (`scripts/select-tests.py`), and falls back to
@@ -237,14 +239,19 @@ that time is distributed.
   forces the whole suite.
 
 - **The tail is where the wall-clock is.** Measured from the committed
-  `.test_durations`: the slowest **50 of 27,116 tests are 61%** of the
-  recorded time, and one file —
-  `python/tests/test_differential_reachability_manifest_2345.py` — is **36%**
-  on its own (six of its cases run 59-76s each). `python/tests/test_deploy_cli.py`
-  is another 11%, mostly real loopback `HTTPServer`s. Under `-n auto` a single
-  76s test is a floor for whatever shard holds it, so it bounds the whole
-  workflow no matter how well the shards balance. Optimising broadly across
-  27,000 fast tests would buy little; the top of this list is the lever.
+  (runner-recorded) `.test_durations`: the slowest **50 of 27,263 tests are
+  59%** of the recorded time, and one file —
+  `python/tests/test_differential_reachability_manifest_2345.py` — is **35%**
+  on its own. Then `test_refusal_collapsed_agreement_2454.py` (7%),
+  `test_checks.py` (5%) and `test_make_doctor_2061.py` (4%). The slowest
+  single test is **205s**.
+
+  That last number is the ceiling on shard balancing: xdist cannot divide one
+  test, so the longest test is a floor for whatever shard holds it. With the
+  shards bin-packed on these numbers the *recorded* balance is exactly 1.00x
+  while the real steps still spread 1.45x — that gap is this tail, not the
+  split. Optimising broadly across 27,000 tests averaging 114 ms would buy
+  little; the top of this list is the lever. Tracked in #2723.
 
 ### CI shards — `.test_durations`
 
