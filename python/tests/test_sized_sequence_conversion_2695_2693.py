@@ -786,20 +786,25 @@ class TestTheSerializationFloorHoldsOnTheNewHandle:
     It is protected by `Context::protect_sidecar_strict`, which re-wraps after
     EVERY segment; this is the measurement that says so.
 
-    A `deque` and not a `list`: the #2695 review found that declining a
-    `list` spends more than it saves (its items are already built, and the
-    carrier then has to spell `str()` and `repr()` of all of them), so
-    `len_call_already_materialised_the_items` exempts `list` and `QuerySet`
-    and this class would be vacuous on either — see
+    A `deque` and not a `list`, for a reason that has changed twice. The
+    #2695 review EXEMPTED a `list` and a `QuerySet` from the decline, so this
+    class would have been vacuous on either — see
     `test_the_carrier_really_is_the_path_being_tested`, which is what would
-    have caught the substitution. A `deque` is the ordinary sized-sequence
-    case and is carried.
+    have caught the substitution. #2717 removed that exemption, so a `list`
+    past the cap is carried too now and the class would no longer be vacuous
+    on one; the `deque` stays because it is the shape that was never exempt.
 
-    Since #2704 a `deque` is carried at BOTH sizes — the spelling decides
-    that, not the cap — so the parametrization now measures the carrier's
+    Since #2704 a `deque` is carried at BOTH sizes — the SPELLING decides
+    that, not the cap — so the parametrization measures the carrier's
     items-present and items-absent halves rather than carrier-vs-`Value::List`.
     The `Value::List` half is stated explicitly with a `list` in the
-    non-vacuity test below, so both mechanisms are still floored here.
+    non-vacuity test below, and a `list` still takes it UNDER the cap
+    (#2717's rule is about length, #2704's about spelling), so both
+    mechanisms are still floored here.
+
+    The shapes #2717's decline newly claims get their own floor sweep in
+    `TestTheFloorHoldsOnEveryShapeTheDeclineNewlyClaims`
+    (`test_declined_container_spelling_2717.py`).
     """
 
     @staticmethod
@@ -867,11 +872,20 @@ class TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap:
     * ``DjustTemplate.render`` auto-serialises the queryset to that same list
       BEFORE Rust sees it, so it hit the identical decline one layer up.
 
-    Both are closed by `len_call_already_materialised_the_items`: a `list`
-    holds its elements and `QuerySet.__len__` calls `_fetch_all()`, so past
-    the cap the decline can only change the spelling. Not a floor breach on
-    either side — asserted here as well, since the whole point is that the
-    fix moves the rows back onto the `Value::List` path.
+    The #2695 review closed both by EXEMPTING a `list` and a `QuerySet` from
+    the decline at any length. #2717 replaced that exemption — it cost 4 GB
+    on a real 150 000-row table — with two narrower fixes, and the cells
+    below are unchanged by the swap, which is the whole point of keeping them
+    here:
+
+    * the three container sinks are spelled from the LIVE HANDLE
+      (`Encoded::declined_list_spelling`), through the same
+      `consume_live_items` walk `{% for %}` uses, so the items are the ones
+      the `Value::List` held by construction;
+    * `_SidecarQuerySetProxy` gained the `__getitem__` the live walk needs,
+      so `{{ rows.0 }}` resolves instead of answering `''`.
+
+    Not a floor breach on either side — asserted here as well.
     """
 
     @staticmethod
@@ -952,19 +966,28 @@ class TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap:
         assert len(self._queryset(100_001 - 3)) == 100_001
         assert len(self._queryset(0)) == 3
 
-    def test_a_queryset_is_exempt_from_the_conversion_decline_at_any_length(
+    def test_a_queryset_past_the_cap_is_declined_like_any_sized_sequence(
         self,
     ) -> None:
-        """The mechanism, named: `QuerySet.__len__` calls `_fetch_all()`, so
-        by the time the length is known every row exists and the decline can
-        only change the spelling."""
+        """#2717: the exemption is gone, so this is the non-vacuity bit for
+        the two classes above — the cells they pin are now measuring the
+        CARRIER path past the cap and the `Value::List` path under it, which
+        is exactly the asymmetry they exist to deny.
+
+        Between the #2695 review and #2717 both of these were `False`: a
+        `list` and a `QuerySet` were exempt at any length, so `{{ v }}` over
+        a 100 001-row queryset converted every row at binding time. Flipping
+        this line to `True` is the whole of #2717's conversion change; the
+        rendered bytes above are what says the spelling survived it.
+        """
         from djust import _rust
 
-        assert _rust.crosses_as_encoded(self._queryset(100_001 - 3)) is False
+        assert _rust.crosses_as_encoded(self._queryset(100_001 - 3)) is True
         assert _rust.crosses_as_encoded(self._queryset(0)) is False
-        # And the duck type that merely LOOKS like one is not exempt — the
-        # exemption is about the `__len__` contract, not the shape.
+        # The ordinary sized sequence answers the same way, which is the
+        # point: there is one rule now, keyed on the LENGTH.
         assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
+        assert _rust.crosses_as_encoded(list(range(100_001))) is True
 
 
 class TestEverySequenceArmDecidesTheCarrier:

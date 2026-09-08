@@ -656,13 +656,18 @@ pub struct Encoded {
     /// **What can never acquire one.** `crosses_as_encoded` / the
     /// `FromPyObject` impl claim a `dict`, a tuple, anything with
     /// `__djust_serialize__` and any `Model` in arms ABOVE [`opaque_value`],
-    /// so no dict, model or manager reaches this field. A `list` and an
-    /// evaluated `QuerySet` are also excluded, but by a RULE rather than by
-    /// the ordering: [`len_call_already_materialised_the_items`] exempts them
-    /// from the conversion's decline at any length, because for those two the
-    /// items exist by the time the length is known and declining could only
-    /// change the spelling (#2695 review — it changed it to 66 MB of djust's
-    /// own serialization dicts).
+    /// so no dict, model or manager reaches this field.
+    ///
+    /// A `list` and a `QuerySet` DO reach it since #2717, and until then did
+    /// not: the #2695 review exempted both from the conversion's decline at
+    /// any length, because their declined spelling was wrong (66 MB of
+    /// djust's own serialization dicts for `{{ rows }}` over a 100 001-row
+    /// queryset). That exemption cost 4 GB on a 150 000-row table and is
+    /// gone; the spelling is answered at the sink instead, by
+    /// [`Encoded::declined_list_spelling`]. So a large `list`/`QuerySet` is
+    /// now an ordinary declined sized sequence here, and the floor question
+    /// below is asked of it too — see
+    /// `TestTheFloorHoldsOnEveryShapeTheDeclineNewlyClaims`.
     ///
     /// An ordinary sized sequence — a `deque`, an `array`, a `range`, a duck
     /// type with a stated `__len__` — DOES arrive here past
@@ -3070,6 +3075,35 @@ impl Value {
     /// `Missing` (`""`, Django's `string_if_invalid` substituted before the
     /// chain runs) and `Object` (its `__str__` for a model, dict repr
     /// otherwise). ONE definition, so no caller re-derives the split (#1646).
+    /// The operand a sink that spells this value WHOLE must use, when the
+    /// value itself cannot spell it (#2717).
+    ///
+    /// The ONE routing point for [`Encoded::declined_list_spelling`], read by
+    /// the three sinks that render a container whole — `{{ v }}`, `pprint`
+    /// and `json_script` — at FOUR call sites, because `{{ v }}` reaches it
+    /// twice: `renderer::localize_if_number` short-circuits `Display` for a
+    /// non-temporal carrier and returns `Encoded::display` directly, so
+    /// patching `Display` alone left the actual `{{ v }}` cell unchanged.
+    /// That fourth site was found by grepping the SINK rather than by listing
+    /// the callers it seemed to have. `None` for every other value and for every
+    /// other carrier, which is the common case and costs one integer compare;
+    /// `None` too when the live walk RAISES, so a caller keeps whatever it
+    /// would have rendered before this existed rather than growing an error
+    /// path (`Display` has no error channel, and the two filters answer their
+    /// own `str()`/JSON spelling as they always did).
+    ///
+    /// Pinned as a SET rather than as a floor by
+    /// `test_the_container_spelling_sinks_are_the_three_named` (#1125): a
+    /// fourth sink that spells a value whole has to be added here, or it
+    /// silently renders djust's own serialization dicts for a declined
+    /// queryset.
+    pub fn container_spelling(&self) -> Option<Value> {
+        match self {
+            Value::Encoded(e) => e.declined_list_spelling()?.ok(),
+            _ => None,
+        }
+    }
+
     pub fn py_str(&self) -> String {
         match self {
             Value::Decimal(d) => d.clone(),
@@ -3218,7 +3252,22 @@ impl fmt::Display for Value {
             Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
             // See the `legacy_display` arm: the display spelling is `str(o)`
             // on both paths, and only `json_script` reads the other one.
-            Value::Encoded(e) => write!(f, "{}", e.display),
+            //
+            // EXCEPT for a carrier the conversion declined for LENGTH whose
+            // spelling is its items' list repr — a `list`, a `QuerySet`, a
+            // djust queryset proxy (#2717). `str(o)` for those is a `list`
+            // repr djust never renders (66 MB of its own identity dicts for a
+            // serialised queryset), so the items are read from the live handle
+            // HERE, at the sink, rather than enumerated at binding time for
+            // every cell. `declined_list_spelling` answers `None` in one
+            // integer compare for everything else, which is what keeps this
+            // arm cheap; a Python failure mid-walk also answers the old
+            // `display`, because `Display` has no error channel and an
+            // unchanged cell beats a panic.
+            Value::Encoded(e) => match self.container_spelling() {
+                Some(spelled) => write!(f, "{spelled}"),
+                None => write!(f, "{}", e.display),
+            },
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
                 write!(f, "[{}]", inner.join(", "))
@@ -3554,70 +3603,78 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   both #2678's and #2695's hangs stay unfixed there. An unfixed cell
 ///   beats a wrong one.
 ///
-/// * **The object is not one whose declined SPELLING would be wrong**
-///   ([`len_call_already_materialised_the_items`], #2695 review). A `list`
-///   and a Django `QuerySet` are exempt at any length. That exemption is a
-///   TRADE and not a free one — read that function before assuming the
-///   decline costs those two shapes nothing.
-fn stated_len_is_too_large_to_enumerate(ob: &Bound<'_, PyAny>, len: usize) -> bool {
-    len > OPAQUE_ITEM_CAP && resolve_lazy() && !len_call_already_materialised_the_items(ob)
+/// TWO conditions and not three. A `list` and a Django `QuerySet` were
+/// EXEMPT from #2695 until #2717, because their declined spelling was wrong
+/// — `{{ rows }}` over a 100 001-row queryset rendered 66 MB of djust's own
+/// identity dicts where the same queryset one row shorter rendered
+/// `[qs0, qs1, qs2]`. That exemption cost 4 GB on a 150 000-row table
+/// (`{{ v|length }}`: 4 437 MB with it, 565 MB without), so #2717 closed the
+/// spelling defect instead of paying for it — see
+/// [`Encoded::declined_list_spelling`], which answers the three container
+/// sinks from the live handle. Nothing is exempt now.
+fn stated_len_is_too_large_to_enumerate(len: usize) -> bool {
+    len > OPAQUE_ITEM_CAP && resolve_lazy()
 }
 
-/// Are this object's items ALREADY built by the time its length is known?
-/// (#2695 review.)
+/// Is this object's SPELLING its ITEMS' list repr, rather than its own
+/// `str(o)`? (#2717, closing the #2695-review exemption.)
 ///
-/// True for a **`list`** (it holds its elements; `len()` is O(1) and creates
-/// nothing) and for a Django **`QuerySet`** (`__len__` calls `_fetch_all()`,
-/// so the row objects are in `_result_cache` the moment the length is
-/// known). [`stated_len_is_too_large_to_enumerate`] asks it and exempts both
-/// from the decline at any length.
+/// The ONE statement of that question, asked by
+/// [`Encoded::declined_list_spelling`] at the three container sinks that
+/// spell a value whole — `{{ v }}`, `|pprint`, `|json_script` — for a
+/// carrier the conversion DECLINED to enumerate. Two shapes answer yes:
 ///
-/// **The exemption is a TRADE, and the price is NOT zero.** An earlier
-/// version of this comment said the cost was "already sunk, so declining only
-/// changes the SPELLING". That is false, by about 4 GB, and the measurement
-/// is the re-review's (#2706): an UNEVALUATED `User.objects.all()` over a
-/// real 150 000-row table, rendering `{{ v|length }}` —
+/// * a **`list`**. `str(list)` IS its elements' repr, so a declined list has
+///   to be spelled from its elements or not at all.
+/// * a Django **`QuerySet`**. djust has never matched Django's
+///   `<QuerySet [...]>` here — a queryset in a djust context is serialised
+///   to a list of identity dicts, so `{{ rows }}` is `[qs0, qs1, qs2]` — and
+///   that spelling must not change at 100 000 rows.
 ///
-/// ```text
-/// exemption ON  (as shipped)      4 650 MB peak, 13.45 s
-/// exemption OFF (decline applies)   593 MB peak,  9.74 s
-/// ```
+/// **Not a `_SidecarQuerySetProxy`, and it does not need to be.** The object
+/// the `{{ v }}` conversion actually sees for a queryset IS that proxy —
+/// `Context::walk_live` runs `protect_sidecar_strict` over the root — so a
+/// third `hasattr("__djust_serialize__")` arm here looks obviously required.
+/// It is dead: the `FromPyObject` fallback block claims a
+/// `__djust_serialize__` object one arm ABOVE [`opaque_value`] and converts
+/// the `list` it hands back, so the proxy never becomes a carrier and this
+/// predicate is never asked about one. That arm shipped in #2717's first
+/// pass and was removed when its gate-off failed nothing;
+/// `crosses_as_encoded` over a padded proxy answers `False` on both sides of
+/// the cap, which is the same fact from the outside and is asserted in
+/// `TestTheFloorHoldsOnEveryShapeTheDeclineNewlyClaims::test_the_sweep_is_not_vacuous`.
 ///
-/// `len()` sinks the cost of `_fetch_all()` — about 140 MB of row objects —
-/// and NOT the conversion of those rows into [`Value`]s, which is the other
-/// ~4 GB. So what the exemption buys is a correct spelling, and what it pays
-/// is a real per-row conversion the decline would have avoided.
+/// **Why this used to be an exemption instead.** #2695 declined every sized
+/// sequence past the cap; its review found that declining these three
+/// spelled `{{ rows }}` over a 100 001-row queryset as
+/// `[{'id': 1, 'pk': 1, '__str__': 'qs0', '__model__': 'User', …}]` — 66 MB
+/// of djust's own serialization dicts — where the same queryset one row
+/// shorter rendered `[qs0, qs1, qs2]`, and answered `{{ rows.0 }}` with
+/// `''`. So the review exempted a `list` and a `QuerySet` from the decline
+/// at any length, which fixed the spelling and cost 4 GB: on an UNEVALUATED
+/// `User.objects.all()` over a real 150 000-row table, `{{ v|length }}` was
+/// 4 437 MB / 13.4 s with the exemption and 565 MB / 10.1 s without it
+/// (#2717's own measurement; the issue's, on the same shape, was
+/// 4 650 / 593 MB). `len()` sinks `_fetch_all()` — about 140 MB of rows —
+/// and NOT their conversion into [`Value`]s, which is the other ~4 GB.
 ///
-/// It is taken anyway, for two reasons that are about correctness rather than
-/// cost: the declined spelling is WRONG (below), and the exempted cost is not
-/// new — `main` never declined a `list` or a `QuerySet` either
-/// (`stated_bound_is_unverifiable` required the object to have NO `__iter__`),
-/// so this restores exactly the cost those two shapes already had rather than
-/// adding one. Getting both — decline the carrier AND spell it correctly at
-/// the sink — is filed as its own change (#2717); doing it here would have
-/// meant designing a lazy QuerySet carrier inside a review fix-pass.
+/// #2717 keeps the spelling and drops the cost by moving the enumeration to
+/// the three sinks that need it: the decline now applies to these shapes
+/// too, and the sinks re-derive the list through
+/// [`Encoded::consume_live_items`] — the SAME walk `{% for %}` and `|join`
+/// already use, so the spelling is the `Value::List` one by construction
+/// rather than by transcription (#1646). The other half, `{{ rows.0 }}`,
+/// was `_SidecarQuerySetProxy` having no `__getitem__` for the live walk to
+/// subscript; it has one now.
 ///
-/// The shape that found the spelling defect is one object wearing both hats.
-/// A 100 001-row
-/// `QuerySet` in a template context is auto-serialised by
-/// `DjustTemplate.render` into a `list` of djust's own identity dicts;
-/// declining that list spelled `{{ rows }}` as
-/// `[{'id': 1, 'pk': 1, '__str__': 'qs0', '__model__': 'User', …}]` — 66 MB —
-/// where the same queryset one row shorter renders `[qs0, qs1, qs2]`, and
-/// declining the QuerySet itself answered `{{ rows.0 }}` with `''` because
-/// `_SidecarQuerySetProxy` has no `__getitem__` for the live walk to use.
-/// Neither is a floor breach — the rows are denylist-filtered on both sides,
-/// pinned by `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` — but
-/// both are a content and payload change on the exact shape
-/// [`Encoded::live`]'s doc names.
-///
-/// Nothing else is exempt, and that is the point of asking about
-/// materialisation rather than listing types: a `tuple` never reaches here
-/// (the tuple arm above [`bounded_sequence_items`] claims it), and `range` /
-/// `bytes` / `array` / `deque` / a numpy array / a duck type with a stated
-/// `__len__` all DESCRIBE or PACK their items, so the decline is a real
-/// saving for them and they keep it.
-fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
+/// Nothing else answers yes, and that is the point of naming the SPELLING
+/// rather than a size: a `tuple` never reaches here (the tuple arm above
+/// [`bounded_sequence_items`] claims it), and `range` / `bytes` / `array` /
+/// `deque` / a numpy array / a duck type with a stated `__len__` each spell
+/// their own container — `str(range(3))` is `range(0, 3)` — so their
+/// declined carrier is already right and must NOT be re-spelled as a list
+/// (#2704).
+fn spelling_is_the_items_list_repr(ob: &Bound<'_, PyAny>) -> bool {
     if ob.is_instance_of::<PyList>() {
         return true;
     }
@@ -3632,10 +3689,21 @@ fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
 
 /// `isinstance(o, django.db.models.QuerySet)`, through a cached `sys.modules`
 /// lookup. ONE statement of the test, because two functions ask it about the
-/// same objects for two different reasons — the cap exemption
-/// ([`len_call_already_materialised_the_items`]) and the list-spelling
-/// exemption ([`list_repr_is_this_objects_own_spelling`]) — and a second copy
-/// is the #1646 shape.
+/// same objects for two different reasons, and a second copy is the #1646
+/// shape:
+///
+/// * [`list_repr_is_this_objects_own_spelling`] (#2704) asks at ANY length,
+///   to decide which conversion ARM claims the object;
+/// * [`spelling_is_the_items_list_repr`] (#2717) asks only PAST
+///   [`OPAQUE_ITEM_CAP`], to decide what an already-declined carrier SPELLS.
+///
+/// The second caller was `len_call_already_materialised_the_items` until
+/// #2717 renamed it and inverted its job (it named the shapes EXEMPT from
+/// the cap; its successor names the shapes whose spelling is their items'
+/// list repr). Both callers survived that change, so the "two reasons"
+/// above is still two — a claim worth re-checking rather than inheriting,
+/// since a rename that drops a caller would leave this comment true-looking
+/// and false.
 fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
     ob.py()
         .import("django.db.models")
@@ -3676,14 +3744,27 @@ fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
 ///   spells. (A `tuple` never reaches here — the tuple arm above
 ///   [`bounded_sequence_items`] claims it and `Value::Tuple` spells itself.)
 /// * **A Django `QuerySet`.** Its Django spelling is `<QuerySet [...]>`, so
-///   it IS divergent — but declining it is #2717's half, not this one: the
-///   `render_template` path hands the conversion a `_SidecarQuerySetProxy`
-///   with no `__getitem__`, so a declined queryset answers `{{ rows.0 }}`
-///   with `''`, and `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap`
-///   pins that it must not. #2717 is the issue that carries both halves
-///   (a carrier that can spell its own container sinks); doing it here would
-///   mean designing a lazy QuerySet carrier inside a spelling fix. Scoped
-///   deliberately rather than half-done (CLAUDE.md #1079).
+///   it IS divergent, and this arm is what keeps djust's own answer
+///   (`[qs0, qs1, qs2]`) for one.
+///
+///   The reason USED to be a hazard: the `render_template` path hands the
+///   conversion a `_SidecarQuerySetProxy` that had no `__getitem__`, so a
+///   declined queryset answered `{{ rows.0 }}` with `''`. #2717 gave the
+///   proxy one, so that hazard is gone and this comment would be asserting
+///   a defect that no longer exists.
+///
+///   What keeps the arm is narrower and outlives the fix: #2717 governs what
+///   a carrier DECLINED FOR LENGTH spells — [`Encoded::declined_list_spelling`]
+///   opens with `len > OPAQUE_ITEM_CAP` — while this arm governs which arm
+///   claims a queryset at ANY length. Drop it and a THREE-row queryset
+///   crosses as a carrier, whose `{{ rows }}` is `str(...)` rather than
+///   `[qs0, qs1, qs2]`, with nothing in #2717 to re-spell it.
+///   `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` pins the two
+///   sides against each other and
+///   `TestASmallQuerySetIsUnmovedByTheDeclineChange2717` pins the small side
+///   against Django directly, because "the two agree" cannot catch both
+///   moving together. Retiring this arm is its own change with its own
+///   before/after, not a side effect of a length fix (CLAUDE.md #1079).
 fn list_repr_is_this_objects_own_spelling(ob: &Bound<'_, PyAny>) -> bool {
     if !resolve_lazy() {
         return true;
@@ -3716,7 +3797,7 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
         return None;
     }
     let len = ob.len().ok()?;
-    if stated_len_is_too_large_to_enumerate(ob, len) {
+    if stated_len_is_too_large_to_enumerate(len) {
         return None;
     }
     let mut items = Vec::with_capacity(len.min(OPAQUE_ITEM_CAP));
@@ -3940,14 +4021,19 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     // shapes convert (Object / List). The result carries no
                     // proxies, so this does not re-enter this branch.
                     //
-                    // The list-of-dicts converts IN FULL at any length, and
-                    // that is not a second rule: it is a `list`, and
-                    // `stated_len_is_too_large_to_enumerate` exempts a `list`
-                    // because its items are already materialised (#2695
-                    // review — see that function). Before the exemption a
-                    // 100 001-row queryset's rows were declined HERE and
-                    // spelled `{{ rows }}` as `str()` of djust's own identity
-                    // dicts.
+                    // The list-of-dicts is a `list`, so past
+                    // [`OPAQUE_ITEM_CAP`] it is DECLINED here like any other
+                    // sized sequence and crosses as a carrier over that list
+                    // (#2717). `{{ rows }}` / `|pprint` / `|json_script` then
+                    // spell it through [`Encoded::declined_list_spelling`],
+                    // which re-derives exactly these items from the live
+                    // handle — so the rendered bytes are the same either side
+                    // of the cap, and a template that asks only for
+                    // `{{ rows|length }}` or `{{ rows.0 }}` never pays for
+                    // them. Between the #2695 review and #2717 a `list` was
+                    // EXEMPT from the decline for this reason and the whole
+                    // list converted here at any length, which is the 4 GB
+                    // #2717 measured.
                     if let Ok(v) = result.extract::<Value>() {
                         return Ok(v);
                     }
@@ -4123,12 +4209,12 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         // than paying the billion reads that are the reported hang — for a
         // `range(10**9)` as much as for the liar whose `__getitem__` never
         // raises. Every sized collection UNDER the cap — `set`, `range(3)`,
-        // a `deque` — is enumerated in full exactly as before, and so is a
-        // `list` / an evaluated `QuerySet` at ANY length (their items are
-        // already built, so the decline could only change the spelling —
-        // `len_call_already_materialised_the_items`). Over the cap the ITEMS
-        // are read at the sink instead, from the live handle, under the
-        // sink's own termination rule ([`Encoded::live_walk_terminates`]).
+        // a `deque`, a `list`, an evaluated `QuerySet` — is enumerated in
+        // full exactly as before. Over the cap the ITEMS are read at the sink
+        // instead, from the live handle, under the sink's own termination
+        // rule ([`Encoded::live_walk_terminates`]); a `list` and a `QuerySet`
+        // were EXEMPT from that between the #2695 review and #2717, and are
+        // not any more (see [`spelling_is_the_items_list_repr`]).
         //
         // Without a `__len__` there is no bound at all, so walk to the cap: a
         // class whose `__iter__` returns `itertools.count()` is RE-iterable,
@@ -4145,7 +4231,7 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         //
         // Counted, not collected: the items are not converted here.
         match len {
-            Some(n) if stated_len_is_too_large_to_enumerate(ob, n) => {
+            Some(n) if stated_len_is_too_large_to_enumerate(n) => {
                 unbounded = true;
             }
             Some(_) => {}
@@ -4278,6 +4364,57 @@ impl Encoded {
             }
             Ok(collected)
         }))
+    }
+
+    /// The `Value::List` the conversion DECLINED to build, materialised at
+    /// the container sink instead of at binding time (#2717).
+    ///
+    /// `{{ v }}`, `|pprint` and `|json_script` are the three sinks that spell
+    /// a value WHOLE. Every other sink over a declined carrier reads only
+    /// what it needs — `|length` is `self.len`, `{{ v.0 }}` is
+    /// [`Encoded::live_get_item`], `|slice` is
+    /// [`Encoded::live_get_slice`], `{% for %}` / `|join` / `in` are
+    /// [`Encoded::consume_live_items`] — so those three are the whole of what
+    /// the #2695-review exemption was protecting, and this is what replaces
+    /// it.
+    ///
+    /// **Only for an object whose spelling IS its items' list repr** —
+    /// [`spelling_is_the_items_list_repr`], the same predicate that used to
+    /// name the exemption, so the rule has one statement (#1646). A `range`,
+    /// a `deque`, an `array`, a `bytes` and a sized user class each spell
+    /// their OWN container (`str(range(3))` is `range(0, 3)`), and re-spelling
+    /// one as a list is the #2704 defect in reverse; they answer `None` here
+    /// and keep `display`.
+    ///
+    /// **Cheap when it does not apply.** The `len` gate is a plain integer
+    /// compare and is FIRST: nothing but a sized sequence past
+    /// [`OPAQUE_ITEM_CAP`] can be a declined one, so an ordinary carrier —
+    /// a `datetime`, a `set`, a `complex`, a user object — never reaches the
+    /// Python probe. That matters because `Display for Value` calls this on
+    /// every `{{ carrier }}` in every render.
+    ///
+    /// **The items are the SAME ones the value stack would have held**,
+    /// because this reuses [`Encoded::consume_live_items`] — the walk
+    /// `{% for %}` already uses — rather than transcribing a second
+    /// enumeration. So the spelling either side of the cap is equal by
+    /// construction, which is exactly what
+    /// `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` asserts.
+    ///
+    /// What it buys, measured on an UNEVALUATED `User.objects.all()` over a
+    /// real 150 000-row table: `{{ v|length }}` falls from 4 437 MB / 13.4 s
+    /// to 565 MB / 10.1 s, and `{{ v.0 }}` from 2 982 MB / 13.3 s to
+    /// 148 MB / 0.7 s, because neither cell reaches this method. The three
+    /// cells that DO reach it pay what they always paid — they emit 60-100 MB
+    /// of HTML, so the enumeration is not the expensive half of them.
+    pub fn declined_list_spelling(&self) -> Option<PyResult<Value>> {
+        if !self.len.is_some_and(|n| n > OPAQUE_ITEM_CAP) {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        if !Python::attach(|py| spelling_is_the_items_list_repr(handle.bind(py))) {
+            return None;
+        }
+        Some(self.consume_live_items()?.map(Value::List))
     }
 
     /// Python's `needle in o` over the live handle, consuming only as far as

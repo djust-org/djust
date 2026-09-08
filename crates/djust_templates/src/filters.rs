@@ -2141,6 +2141,14 @@ fn apply_builtin_filter(
                 return Some(Ok(Value::Missing));
             }
             // json_script filter: wrap value as JSON inside a <script> tag.
+            //
+            // Over the whole value, so the same #2717 substitution `pprint`
+            // and `Display` make: a length-declined `list`/`QuerySet` carrier
+            // is spelled from its live handle, or `value_to_json` emits the
+            // carrier's `display` as a JSON *string* where the same queryset
+            // one row shorter emits a JSON *array*.
+            let spelled = value.container_spelling();
+            let value = spelled.as_ref().unwrap_or(value);
             let json_str = value_to_json(value);
             let safe_json = json_escape_for_script(&json_str);
             // Django builds the tag with `format_html`, whose interpolation is
@@ -2318,7 +2326,15 @@ fn apply_builtin_filter(
             // Django's `pprint` filter is `pprint.pformat(value)` — which WRAPS
             // at width 80. The single-line builder this replaced diverged by
             // every newline and every indent space above that width (#2277).
-            Ok(Value::String(crate::pprint::pformat(value)))
+            //
+            // `container_spelling` first: `pformat` reads the value WHOLE, so a
+            // carrier the conversion declined for length must be spelled from
+            // its live handle here or it prints `str(o)` of djust's own
+            // serialization dicts (#2717). One of the three sinks that need
+            // it; the other two are `json_script` below and `Display`.
+            Ok(Value::String(crate::pprint::pformat(
+                value.container_spelling().as_ref().unwrap_or(value),
+            )))
         }
         // `[mark_safe(obj) for obj in value]`. `mark_safe(obj)` is
         // `SafeString(str(obj))`, so it does not merely MARK an item — it
