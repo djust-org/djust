@@ -5375,8 +5375,8 @@ impl TemplateObject {
     /// [`OPAQUE_ITEM_CAP`]. Those fall back to asking the live object, which
     /// is what Django's own handler would have done (`RegroupNode` runs
     /// `groupby` over whatever the operand resolved to), and every element
-    /// goes through the SAME floor as the whole-object arm — so a model in a
-    /// declined carrier crosses as its proxy, not raw.
+    /// goes through the SAME conversion the enumerated branch uses — so the
+    /// floor reaches a model at any depth, on both sides of the cap.
     ///
     /// Raising here reached a render entry point as a 500 (PR #2734 review):
     /// `{% regroup %}` over a list of 100 001 rows raised
@@ -5404,14 +5404,30 @@ impl TemplateObject {
         // `try_iter` raises Python's own "not iterable" TypeError for an
         // object that is not, which is the message to keep.
         for item in handle.bind(py).try_iter()? {
-            let Some(protected) = context::protect_sidecar_strict(py, item?) else {
-                // The floor could not be enforced. Fail CLOSED — stop rather
-                // than hand the element on, exactly as `walk_live` does.
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "djust could not enforce the serialization floor on this element",
-                ));
-            };
-            py_list.append(protected)?;
+            // Through `extract::<Value>()` and back — the SAME conversion the
+            // `items` branch above hands `value_into_handler_pyobject`, since
+            // `Encoded::items` are exactly `item.extract::<Value>()` measured
+            // at the conversion. The two branches therefore differ only in
+            // WHEN the `Value` was measured, never in what the element becomes
+            // (#1646).
+            //
+            // That convergence is the floor (PR #2734 review round 3). The
+            // first version applied `protect_sidecar_strict` — the LEAF floor —
+            // once per element, which protects a model IN the element position
+            // and cannot see one held INSIDE it. So the floor was
+            // DISCONTINUOUS at [`OPAQUE_ITEM_CAP`]:
+            //
+            // ```text
+            // [[user]] * 3        {% regroup rows by 0.password %}  ->  ""
+            // [[user]] * 100_001  {% regroup rows by 0.password %}  ->  the hash
+            // ```
+            //
+            // The `Value` conversion descends: its `List` / `Object` arms
+            // recurse per element, and a `Model` at any depth routes through
+            // `normalize_django_value`'s denylist. A plain object still ends at
+            // the same leaf floor, because `value_into_handler_pyobject`'s live
+            // arm applies it.
+            py_list.append(value_into_handler_pyobject(py, item?.extract::<Value>()?)?)?;
         }
         py_list.as_any().try_iter().map(|it| it.into_any())
     }

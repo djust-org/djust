@@ -526,7 +526,8 @@ _BY_ORDINARY_FIELD = (
 
 
 class TestFloorHoldsForEveryCarrier:
-    """The serialization floor holds for a model in EVERY carrier shape.
+    """The serialization floor holds for a model in EVERY carrier shape, at
+    this sink, on the ``RustLiveView`` render path these tests drive.
 
     The first version of this fix gated the live arm on an ``isinstance``
     allowlist — ``list`` / ``tuple`` / ``dict`` / ``set`` / ``frozenset`` — and
@@ -536,10 +537,10 @@ class TestFloorHoldsForEveryCarrier:
     ``{% regroup rows by password %}`` rendered the hash.
 
     The gate is now the PROPERTY the floor actually has — take the live arm
-    only when the object is not iterable, or when the floor transformed it —
-    because an allowlist of container types is always one shape short. Each row
-    below carries its own non-vacuity control, so a cell that is "safe" because
-    nothing resolved at all cannot pass.
+    only when the object is NOT ITERABLE — because an allowlist of container
+    types is always one shape short. Each row below carries its own
+    non-vacuity control, so a cell that is "safe" because nothing resolved at
+    all cannot pass.
     """
 
     @pytest.mark.parametrize("carrier", sorted(CARRIERS))
@@ -576,6 +577,106 @@ class TestFloorHoldsForEveryCarrier:
         expected = DjangoTemplate(source).render(Context({"rows": wrapped()}))
         assert expected == "[g0][g1][g0][g1]"
         assert _rust_live_view(source, wrapped()) == expected
+
+
+class TestFloorReachesAModelHeldINSIDEAnElement:
+    """The floor is CONTINUOUS across ``OPAQUE_ITEM_CAP`` for a NESTED model.
+
+    Every row in :class:`TestFloorHoldsForEveryCarrier` holds its model in
+    LEAF position — the element *is* the model. This class holds it one level
+    down, which is what separates the two ``__iter__`` branches:
+
+    * under the cap, elements come from ``Encoded::items`` — already ``Value``s,
+      and the ``Value`` conversion descends, so a model at any depth is the
+      denylist-filtered dict ``normalize_django_value`` made;
+    * past the cap (and for a one-shot generator) the elements are asked of the
+      live object instead.
+
+    The first version of that fallback applied ``_protect_sidecar_value`` — the
+    LEAF floor — once per element, which cannot see inside one. So the floor
+    was DISCONTINUOUS at the cap (PR #2734 review round 3): the identical
+    template rendered ``""`` for 3 rows and the password hash for 100 001. The
+    fallback now routes each element through the same ``Value`` conversion the
+    enumerated branch uses, so both branches answer alike.
+
+    Gate the conversion back to the leaf floor and the past-cap and generator
+    rows below go red while every leaf-position row stays green — which is
+    exactly why this class exists separately.
+    """
+
+    NESTED_FLOOR = (
+        "{% regroup rows by 0.password as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+    )
+    NESTED_CONTROL = (
+        "{% regroup rows by 0.username as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+    )
+
+    @staticmethod
+    def _nested(n):
+        """``n`` elements, each a LIST holding a model — one level down."""
+        return [[_a_user()] for _ in range(n)]
+
+    @pytest.mark.parametrize(
+        "label,rows",
+        [
+            (
+                "under the cap (enumerated items)",
+                lambda: TestFloorReachesAModelHeldINSIDEAnElement._nested(3),
+            ),
+            (
+                "past the cap (live fallback)",
+                lambda: TestFloorReachesAModelHeldINSIDEAnElement._nested(100_001),
+            ),
+            (
+                "one-shot generator (live fallback)",
+                lambda: ([_a_user()] for _ in range(3)),
+            ),
+        ],
+    )
+    def test_a_nested_floor_field_does_not_render(self, label, rows):
+        rendered = _rust_live_view(self.NESTED_FLOOR, rows())
+        assert "THIS-MUST-NOT-RENDER" not in rendered, (
+            f"the floor leaked through a model nested one level down, {label}: {rendered!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "label,rows",
+        [
+            (
+                "under the cap (enumerated items)",
+                lambda: TestFloorReachesAModelHeldINSIDEAnElement._nested(3),
+            ),
+            (
+                "past the cap (live fallback)",
+                lambda: TestFloorReachesAModelHeldINSIDEAnElement._nested(100_001),
+            ),
+            (
+                "one-shot generator (live fallback)",
+                lambda: ([_a_user()] for _ in range(3)),
+            ),
+        ],
+    )
+    def test_non_vacuity_a_nested_ordinary_field_DOES_render(self, label, rows):
+        """The control: the nested lookup resolves at all on this shape.
+
+        Without it, a nested carrier that resolved to nothing would look
+        exactly like the floor holding.
+        """
+        assert _rust_live_view(self.NESTED_CONTROL, rows()) == "[alice]"
+
+    def test_the_two_sides_of_the_cap_agree(self):
+        """The discontinuity itself, pinned as one assertion.
+
+        A future change that fixes one branch and not the other leaves these
+        two equal-by-accident only if BOTH are wrong the same way; the floor
+        row above then catches it.
+        """
+        under = _rust_live_view(self.NESTED_FLOOR, self._nested(3))
+        past = _rust_live_view(self.NESTED_FLOOR, self._nested(100_001))
+        assert under == past, (
+            "the serialization floor must not depend on which side of "
+            f"OPAQUE_ITEM_CAP the carrier falls: {under!r} vs {past!r}"
+        )
 
 
 class TestAboveTheItemCap:
