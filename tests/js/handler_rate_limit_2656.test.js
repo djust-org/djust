@@ -128,7 +128,12 @@ function createHarness(handlerConfig) {
     // Installed AFTER bundle init so the client's own start-up timers use
     // the real ones; only the rate-limit gate's timers land in this queue.
     const clock = installClock(window);
-    return { dom, window, sent, clock };
+    const http = [];
+    window.fetch = (url, options) => {
+        http.push({ url, ...options });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    };
+    return { dom, window, sent, clock, http };
 }
 
 describe('#2656 — @debounce client gate', () => {
@@ -412,4 +417,141 @@ describe('#2656 — flush and teardown', () => {
         clock.advance(10_000);
         expect(sent).toHaveLength(2);
     });
+});
+
+
+describe('#2705 — pending edits survive teardown without crossing mounts', () => {
+    it.each(['pagehide', 'close'])('flushes handler debounce exactly once on %s', async (cause) => {
+        const { window, sent, clock, http } = createHarness({search: {debounce: {wait: 5}}});
+        window.document.cookie = 'csrftoken=token2705';
+        await window.djust.handleEvent('search', {query: 'last-edit'});
+        if (cause === 'pagehide') window.dispatchEvent(new window.Event('pagehide'));
+        window.djust.liveViewInstance.ws.onclose({code: 1006});
+        clock.advance(10_000);
+        expect(sent).toHaveLength(0);
+        expect(http).toHaveLength(1);
+        expect(http[0].keepalive).toBe(true);
+        expect(http[0].headers['X-CSRFToken']).toBe('token2705');
+        expect(JSON.parse(http[0].body)).toEqual({query: 'last-edit'});
+    });
+
+    it('flushes an element debounce even when its handler is also debounced', () => {
+        const { window, clock, http, sent } = createHarness({search: {debounce: {wait: 5}}});
+        const button = window.document.querySelector('#btn');
+        button.setAttribute('dj-debounce', '5000');
+        button.click();
+        expect(http).toHaveLength(0);
+        window.dispatchEvent(new window.Event('pagehide'));
+        clock.advance(10_000);
+        expect(sent).toHaveLength(0);
+        expect(http).toHaveLength(1);
+        expect(http[0].headers['X-Djust-Event']).toBe('search');
+    });
+
+    it('flushes a pending handler throttle tail without duplicating its leading send', async () => {
+        const { window, clock, http, sent } = createHarness({search: {
+            throttle: {interval: 5, leading: true, trailing: true},
+        }});
+        await window.djust.handleEvent('search', {query: 'leading'});
+        await window.djust.handleEvent('search', {query: 'trailing'});
+        window.dispatchEvent(new window.Event('pagehide'));
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(http).toHaveLength(1);
+        expect(JSON.parse(http[0].body)).toEqual({query: 'trailing'});
+    });
+
+    it('a second mount cancels old timers and replaces all event configuration', async () => {
+        const { window, clock, sent, http } = createHarness(null);
+        const ws = window.djust.liveViewInstance;
+        const mount = async data => {
+            ws.ws.onmessage({data: JSON.stringify({type: 'mount', version: 1, ...data})});
+            await ws._inflight;
+        };
+        window.handlerMetadata = {search: {debounce: {wait: 5}}};
+        await mount({handler_config: window.handlerMetadata,
+            cache_config: {search: {ttl: 60}},
+            optimistic_rules: {search: {action: 'hide', selector: '#btn'}}});
+        await window.djust.handleEvent('search', {query: 'old-view'});
+        await mount({});
+        expect(window.djust._optimisticRules).toEqual({});
+        await window.djust.handleEvent('search', {query: 'new-view'});
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].params).toEqual({query: 'new-view'});
+        expect(http).toHaveLength(0);
+        expect(window.document.querySelector('#btn').style.display).not.toBe('none');
+    });
+});
+
+
+describe('#2705 — element and SSE lifecycle parity', () => {
+    it('flushes blur-deferred input and cancels a leading-only element throttle on remount', async () => {
+        const {window, clock, sent, http} = createHarness(null);
+        const root = window.document.querySelector('[dj-root]');
+        root.insertAdjacentHTML('beforeend', '<input id="edit" dj-input="search" dj-debounce="blur">');
+        const input = window.document.querySelector('#edit');
+        input.value = 'last-blur-edit';
+        input.dispatchEvent(new window.Event('input', {bubbles: true}));
+        window.dispatchEvent(new window.Event('pagehide'));
+        input.dispatchEvent(new window.Event('blur'));
+        expect(http).toHaveLength(1);
+        expect(JSON.parse(http[0].body).value).toBe('last-blur-edit');
+        const btn = window.document.querySelector('#btn');
+        btn.setAttribute('dj-throttle', '5000');
+        btn.click();
+        expect(sent).toHaveLength(1);
+        const ws = window.djust.liveViewInstance;
+        ws.ws.onmessage({data: JSON.stringify({type: 'mount'})});
+        await ws._inflight;
+        btn.click();
+        expect(sent).toHaveLength(2);
+        clock.advance(10_000);
+        expect(http).toHaveLength(1);
+    });
+
+    it('SSE mounts replace the same handler, cache and optimistic config', async () => {
+        const {window, sent, clock} = createHarness(null);
+        const sse = new window.djust.LiveViewSSE();
+        await sse.handleMessage({type: 'mount', handler_config: {search: {debounce: {wait: 5}}},
+            cache_config: {search: {ttl: 30}}, optimistic_rules: {search: {action: 'hide'}}});
+        await window.djust.handleEvent('search', {query: 'old'});
+        await sse.handleMessage({type: 'mount'});
+        await window.djust.handleEvent('search', {query: 'new'});
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].params).toEqual({query: 'new'});
+        expect(window.djust._optimisticRules).toEqual({});
+    });
+
+    it('SSE teardown uses its existing session message endpoint with keepalive', () => {
+        const {window, http} = createHarness(null);
+        const sse = new window.djust.LiveViewSSE();
+        sse.sseBaseUrl = '/djust/sse/session2705/';
+        sse.viewMounted = true;
+        expect(sse.sendTeardownEvent('search', {query: 'last'}, null)).toBe(true);
+        expect(http).toHaveLength(1);
+        expect(http[0].url).toBe('/djust/sse/session2705/message/');
+        expect(http[0].keepalive).toBe(true);
+        expect(http[0].credentials).toBe('include');
+        expect(JSON.parse(http[0].body)).toEqual({type: 'event', event: 'search', params: {query: 'last'}});
+    });
+});
+
+
+it('#2705 coalesces an old handler-level edit with its newer element-level edit', async () => {
+    const {window, clock, sent, http} = createHarness({search: {debounce: {wait: 5}}});
+    const root = window.document.querySelector('[dj-root]');
+    root.insertAdjacentHTML('beforeend', '<input id="edit" dj-input="search" dj-debounce="500">');
+    const input = window.document.querySelector('#edit');
+    input.value = 'old';
+    input.dispatchEvent(new window.Event('input', {bubbles: true}));
+    clock.advance(500); // now pending in the handler gate
+    input.value = 'new';
+    input.dispatchEvent(new window.Event('input', {bubbles: true}));
+    window.dispatchEvent(new window.Event('pagehide'));
+    clock.advance(10_000);
+    expect(http).toHaveLength(1);
+    expect(JSON.parse(http[0].body).value).toBe('new');
+    expect(sent).toHaveLength(0);
 });

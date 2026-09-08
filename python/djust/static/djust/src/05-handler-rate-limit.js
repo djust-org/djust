@@ -30,6 +30,54 @@
 
 // event name -> {debounce: {wait, max_wait}, throttle: {interval, leading, trailing}}
 const handlerRateConfig = new Map();
+let handlerMountConfigured = false;
+// Active element wrappers only; settled/cancelled timers release DOM references.
+const pendingElementRateLimits = new Set();
+let teardownEventTransport = null;
+
+function cancelPendingRateLimits() {
+    pendingElementRateLimits.forEach(wrapper => wrapper.cancel());
+    debounceTimers.forEach(state => clearTimeout(state.timerId));
+    throttleState.forEach(state => clearTimeout(state.timeoutId));
+    debounceTimers.clear();
+    throttleState.clear();
+}
+
+function flushPendingRateLimits() {
+    const previous = teardownEventTransport;
+    teardownEventTransport = { url: window.location.href, collecting: true, pending: new Map() };
+    try {
+        // The handler gate may hold an older edit while its element wrapper
+        // holds the newest one. Collect the older layer first, then replace
+        // it by event name instead of issuing racing HTTP requests for both.
+        flushHandlerRateLimit();
+        Array.from(pendingElementRateLimits).forEach(wrapper => wrapper.flush());
+        teardownEventTransport.collecting = false;
+        teardownEventTransport.pending.forEach((params, eventName) => {
+            window.djust.handleEvent(eventName, params, true);
+        });
+    } finally {
+        teardownEventTransport = previous;
+    }
+}
+window.addEventListener('pagehide', flushPendingRateLimits);
+
+// A mount replaces the complete configuration, including omitted/empty maps.
+// Share this between WS and SSE to avoid cross-view rules and cached patches.
+function installMountEventConfig(data) {
+    cancelPendingRateLimits();
+    handlerRateConfig.clear();
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    cacheConfig.clear();
+    resultCache.clear();
+    pendingCacheRequests.forEach(state => clearTimeout(state.timeoutId));
+    pendingCacheRequests.clear();
+    setCacheConfig(data.cache_config);
+    optimisticUpdates.clear();
+    window.djust._optimisticRules = data.optimistic_rules || {};
+}
+
 
 /**
  * Install handler rate-limit configuration (called on mount, WS and SSE).
@@ -63,6 +111,7 @@ function _configFor(eventName) {
     if (handlerRateConfig.has(eventName)) {
         return handlerRateConfig.get(eventName);
     }
+    if (handlerMountConfigured) return null;
     const meta = window.handlerMetadata;
     if (meta && Object.prototype.hasOwnProperty.call(meta, eventName)) {
         // eslint-disable-next-line security/detect-object-injection

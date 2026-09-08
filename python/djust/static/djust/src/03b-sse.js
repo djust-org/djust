@@ -187,13 +187,7 @@ class LiveViewSSE {
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
                 }
-                if (data.cache_config) {
-                    setCacheConfig(data.cache_config);
-                }
-                // #2656 — @debounce / @throttle configuration (WS parity).
-                if (data.handler_config) {
-                    setHandlerConfig(data.handler_config);
-                }
+                installMountEventConfig(data);
 
                 if (data.html) {
                     // #2632: the PAGE container — a sticky/embedded root
@@ -347,7 +341,7 @@ class LiveViewSSE {
      * @param {Object}      params         Event parameters
      * @param {Element|null} triggerElement DOM element that triggered the event
      */
-    sendEvent(eventName, params = {}, triggerElement = null) {
+    sendEvent(eventName, params = {}, triggerElement = null, keepalive = false) {
         if (!this.enabled || !this.viewMounted) {
             return false;
         }
@@ -355,7 +349,11 @@ class LiveViewSSE {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
-        return this.sendMessage({ type: 'event', event: eventName, params });
+        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+    }
+
+    sendTeardownEvent(eventName, params, triggerElement) {
+        return this.sendEvent(eventName, params, triggerElement, true);
     }
 
     /**
@@ -373,7 +371,7 @@ class LiveViewSSE {
      *
      * @param {Object} data  Wire message; must include ``type``.
      */
-    sendMessage(data) {
+    sendMessage(data, keepalive = false) {
         if (!this.enabled) return false;
 
         const body = JSON.stringify(data);
@@ -385,6 +383,7 @@ class LiveViewSSE {
 
         fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
+            keepalive,
             headers: { 'Content-Type': 'application/json' },
             // Explicit credentials: 'include' to mirror the EventSource
             // GET's withCredentials: true. Without this, the Django session

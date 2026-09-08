@@ -805,11 +805,11 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
 
     A pending send IS flushed when the user submits a ``dj-submit`` form
     (#1278), so a debounced field edited immediately before submit is not
-    lost. It is NOT flushed when the socket closes or the page unloads: the
-    pending event is dropped, and the trade you are buying is "the last edit
-    of a burst can be lost to a connection blip" in exchange for one send
-    instead of N. The element-level ``dj-debounce`` has the same gap; both
-    are tracked in #2705.
+    lost. Pending handler and element-level rate limits also flush through the
+    CSRF-protected HTTP fallback on socket close and pagehide. These teardown
+    requests use fetch keepalive; delivery still depends on network availability
+    and browser keepalive limits. A new mount cancels old-view timers and replaces
+    handler, cache, and optimistic configuration.
 
     Intended for input events where you want to wait until the user stops
     typing.

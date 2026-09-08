@@ -82,10 +82,8 @@ window.setCacheConfig = setCacheConfig;
  * Cache keys are deterministic: the same event name + params will always produce
  * the same key. This is intentional - it allows caching across repeated requests.
  *
- * Note: Cache keys are global across all views. If two different views have handlers
- * with the same name and are called with the same params, they will share cache entries.
- * This is typically fine since event handler names are usually unique per view, but
- * use key_params in the @cache decorator to disambiguate if needed.
+ * Cache entries are scoped to the current mount: installMountEventConfig clears
+ * them along with handler configuration before the next view receives events.
  *
  * @param {string} eventName - The event handler name
  * @param {Object} params - Event parameters

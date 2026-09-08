@@ -341,22 +341,10 @@ class LiveViewWebSocket {
             // Notify hooks of disconnection
             notifyHooksDisconnected();
 
-            // Clear all decorator state on disconnect
-            // Phase 2: Debounce timers
-            debounceTimers.forEach(state => {
-                if (state.timerId) {
-                    clearTimeout(state.timerId);
-                }
-            });
-            debounceTimers.clear();
-
-            // Phase 2: Throttle timers
-            throttleState.forEach(state => {
-                if (state.timeoutId) {
-                    clearTimeout(state.timeoutId);
-                }
-            });
-            throttleState.clear();
+            // An abnormal close cannot use this socket, but the normal
+            // same-origin HTTP fallback still accepts events with CSRF checks.
+            if (this._intentionalDisconnect) cancelPendingRateLimits();
+            else flushPendingRateLimits();
 
             // Phase 3: Optimistic updates
             optimisticUpdates.clear();
@@ -530,23 +518,7 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
-                // Initialize cache configuration from mount response
-                if (data.cache_config) {
-                    setCacheConfig(data.cache_config);
-                }
-
-                // #2656 — @debounce / @throttle configuration. Same route as
-                // cache_config: no inline <script>, so it survives the #1610
-                // mount morph and works identically over SSE.
-                if (data.handler_config) {
-                    setHandlerConfig(data.handler_config);
-                }
-
-                // Initialize optimistic UI rules from descriptor components (DEP-002)
-                if (data.optimistic_rules) {
-                    window.djust._optimisticRules = data.optimistic_rules;
-                    if (globalThis.djustDebug) console.log('[LiveView] Optimistic rules loaded:', Object.keys(data.optimistic_rules));
-                }
+                installMountEventConfig(data);
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
