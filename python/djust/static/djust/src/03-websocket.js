@@ -303,6 +303,7 @@ class LiveViewWebSocket {
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
+        const socket = this.ws;
 
         this.ws.onopen = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
@@ -334,6 +335,9 @@ class LiveViewWebSocket {
         };
 
         this.ws.onclose = (_event) => {
+            // A navigation disconnect clears this.ws before the close event.
+            // Its callback must not touch a subsequent mount's global state.
+            if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 

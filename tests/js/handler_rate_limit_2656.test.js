@@ -565,3 +565,22 @@ it('#2705 intentional navigation cancels timers before the delayed socket close'
     expect(sent).toHaveLength(0);
     expect(http).toHaveLength(0);
 });
+
+it('#2705 a delayed old socket close cannot cancel a new mount edit', async () => {
+    const {window, clock, sent, http} = createHarness(null);
+    const ws = window.djust.liveViewInstance;
+    const oldClose = ws.ws.onclose;
+    ws.disconnect();
+    ws.connect();
+    ws.ws.onopen({});
+    ws.ws.onmessage({data: JSON.stringify({type: 'mount', version: 1,
+        handler_config: {search: {debounce: {wait: 0.5}}}})});
+    await ws._inflight;
+    await window.djust.handleEvent('search', {query: 'new-view'});
+    oldClose({});
+    clock.advance(500);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].params).toEqual({query: 'new-view'});
+    expect(http).toHaveLength(0);
+    expect(ws.viewMounted).toBe(true);
+});
