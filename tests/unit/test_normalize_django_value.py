@@ -325,18 +325,34 @@ class TestUnknownType:
     def test_a_value_the_conversion_does_NOT_model_is_still_stringified(self):
         """The other half, so the change above is bounded.
 
-        A `bytes` is claimed by PyO3's SEQUENCE extraction long before the
-        fallback arm that carries an opaque object, so `crosses_as_encoded` is
-        False for it and the historical `str()` stands — which is what keeps
-        `{{ p }}` rendering `b'hello'` rather than `[104, 101, ...]`.
-        """
-        assert normalize_django_value(b"hello") == "b'hello'"
+        The bound used to be spelled with a `bytes`: PyO3's SEQUENCE
+        extraction claimed it long before the fallback arm that carries an
+        opaque object, so `crosses_as_encoded` was False for it. #2704 moved
+        every non-`list` sequence onto the carrier, so a `bytes` is no longer
+        outside the modelled class and cannot state this half.
 
-    def test_bytes_to_str(self):
-        # bytes is not JSON-native, falls through to str()
+        `state_roundtrip=True` still can, and it is the bound the branch's own
+        comment names: that boundary writes to the Django session through an
+        encoder-less serializer, so it never reaches the carry and the
+        historical `str()` stands there.
+        """
+        assert normalize_django_value(b"hello", state_roundtrip=True) == "b'hello'"
+
+    def test_bytes_is_carried_to_the_renderer_and_renders_the_same_bytes(self):
+        """A `bytes` crosses as a carrier since #2704, so it is carried here
+        rather than stringified — and the RENDERED output is unchanged,
+        because the carrier's display is the same `str(o)` this branch used
+        to substitute."""
+        from djust import _rust
+
         result = normalize_django_value(b"hello")
-        assert result == "b'hello'"
-        assert isinstance(result, str)
+        assert result == b"hello"
+        assert isinstance(result, bytes)
+        assert _rust.render_template("{{ p }}", {"p": b"hello"}) == "b&#x27;hello&#x27;"
+        assert (
+            _rust.render_template("{{ p }}", normalize_django_value({"p": b"hello"}))
+            == "b&#x27;hello&#x27;"
+        )
 
 
 class TestParityWithJSONRoundtrip:

@@ -17,10 +17,13 @@ Measurement 1 — the divergent set, re-derived
 live djust (:class:`TestTheDivergentSetReDerived`). It is **wider and shaped
 differently** than #2429's table:
 
-* the issue's `{"a": b"k"}` row says djust emits `{"a": "b'k'"}`. It emits
-  ``{"a": [107]}`` — a JSON **array of byte values**, because PyO3 extracts
-  `bytes` as a sequence long before any `str()` fallback;
-* `range(2)` emits `{"a": [0, 1]}` and a generator emits its repr — and is
+* the issue's `{"a": b"k"}` row says djust emits `{"a": "b'k'"}`. When this
+  file was written it emitted ``{"a": [107]}`` — a JSON **array of byte
+  values**, because PyO3 extracted `bytes` as a sequence long before any
+  `str()` fallback. #2704 moved every non-`list` sequence onto the carrier, so
+  the issue's row is now the true one and this correction has expired;
+* `range(2)` emits ``{"a": "range(0, 2)"}`` for the same reason — it was
+  ``{"a": [0, 1]}`` before #2704 — and a generator emits its repr, and is
   CONSUMED on the way, so the value is gone afterwards;
 * an object carrying a populated ``__dict__`` emits ``{"a": {"name": "n"}}``
   — a nested JSON **object**, not a string. The issue's `{obj: "v"}` /
@@ -51,7 +54,7 @@ output for an ordinary serialisable stand-in::
     {"a": Obj()}            and {"a": "OBJ"}              -> {"a": "OBJ"}
     {"a": WithDict()}       and {"a": {"name": "n"}}      -> {"a": {"name": "n"}}
     {"a": frozenset({1})}   and {"a": "frozenset({1})"}   -> {"a": "frozenset({1})"}
-    {"a": b"k"}             and {"a": [107]}              -> {"a": [107]}
+    {"a": b"k"}             and {"a": "b'k'"}             -> {"a": "b'k'"}
 
 The PyO3 boundary (`FromPyObject for Value`) converts an arbitrary object to a
 structural `Value` — its `__dict__` as an `Object`, else its `str()` as a
@@ -312,15 +315,24 @@ class TestTheDivergentSetReDerived:
         assert _django_refuses({obj: "v"}), f"{name} is no longer refused as a Django KEY"
         assert not _django_refuses({"a": obj}), f"{name} is now refused as a Django VALUE"
 
-    def test_the_issues_bytes_row_is_wrong_and_this_is_what_it_emits(self) -> None:
-        """A premise correction kept as a row (CLAUDE.md, v1.1.1-2 retro).
+    def test_the_issues_bytes_row_became_right_when_the_mechanism_moved(self) -> None:
+        """A premise correction, and then the correction expiring — both
+        halves kept, because the pair IS the finding (CLAUDE.md, v1.1.1-2
+        retro; the chain convention, #2142).
 
-        #2429 tabulates `{"a": b"k"}` as emitting `{"a": "b'k'"}`. PyO3
-        extracts `bytes` as a sequence long before any `str()` fallback, so it
-        is a JSON array of byte values — which is a different answer about a
-        different mechanism.
+        #2429 tabulated `{"a": b"k"}` as emitting `{"a": "b'k'"}`. That was
+        WRONG when #2425 measured it: PyO3 extracted `bytes` as a sequence
+        long before any `str()` fallback, so the answer was a JSON array of
+        byte values. #2704 declines every non-`list` sequence at the
+        conversion — `{{ v }}` over a `bytes` is `b'k'` in Django and was
+        `[107]` here — so the boundary now hands `json_script` the carrier's
+        display and the issue's original row is the true one.
+
+        Arriving at the issue's answer by a different mechanism is not the
+        same as the issue having been right about the mechanism, which is why
+        this row keeps both sentences rather than being deleted.
         """
-        assert _body(_djust({"a": b"k"})) == '{"a": [107]}'
+        assert _body(_djust({"a": b"k"})) == '{"a": "b\'k\'"}'
 
     def test_an_object_with_attributes_emits_a_nested_OBJECT(self) -> None:
         """Not sampled by the issue, and the sharper half of the value story.
@@ -411,8 +423,13 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
             ({"a": frozenset({1})}, {"a": "frozenset({1})"}),
             ({"a": {1}}, {"a": "{1}"}),
             ({"a": complex(1, 2)}, {"a": "(1+2j)"}),
-            ({"a": b"k"}, {"a": [107]}),
-            ({"a": range(2)}, {"a": [0, 1]}),
+            # Both stand-ins were a JSON ARRAY of the enumerated items until
+            # #2704; a non-`list` sequence now crosses as a carrier and the
+            # boundary sees `str(o)`, so the byte-identical stand-in is a
+            # STRING. WHICH stand-in it is changes; that there IS one — the
+            # property this class exists to measure — does not.
+            ({"a": b"k"}, {"a": "b'k'"}),
+            ({"a": range(2)}, {"a": "range(0, 2)"}),
         ],
         ids=["object", "object-with-dict", "frozenset", "set", "complex", "bytes", "range"],
     )
