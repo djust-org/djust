@@ -336,7 +336,27 @@ cannot drift from the shipped default the way #2017's prose did.
 | 4. flip the default | **shipped** |
 | 5. delete the enumeration arms | **not shipped** |
 
-The six cells movement 3 left held (O, V, J, J2, Q, P-liveview) are tracked at **#2621**, which carries the two mechanisms that close five of them: a transient `Encoded.safe` bit and gating `normalize_django_value`'s callable arm on the flag. It blocks step 5.
+The six cells movement 3 left held (O, V, J, J2, Q, P-liveview) were tracked at **#2621** and are
+now **all closed**; both stated sets in the characterization net are empty. It took **four** PRs,
+and only one of them was filed against #2621 — worth recording, because the issue planned two
+mechanisms and the second was the only one it had to build:
+
+| cell | closed by | mechanism |
+|---|---|---|
+| O | PR #2665 (before #2621 was worked) | `Encoded::display_safe` (`crates/djust_core/src/lib.rs:427`) — "runtime safety of `str(o)`, not of `o` itself. Never restored from wire data", read at `:2672` |
+| V | #2613 | `opaque_gate` admits a one-shot iterator with a handle and no items; `{% for %}` consumes it once through `Encoded::consume_live_items` |
+| P-liveview | #2624 (crash) then #2621 (bytes) | the conversion depth ceiling turned the segfault into wrong bytes; the callable gate then gave it Django's |
+| J, J2, Q, P, P0 | #2621 | `normalize_django_value`'s callable arm gated on `template_resolve_lazy` — a callable crosses raw and `walk_live`'s root `maybe_call` decides |
+
+§Security 5 above anticipated exactly the O mechanism, under the name `Encoded.safe`, and the
+shipped `display_safe` matches its constraints (computed at conversion from Python's `SafeData`
+contract; never inferred from the text; never restored from a round trip). What it does NOT have is
+the ADR's twelfth wire slot: the bit does not need to survive a round trip, because the
+post-round-trip bytes for row O are already the escaped ones — degrading to escaped is degrading to
+today, in the fail-safe direction. `the_payload_is_eleven_slots_in_the_documented_order` is
+unedited.
+
+Step 5's prerequisite is therefore met.
 
 ### Erratum (movement 3, 2026-09-03)
 
