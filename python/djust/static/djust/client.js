@@ -875,6 +875,9 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
+        // TurboNav may already have replaced the URL/DOM. Cancel immediately,
+        // before a delayed close callback could send old-view edits to the new URL.
+        cancelPendingRateLimits();
         if (globalThis.djustDebug) console.log('[LiveView] Disconnecting for navigation...');
 
         // Stop heartbeat
@@ -944,6 +947,7 @@ class LiveViewWebSocket {
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
+        const socket = this.ws;
 
         this.ws.onopen = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
@@ -975,6 +979,9 @@ class LiveViewWebSocket {
         };
 
         this.ws.onclose = (_event) => {
+            // A navigation disconnect clears this.ws before the close event.
+            // Its callback must not touch a subsequent mount's global state.
+            if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
@@ -985,22 +992,21 @@ class LiveViewWebSocket {
             // Notify hooks of disconnection
             notifyHooksDisconnected();
 
-            // Clear all decorator state on disconnect
-            // Phase 2: Debounce timers
-            debounceTimers.forEach(state => {
-                if (state.timerId) {
-                    clearTimeout(state.timerId);
-                }
-            });
-            debounceTimers.clear();
-
-            // Phase 2: Throttle timers
-            throttleState.forEach(state => {
-                if (state.timeoutId) {
-                    clearTimeout(state.timeoutId);
-                }
-            });
-            throttleState.clear();
+            // An abnormal close cannot use this socket, but the normal
+            // same-origin HTTP fallback still accepts events with CSRF checks.
+            //
+            // #2721: this POST is out-of-band and races the client's own
+            // reconnect+remount. Traced, and it is bounded: the teardown
+            // response is never applied to the DOM (11-event-handler.js
+            // `if (teardown) return`), and the POST path restores from and
+            // saves back to the SESSION (mixins/request.py `post`). So if the
+            // remount's restore wins the race, the POST's session write is
+            // orphaned and the next WS save overwrites it — the edit is lost,
+            // exactly as it was before this PR. If the POST wins, the edit
+            // survives. Neither ordering corrupts client state, so the
+            // recovery is worth the extra request.
+            if (this._intentionalDisconnect) cancelPendingRateLimits();
+            else flushPendingRateLimits();
 
             // Phase 3: Optimistic updates
             optimisticUpdates.clear();
@@ -1174,23 +1180,15 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
-                // Initialize cache configuration from mount response
-                if (data.cache_config) {
-                    setCacheConfig(data.cache_config);
-                }
-
-                // #2656 — @debounce / @throttle configuration. Same route as
-                // cache_config: no inline <script>, so it survives the #1610
-                // mount morph and works identically over SSE.
-                if (data.handler_config) {
-                    setHandlerConfig(data.handler_config);
-                }
-
-                // Initialize optimistic UI rules from descriptor components (DEP-002)
-                if (data.optimistic_rules) {
-                    window.djust._optimisticRules = data.optimistic_rules;
-                    if (globalThis.djustDebug) console.log('[LiveView] Optimistic rules loaded:', Object.keys(data.optimistic_rules));
-                }
+                // #2721: only the PAGE view's mount is a view-replacement
+                // boundary. Lazy/per-element/batch mounts land here too, on
+                // the same socket, and must not reset the page view's
+                // handler / cache / optimistic configuration. `view` is
+                // always echoed on real mount frames (runtime.py:2526); when
+                // it is absent AND no primary mount was ever requested, the
+                // two are `undefined` and this is the page mount.
+                if (data.view === this.primaryViewPath) installMountEventConfig(data);
+                else installAdditionalMountEventConfig(data);
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
@@ -1914,10 +1912,22 @@ class LiveViewWebSocket {
         }
     }
 
-    mount(viewPath, params = {}) {
+    /**
+     * Send a mount frame.
+     *
+     * @param {string} viewPath  Dotted view path.
+     * @param {Object} params    Initial mount kwargs.
+     * @param {Object} options   ``{primary: true}`` marks the PAGE-level view
+     *   (`autoMount`). #2721: everything else mounting on this socket — lazy
+     *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
+     *   view whose mount reply must not reset the page view's client config.
+     */
+    mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
+
+        if (options.primary) this.primaryViewPath = viewPath;
 
         if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
@@ -2007,7 +2017,7 @@ class LiveViewWebSocket {
                 // Always send mount message to initialize server-side session
                 // Pass URL query params so server mount can read filters (e.g., ?sender=80)
                 const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-                this.mount(viewPath, urlParams);
+                this.mount(viewPath, urlParams, { primary: true });
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
             }
@@ -2335,6 +2345,9 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        // TurboNav may already have replaced the URL/DOM. Cancel immediately,
+        // before a delayed close callback could send old-view edits to the new URL.
+        cancelPendingRateLimits();
         if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;
@@ -2397,13 +2410,7 @@ class LiveViewSSE {
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
                 }
-                if (data.cache_config) {
-                    setCacheConfig(data.cache_config);
-                }
-                // #2656 — @debounce / @throttle configuration (WS parity).
-                if (data.handler_config) {
-                    setHandlerConfig(data.handler_config);
-                }
+                installMountEventConfig(data);
 
                 if (data.html) {
                     // #2632: the PAGE container — a sticky/embedded root
@@ -2557,7 +2564,7 @@ class LiveViewSSE {
      * @param {Object}      params         Event parameters
      * @param {Element|null} triggerElement DOM element that triggered the event
      */
-    sendEvent(eventName, params = {}, triggerElement = null) {
+    sendEvent(eventName, params = {}, triggerElement = null, keepalive = false) {
         if (!this.enabled || !this.viewMounted) {
             return false;
         }
@@ -2565,7 +2572,11 @@ class LiveViewSSE {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
-        return this.sendMessage({ type: 'event', event: eventName, params });
+        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+    }
+
+    sendTeardownEvent(eventName, params, triggerElement) {
+        return this.sendEvent(eventName, params, triggerElement, true);
     }
 
     /**
@@ -2583,7 +2594,7 @@ class LiveViewSSE {
      *
      * @param {Object} data  Wire message; must include ``type``.
      */
-    sendMessage(data) {
+    sendMessage(data, keepalive = false) {
         if (!this.enabled) return false;
 
         const body = JSON.stringify(data);
@@ -2595,6 +2606,7 @@ class LiveViewSSE {
 
         fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
+            keepalive,
             headers: { 'Content-Type': 'application/json' },
             // Explicit credentials: 'include' to mirror the EventSource
             // GET's withCredentials: true. Without this, the Django session
@@ -2757,10 +2769,13 @@ window.setCacheConfig = setCacheConfig;
  * Cache keys are deterministic: the same event name + params will always produce
  * the same key. This is intentional - it allows caching across repeated requests.
  *
- * Note: Cache keys are global across all views. If two different views have handlers
- * with the same name and are called with the same params, they will share cache entries.
- * This is typically fine since event handler names are usually unique per view, but
- * use key_params in the @cache decorator to disambiguate if needed.
+ * Cache keys are NOT namespaced per view. The page view's own mount clears the
+ * cache (`installMountEventConfig`, 05-handler-rate-limit.js), so entries do not
+ * survive a navigation — but within one page they are shared: sticky children,
+ * components, and lazily-hydrated sibling views all mount onto the same socket
+ * and keep their entries (#2721). Two views on one page whose handlers share a
+ * name and are called with the same params therefore share a cache entry. Use
+ * `key_params` in the `@cache` decorator to disambiguate if needed.
  *
  * @param {string} eventName - The event handler name
  * @param {Object} params - Event parameters
@@ -2918,6 +2933,76 @@ window.djust._pushTickBuffer = function(data) {
 
 // event name -> {debounce: {wait, max_wait}, throttle: {interval, leading, trailing}}
 const handlerRateConfig = new Map();
+let handlerMountConfigured = false;
+// Active element wrappers only; settled/cancelled timers release DOM references.
+const pendingElementRateLimits = new Set();
+let teardownEventTransport = null;
+
+function cancelPendingRateLimits() {
+    pendingElementRateLimits.forEach(wrapper => wrapper.cancel());
+    debounceTimers.forEach(state => clearTimeout(state.timerId));
+    throttleState.forEach(state => clearTimeout(state.timeoutId));
+    debounceTimers.clear();
+    throttleState.clear();
+}
+
+function flushPendingRateLimits() {
+    const previous = teardownEventTransport;
+    teardownEventTransport = { url: window.location.href, collecting: true, pending: new Map() };
+    try {
+        // The handler gate may hold an older edit while its element wrapper
+        // holds the newest one. Collect the older layer first, then replace
+        // it by event name instead of issuing racing HTTP requests for both.
+        flushHandlerRateLimit();
+        Array.from(pendingElementRateLimits).forEach(wrapper => wrapper.flush());
+        teardownEventTransport.collecting = false;
+        teardownEventTransport.pending.forEach((params, eventName) => {
+            window.djust.handleEvent(eventName, params, true);
+        });
+    } finally {
+        teardownEventTransport = previous;
+    }
+}
+window.addEventListener('pagehide', flushPendingRateLimits);
+
+// The PAGE-LEVEL view's mount replaces the complete configuration, including
+// omitted/empty maps. Share this between WS and SSE to avoid cross-view rules
+// and cached patches surviving a navigation.
+//
+// #2721: call this ONLY for the page view's own mount frame. `case 'mount'`
+// is the reply to EVERY mount request on the socket — per-element lazy
+// hydration (13-lazy-hydration.js `mountElement`), `hydrateAll()`, and the
+// `mount_batch` fallback (#1031) all mount ADDITIONAL views onto the same
+// page over the SAME socket. Resetting on one of those wiped the primary
+// view's @debounce/@throttle/@cache config and its optimistic rules, silently
+// turning the decorators into no-ops. Sibling mounts take
+// `installAdditionalMountEventConfig` instead.
+function installMountEventConfig(data) {
+    cancelPendingRateLimits();
+    handlerRateConfig.clear();
+    cacheConfig.clear();
+    resultCache.clear();
+    pendingCacheRequests.forEach(state => clearTimeout(state.timeoutId));
+    pendingCacheRequests.clear();
+    optimisticUpdates.clear();
+    window.djust._optimisticRules = data.optimistic_rules || {};
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+}
+
+// An ADDITIONAL view mounting onto the page the primary view already owns
+// (lazy hydration / mount_batch fallback). Its config is ADDITIVE: it adds
+// its own handlers and cache rules and must not disturb any sibling's.
+function installAdditionalMountEventConfig(data) {
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+    if (data.optimistic_rules) {
+        window.djust._optimisticRules = data.optimistic_rules;
+    }
+}
+
 
 /**
  * Install handler rate-limit configuration (called on mount, WS and SSE).
@@ -2951,6 +3036,7 @@ function _configFor(eventName) {
     if (handlerRateConfig.has(eventName)) {
         return handlerRateConfig.get(eventName);
     }
+    if (handlerMountConfigured) return null;
     const meta = window.handlerMetadata;
     if (meta && Object.prototype.hasOwnProperty.call(meta, eventName)) {
         // eslint-disable-next-line security/detect-object-injection
@@ -4985,17 +5071,7 @@ function installDelegatedListeners(root) {
                     // same tick as the input event.
                     wrapped = rawHandler;
                 } else if (rateLimit.type === 'blur') {
-                    // dj-debounce="blur": defer until element loses focus
-                    let latestArgs = null;
-                    wrapped = function() {
-                        latestArgs = arguments;
-                    };
-                    inputEl.addEventListener('blur', function() {
-                        if (latestArgs !== null) {
-                            rawHandler.apply(null, latestArgs);
-                            latestArgs = null;
-                        }
-                    });
+                    wrapped = deferUntilBlur(inputEl, rawHandler);
                 } else if (rateLimit.type === 'throttle') {
                     wrapped = throttle(rawHandler, rateLimit.ms);
                 } else {
@@ -5324,22 +5400,31 @@ function _warnUnrecognizedDjModifiers(scope) {
  * @param {Function} handler - Original event handler
  * @returns {Function} - Wrapped or original handler
  */
+function deferUntilBlur(element, handler) {
+    let latestArgs = null;
+    const wrapped = function (...args) {
+        latestArgs = args;
+        pendingElementRateLimits.add(wrapped);
+    };
+    wrapped.cancel = function () {
+        latestArgs = null;
+        pendingElementRateLimits.delete(wrapped);
+    };
+    wrapped.flush = function () {
+        if (latestArgs === null) return;
+        const args = latestArgs;
+        wrapped.cancel();
+        handler(...args);
+    };
+    element.addEventListener('blur', wrapped.flush);
+    return wrapped;
+}
+
 function _applyRateLimitAttrs(element, handler) {
     if (element.hasAttribute('dj-debounce')) {
         const val = element.getAttribute('dj-debounce');
         if (val === 'blur') {
-            // Special: defer event until element loses focus
-            let latestArgs = null;
-            const blurWrapper = function (...args) {
-                latestArgs = args;
-            };
-            element.addEventListener('blur', function () {
-                if (latestArgs !== null) {
-                    handler(...latestArgs);
-                    latestArgs = null;
-                }
-            });
-            return blurWrapper;
+            return deferUntilBlur(element, handler);
         }
         const ms = parseInt(val, 10);
         if (ms === 0) {
@@ -5393,8 +5478,10 @@ function debounce(func, wait) {
     function debounced(...args) {
         pendingArgs = args;
         pendingThis = this;
+        pendingElementRateLimits.add(debounced);
         const later = () => {
             timeout = null;
+            pendingElementRateLimits.delete(debounced);
             const a = pendingArgs;
             const t = pendingThis;
             pendingArgs = null;
@@ -5409,6 +5496,7 @@ function debounce(func, wait) {
         if (timeout === null) return;
         clearTimeout(timeout);
         timeout = null;
+        pendingElementRateLimits.delete(debounced);
         const a = pendingArgs;
         const t = pendingThis;
         pendingArgs = null;
@@ -5416,19 +5504,33 @@ function debounce(func, wait) {
         func.apply(t, a);
     };
 
+    debounced.cancel = function () {
+        clearTimeout(timeout);
+        timeout = null;
+        pendingArgs = null;
+        pendingThis = null;
+        pendingElementRateLimits.delete(debounced);
+    };
     return debounced;
 }
 
 // Helper: Throttle function
 function throttle(func, limit) {
-    let inThrottle;
-    return function (...args) {
-        if (!inThrottle) {
-            func(...args);
-            inThrottle = true;
-            setTimeout(() => inThrottle = false, limit);
-        }
-    }
+    let timeout = null;
+    const throttled = function (...args) {
+        if (timeout !== null) return;
+        func(...args);
+        pendingElementRateLimits.add(throttled);
+        timeout = setTimeout(throttled.cancel, limit);
+    };
+    throttled.cancel = function () {
+        clearTimeout(timeout);
+        timeout = null;
+        pendingElementRateLimits.delete(throttled);
+    };
+    // Element throttling is leading-only: it has no trailing payload to send.
+    throttled.flush = throttled.cancel;
+    return throttled;
 }
 
 // Helper: Get LiveView root element (the PARENT / page container).
@@ -5912,6 +6014,12 @@ let _djustHttpFallbackWarned = false;
 // params key on purpose — anything written into `params` would have to be
 // stripped again before the payload is serialized to the server.
 async function handleEvent(eventName, params = {}, _rateBypass = false) {
+    // Snapshot before any await: teardown's scope ends after synchronous dispatch.
+    const teardown = teardownEventTransport;
+    if (teardown && teardown.collecting) {
+        teardown.pending.set(eventName, params);
+        return;
+    }
     if (globalThis.djustDebug) {
         djLog(`[LiveView] Handling event: ${eventName}`, params);
     }
@@ -5919,7 +6027,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // @debounce / @throttle: collapse or cap the outbound send. Runs before
     // anything else so a deferred event costs no loading state, no cache
     // lookup and no DOM work.
-    if (!_rateBypass && applyHandlerRateLimit(eventName, params, handleEvent)) {
+    if (!teardown && !_rateBypass && applyHandlerRateLimit(eventName, params, handleEvent)) {
         return;
     }
 
@@ -5928,7 +6036,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // and would corrupt the params payload (e.g., HTMLElement objects serialize
     // as objects with numeric-indexed children that clobber form field data).
     const triggerElement = params._targetElement;
-    const skipLoading = params._skipLoading;
+    const skipLoading = params._skipLoading || !!teardown;
 
     // v0.7.0 — Activity gate. Drop the event client-side when ANY
     // ancestor activity wrapper is hidden and not eager. The nested
@@ -6028,7 +6136,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const cacheKey = buildCacheKey(eventName, serverParams, keyParams);
     const cached = getCachedResult(cacheKey);
 
-    if (cached) {
+    if (cached && !teardown) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
             djLog(`[LiveView:cache] Cache hit: ${cacheKey}`);
@@ -6058,7 +6166,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     let paramsToSend = serverParams;
 
     // Only set up caching for events with @cache decorator
-    if (config) {
+    if (config && !teardown) {
         // Generate cache request ID for cacheable events
         const cacheRequestId = generateCacheRequestId();
         const ttl = config.ttl || 60;
@@ -6084,7 +6192,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // #1315: sendEvent now returns a Promise that resolves when the server
     // responds (patch, noop, or error with matching ref). Await it so callers
     // can run post-response logic (e.g. _setFormPending(false) in finally).
-    const wsPromise = liveViewWS && liveViewWS.sendEvent(eventName, paramsToSend, triggerElement);
+    const wsPromise = liveViewWS && (teardown
+        ? (liveViewWS.sendTeardownEvent && liveViewWS.sendTeardownEvent(eventName, paramsToSend, triggerElement))
+        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement));
     if (wsPromise) {
         await wsPromise;
         return;
@@ -6096,7 +6206,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // degrades to full-page HTTP re-renders that *look* like the app works.
     // The server intentionally returns a generic "View not found" (no allowlist
     // detail leaked), so the client points the developer at the likely cause.
-    if (!_djustHttpFallbackWarned) {
+    //
+    // #2721: a teardown flush reaches this path BY DESIGN — the WS branch
+    // above deliberately falls through because `LiveViewWebSocket` has no
+    // `sendTeardownEvent`. That says nothing about the socket's health, so
+    // warning here would be wrong AND would burn the once-per-session flag,
+    // silencing a later genuine degraded mount — inverting the point of #1674.
+    if (!teardown && !_djustHttpFallbackWarned) {
         _djustHttpFallbackWarned = true;
         console.warn(
             '[LiveView] Events are falling back to full-page HTTP re-renders '
@@ -6114,7 +6230,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
             || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
             || '';
-        const response = await fetch(window.location.href, {
+        const response = await fetch(teardown ? teardown.url : window.location.href, {
+            keepalive: !!teardown,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -6128,12 +6245,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // This response belongs to the outgoing view; never patch the new one.
+        if (teardown) return;
         const data = await response.json();
         await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!teardown) globalLoadingManager.stopLoading(eventName, triggerElement);
     }
 }
 window.djust.handleEvent = handleEvent;
