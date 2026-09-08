@@ -173,16 +173,32 @@ struct ScopeFrame {
     /// `DerefMut` goes through [`std::sync::Arc::make_mut`], so the first
     /// write to a SHARED map copies it and mutates the unique copy, exactly as
     /// the eager clone did. Semantics are unchanged by construction; only the
-    /// moment of the copy moves. Writes land on the freshly pushed top frame,
-    /// which is uniquely owned, so in practice the copy never happens.
+    /// moment of the copy moves.
     ///
-    /// `Arc` and not `Rc`: `Context` already holds five other `Arc` fields
-    /// (`raw_py_objects`, `cycle_state`, `ifchanged_state`,
-    /// `loop_scope_counter`, `block_super`) and `Value` must be `Send` because
-    /// `RustLiveViewBackend` is a non-`unsendable` `#[pyclass]` holding a
-    /// `HashMap<String, Value>`. An `Rc` here would make `Context` `!Send` for
-    /// a saving of a few non-atomic refcount bumps per clone — O(stack depth),
-    /// against the O(entire state) deep copy this removes.
+    /// **The copy path is LIVE — do not simplify it away.** Writes usually land
+    /// on the freshly pushed top frame, which is uniquely owned, so the copy is
+    /// usually skipped. But the tags that write into the ENCLOSING context so
+    /// their siblings can read it — `{% regroup %}` and `{% assign %}`, which
+    /// reach `set_at` through `render_nodes_with_loader`'s `&mut
+    /// context.clone()` — write through a frame that is shared at that moment,
+    /// and take the copy on every render that uses them. Proven by mutation,
+    /// not by inspection: building this crate with `Arc::get_mut(..).expect(..)`
+    /// in place of `make_mut` (which panics rather than copying when the `Arc`
+    /// is shared) makes all 22 tests in `python/djust/tests/test_regroup_tag.py`
+    /// and `tests/unit/test_assign_tag.py` fail with that panic — 12 of them
+    /// reach it directly. The cost is bounded: one copy per shared write, of
+    /// whichever frame the write targets, which is strictly less than the eager
+    /// clone charged unconditionally.
+    ///
+    /// `Arc` and not `Rc`. No path is known on which a `Context` crosses a
+    /// thread — the parallel chunk render is `asyncio.as_completed` over
+    /// coroutines on one thread, and a `Context` is created and dropped inside a
+    /// single `render()` — so an `Rc` would very likely compile. It would still
+    /// be wrong: [`BlockSuperSource`] is declared `Send + Sync`, so `Context` is
+    /// already built to be `Send`, and an `Rc` field would silently revoke that
+    /// for every future caller. The atomics buy that back for O(stack depth)
+    /// refcount bumps per clone, against the O(entire state) deep copy this
+    /// removes.
     values: std::sync::Arc<AHashMap<String, Value>>,
     assignments: indexmap::IndexSet<String>,
     invalid_block_super: bool,
@@ -3232,6 +3248,12 @@ mod tests {
     /// parent give DIFFERENT answers. Serving that read from `ctx` would be a
     /// silent behaviour change on a legal template, which is why the clone
     /// stayed and got cheaper instead.
+    ///
+    /// The parent's answer is also the one DJANGO agrees with, so this is
+    /// parity and not merely caution: `{% for a, b in a %}{{ b }}|{% endfor %}`
+    /// over `a = [("x", mark_safe("<i>1</i>"))]` emits `<i>1</i>|` RAW on
+    /// Django 5.2 (measured). `true` — the parent's answer — is what produces
+    /// that; `ctx` answers `false` and would escape it.
     ///
     /// This test exists to keep that reasoning falsifiable: if the two ever
     /// agree, removing the clone becomes an option and this test says so.
