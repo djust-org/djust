@@ -361,6 +361,10 @@ impl Template {
 struct NoOpTemplateLoader;
 
 impl TemplateLoader for NoOpTemplateLoader {
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+        std::sync::Arc::new(NoOpTemplateLoader)
+    }
+
     fn load_template(&self, name: &str) -> Result<Vec<Node>> {
         Err(DjangoRustError::TemplateError(format!(
             "Template loader not configured. Cannot load parent template: {name}"
@@ -472,6 +476,7 @@ mod tests {
     }
 
     // In-memory template loader for testing
+    #[derive(Clone)]
     struct TestTemplateLoader {
         templates: HashMap<String, String>,
     }
@@ -489,6 +494,10 @@ mod tests {
     }
 
     impl TemplateLoader for TestTemplateLoader {
+        fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(self.clone())
+        }
+
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             if let Some(source) = self.templates.get(name) {
                 let tokens = lexer::tokenize(source)?;

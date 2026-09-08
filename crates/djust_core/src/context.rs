@@ -330,6 +330,20 @@ pub struct Context {
     /// `Foo` under a configured `string_if_invalid`. Carried on the render
     /// (not the parsed template) for the same reason as `autoescape`.
     string_if_invalid: String,
+    /// The parent body a `{{ block.super }}` would render, DEFERRED (#2710).
+    ///
+    /// `Node::BlockSuperScope` used to render the parent into a string and
+    /// bind it before entering the child body, so a reference sitting in a
+    /// branch Django never evaluates still ran the parent: measured against
+    /// 5.2.16, `{% if show %}{{ block.super }}{% endif %}` with `show`
+    /// false called the parent once here and zero times there, and a parent
+    /// that RAISES turned an otherwise-fine false branch into a 500. Equal
+    /// output was hiding unequal behaviour.
+    ///
+    /// Deferring it means the resolver has to be able to run the render, and
+    /// the resolver holds `&Context` — hence a shareable handle rather than
+    /// a borrow. See [`BlockSuperSource`].
+    block_super: Option<std::sync::Arc<dyn BlockSuperSource>>,
 }
 
 impl Default for Context {
@@ -363,8 +377,35 @@ impl Clone for Context {
             ifchanged_state: std::sync::Arc::clone(&self.ifchanged_state),
             loop_scope_counter: std::sync::Arc::clone(&self.loop_scope_counter),
             string_if_invalid: self.string_if_invalid.clone(),
+            // SHARED, like the three above and for the same reason: a
+            // `{% for %}` / `{% with %}` / `{% include %}` clone made INSIDE
+            // a `{% block %}` that overrides one is still inside it, so
+            // `{{ block.super }}` must resolve there (#2710). The `Arc` holds
+            // the parent NODES, not a rendered string, so cloning it costs a
+            // refcount.
+            block_super: self.block_super.clone(),
         }
     }
+}
+
+/// The parent body a `{{ block.super }}` in scope would render (#2710).
+///
+/// Implemented in `djust_templates` — this crate has no `Node` and no
+/// renderer — and held by [`Context`] so the ONE resolver every operand
+/// channel ends in ([`Context::resolve`]) can answer it. The trait exists
+/// because the alternative is threading `(&[Node], &L)` through every
+/// function between `render_nodes_with_loader_mut` and the resolver, and
+/// because the resolver holds `&Context`: an owned, shareable handle is what
+/// lets the render outlive the borrow the render arm has.
+///
+/// Django's `BlockNode.super()` renders the parent EACH time the expression
+/// is evaluated — `{{ block.super }}{{ block.super }}` calls into the parent
+/// twice, and a `{% for %}` over three items calls three times (measured
+/// against 5.2.16) — so implementations must NOT memoize.
+pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
+    /// Render the parent body against `ctx`, as Django's
+    /// `BlockNode.render(self.context)` does.
+    fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 }
 
 /// Outcome of the Django-parity callable handling for one resolved
@@ -456,6 +497,7 @@ impl Context {
             ifchanged_state: std::sync::Arc::default(),
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
+            block_super: None,
         }
     }
 
@@ -485,6 +527,7 @@ impl Context {
             ifchanged_state: std::sync::Arc::default(),
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
+            block_super: None,
         }
     }
 
@@ -920,6 +963,48 @@ impl Context {
                 })
             })
             .collect()
+    }
+
+    /// Arm the DEFERRED `{{ block.super }}` for this scope (#2710).
+    ///
+    /// Called by the renderer's `Node::BlockSuperScope` arm on the scoped
+    /// context it hands the CHILD body. Nothing renders here: `source` holds
+    /// the parent nodes and a loader handle, and [`Context::resolve`] runs it
+    /// only when an expression actually asks for `block.super`.
+    pub fn arm_block_super(&mut self, source: std::sync::Arc<dyn BlockSuperSource>) {
+        self.block_super = Some(source);
+    }
+
+    /// Disarm it, so a stray `{{ block.super }}` in a body with no further
+    /// ancestor resolves to nothing rather than re-entering the same parent.
+    ///
+    /// The renderer calls this on the context it renders the PARENT body in;
+    /// Django's `BlockNode.super()` answers `''` once `BlockContext` has no
+    /// block left to pop, and this is the same floor.
+    pub fn disarm_block_super(&mut self) {
+        self.block_super = None;
+    }
+
+    /// Is a deferred `{{ block.super }}` armed here? Used by the renderer's
+    /// structural tests; the resolution itself is [`Context::resolve`]'s.
+    pub fn block_super_is_armed(&self) -> bool {
+        self.block_super.is_some()
+    }
+
+    /// Run the armed source NOW, or answer `None` when nothing is armed.
+    ///
+    /// The escape hatch for the ONE boundary laziness cannot cross: a
+    /// PYTHON-BRIDGED tag receives the context as a flat map
+    /// ([`Context::to_hashmap`]), and a map has no callable to defer behind —
+    /// so `{% blocktranslate with s=block.super %}`, whose operands Django's
+    /// own Python code resolves against that map, needs the string. The
+    /// renderer's `bridge_context` is the only caller; see its doc for the
+    /// residual divergence that buys.
+    pub fn render_armed_block_super(&self) -> crate::Result<Option<String>> {
+        match self.block_super.clone() {
+            Some(source) => source.render_block_super(self).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// A base block has no inheritance context; super is invalid until evaluated.
@@ -1506,6 +1591,37 @@ impl Context {
                     )
                     .to_owned(),
                 ));
+            }
+        }
+        // The DEFERRED parent render (#2710). Here, in the ONE resolver every
+        // operand channel ends in — `Node::Variable` calls it directly,
+        // `renderer::get_value_safe_inner` falls through to it after `get`
+        // misses, and `evaluate_condition` reaches it through that — so
+        // `{{ block.super }}`, `{% if block.super %}`, `{% with s=block.super %}`
+        // and a filter argument all get the same answer from one place
+        // (#1646). Everything above this line is unreachable for the name
+        // because `Node::BlockSuperScope` no longer BINDS a rendered string.
+        //
+        // The EXACT name only. `{{ block.super.0 }}` keeps falling through to
+        // the miss it already took (Django answers `P`, the first character
+        // of the parent output; djust answered `''` before this change and
+        // still does) — a pre-existing divergence this is not the fix for,
+        // and claiming the prefix here would mean re-implementing Django's
+        // per-segment string walk inside the resolver.
+        //
+        // Re-rendered on EVERY resolution, deliberately: Django's
+        // `BlockNode.super()` is a method call, so `{{ block.super }}` twice
+        // renders the parent twice and a `{% for %}` over three items renders
+        // it three times. Measured against 5.2.16 — a memoizing version
+        // answers `a-a` for a parent containing `{% cycle 'a' 'b' %}` where
+        // Django answers `a-b`.
+        //
+        // `SafeString`, because Django `mark_safe`s the result: it is
+        // rendered template output, already escaped by whatever produced it,
+        // and escaping it again would double-escape every parent block.
+        if key == "block.super" {
+            if let Some(source) = self.block_super.clone() {
+                return Ok(Some(Value::SafeString(source.render_block_super(self)?)));
             }
         }
         // Django's THREE template builtins, tried LAST (#2347).

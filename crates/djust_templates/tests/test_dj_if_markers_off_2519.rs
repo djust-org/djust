@@ -30,6 +30,7 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 
 /// Inline test loader — the same shape as `test_if_markers.rs`'s.
+#[derive(Clone)]
 struct InMemLoader {
     templates: HashMap<String, String>,
 }
@@ -47,6 +48,10 @@ impl InMemLoader {
 }
 
 impl TemplateLoader for InMemLoader {
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+        std::sync::Arc::new(self.clone())
+    }
+
     fn load_template(&self, name: &str) -> Result<Vec<parser::Node>> {
         let source = self.templates.get(name).ok_or_else(|| {
             djust_core::DjangoRustError::TemplateError(format!("Template not found: {name}"))

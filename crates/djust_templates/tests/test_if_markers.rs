@@ -453,6 +453,7 @@ mod cross_template_ids {
     /// Inline test loader — same shape as the in-tree
     /// `TestTemplateLoader` in `lib.rs::tests` but exposed via the
     /// public surface so the integration test can use it.
+    #[derive(Clone)]
     struct InMemLoader {
         templates: HashMap<String, String>,
     }
@@ -470,6 +471,10 @@ mod cross_template_ids {
     }
 
     impl TemplateLoader for InMemLoader {
+        fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(self.clone())
+        }
+
         fn load_template(&self, name: &str) -> Result<Vec<tparser::Node>> {
             let source = self.templates.get(name).ok_or_else(|| {
                 djust_core::DjangoRustError::TemplateError(format!("Template not found: {name}"))

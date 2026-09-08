@@ -58,11 +58,16 @@ const ITERS: usize = 200;
 /// In-memory `TemplateLoader` for the inheritance / `OnceLock` test.
 /// Implementing the public `TemplateLoader` trait in the test crate is
 /// the supported way to exercise `Template::resolve_inheritance`.
+#[derive(Clone)]
 struct InMemoryLoader {
     templates: HashMap<String, String>,
 }
 
 impl TemplateLoader for InMemoryLoader {
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+        std::sync::Arc::new(self.clone())
+    }
+
     fn load_template(&self, name: &str) -> DjustResult<Vec<Node>> {
         let src = self.templates.get(name).ok_or_else(|| {
             djust_core::DjangoRustError::TemplateError(format!("missing template: {name}"))
