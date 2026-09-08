@@ -1410,8 +1410,13 @@ pub struct HandlerBinding {
 /// `grouper=None`, and `{% url 'v' rows.0.pk %}` raised `NoReverseMatch` — on
 /// the LiveView render path only, because the stateless path's sidecar happens
 /// to carry the live list and overwrite the flattened entry a line below.
-/// The handler conversion keeps the object an object whose lookups go through
-/// `context::lookup_segment`, the renderer's own step.
+///
+/// The handler conversion keeps the object an OBJECT. Where the `Encoded`
+/// carries an ADR-027 live handle it hands over that very object, so Django's
+/// `_resolve_lookup` walks what `Context::walk_live` walks; otherwise it hands
+/// over a `TemplateObject`, which answers from `context::lookup_segment`. See
+/// that function for which arm applies when, and for why a CONTAINER handle
+/// takes the second.
 pub(crate) fn build_py_context<'py>(
     py: Python<'py>,
     context: &HashMap<String, djust_core::Value>,
