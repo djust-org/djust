@@ -4591,6 +4591,13 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_class::<CompiledTemplate>()?;
+    // #2731: the shape a `Value::Encoded` takes for a bridged Django tag
+    // handler. Registered so its declared `module = "djust._rust"` resolves —
+    // `repr()`, `pickle` and every "what type is this?" tool follow that path,
+    // and an unregistered class makes all of them point at nothing (PR #2734
+    // review). It has no `#[new]`, so registering exposes a NAME, not a
+    // constructor: only `value_into_handler_pyobject` builds one.
+    m.add_class::<djust_core::TemplateObject>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;

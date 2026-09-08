@@ -3880,6 +3880,17 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         CONVERSION_DEPTH.with(|c| c.set(depth + 1));
         let _restore = DepthGuard(depth);
 
+        // NOTE (#2731): a [`TemplateObject`] — the shape a `Value::Encoded`
+        // takes for a bridged tag handler — can come back through here, in a
+        // handler's BINDING: `{% regroup %}` over a `frozenset` of
+        // `frozenset`s puts one in every `GroupedResult.list`. There is
+        // deliberately no unwrap arm for it. The wrapper answers `__str__` /
+        // `__repr__` / `__len__` / `__iter__` / `__bool__` from the very facts
+        // `opaque_value` measures, so re-measuring it reconstructs the same
+        // `Encoded` — an unwrap arm was written, gate-off-tested, and found to
+        // change no output for any reachable input while adding a downcast
+        // attempt to EVERY value conversion in the workspace. Deleted rather
+        // than kept as a decoration (#2233).
         if ob.is_none() {
             // Python `None` — NOT `Missing`. An absent key never reaches this
             // conversion; it arrives as `Option::None` from the resolver (#2203).
@@ -5229,6 +5240,404 @@ impl<'py> IntoPyObject<'py> for &Value {
 
     fn into_pyobject(self, py: Python<'py>) -> std::result::Result<Self::Output, Self::Error> {
         self.clone().into_pyobject(py)
+    }
+}
+
+/// A [`Value::Encoded`] crossing into a bridged Python tag handler AS AN
+/// OBJECT rather than as its `str()` (#2731).
+///
+/// # Why this exists
+///
+/// A `Value` is inert data. An arbitrary Python object crosses the PyO3
+/// boundary as a `Value::Encoded` — the facts measured from it — and the ONE
+/// place a dotted segment is answered against those facts is
+/// [`context::lookup_segment`], which reads [`Encoded::attrs`]. That is how
+/// `{{ r.group }}` resolves.
+///
+/// A bridged Django tag (`{% regroup %}`, `{% url %}`, …) does NOT resolve its
+/// operands through the renderer: it is handed a flat Python dict and Django's
+/// own `Variable._resolve_lookup` walks it. `IntoPyObject for Value` turns a
+/// non-temporal `Encoded` into `e.display` — a `str` — so `_resolve_lookup`
+/// was walking a STRING, every segment missed, and the tag silently produced
+/// its "resolved to nothing" answer: `{% regroup rows by group %}` over a list
+/// of objects built ONE group with `grouper=None` and an empty `list`, and
+/// `{% url 'v' rows.0.pk %}` raised `NoReverseMatch`. Neither raised on the
+/// stateless path, where the raw-Python sidecar happens to carry the live list
+/// and overwrite the flattened entry.
+///
+/// This type closes that by making the object cross as an object whose lookups
+/// go through `lookup_segment` — the SAME step, so the tag bridge and the
+/// renderer cannot drift (#1646). It is not a general-purpose export: it is
+/// built only by [`value_into_handler_pyobject`], for the two cases that
+/// function's doc comment names.
+///
+/// It answers `__str__` / `__repr__` / `__len__` / `__iter__` / `__bool__`
+/// from the very facts [`opaque_value`] measures, which is why
+/// `impl FromPyObject for Value` needs no unwrap arm for it: a wrapper that
+/// comes back in a handler's binding re-measures to the same `Encoded`.
+#[pyclass(name = "TemplateObject", module = "djust._rust")]
+pub struct TemplateObject {
+    value: Value,
+}
+
+impl TemplateObject {
+    fn segment<'py>(&self, py: Python<'py>, part: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match context::lookup_segment(&self.value, part) {
+            Some(found) => Ok(Some(value_into_handler_pyobject(py, found.clone())?)),
+            None => Ok(None),
+        }
+    }
+
+    fn items(&self) -> Option<&Vec<Value>> {
+        match &self.value {
+            Value::Encoded(e) => e.items.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn live_handle(&self) -> Option<&std::sync::Arc<Py<PyAny>>> {
+        match &self.value {
+            Value::Encoded(e) => e.live.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+#[pymethods]
+impl TemplateObject {
+    /// Django's `_resolve_lookup` step 1 (mapping access). A miss is a
+    /// `KeyError`, which is what makes it fall through to `getattr`.
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let part = key.str()?.extract::<String>()?;
+        match self.segment(py, &part)? {
+            Some(found) => Ok(found),
+            None => Err(pyo3::exceptions::PyKeyError::new_err(part)),
+        }
+    }
+
+    /// Django's `_resolve_lookup` step 2 (`getattr`). Reached only for names
+    /// Python could not find on the type, so the dunders below are unaffected.
+    fn __getattr__<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        match self.segment(py, name)? {
+            Some(found) => Ok(found),
+            None => Err(pyo3::exceptions::PyAttributeError::new_err(
+                name.to_string(),
+            )),
+        }
+    }
+
+    /// `str(o)`, measured at the conversion — the whole point of not handing
+    /// the handler a `dict` of the attributes instead.
+    fn __str__(&self) -> String {
+        self.value.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        self.value.py_repr()
+    }
+
+    /// `bool(o)`, measured at the conversion — NOT derived from `__len__`,
+    /// for the reason [`Encoded::truthy`] documents.
+    fn __bool__(&self) -> bool {
+        self.value.is_truthy()
+    }
+
+    /// `len(o)` where Python answered one, else the enumerated item count.
+    /// A `TypeError` where Python raises.
+    fn __len__(&self) -> PyResult<usize> {
+        let carried = match &self.value {
+            Value::Encoded(e) => e.len,
+            _ => None,
+        };
+        carried
+            .or_else(|| self.items().map(|items| items.len()))
+            .ok_or_else(|| {
+                pyo3::exceptions::PyTypeError::new_err(format!(
+                    "object of type '{}' has no len()",
+                    self.value_type_name()
+                ))
+            })
+    }
+
+    /// The object's items.
+    ///
+    /// Normally [`Encoded::items`], enumerated at the conversion — already
+    /// `Value`s, so a model among them is the floor-filtered dict
+    /// `normalize_django_value` made.
+    ///
+    /// `items` is `None` for the two carriers the conversion declined to
+    /// enumerate: a ONE-SHOT iterator (a generator — enumerating it would
+    /// consume it) and an object whose stated length is past
+    /// [`OPAQUE_ITEM_CAP`]. Those fall back to asking the live object, which
+    /// is what Django's own handler would have done (`RegroupNode` runs
+    /// `groupby` over whatever the operand resolved to), and every element
+    /// goes through the SAME conversion the enumerated branch uses — so the
+    /// floor reaches a model at any depth, on both sides of the cap.
+    ///
+    /// Raising here reached a render entry point as a 500 (PR #2734 review):
+    /// `{% regroup %}` over a list of 100 001 rows raised
+    /// `TypeError: 'list' object is not iterable` out of `render()` where it
+    /// used to render (wrongly, but render). The fallback is what makes it
+    /// render CORRECTLY instead of either.
+    ///
+    /// A one-shot iterator is consumed by this, exactly as Django consumes it.
+    /// An iterator with no end does not terminate — also exactly as Django's
+    /// `groupby`/`list` does not.
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_list = PyList::empty(py);
+        if let Some(items) = self.items() {
+            for item in items {
+                py_list.append(value_into_handler_pyobject(py, item.clone())?)?;
+            }
+            return py_list.as_any().try_iter().map(|it| it.into_any());
+        }
+        let Some(handle) = self.live_handle() else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "'{}' object is not iterable",
+                self.value_type_name()
+            )));
+        };
+        // `try_iter` raises Python's own "not iterable" TypeError for an
+        // object that is not, which is the message to keep.
+        for item in handle.bind(py).try_iter()? {
+            // Through `extract::<Value>()` and back — the SAME conversion the
+            // `items` branch above hands `value_into_handler_pyobject`, since
+            // `Encoded::items` are exactly `item.extract::<Value>()` measured
+            // at the conversion. The two branches therefore differ only in
+            // WHEN the `Value` was measured, never in what the element becomes
+            // (#1646).
+            //
+            // That convergence is the floor (PR #2734 review round 3). The
+            // first version applied `protect_sidecar_strict` — the LEAF floor —
+            // once per element, which protects a model IN the element position
+            // and cannot see one held INSIDE it. So the floor was
+            // DISCONTINUOUS at [`OPAQUE_ITEM_CAP`]:
+            //
+            // ```text
+            // [[user]] * 3        {% regroup rows by 0.password %}  ->  ""
+            // [[user]] * 100_001  {% regroup rows by 0.password %}  ->  the hash
+            // ```
+            //
+            // The `Value` conversion descends: its `List` / `Object` arms
+            // recurse per element, and a `Model` at any depth routes through
+            // `normalize_django_value`'s denylist. A plain object still ends at
+            // the same leaf floor, because `value_into_handler_pyobject`'s live
+            // arm applies it.
+            py_list.append(value_into_handler_pyobject(py, item?.extract::<Value>()?)?)?;
+        }
+        py_list.as_any().try_iter().map(|it| it.into_any())
+    }
+
+    /// Two wrappers are equal when the objects behind them measured the same
+    /// (`values_structurally_equal`, which for an `Encoded` is
+    /// [`Encoded::eq`]'s own equality contract). Anything else — a `str`, a
+    /// `dict`, the live object — is NOT equal: the wrapper stands for a Python
+    /// object and cannot claim equality with its own `str()`.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, TemplateObject>>() {
+            Ok(other) => values_structurally_equal(&self.value, &other.value),
+            Err(_) => false,
+        }
+    }
+
+    /// Consistent with [`TemplateObject::__eq__`], and REQUIRED because
+    /// declaring `__eq__` makes PyO3 set `__hash__ = None` (PR #2734 review).
+    /// A `str` used to arrive here, so a `{% load %}`ed handler doing
+    /// `set(values)` or using a value as a dict key would have started raising
+    /// `TypeError: unhashable type`.
+    ///
+    /// `Encoded`'s own `PartialEq` compares `type_name` / `display` / `repr`
+    /// among other fields, so two equal wrappers agree on all three and this
+    /// cannot hash them apart. It may hash UNEQUAL values together, which is
+    /// what a hash is allowed to do.
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match &self.value {
+            Value::Encoded(e) => {
+                e.type_name.hash(&mut hasher);
+                e.display.hash(&mut hasher);
+                e.repr.hash(&mut hasher);
+            }
+            other => other.to_string().hash(&mut hasher),
+        }
+        hasher.finish()
+    }
+
+    /// Pickle / `copy.deepcopy` degrade the wrapper to the `str` that used to
+    /// arrive here (PR #2734 review).
+    ///
+    /// A pyclass with no `__reduce__` is unpicklable, and `copy.deepcopy`
+    /// falls through to `__reduce_ex__`, so a handler that deep-copied its
+    /// context — or a `simple_tag` that pickled a value into a cache — would
+    /// have started raising. `str(o)` is exactly what this position held
+    /// before the fix, so the degraded form is the OLD behaviour rather than a
+    /// new one; a copy is data, and the live object it stood for cannot be
+    /// carried into a pickle anyway.
+    fn __reduce__(&self) -> (Py<PyAny>, (String,)) {
+        Python::attach(|py| {
+            (
+                py.get_type::<PyString>().into_any().unbind(),
+                (self.value.to_string(),),
+            )
+        })
+    }
+}
+
+impl TemplateObject {
+    /// CPython's `tp_name` for the object this stands for — only ever an
+    /// `Encoded`, but spelled defensively so the error text never lies.
+    fn value_type_name(&self) -> String {
+        match &self.value {
+            Value::Encoded(e) => e.type_name.clone(),
+            _ => "object".to_string(),
+        }
+    }
+}
+
+/// [`IntoPyObject`] for the TAG-BRIDGE sink, where an object must stay an
+/// object (#2731).
+///
+/// Identical to `Value::into_pyobject` except that a non-temporal
+/// [`Value::Encoded`] becomes a [`TemplateObject`] rather than its `str()`,
+/// and the container variants recurse through here so a nested object is
+/// reached too — `{% regroup rows by group %}` hands the handler a LIST of
+/// objects, not an object.
+///
+/// A temporal `Encoded` still becomes a real `datetime` / `date` / `time` /
+/// `timedelta`: that conversion is strictly better than any wrapper, and it is
+/// what `{% now %}`-adjacent handlers and custom filters already receive.
+///
+/// # The two arms, and why both
+///
+/// An `Encoded` is handled in one of two ways, and they are disjoint by
+/// construction — `encoded.live.is_some()` decides:
+///
+/// * **A live handle (ADR-027, #2539).** The object crosses AS ITSELF, floor-
+///   protected through [`context::protect_sidecar_strict`] — the SAME handle
+///   and the SAME floor [`Context::walk_live`] resolves `{{ r.group }}`
+///   through. Django's own `_resolve_lookup` then walks the real object, so
+///   the tag bridge cannot answer a dotted lookup differently from the
+///   renderer (#1646). This is the arm the `{% regroup %}` / `{% url %}`
+///   defect needed: `attrs` is EMPTY for an ordinary user object, so nothing
+///   short of the live object can answer `by group`.
+/// * **No live handle** — the ADR-027 kill-switch is off, or the value came
+///   off the wire. The object crosses as a [`TemplateObject`], which answers
+///   from [`Encoded::attrs`] / [`Encoded::items`] through
+///   `context::lookup_segment`. That is strictly more than the `str()` this
+///   used to send (a `set` becomes iterable; `{{ p.year }}` on a carried
+///   temporal-family value resolves) and it exposes nothing a `Value` was not
+///   already carrying.
+///
+/// A floor that fails to enforce (`protect_sidecar_strict` answering `None`)
+/// falls to the wrapper rather than passing the raw object: the wrapper can
+/// only ever expose `Encoded`'s measured facts, so the failure degrades to
+/// less information, never to more.
+///
+/// # Which arm: the floor decides, by a PROPERTY rather than a type list
+///
+/// `_protect_sidecar_value` is the LEAF floor — it proxies a `Model`, a
+/// `Manager` and a `QuerySet`, and returns anything else unchanged. That is
+/// correct for [`Context::walk_live`], which re-protects after every segment.
+/// This sink has no next segment: it hands the object straight to Python code,
+/// which is precisely the second sink
+/// `djust.serialization.build_render_sidecar`'s docstring names. So handing
+/// over an object the floor could not see INSIDE would carry raw models past
+/// it, and the tree pass that would fix that is an O(n) walk per bridged TAG
+/// CALL — a `{% url %}` inside a `{% for %}` pays it per iteration.
+///
+/// The live arm is therefore taken exactly when the object is **not
+/// iterable** — there is no "inside" for the leaf floor to miss. Every
+/// ordinary user object is here, which is the case this fix is for. An
+/// iterable takes the wrapper instead, and its `items` are `Value`s, so a
+/// model among them is already the floor-filtered dict
+/// `normalize_django_value` made.
+///
+/// **One property, not two.** The first version also took the live arm when
+/// `protect_sidecar_strict` had TRANSFORMED the object, to keep a `QuerySet`
+/// on its `_SidecarQuerySetProxy`. Gate-off measured that term as changing no
+/// outcome, and the reason is structural rather than a coverage gap: the floor
+/// transforms exactly `Model`, `Manager` and `QuerySet`
+/// (`djust.serialization._protect_sidecar_value`); a `Model` and a `Manager`
+/// are not iterable, so the first term already admits them, and a `QuerySet`
+/// never reaches this arm at all — it converts through `__djust_serialize__`
+/// to a `Value::List` of filtered dicts (measured: a handler receives a
+/// `list`). A term that cannot decide is a decoration (#2233).
+///
+/// **This was an `isinstance` allowlist of five builtins, and it shipped five
+/// leaks** (PR #2734 review): `collections.deque`, `dict_keys`, `dict_values`,
+/// a generator and any custom `__len__`/`__iter__` class are not `list` /
+/// `tuple` / `dict` / `set` / `frozenset`, so each took the live arm and
+/// `{% regroup rows by password %}` rendered the hash. An allowlist of
+/// container types is always one shape short; the property is not.
+pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bound<'_, PyAny>> {
+    match value {
+        Value::Encoded(ref encoded) => {
+            if let Some(temporal) = encoded.temporal_object(py)? {
+                return Ok(temporal);
+            }
+            if let Some(handle) = encoded.live.as_ref() {
+                if !encoded.iterable {
+                    // `protect_sidecar_strict` answering `None` is the floor
+                    // failing to enforce: fall to the wrapper, which can only
+                    // ever expose `Encoded`'s measured facts.
+                    if let Some(protected) =
+                        context::protect_sidecar_strict(py, handle.bind(py).clone())
+                    {
+                        return Ok(protected);
+                    }
+                }
+            }
+            Ok(Bound::new(py, TemplateObject { value })?.into_any())
+        }
+        Value::List(items) => {
+            let py_list = PyList::empty(py);
+            for item in items {
+                py_list.append(value_into_handler_pyobject(py, item)?)?;
+            }
+            Ok(py_list.into_any())
+        }
+        // A view crosses as a LIST for the same reason `into_pyobject` sends
+        // one: it cannot be rebuilt without its dict, and every consumer here
+        // wants something iterable.
+        Value::DictView { items, .. } => value_into_handler_pyobject(py, Value::List(items)),
+        Value::Tuple(items) => {
+            let items: Vec<_> = items
+                .into_iter()
+                .map(|item| value_into_handler_pyobject(py, item))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(pyo3::types::PyTuple::new(py, items)?.into_any())
+        }
+        Value::NamedTuple {
+            name,
+            fields,
+            items,
+        } => {
+            let cls = py
+                .import("collections")?
+                .getattr("namedtuple")?
+                .call1((name, fields))?;
+            let args: Vec<_> = items
+                .into_iter()
+                .map(|item| value_into_handler_pyobject(py, item))
+                .collect::<PyResult<Vec<_>>>()?;
+            cls.call(pyo3::types::PyTuple::new(py, args)?, None)
+        }
+        Value::Object(map) => {
+            let py_dict = PyDict::new(py);
+            for (key, item) in map {
+                py_dict.set_item(
+                    Value::from(key).into_pyobject(py)?,
+                    value_into_handler_pyobject(py, item)?,
+                )?;
+            }
+            Ok(py_dict.into_any())
+        }
+        other => other.into_pyobject(py),
     }
 }
 
