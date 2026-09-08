@@ -7,6 +7,337 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc3] - 2026-09-08
+
+### Added
+
+- **`@debounce` and `@throttle` now work — the client half is implemented (#2656).**
+  Both decorators previously stamped handler metadata that nothing in the shipped
+  client read: `debounceTimers` / `throttleState` were declared in
+  `static/djust/src/04-cache.js` and only ever cleared on disconnect, and the
+  `window.handlerMetadata` script written by `mixins/template.py` had no readers
+  at all — so a decorated handler fired on every event exactly as an undecorated
+  one did.
+
+  The consumer is a new client module, `static/djust/src/05-handler-rate-limit.js`,
+  gating dispatch at the top of `handleEvent`. `@debounce(wait, max_wait)` collapses
+  a burst of events into one send carrying the LAST payload, with `max_wait`
+  bounding the total delay from the first event of the burst. `@throttle(interval,
+  leading, trailing)` caps sends at one per interval, honouring both edges as its
+  docstring already described. A pending send is also flushed on `dj-submit`, so a
+  debounced field edited immediately before submit is not lost (#1278).
+
+  The configuration reaches the browser on the **mount frame** as `handler_config`
+  (`ViewRuntime._extract_handler_config`), the same route `@cache` uses for
+  `cache_config` — CSP-strict, and unaffected by the #1610 mount morph that does
+  not re-execute the inline `handlerMetadata` script. `window.handlerMetadata` is
+  retained as the HTTP-path fallback, where no mount frame is ever delivered.
+
+  Costs 603 bytes gzipped (`client.min.js.gz` 59,945 → 60,548 B; 58.5 → 59.1 KB),
+  measured like-for-like from the committed `client-sizes.json` manifest on both
+  sides. An earlier draft said 584 B, which mixed toolchains — `main` measured by
+  a local `gzip`, the branch read off its manifest.
+
+  A pending debounced/throttled send is flushed on `dj-submit` but NOT on socket
+  close or page unload, where it is dropped; handler config also accumulates
+  across `live_redirect` mounts. Both mirror `setCacheConfig`'s existing
+  behaviour and the element-level `dj-debounce`'s existing unload gap, so they
+  are pre-existing shapes rather than new ones — but `@debounce` being inert
+  before meant nothing could be lost, so the reach is new. The trade is stated in
+  the `@debounce` docstring and tracked in #2705.
+
+  `@optimistic` is **not** included: it takes no arguments and so declares no DOM
+  change for a client to apply. It stays marked INERT, now tracked in #2699 —
+  which also records that the already-wired DEP-002 `optimistic_rules` path covers
+  the same ground. The INERT caveats added in #2655/#2690/#2694 are removed for
+  `@debounce`/`@throttle` across the docs, `schema.py` (descriptions **and** the
+  `usage` snippets an agent pastes, closing #2696), `mcp/server.py`,
+  `BEST_PRACTICES_AI.md` and the decorator docstrings, and kept — re-pointed at
+  #2699 / #2680 — for `@optimistic` and `@client_state`.
+
+  That sweep missed three lines of `docs/state-management/STATE_MANAGEMENT_API.md`
+  — the file `docs/README.md` calls the *complete* decorator reference — which
+  still said `@debounce` was "a marker with no client implementation", five lines
+  under a banner the same commit had corrected to say the opposite. Neither guard
+  could see them: the schema pin reads only `schema.py`, and the checker's
+  `INERT_DECORATOR_USE` matches `@client_state`. `scripts/check-inert-api-claims.py`
+  grew a third arm, `STALE_INERT_CLAIMS`, that fails any line naming `@debounce`
+  or `@throttle` **and** asserting it does nothing — scoped to the claim, not to
+  the use site, so it reports 3 lines rather than the ~230 an `@optimistic`-style
+  use-site match would. Gate-off: restoring each of the three sentences turns the
+  checker red, 3/3. New cases in `test_the_checker_catches_a_stale_inert_claim_about_a_wired_decorator`
+  and `test_the_stale_inert_arm_does_not_fire_on_correct_prose`.
+
+### Changed
+
+- **CI shards balance on the runner's own timings, and the scoreboard headline moves from one command (#2584, #2615, #2526).**
+  `.test_durations` decides how CI deals its four `python-tests` shards, and it was
+  recorded on a 12-core Mac. On run 34173511325 the py3.12 shards took 182/235/584/204s
+  of pytest against 280/278/328/193s recorded — per-shard slowdown factors of 2.6x to
+  7.1x, so the recorded imbalance read 1.70x while the runner's was 3.21x and the longest
+  shard ran 584s against a 301s ideal. Every shard now records what it measured
+  (`--store-durations --clean-durations`) and uploads it; `scripts/merge-test-durations.py`
+  unions the four disjoint files and `make test-durations-from-ci RUN=<id>` closes the
+  loop. The split also moved to `--splitting-algorithm least_duration`: the default cuts
+  four contiguous runs and cannot separate two adjacent heavyweight files (it dealt one
+  shard 204 tests, 186s of which was half of a single file), and bin-packing turns
+  280/278/328/193s into 270/270/270/270s on the same durations. The upload step is
+  ancillary and `continue-on-error`; the gate is unchanged. New pins in
+  `tests/test_ci_python_test_shards.py` and `tests/unit/test_merge_test_durations.py`,
+  and the existing balance guard now collects under the algorithm CI actually uses.
+
+  `scripts/run-django-template-suite.py --write-baseline` now also retargets every
+  `django-suite-claim` line in `README.md` and `docs/TEMPLATE_BACKEND.md` — percentage
+  *and* the `<ok> of <ran>` counts, which were pinned by nothing — so the three places
+  the headline lives move together from one measurement (`--no-doc-claims` opts out).
+  New cases in `TestDocClaimRewrite` and `test_doc_counts_equal_the_baseline`.
+  `docs/TEMPLATE_BACKEND.md` now states how to resolve a baseline conflict (re-measure
+  against the merged tree, never pick a side) and why a silently stale baseline can only
+  under-claim: an overstatement fails the blocking `compare` on the next `main` push.
+
+  `.test_durations` in this release is recorded on the runner: 27,263 tests, 3,105s
+  (mean 114 ms) against 1,094s for the same suite on a 12-core Mac. Measured effect on
+  the py3.12 pytest step: 182/235/584/204s before, 293/289/407/420s after — the longest
+  shard, which is the workflow's critical path, drops **584s to 420s (-28%)** and the
+  spread goes 3.21x to 1.45x. The residual is not the split's: the recorded balance is
+  1.00x, and xdist cannot divide the 205s slowest test, so the tail is now the binding
+  constraint (#2723).
+
+  Re-balancing surfaced two latent test-isolation bugs that were green only because
+  xdist happened to deal them apart — `test_presence.py`'s fixture never cleared the
+  Django cache that `CursorTracker` actually uses, and a `{% load %}` cache test seeded
+  its plain entry before its own first (legitimately generation-bumping) parse, so it
+  fails standalone on main today. Both fixed.
+
+  `CONTRIBUTING.md` records where the suite's time actually goes — the slowest 50 of
+  27,263 tests are 59% of the recorded time and one file is 35% — and that the scoped
+  pre-push hook is a heuristic before the round-trip, not the gate.
+
+- **`.test_durations` regenerated, and the shard pin can now see staleness and imbalance (#2703).** 21% of collected tests (5,573 of 27,118) had no recorded duration. `tests/test_ci_python_test_shards.py` pinned that the file exists, parses, and holds no foreign roots — none of which can fail when the file is merely out of date, the condition CONTRIBUTING says to act on past ~10%. Two guards now assert the outcome directly: the stale fraction, and the balance of the split pytest-split would actually produce. The balance guard asks pytest-split for each group rather than reimplementing its algorithm — the first version did reimplement it, disagreed, and passed green (#1859).
+
+  This is a balance-quality fix, not a fix for the shard-3 CI failure it was found while investigating. Measurement refuted that theory: pytest-split balances by *time*, and the pre-regeneration shards were already even at 274/306/274/240s — the 9909-vs-1898 count spread is the intended consequence of grouping fewer, slower tests. #2703 tracks the real cause, still open.
+
+- **Templates:** a large `list` or Django `QuerySet` in a template context is
+  no longer converted at binding time (#2717). The #2695 review had exempted
+  both from the conversion's decline at any length, because their declined
+  spelling was wrong — `{{ rows }}` over a 100 001-row queryset rendered
+  djust's own identity dicts, and `{{ rows.0 }}` answered `''`. That exemption
+  cost 4 GB: on an unevaluated `User.objects.all()` over a real 150 000-row
+  table, `{{ v|length }}` peaked at 4 437 MB / 13.4 s and `{{ v.0 }}` at
+  2 982 MB / 13.3 s. Both defects are fixed at the sink instead —
+  `{{ v }}` / `|pprint` / `|json_script` spell the container from the live
+  handle through the same `consume_live_items` walk `{% for %}` uses, and
+  `_SidecarQuerySetProxy` gained the `__getitem__` the live walk needs — so
+  the exemption is gone and nothing is exempt for its length. The same cells
+  now peak at 568 MB / 9.7 s and 149 MB / 0.9 s, with every rendered byte
+  unchanged either side of the cap. New cases in
+  `TestTheContainerSinksSpellFromTheLiveHandle`,
+  `TestNothingIsConvertedUntilASinkAsksForIt`,
+  `TestTheSidecarQuerySetProxySubscripts`,
+  `TestTheFloorHoldsOnEveryShapeTheDeclineNewlyClaims`,
+  `TestAContainerThatSpellsItselfIsNotRespelledAsAList` and
+  `TestTheContainerSpellingCallSitesAreTheSetNamed`.
+
+### Fixed
+
+- **A callable in a LiveView's context now resolves by Django's rules instead of rendering `None` (#2621, ADR-027).**
+  `normalize_django_value` replaced ANY callable with `None` before the context reached
+  Rust — a "safety net" that pre-dated the resolution sink — so on the LiveView path
+  `{{ callable }}` and `{{ var.callable }}` rendered `None` where Django renders the
+  call's result, `{{ k }}` on a class rendered `None` where Django instantiates it, and
+  a `list`-subclass class fell through to the pre-ADR walk's unguarded string-key
+  `get_item` and rendered a `types.GenericAlias` spelled with the string key. The plain
+  path, which has no `normalize_django_value` in front of it, already answered Django's
+  bytes for all five — the divergence was the arm, not the sink.
+
+  The arm is now gated on `template_resolve_lazy`: under ADR-027 a callable crosses raw
+  and `walk_live`'s root `maybe_call` decides, which is where Django's rules already
+  live — `alters_data` renders `string_if_invalid` without running the mutator,
+  `do_not_call_in_templates` renders the object as is, an arity mismatch renders empty,
+  and a raising body propagates (#2506 never fails open). Normalization itself never
+  invokes what it carries.
+
+  Two boundaries keep the arm, and both are pinned: `state_roundtrip=True` — the session
+  and signed-snapshot channel, written by an encoder-less serializer that cannot hold a
+  live object, so a callable in public state still persists as `None` — and a callable
+  the conversion does not model as a `Value::Encoded`, which has no handle for the sink
+  to walk. The ADR-027 escape hatch (`template_resolve_lazy=False`) is byte-identical to
+  before.
+
+  Unchanged, and pinned so it is not read as wider than it is: a callable assigned as a
+  public LiveView **attribute** still never reaches this arm. The public-attribute walk
+  drops it first (`mixins/context.py`), deliberately — without that, every
+  `@event_handler` on the view would become a context variable — so `{{ cb }}` for
+  `self.cb = fn` renders empty on both settings. This change is about the context dict.
+
+  This closes the last of the six cells ADR-027 movement 3 left held. Both stated sets in
+  the characterization net (`PLAIN_WRONG_UNDER_LAZY`, `LIVEVIEW_WRONG_UNDER_LAZY`) are now
+  empty: rows J, J2, Q, P and P0 move here, row O closed in #2665 via `Encoded::display_safe`
+  and row V in #2613. New cases in `TestTheArmsTruthTable2621`,
+  `TestTheSinkAnswersDjangoOnTheLiveViewPath2621`,
+  `TestNoLiveObjectReachesAChannelThatPersists2621` and `TestTheQuestionHasOneStatement2621`;
+  `TestCallable` in `tests/unit/test_normalize_django_value.py` now states the two channels
+  that still drop. Django's own template suite is unmoved at 98.57% engine / 98.97% whole,
+  with zero per-test OK→FAIL transitions.
+
+  Also `#1646`: the guarded `_rust.crosses_as_encoded` call moved out of
+  `normalize_django_value`'s final fallback into a module-level `_crosses_as_encoded`
+  helper, because two arms now ask that one question and a second copy would drift on the
+  first widening. `TestTheGateHasOneStatement` in
+  `python/tests/test_opaque_collections_2477_2489.py` is restated to match: what must stay
+  singular is the **export**, not the number of arms that consult it, and the pin is now
+  spelled `_rust.crosses_as_encoded` because the bare name is a substring of the helper's
+  and silently counted 1 → 4 at the refactor. Its new sibling
+  `test_the_helper_has_exactly_the_two_arms_that_should_ask_it` pins who asks.
+
+- **`{% cache %}` no longer renders its body on a cache HIT (#2658).** The block-handler protocol renders the children before the handler is called, so the tag returned the stored fragment — correct output — after paying for the render it exists to avoid: correct and pointless. Block handlers may now declare `LAZY_BODY = True` and implement two phases instead of `render()` — `before_body(args, context) -> (str | None, state)`, asked before the children render and able to answer outright, and `after_body(args, content, context, state) -> str`, reached only when the first declined. Two phases rather than a re-entrant callback, which would have Python calling back into the renderer while Rust holds `&mut Context`; the opaque `state` is carried across the body render so phase two need not redo phase one's work. Args are resolved and the context snapshotted before `before_body`, and both phases get that same snapshot — Django's own order, since `CacheNode.render` resolves, keys and consults the cache before touching `self.nodelist`.
+
+  Existing single-phase handlers are untouched. `LAZY_BODY` with either phase method missing, or combined with `RETURNS_BINDINGS` / `WANTS_AUTOESCAPE`, is refused at `register_block_tag_handler` rather than half-honoured at render time; a lazy handler needs no `render` method.
+
+  The behaviour change is the fix: a body with side effects (a `{% cycle %}`, an `as`-binding, a lazily-evaluated queryset) stops running on a hit, because in Django it never ran. That also closes the `{% cycle … as k %}` divergence #2658 reported as a separate scope bug — djust now emits Django's exact `<1>1|<1>1|<1>1|`. New cases in `TestTheBodyDoesNotRenderOnAHit`, which replaces the `TestTheBodyStillRendersOnAHit` that pinned the gap, and in `python/tests/test_lazy_body_block_protocol_2658.py`.
+
+- **`reassert()` re-registered `{% cache %}` as an inline tag (#2658, #1646).** `djust.test_isolation` runs `reassert()` before every test, and it dispatched on `isinstance` of the two generic library handler classes — so `CacheTagHandler`, which is neither, fell to the inline branch: `cache` was re-registered as an inline tag and its block handler unregistered, and `{% cache %}…{% endcache %}` stopped parsing as a block for the rest of the worker. It now makes the same `_BESPOKE_BLOCK_TAGS` dispatch `_bridge_bespoke_block_tag` makes. Pinned by `TestReassertKeepsCacheABlockTag`.
+
+- **Templates:** a sized sequence is no longer materialised when it enters a
+  context, so `range(10**9)` renders instead of hanging (#2695), and
+  `dictsort` / `dictsortreversed` consume a one-shot iterator through the same
+  sink `{% for %}` and `|join` use (#2693).
+
+  #2678 stopped the conversion enumerating an object whose stated `__len__`
+  its `__getitem__` could never reach, but scoped the decline to that one
+  shape — so `range(10**9)`, which terminates, was still read a billion times
+  the moment it entered a context and `{{ v.0 }}`, `{{ v|length }}`,
+  `{{ v }}` and `{% for %}` all failed to return. Django never enumerates at
+  binding time, so the bound now sits on the stated length for every sized
+  sequence whose items do not already exist, and each sink reads what it needs
+  off ADR-027's live handle: `|length` is `len(v)`, `{{ v.0 }}` / `|first` /
+  `|last` are `v[i]`, `|slice` is `v[slice(*bits)]`, `in` is Python's own
+  `__contains__` and `{{ v }}` is `str(v)` — all in constant time, all
+  Django's own answers.
+
+  A `list` and an evaluated `QuerySet` are exempt from the decline at any
+  length, because declining them produced a WRONG SPELLING: a 100 001-row
+  queryset rendered `{{ rows }}` as 66 MB of djust's own serialization dicts
+  where the same queryset one row shorter renders `[qs0, qs1, qs2]`, and
+  `{{ rows.0 }}` answered `''`. Not a floor breach — the rows are
+  denylist-filtered on both sides — but a content and payload change, now
+  pinned on both paths a queryset reaches the engine by.
+
+  That exemption is a TRADE and the price is not zero: asking a `QuerySet`'s
+  length sinks `_fetch_all()` (~140 MB of rows) but NOT the conversion of
+  those rows into values, so on an unevaluated 150 000-row queryset
+  `{{ v|length }}` peaks at 4 650 MB with the exemption against 593 MB
+  without it. It is taken because the declined spelling is wrong and because
+  the cost is not new — neither shape was ever declined before #2695 either.
+  Getting both — decline the carrier AND spell it correctly at the sink — is
+  #2717.
+
+  The cap moved to where it belongs rather than being removed: the conversion
+  asks "is the stated length too large to spend here" and the SINKS ask "can
+  this walk end at all", so `collections.deque(range(100_001))` still renders
+  every item at `{% for %}` while #2678's liar still raises. `{% for %}` /
+  `|join` / `dictsort` over a stated billion still does not return — measured
+  with a 60 s deadline and a 4 GiB ceiling, neither does Django's.
+
+  `dictsort` had iteration of its own instead of going through
+  `filters::iter_values`, so it answered `''` for a generator, a `map`, a
+  `zip` and a one-shot `iter([...])` where Django sorts them. A structural
+  test now pins the SET of functions allowed to match a sequence by hand, and
+  requires every such `match` to name `Value::Encoded` IN THAT MATCH — the
+  per-function version of that check was satisfied by an unrelated line and
+  could not fail.
+
+  Verified by a Django 5.2 differential over 12 sinks x 19 shapes x both
+  `template_resolve_lazy` settings, in `TestTheDjangoDifferential`: on the
+  shipped lazy default 192 of 218 comparable cells render Django's string
+  byte for byte and the remaining 26 are pinned as a set, with 148 of 204 on
+  the eager escape hatch and 56 pinned there.
+
+- **Test fixtures no longer make macOS write a crash report per run (#2701).** `test_django_template_suite_2517.py`'s crash-isolation fixtures had their child `os.kill(os.getpid(), signal.SIGSEGV)` to prove the scoreboard runner isolates a native death and resumes. The death is deliberate and the runner handled it correctly — but SIGSEGV/SIGBUS/SIGABRT are fatal-exception signals, so macOS ReportCrash wrote a full `.ips` report to `~/Library/Logs/DiagnosticReports` for every one (~37 in a day), which buries a real crash in fixture noise.
+
+  The runner branches on `returncode < 0` and formats `-returncode` into its message; it never inspects which signal, so the choice is free. The fixtures now use `SIGKILL` on Darwin — same branch, no report — and keep `SIGSEGV` elsewhere, so CI's closest-to-native-death coverage is unchanged. SIGKILL is the stricter death besides: uncatchable, so faulthandler never runs and the child cannot flush buffered output, meaning the quiet local runs are the ones that would catch a runner whose finished-test accounting depended on a dying child's cooperation.
+
+  `test_no_reported_crash_signals_2701.py` pins it, scoped to the *sending* side so naming these signals in a detection set or a comment stays legal. Its own canary caught the first version of its regex failing to match `os.kill(os.getpid(), …)` — `[^)]*?` cannot cross the `)` in `os.getpid()`, so the pin would have missed the exact line it exists for.
+
+- **Templates:** a non-`list` sequence is spelled as ITSELF at every length,
+  so `{{ v }}` over a `range` / `deque` / `array` / `bytes` / sized user class
+  renders the container's own `str()` as Django does (#2704), and
+  `{{ block.super }}` renders the parent when the expression is EVALUATED
+  rather than when the block is entered (#2710).
+
+  `Value::List`'s display is a list repr, so every object PyO3's sequence
+  extraction claimed rendered `{{ v }}` as `[3, 1, 2]` where Django renders
+  `range(0, 3)`, `deque([3, 1, 2])`, `array('i', [3, 1, 2])`,
+  `b'\x03\x01\x02'` or `<X object at 0x…>`. `|slice` inherited it, Django's
+  filter being a bare `value[slice(*bits)]` passthrough. #2695 had made the
+  divergence LENGTH-dependent rather than uniform — past `OPAQUE_ITEM_CAP` the
+  same shapes decline into ADR-027's carrier and do render `str(o)`, so
+  `range(3)` was `[0, 1, 2]` while `range(10**9)` was `range(0, 1000000000)`.
+  The conversion now asks the spelling question at every length instead. A
+  `list` keeps the list arm because its own `str()` IS the list repr; the
+  eager escape hatch keeps it because there is no live handle to fall to
+  (a decline there lands on `str(o)` and `{% for %}` walks the repr character
+  by character); a Django `QuerySet` keeps it because declining it is #2717's
+  half, not this one's.
+
+  Two subscript sinks followed. `Encoded::live_get_item` and
+  `live_get_slice` each refused a carrier that held items, as a stand-in for
+  "not subscriptable" that was true only while the sole item-holding carriers
+  were a `set` / `frozenset` / `dict_keys`. A `deque` now holds items AND
+  subscripts, so `{{ v|first }}` answered
+  `TypeError: 'deque' object is not subscriptable` where Django answers `3`.
+  Both now ask the live object, through one predicate — which also gives
+  `{{ p|first }}` over a `mappingproxy` Django's own `KeyError`.
+
+  For `block.super`, static detection that a child body MENTIONS it is not
+  evidence that evaluation will reach it, so a reference inside a false branch
+  ran the parent anyway — measured against Django 5.2.16,
+  `{% if show %}{{ block.super }}{% endif %}child` with `show` false called
+  the parent once here and zero times there, and a parent that raises only
+  when asked turned an otherwise-fine false branch into a 500. Nine more cells
+  diverged the same way, and two the issue did not name: Django does NOT
+  memoize (`BlockNode.super()` is a method, so two references render the
+  parent twice and a `{% for %}` over three items renders it three times — a
+  parent containing `{% cycle 'a' 'b' %}` referenced twice is `a-b` there and
+  was `a-a` here), and `{% if show and block.super %}` / `{% firstof yes
+  block.super %}` short-circuit past it.
+
+  The scope now carries a deferred source — the parent nodes plus an owned
+  loader handle, since the resolver holds `&Context` and cannot borrow the
+  render arm's loader — and `Context::resolve` runs it on each request. That
+  is the one resolver `{{ }}`, `{% if %}`, `{% with %}` and filter arguments
+  all end in. The one boundary it cannot cross is a PYTHON-BRIDGED tag, which
+  receives the context as a flat map that Django's own code then resolves
+  against (`{% blocktranslate with s=block.super %}`); all seven builders of
+  that map go through one materialiser, which preserves the previous
+  behaviour there exactly.
+
+  Verified by two Django 5.2.16 differentials. The sized-sequence grid (12
+  sinks x 19 shapes x both `template_resolve_lazy` settings) gains ten cells
+  on the lazy default and loses none, with the eager set byte-identical; the
+  opaque-collections grid gains the two `mappingproxy` subscript cells and
+  sweeps four newly-carried shapes against Django for the first time; and the
+  `block.super` grid compares 26 cells on OUTPUT **and** parent-evaluation
+  COUNT, of which 10 diverged before and 0 after. New cases in
+  `TestANonListSequenceIsSpelledAsItself2704` and in
+  `python/tests/test_block_super_lazy_2710.py`.
+
+- Flush pending handler and element rate limits through HTTP keepalive during page teardown and WebSocket close, coalescing edits to the latest payload. The abnormal-close flush is an out-of-band POST that races the client's own reconnect: it is never applied to the DOM, and in the losing ordering its session write is simply overwritten, so the edit is preserved or lost exactly as before — never corrupted. Reset rate-limit, cache, and optimistic configuration on the PAGE view's own mount so old-view timers and rules cannot affect the next view; lazily-hydrated sibling views and the `mount_batch` fallback mount additively on the same socket and no longer wipe the page view's configuration (#2721).
+- Retain the same lazy block-tag handler across body rendering, so registry replacement or removal cannot deliver phase-one state to a different handler.
+- **Template loader containment and inheritance**: Reject Python backend template paths outside configured roots and remove the obsolete Python inheritance algorithm, retaining integration coverage through native rendering.
+- **Template engine isolation**: Keep bridged tag/filter registries, library state, and source/include cache entries scoped to their backend. Publish compiled templates and validation generations together and test stable cache reuse after library loading.
+- **Template AST traversal**: Share exhaustive immutable and mutable child enumeration between inheritance annotations and model-field discovery. Discover literal model bindings inside ifchanged branches and inherited parent scopes while preserving scope-specific renderer behavior.
+
+### Documentation
+
+- **Correction to two scoreboard figures published in `[1.2.0rc2]` (#2619).** Two bullets in that section were written before the `changelog.d/` convention (#2598) and carry conformance deltas measured against a baseline that moved before they merged. The `[1.2.0rc2]` section itself is left byte-identical to its tag (#2028 — a shipped section is immutable); the corrected figures are recorded here instead.
+
+  **`{% autoescape %}` (#2556 PR A).** The bullet claims `44.03% → 50.91%` of engine cells (461 → 533 of 1047) and `71 OK / 6 FAIL / 2 ERROR` for the tag's own share. Re-measured on the merged tree — the arm gated off and per-test outcomes diffed — the 79 cells refused as `Unsupported template tag '{% autoescape …'` go **74 OK / 5 FAIL / 0 ERROR**, and the whole scoreboard moved **55.68% → 62.85%** (583 → 658 of 1047), 68.13% → 73.28% over the whole label. The same `[1.2.0rc2]` section already carries these numbers in the `#2556` merge bullet, which said in-line that they supersede the earlier ones; this entry states the correction on its own so a reader meets it without having to reconcile two bullets.
+
+  **The five built-in tags (#2556 PRs B–E).** The bullet claims `44.03% → 48.52%` (461 → 508 of 1047). No re-measure of that branch against its merged base was ever recorded, so there is no corrected delta to publish and none is invented here: read it as measured against that branch's own base, before #2593, #2594, #2596 and #2607 landed around it, and therefore not comparable with the release's other figures.
+
+  **The anchor that is comparable.** On the tree released as `1.2.0rc2`, `make django-template-suite` reports **98.57%** of the engine subset (1032 OK / 1 FAIL / 14 ERROR of 1047) and **98.97%** over the whole `template_tests` label (1441 of 1456). Per-PR deltas in this changelog are point-in-time measurements against whichever baseline that PR branched from; #2615 tracks the shared-baseline problem that makes them drift.
+
 ## [1.2.0rc2] - 2026-09-05
 
 ### Added
