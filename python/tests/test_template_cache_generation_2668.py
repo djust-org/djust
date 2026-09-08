@@ -41,6 +41,25 @@ class TestLoadTemplatesHitTheCache:
         assert _rust.registry_generation() == gen, "a cache hit must not bump"
 
     def test_a_load_template_does_not_thrash_other_entries(self):
+        # Bridge the library FIRST. The first parse of a `{% load %}` template
+        # legitimately bumps the generation — the test above says so in as many
+        # words — so the claim here is about an ALREADY-bridged library, and
+        # the plain entry has to be seeded after that bump, not before it.
+        #
+        # This used to rely on the sibling test having bridged `i18n` earlier in
+        # the same process. That holds in file order, but pytest-xdist deals
+        # tests to workers individually: when this one landed on a worker where
+        # the sibling had not run, its own first `{% load %}` parse did the
+        # bridging, bumped, and stranded the plain entry it had just seeded —
+        # failing on the legitimate bump rather than on the #2668 regression.
+        # Re-balancing CI's shards (#2584) produced exactly that deal.
+        #
+        # The assertion below is unchanged, and still red under #2668: that bug
+        # bumped on EVERY parse, so no amount of pre-warming would leave the
+        # plain entry current across the two compiles that follow.
+        _compile(self.LOAD_SRC)
+        _compile(self.LOAD_SRC)
+
         _compile(self.PLAIN_SRC)
         assert _is_hit_next_time(self.PLAIN_SRC)
         _compile(self.LOAD_SRC)

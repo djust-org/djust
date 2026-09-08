@@ -54,6 +54,8 @@ from scripts.lib.django_template_suite.report import (
     format_per_test_line,
     format_summary,
     percent,
+    rewrite_doc_claim,
+    rewrite_doc_claims,
     summarize,
 )
 
@@ -874,6 +876,162 @@ def _result(
     }
 
 
+class TestDocClaimRewrite:
+    """`--write-baseline` retargets the prose headline too (#2615).
+
+    The scoreboard number lives in three places — the baseline JSON and a
+    marker line in each of two docs — and every PR that raises it had to edit
+    all three by hand. #2615 counted three such regenerations across two PRs,
+    plus a baseline that went 34 cells stale and stayed green because the doc
+    figure is pinned to the file rather than to a measurement.
+
+    These cases pin the rewrite the way the docs actually read: two different
+    comma groupings, a percentage that must not be touched off the marker
+    line, and the `<ok> of <ran>` pair that no test checked before.
+    """
+
+    RESULT = {"ok": 1032, "ran": 1047, "percent": 98.57}
+
+    def test_percentage_and_counts_are_retargeted(self) -> None:
+        text = (
+            "- **43.55%** of the Django template tests that reach the engine pass "
+            "(456 of 1047) <!-- django-suite-claim -->\n"
+        )
+        assert rewrite_doc_claim(text, self.RESULT) == (
+            "- **98.57%** of the Django template tests that reach the engine pass "
+            "(1032 of 1047) <!-- django-suite-claim -->\n"
+        )
+
+    def test_comma_grouping_is_preserved_per_number(self) -> None:
+        """Each number keeps the grouping the author gave it, independently.
+
+        The README's own line is `1032 of the 1,047` — no separator on the
+        numerator, one on the denominator — so grouping cannot be decided
+        per line or per file. It also keeps the `of the` wording, which
+        `docs/TEMPLATE_BACKEND.md` does not use.
+        """
+        text = "- **43.55%** … (456 of the 1,047 cells …) <!-- django-suite-claim -->\n"
+        assert "1032 of the 1,047 cells" in rewrite_doc_claim(text, self.RESULT)
+        text = "- **43.55%** … (4,56 of 1047 …) <!-- django-suite-claim -->\n"
+        assert "1,032 of 1047" in rewrite_doc_claim(text, self.RESULT)
+
+    def test_a_line_without_the_marker_is_untouched(self) -> None:
+        """Other percentages in the same document must survive — the README
+        carries a 7-11x speedup claim and a client-size table."""
+        text = (
+            "Coverage is 43.55% and 456 of 1047 rows are green.\n"
+            "- **43.55%** (456 of 1047) <!-- django-suite-claim -->\n"
+        )
+        out = rewrite_doc_claim(text, self.RESULT)
+        assert out.splitlines()[0] == "Coverage is 43.55% and 456 of 1047 rows are green."
+        assert "**98.57%** (1032 of 1047)" in out
+
+    def test_rewriting_the_current_value_is_a_no_op(self) -> None:
+        """An unchanged number must not dirty the working tree, or every run
+        of the suite produces a spurious diff to review."""
+        text = "- **98.57%** … (1032 of 1047) <!-- django-suite-claim -->\n"
+        assert rewrite_doc_claim(text, self.RESULT) == text
+
+    def test_only_changed_files_are_written(self, tmp_path: pathlib.Path) -> None:
+        stale = tmp_path / "stale.md"
+        fresh = tmp_path / "fresh.md"
+        stale.write_text("**43.55%** (456 of 1047) <!-- django-suite-claim -->\n")
+        fresh.write_text("**98.57%** (1032 of 1047) <!-- django-suite-claim -->\n")
+        assert rewrite_doc_claims([stale, fresh], self.RESULT) == [stale]
+        assert "98.57" in stale.read_text()
+
+    def test_a_missing_doc_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
+        assert rewrite_doc_claims([tmp_path / "nope.md"], self.RESULT) == []
+
+    def _fake_checkout(self, root: pathlib.Path) -> pathlib.Path:
+        src = root / "django-src"
+        (src / "tests").mkdir(parents=True)
+        (src / "tests" / "runtests.py").write_text("", encoding="utf-8")
+        return src
+
+    def _drive_write_baseline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+        docs: tuple[pathlib.Path, ...],
+        *extra_argv: str,
+    ) -> int:
+        """Run the REAL `cmd_run` write-baseline tail, child process aside.
+
+        Only two things are replaced: `run_children` (a Django checkout and
+        several minutes of subprocesses, and not what this asserts about) and
+        the doc set (so a test never rewrites the repo's own README). The
+        refusal guard, `build_result`, `write_json` and the doc rewrite are
+        all the shipped code on the shipped path — which is the point: the
+        wiring from `--write-baseline` to the rewrite was the one part of
+        #2615 that no test reached, and a mechanism nothing reaches is
+        decorative (#1859).
+        """
+        runner = _runner()
+        records = [rec("t.a", "OK"), rec("t.b", "OK"), rec("t.c", "FAIL")]
+        monkeypatch.setattr(runner, "run_children", lambda *a, **k: (records, 0, 0))
+        monkeypatch.setattr(runner, "DOC_CLAIM_PATHS", docs)
+        return runner.main(
+            [
+                "run",
+                "--django-src",
+                str(self._fake_checkout(tmp_path)),
+                "--django-tag",
+                "5.2.16",
+                "--label",
+                "fake_tests",
+                "--baseline",
+                str(tmp_path / "baseline.json"),
+                "--write-baseline",
+                "--quiet",
+                *extra_argv,
+            ]
+        )
+
+    def test_write_baseline_retargets_the_docs_in_the_same_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        doc = tmp_path / "doc.md"
+        doc.write_text("- **43.55%** (456 of 1047) <!-- django-suite-claim -->\n")
+        assert self._drive_write_baseline(monkeypatch, tmp_path, (doc,)) == 0
+        # 2 of 3 ran = 66.67 %, from the fabricated records above.
+        assert doc.read_text() == "- **66.67%** (2 of 3) <!-- django-suite-claim -->\n"
+        assert json.loads((tmp_path / "baseline.json").read_text())["percent"] == 66.67
+
+    def test_no_doc_claims_writes_the_baseline_and_leaves_the_docs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        doc = tmp_path / "doc.md"
+        before = "- **43.55%** (456 of 1047) <!-- django-suite-claim -->\n"
+        doc.write_text(before)
+        assert self._drive_write_baseline(monkeypatch, tmp_path, (doc,), "--no-doc-claims") == 0
+        assert doc.read_text() == before
+        assert (tmp_path / "baseline.json").exists()
+
+    def test_a_refused_baseline_leaves_the_docs_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """The rewrite sits INSIDE the refusal guard, so a `--gate-off` run —
+        Django measured against itself — can never publish its own number as
+        djust's. Before this, the guard protected only the JSON.
+        """
+        doc = tmp_path / "doc.md"
+        before = "- **43.55%** (456 of 1047) <!-- django-suite-claim -->\n"
+        doc.write_text(before)
+        assert self._drive_write_baseline(monkeypatch, tmp_path, (doc,), "--gate-off") == 2
+        assert doc.read_text() == before
+        assert not (tmp_path / "baseline.json").exists()
+
+    def test_the_committed_docs_round_trip_against_the_committed_baseline(self) -> None:
+        """The rewriter and the pins must agree on the docs as they stand, or
+        `--write-baseline` produces a diff on a run that measured no change.
+        """
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        for doc in DOC_PATHS:
+            text = doc.read_text(encoding="utf-8")
+            assert rewrite_doc_claim(text, baseline) == text, doc.name
+
+
 class TestRatchetCompare:
     def test_equal_is_zero(self) -> None:
         code, _ = compare(_result(43.55, 59.27), _result(43.55, 59.27))
@@ -1066,6 +1224,33 @@ class TestDocClaimMatchesBaseline:
             assert m, f"{doc.name}: no NN.NN% figure on the marker line: {claim_line!r}"
             assert float(m.group(1)) == baseline["percent"], (
                 f"{doc.name}: {claim_line!r} disagrees with the baseline ({baseline['percent']}%)"
+            )
+
+    @pytest.mark.parametrize("doc", DOC_PATHS, ids=lambda p: p.name)
+    def test_doc_counts_equal_the_baseline(self, doc: pathlib.Path) -> None:
+        """The `<ok> of <ran>` pair beside the percentage was pinned by nothing.
+
+        `test_doc_percentage_equals_the_baseline` reads only the `NN.NN%`
+        figure, so `1032 of 1,047` could drift to any other pair of numbers
+        and stay green next to a percentage that was still checked. Both docs
+        state the counts, in different groupings (`1,047` / `1047`), so read
+        the digits and ignore the commas.
+
+        `--write-baseline` now rewrites these alongside the percentage
+        (#2615); this is the pin that makes that mechanical rather than
+        conventional.
+        """
+        for claim_line in [
+            line for line in doc.read_text(encoding="utf-8").splitlines() if DOC_MARKER in line
+        ]:
+            m = re.search(r"(?<![\d,])(\d[\d,]*) of (?:the )?(\d[\d,]*)(?![\d,])", claim_line)
+            if not m:
+                continue
+            baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+            ok, ran = (int(g.replace(",", "")) for g in m.groups())
+            assert (ok, ran) == (baseline["ok"], baseline["ran"]), (
+                f"{doc.name}: {claim_line!r} claims {ok} of {ran}, the baseline records "
+                f"{baseline['ok']} of {baseline['ran']}"
             )
 
     def test_at_least_one_doc_carries_the_claim(self) -> None:

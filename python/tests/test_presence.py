@@ -6,6 +6,8 @@ import pytest
 import time
 from unittest.mock import Mock, patch
 
+from django.core.cache import cache
+
 from djust.presence import (
     PresenceManager,
     PresenceMixin,
@@ -89,12 +91,34 @@ fake_cache = FakeCache()
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    """Reset presence backend before each test"""
+    """Reset presence backend AND the Django cache before each test.
+
+    `fake_cache` above is a local double that nothing installs, and the
+    presence backend is a separate store — but `CursorTracker` reads and
+    writes `django.core.cache.cache` (see `CursorTracker.get_cursors`), a
+    LocMemCache global to the worker process and shared by every test that
+    lands in it. Clearing the other two therefore isolated everything except
+    the cursors.
+
+    That left a cursor written under `document:123` by one test visible to
+    the next test using the same presence key, so
+    `test_untrack_presence_removes_cursor` — which untracks its OWN user and
+    asserts the group is then empty — sees the leftover and reads 1 == 0.
+
+    It stayed green only because pytest-xdist happened to deal those tests to
+    different worker processes. Re-balancing CI's shards (#2584) put them on
+    one worker and it failed immediately; `-n 4` reproduces it locally, `-n
+    auto` on a 12-core machine does not. Nothing about the ordering was ever
+    guaranteed, so this is a latent isolation bug, not a consequence of the
+    split.
+    """
     fake_cache.clear()
+    cache.clear()
     backend = InMemoryPresenceBackend(timeout=PRESENCE_TIMEOUT)
     set_presence_backend(backend)
     yield
     fake_cache.clear()
+    cache.clear()
     reset_presence_backend()
 
 

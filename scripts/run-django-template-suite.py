@@ -75,6 +75,10 @@ from scripts.lib.django_template_suite import report  # noqa: E402
 CHILD = _REPO_ROOT / "scripts" / "lib" / "django_template_suite" / "child.py"
 DEFAULT_BASELINE = _REPO_ROOT / "scripts" / "django-template-suite-baseline.json"
 DEFAULT_CACHE = _REPO_ROOT / ".django-src"
+# Every doc that quotes the scoreboard headline, kept in step by
+# `--write-baseline` (#2615). `python/tests/test_django_template_suite_2517.py`
+# pins the same set from the other side; a third quoting doc goes in both.
+DOC_CLAIM_PATHS = (_REPO_ROOT / "docs" / "TEMPLATE_BACKEND.md", _REPO_ROOT / "README.md")
 DJANGO_GIT = "https://github.com/django/django.git"
 STDERR_TAIL_LINES = 25
 
@@ -441,6 +445,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
         report.write_json(args.baseline, result)
         _say("baseline written to %s" % args.baseline, quiet=args.quiet)
+        # The headline also lives in prose in two docs, pinned to this file by
+        # a test. Leaving those to a hand-edit is how #2615 counted three
+        # regenerations across two PRs — and the `<ok> of <ran>` counts beside
+        # the percentage were pinned by nothing at all. Rewrite all three from
+        # the one measurement (skippable for a scratch baseline elsewhere).
+        if args.write_doc_claims:
+            for path in report.rewrite_doc_claims(DOC_CLAIM_PATHS, result):
+                _say("doc claim updated in %s" % path, quiet=args.quiet)
     return status
 
 
@@ -502,6 +514,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--write-baseline", action="store_true", help="write the baseline file from this run"
+    )
+    run.add_argument(
+        "--no-doc-claims",
+        dest="write_doc_claims",
+        action="store_false",
+        help="with --write-baseline, leave the docs' <!-- django-suite-claim --> "
+        "lines alone (they are rewritten from the baseline by default)",
     )
     run.add_argument(
         "--timeout", type=int, default=600, help="seconds per child process (default 600)"
