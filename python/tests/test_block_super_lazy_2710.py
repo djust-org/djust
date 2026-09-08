@@ -118,6 +118,22 @@ CASES: dict[str, str] = {
     "{% blocktranslate with s=block.super %}v={{ s }}{% endblocktranslate %}{% endblock %}",
     # ---- autoescape: the parent's output is already escaped --------------
     "autoescape": '{% extends "amp.html" %}{% block body %}[{{ block.super }}]{% endblock %}',
+    # ---- the safety grant, on all four channels it can leave by ----------
+    # Django `mark_safe`s the parent's output — it is rendered template
+    # output, already escaped by whatever produced it — so double-escaping it
+    # is the failure mode on one side and emitting a parent's UNESCAPED user
+    # data is the failure mode on the other. `parent_escapes_user_data` is
+    # the one that would be an XSS if the grant were applied too widely.
+    "alias_escaping": '{% extends "amp.html" %}{% block body %}'
+    "{% with s=block.super %}[{{ s }}]{% endwith %}{% endblock %}",
+    "explicit_escape": '{% extends "amp.html" %}{% block body %}'
+    "[{{ block.super|escape }}]{% endblock %}",
+    "autoescape_off": '{% extends "amp.html" %}{% block body %}'
+    "{% autoescape off %}[{{ block.super }}]{% endautoescape %}{% endblock %}",
+    "parent_escapes_user_data": '{% extends "raw.html" %}{% block body %}'
+    "[{{ block.super }}]{% endblock %}",
+    "length_filter": '{% extends "amp.html" %}{% block body %}'
+    "{{ block.super|length }}{% endblock %}",
     # ---- the raising parent ----------------------------------------------
     "boom_false": '{% extends "boom.html" %}{% block body %}'
     "{% if show %}{{ block.super }}{% endif %}ok{% endblock %}",
@@ -144,6 +160,7 @@ PARENTS = {
     "amp.html": "{% block body %}<b>&</b>{% endblock %}",
     "inc.html": '{% block body %}{% include "frag.html" %}{{ counter.tick }}{% endblock %}',
     "frag.html": "F",
+    "raw.html": "{% block body %}{{ danger }}{% endblock %}",
 }
 
 
@@ -165,6 +182,7 @@ def _answer(engine: str, template_dir: str, source: str) -> tuple[str, int, int]
         "yes": True,
         "empty": [],
         "three": [1, 2, 3],
+        "danger": "<script>x</script>",
     }
     try:
         if engine == "django":
@@ -219,9 +237,11 @@ class TestTheParentRendersOnlyWhenTheExpressionIsEvaluated:
             "blocktranslate",
             "autoescape",
             "include_in_parent",
+            "alias_escaping",
+            "parent_escapes_user_data",
         ):
             assert required in CASES
-        assert len(CASES) == 21
+        assert len(CASES) == 26
 
 
 class TestTheCountsAreNotVacuous:
@@ -284,6 +304,23 @@ class TestTheCountsAreNotVacuous:
         rendered, calls, _ = _answer("djust", template_dir, CASES["include_in_parent_false"])
         assert rendered == "c"
         assert calls == 0
+
+    def test_the_parents_own_escaping_is_neither_undone_nor_repeated(
+        self, template_dir: str
+    ) -> None:
+        """Stated outright, because this is the pair where being wrong in one
+        direction is a double-escape and in the other is an XSS.
+
+        The parent's output is rendered template output — already escaped by
+        whatever produced it — so Django `mark_safe`s it. The grant covers the
+        parent's own MARKUP and not the user data the parent interpolated,
+        which the parent escaped on the way out.
+        """
+        markup, _, _ = _answer("djust", template_dir, CASES["autoescape"])
+        assert markup == "[<b>&</b>]"
+        user_data, _, _ = _answer("djust", template_dir, CASES["parent_escapes_user_data"])
+        assert user_data == "[&lt;script&gt;x&lt;/script&gt;]"
+        assert "<script>" not in user_data
 
     def test_a_side_effect_in_the_parent_runs_once_per_reference(self, template_dir: str) -> None:
         """`{% cycle %}` state lives on the shared `Arc` a `Context` clone
