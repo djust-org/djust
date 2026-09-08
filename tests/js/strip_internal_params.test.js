@@ -71,6 +71,7 @@ describe('handleEvent strips internal params before sending', () => {
             },
 
             // Window/djust namespace
+            teardownEventTransport: null,
             window: { djust: {} },
             globalThis: {},
         };

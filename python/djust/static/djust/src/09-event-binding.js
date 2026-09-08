@@ -1108,17 +1108,7 @@ function installDelegatedListeners(root) {
                     // same tick as the input event.
                     wrapped = rawHandler;
                 } else if (rateLimit.type === 'blur') {
-                    // dj-debounce="blur": defer until element loses focus
-                    let latestArgs = null;
-                    wrapped = function() {
-                        latestArgs = arguments;
-                    };
-                    inputEl.addEventListener('blur', function() {
-                        if (latestArgs !== null) {
-                            rawHandler.apply(null, latestArgs);
-                            latestArgs = null;
-                        }
-                    });
+                    wrapped = deferUntilBlur(inputEl, rawHandler);
                 } else if (rateLimit.type === 'throttle') {
                     wrapped = throttle(rawHandler, rateLimit.ms);
                 } else {
@@ -1447,22 +1437,31 @@ function _warnUnrecognizedDjModifiers(scope) {
  * @param {Function} handler - Original event handler
  * @returns {Function} - Wrapped or original handler
  */
+function deferUntilBlur(element, handler) {
+    let latestArgs = null;
+    const wrapped = function (...args) {
+        latestArgs = args;
+        pendingElementRateLimits.add(wrapped);
+    };
+    wrapped.cancel = function () {
+        latestArgs = null;
+        pendingElementRateLimits.delete(wrapped);
+    };
+    wrapped.flush = function () {
+        if (latestArgs === null) return;
+        const args = latestArgs;
+        wrapped.cancel();
+        handler(...args);
+    };
+    element.addEventListener('blur', wrapped.flush);
+    return wrapped;
+}
+
 function _applyRateLimitAttrs(element, handler) {
     if (element.hasAttribute('dj-debounce')) {
         const val = element.getAttribute('dj-debounce');
         if (val === 'blur') {
-            // Special: defer event until element loses focus
-            let latestArgs = null;
-            const blurWrapper = function (...args) {
-                latestArgs = args;
-            };
-            element.addEventListener('blur', function () {
-                if (latestArgs !== null) {
-                    handler(...latestArgs);
-                    latestArgs = null;
-                }
-            });
-            return blurWrapper;
+            return deferUntilBlur(element, handler);
         }
         const ms = parseInt(val, 10);
         if (ms === 0) {
@@ -1516,8 +1515,10 @@ function debounce(func, wait) {
     function debounced(...args) {
         pendingArgs = args;
         pendingThis = this;
+        pendingElementRateLimits.add(debounced);
         const later = () => {
             timeout = null;
+            pendingElementRateLimits.delete(debounced);
             const a = pendingArgs;
             const t = pendingThis;
             pendingArgs = null;
@@ -1532,6 +1533,7 @@ function debounce(func, wait) {
         if (timeout === null) return;
         clearTimeout(timeout);
         timeout = null;
+        pendingElementRateLimits.delete(debounced);
         const a = pendingArgs;
         const t = pendingThis;
         pendingArgs = null;
@@ -1539,19 +1541,33 @@ function debounce(func, wait) {
         func.apply(t, a);
     };
 
+    debounced.cancel = function () {
+        clearTimeout(timeout);
+        timeout = null;
+        pendingArgs = null;
+        pendingThis = null;
+        pendingElementRateLimits.delete(debounced);
+    };
     return debounced;
 }
 
 // Helper: Throttle function
 function throttle(func, limit) {
-    let inThrottle;
-    return function (...args) {
-        if (!inThrottle) {
-            func(...args);
-            inThrottle = true;
-            setTimeout(() => inThrottle = false, limit);
-        }
-    }
+    let timeout = null;
+    const throttled = function (...args) {
+        if (timeout !== null) return;
+        func(...args);
+        pendingElementRateLimits.add(throttled);
+        timeout = setTimeout(throttled.cancel, limit);
+    };
+    throttled.cancel = function () {
+        clearTimeout(timeout);
+        timeout = null;
+        pendingElementRateLimits.delete(throttled);
+    };
+    // Element throttling is leading-only: it has no trailing payload to send.
+    throttled.flush = throttled.cancel;
+    return throttled;
 }
 
 // Helper: Get LiveView root element (the PARENT / page container).

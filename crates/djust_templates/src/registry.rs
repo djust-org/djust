@@ -1272,6 +1272,13 @@ pub fn block_handler_lazy_body(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Retain the phase-one handler with its opaque state across body rendering.
+/// Registry mutations in the body cannot hand that state to another handler.
+pub struct PendingBlockBody {
+    handler: Py<PyAny>,
+    state: Py<PyAny>,
+}
+
 /// Phase one of the lazy-body contract (#2658): ask the handler whether it can
 /// answer WITHOUT the body.
 ///
@@ -1290,7 +1297,7 @@ pub fn call_block_handler_before_body(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<(Option<String>, Py<PyAny>), DjangoRustError> {
+) -> Result<(Option<String>, PendingBlockBody), DjangoRustError> {
     let handler = clone_block_handler(name)?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1308,11 +1315,11 @@ pub fn call_block_handler_before_body(
         })?;
         let output = output.bind(py);
         if output.is_none() {
-            return Ok((None, state));
+            return Ok((None, PendingBlockBody { handler, state }));
         }
         let html = escape_handler_return(output, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)?;
-        Ok((Some(html), state))
+        Ok((Some(html), PendingBlockBody { handler, state }))
     })
 }
 
@@ -1329,10 +1336,10 @@ pub fn call_block_handler_after_body(
     content: &str,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
-    state: &Py<PyAny>,
+    pending: &PendingBlockBody,
     autoescape: bool,
 ) -> Result<String, DjangoRustError> {
-    let handler = clone_block_handler(name)?;
+    let handler = &pending.handler;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_content = mark_safe_str(py, content).map_err(|e| {
@@ -1344,7 +1351,7 @@ pub fn call_block_handler_after_body(
             .bind(py)
             .call_method1(
                 "after_body",
-                (py_args, py_content, py_context, state.clone_ref(py)),
+                (py_args, py_content, py_context, pending.state.clone_ref(py)),
             )
             .map_err(handler_exception)?;
         escape_handler_return(&result, "Block handler", name, autoescape)

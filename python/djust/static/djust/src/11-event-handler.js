@@ -12,6 +12,12 @@ let _djustHttpFallbackWarned = false;
 // params key on purpose — anything written into `params` would have to be
 // stripped again before the payload is serialized to the server.
 async function handleEvent(eventName, params = {}, _rateBypass = false) {
+    // Snapshot before any await: teardown's scope ends after synchronous dispatch.
+    const teardown = teardownEventTransport;
+    if (teardown && teardown.collecting) {
+        teardown.pending.set(eventName, params);
+        return;
+    }
     if (globalThis.djustDebug) {
         djLog(`[LiveView] Handling event: ${eventName}`, params);
     }
@@ -19,7 +25,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // @debounce / @throttle: collapse or cap the outbound send. Runs before
     // anything else so a deferred event costs no loading state, no cache
     // lookup and no DOM work.
-    if (!_rateBypass && applyHandlerRateLimit(eventName, params, handleEvent)) {
+    if (!teardown && !_rateBypass && applyHandlerRateLimit(eventName, params, handleEvent)) {
         return;
     }
 
@@ -28,7 +34,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // and would corrupt the params payload (e.g., HTMLElement objects serialize
     // as objects with numeric-indexed children that clobber form field data).
     const triggerElement = params._targetElement;
-    const skipLoading = params._skipLoading;
+    const skipLoading = params._skipLoading || !!teardown;
 
     // v0.7.0 — Activity gate. Drop the event client-side when ANY
     // ancestor activity wrapper is hidden and not eager. The nested
@@ -128,7 +134,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const cacheKey = buildCacheKey(eventName, serverParams, keyParams);
     const cached = getCachedResult(cacheKey);
 
-    if (cached) {
+    if (cached && !teardown) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
             djLog(`[LiveView:cache] Cache hit: ${cacheKey}`);
@@ -158,7 +164,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     let paramsToSend = serverParams;
 
     // Only set up caching for events with @cache decorator
-    if (config) {
+    if (config && !teardown) {
         // Generate cache request ID for cacheable events
         const cacheRequestId = generateCacheRequestId();
         const ttl = config.ttl || 60;
@@ -184,7 +190,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // #1315: sendEvent now returns a Promise that resolves when the server
     // responds (patch, noop, or error with matching ref). Await it so callers
     // can run post-response logic (e.g. _setFormPending(false) in finally).
-    const wsPromise = liveViewWS && liveViewWS.sendEvent(eventName, paramsToSend, triggerElement);
+    const wsPromise = liveViewWS && (teardown
+        ? (liveViewWS.sendTeardownEvent && liveViewWS.sendTeardownEvent(eventName, paramsToSend, triggerElement))
+        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement));
     if (wsPromise) {
         await wsPromise;
         return;
@@ -196,7 +204,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // degrades to full-page HTTP re-renders that *look* like the app works.
     // The server intentionally returns a generic "View not found" (no allowlist
     // detail leaked), so the client points the developer at the likely cause.
-    if (!_djustHttpFallbackWarned) {
+    //
+    // #2721: a teardown flush reaches this path BY DESIGN — the WS branch
+    // above deliberately falls through because `LiveViewWebSocket` has no
+    // `sendTeardownEvent`. That says nothing about the socket's health, so
+    // warning here would be wrong AND would burn the once-per-session flag,
+    // silencing a later genuine degraded mount — inverting the point of #1674.
+    if (!teardown && !_djustHttpFallbackWarned) {
         _djustHttpFallbackWarned = true;
         console.warn(
             '[LiveView] Events are falling back to full-page HTTP re-renders '
@@ -214,7 +228,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
             || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
             || '';
-        const response = await fetch(window.location.href, {
+        const response = await fetch(teardown ? teardown.url : window.location.href, {
+            keepalive: !!teardown,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -228,12 +243,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // This response belongs to the outgoing view; never patch the new one.
+        if (teardown) return;
         const data = await response.json();
         await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!teardown) globalLoadingManager.stopLoading(eventName, triggerElement);
     }
 }
 window.djust.handleEvent = handleEvent;

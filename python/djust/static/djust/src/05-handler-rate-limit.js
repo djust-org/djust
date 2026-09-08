@@ -30,6 +30,76 @@
 
 // event name -> {debounce: {wait, max_wait}, throttle: {interval, leading, trailing}}
 const handlerRateConfig = new Map();
+let handlerMountConfigured = false;
+// Active element wrappers only; settled/cancelled timers release DOM references.
+const pendingElementRateLimits = new Set();
+let teardownEventTransport = null;
+
+function cancelPendingRateLimits() {
+    pendingElementRateLimits.forEach(wrapper => wrapper.cancel());
+    debounceTimers.forEach(state => clearTimeout(state.timerId));
+    throttleState.forEach(state => clearTimeout(state.timeoutId));
+    debounceTimers.clear();
+    throttleState.clear();
+}
+
+function flushPendingRateLimits() {
+    const previous = teardownEventTransport;
+    teardownEventTransport = { url: window.location.href, collecting: true, pending: new Map() };
+    try {
+        // The handler gate may hold an older edit while its element wrapper
+        // holds the newest one. Collect the older layer first, then replace
+        // it by event name instead of issuing racing HTTP requests for both.
+        flushHandlerRateLimit();
+        Array.from(pendingElementRateLimits).forEach(wrapper => wrapper.flush());
+        teardownEventTransport.collecting = false;
+        teardownEventTransport.pending.forEach((params, eventName) => {
+            window.djust.handleEvent(eventName, params, true);
+        });
+    } finally {
+        teardownEventTransport = previous;
+    }
+}
+window.addEventListener('pagehide', flushPendingRateLimits);
+
+// The PAGE-LEVEL view's mount replaces the complete configuration, including
+// omitted/empty maps. Share this between WS and SSE to avoid cross-view rules
+// and cached patches surviving a navigation.
+//
+// #2721: call this ONLY for the page view's own mount frame. `case 'mount'`
+// is the reply to EVERY mount request on the socket — per-element lazy
+// hydration (13-lazy-hydration.js `mountElement`), `hydrateAll()`, and the
+// `mount_batch` fallback (#1031) all mount ADDITIONAL views onto the same
+// page over the SAME socket. Resetting on one of those wiped the primary
+// view's @debounce/@throttle/@cache config and its optimistic rules, silently
+// turning the decorators into no-ops. Sibling mounts take
+// `installAdditionalMountEventConfig` instead.
+function installMountEventConfig(data) {
+    cancelPendingRateLimits();
+    handlerRateConfig.clear();
+    cacheConfig.clear();
+    resultCache.clear();
+    pendingCacheRequests.forEach(state => clearTimeout(state.timeoutId));
+    pendingCacheRequests.clear();
+    optimisticUpdates.clear();
+    window.djust._optimisticRules = data.optimistic_rules || {};
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+}
+
+// An ADDITIONAL view mounting onto the page the primary view already owns
+// (lazy hydration / mount_batch fallback). Its config is ADDITIVE: it adds
+// its own handlers and cache rules and must not disturb any sibling's.
+function installAdditionalMountEventConfig(data) {
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+    if (data.optimistic_rules) {
+        window.djust._optimisticRules = data.optimistic_rules;
+    }
+}
+
 
 /**
  * Install handler rate-limit configuration (called on mount, WS and SSE).
@@ -63,6 +133,7 @@ function _configFor(eventName) {
     if (handlerRateConfig.has(eventName)) {
         return handlerRateConfig.get(eventName);
     }
+    if (handlerMountConfigured) return null;
     const meta = window.handlerMetadata;
     if (meta && Object.prototype.hasOwnProperty.call(meta, eventName)) {
         // eslint-disable-next-line security/detect-object-injection
