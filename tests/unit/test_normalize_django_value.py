@@ -1,5 +1,6 @@
 """Tests for normalize_django_value() in djust.serialization."""
 
+import contextlib
 import json
 from datetime import datetime, date, time, timedelta, timezone
 from decimal import Decimal
@@ -278,20 +279,60 @@ class TestMaxRecursionDepth:
 
 
 class TestCallable:
-    """callable -> None."""
+    """callable -> None, on the two channels that still drop it (#2621).
+
+    The arm used to be unconditional, and that is what made the LiveView path
+    render ``None`` for ``{{ callable }}`` where Django renders the CALL's
+    result — rows J / J2 / Q / P / P0 of the ADR-027 characterization net.
+    Since #2621 it is gated on ``template_resolve_lazy``: under the flag a
+    callable crosses RAW and the resolution sink applies Django's own call
+    rules (``alters_data``, ``do_not_call_in_templates``, a propagating
+    raise).
+
+    Two channels keep the drop, and they are what these cases now assert:
+    the ADR-027 escape hatch, and ``state_roundtrip=True`` — the session /
+    signed-snapshot boundary, written by an encoder-less serializer that
+    cannot hold a live object.
+
+    The flag-ON behaviour is pinned in
+    ``python/tests/test_adr027_callable_arm_2621.py`` rather than duplicated
+    here: this file's subject is the encoder-parity contract, and the sink is
+    that file's.
+    """
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _resolve_lazy(enabled):
+        from djust.config import config
+        from djust.render_env import apply_render_env
+
+        previous = config.get("template_resolve_lazy", False)
+        config.update({"template_resolve_lazy": enabled})
+        apply_render_env()
+        try:
+            yield
+        finally:
+            config.update({"template_resolve_lazy": previous})
+            apply_render_env()
 
     def test_function_returns_none(self):
         def my_func():
             return 42
 
-        assert normalize_django_value(my_func) is None
+        with self._resolve_lazy(False):
+            assert normalize_django_value(my_func) is None
+        assert normalize_django_value(my_func, state_roundtrip=True) is None
 
     def test_lambda_returns_none(self):
-        assert normalize_django_value(lambda: 42) is None
+        with self._resolve_lazy(False):
+            assert normalize_django_value(lambda: 42) is None
+        assert normalize_django_value(lambda: 42, state_roundtrip=True) is None
 
     def test_builtin_returns_none(self):
         # len is callable
-        assert normalize_django_value(len) is None
+        with self._resolve_lazy(False):
+            assert normalize_django_value(len) is None
+        assert normalize_django_value(len, state_roundtrip=True) is None
 
 
 class MyCustom:

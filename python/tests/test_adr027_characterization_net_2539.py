@@ -707,32 +707,40 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #: Django engine every run. A row still in the set must keep TODAY's recorded
 #: bytes, so "wrong in a new way" fails too.
 #:
-#: The remaining disagreements are measured against Django below; each
-#: retained row has a named reason:
+#: **Both sets are now empty** (#2621): with the flag ON every non-floor row
+#: answers Django's bytes on both paths. The set is kept — not deleted — for
+#: two reasons: it is what ``assert_lazy_column`` reads, so a future
+#: regression has a named place to land rather than a diff that edits an
+#: assertion; and movement 4 (#2628) is the PR that deletes both sets with
+#: the flag itself. An empty stated set is a stronger claim than a populated
+#: one, and ``TestTheTableIsLoadBearing`` still exercises the held-row branch
+#: against a synthetic row so the machinery cannot rot while unused.
 #:
-#: Row O now agrees on both paths and both flag settings: Encoded keeps
-#: string-conversion safety as runtime-only metadata, without a wire grant.
+#: How each of the six cells #2621 inherited was closed:
 #:
-#: Row V (a generator) agrees on both paths with the flag ON since #2613:
-#: ``opaque_gate`` admits a ONE-SHOT iterator with a live handle and no
-#: items, and the ``{% for %}`` sink consumes it once through
-#: ``Encoded::consume_live_items`` — Django's ``list(values)``. With the flag
-#: OFF there is no handle, so the recorded (declined) bytes stand there.
-#: * ``J`` / ``J2`` / ``Q``, LiveView only — ``normalize_django_value``
-#:   replaces ANY callable with ``None`` before Rust sees it
-#:   (``serialization.py``'s "safety net: skip callables"), so a lambda and a
-#:   class never reach the sink on that path at all. The same shape as the
-#:   Component arm #2513 turns on, and deferred with it: lifting it changes
-#:   the LiveView STATE channel, not the resolution sink.
+#: * Row **O** (a ``__str__`` returning ``SafeData``) — closed before #2621
+#:   opened: ``Encoded`` keeps string-conversion safety as runtime-only
+#:   metadata, without a wire grant.
 #:
-#: * ``P`` / ``P0``, LiveView only — the same callable arm: the class is
-#:   replaced before Rust sees it, no handle exists, and the pre-ADR walk's
-#:   unguarded string-key item call answers (#2624 made that an answer
-#:   rather than a segfault). Closes with J / J2 / Q.
+#: * Row **V** (a generator) — closed by #2613: ``opaque_gate`` admits a
+#:   ONE-SHOT iterator with a live handle and no items, and the ``{% for %}``
+#:   sink consumes it once through ``Encoded::consume_live_items`` — Django's
+#:   ``list(values)``. With the flag OFF there is no handle, so the recorded
+#:   (declined) bytes stand there.
 #:
-#: Remaining callable and iterator differences are tracked at #2621.
+#: * Rows **J** / **J2** / **Q** / **P** / **P0**, LiveView only — closed by
+#:   #2621. ``normalize_django_value`` replaced ANY callable with ``None``
+#:   before Rust saw it (``serialization.py``'s "safety net: skip callables"),
+#:   so a lambda and a class never reached the sink on that path at all, and
+#:   for P / P0 the absent handle left the pre-ADR walk's unguarded string-key
+#:   item call to answer (#2624 made that an answer rather than a segfault).
+#:   That arm is now gated on the flag, so under ADR-027 a callable crosses
+#:   RAW and ``walk_live``'s root ``maybe_call`` decides — Django's own rules,
+#:   at the sink. The arm still fires for ``state_roundtrip=True`` (the
+#:   session channel cannot hold a live object) and for a callable the
+#:   conversion does not model as an ``Encoded``.
 PLAIN_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
-LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 P P0 Q".split())
+LIVEVIEW_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
 
 
 def recorded(row: Row, path: str) -> Any:
@@ -979,8 +987,11 @@ class TestTheDifferentialTable:
         )
         # 27 at the flip, 29 since #2613 moved row V on both paths, 31 since
         # #2624: P-plain and P0-plain joined once they stopped crashing (the
-        # flag's metaclass guard answers both with Django's bytes).
-        assert len(moved) == 31, f"expected 31 cells to move, got {len(moved)}: {sorted(moved)}"
+        # flag's metaclass guard answers both with Django's bytes). 36 since
+        # #2621 gated `normalize_django_value`'s callable arm on the flag,
+        # which moved the five LiveView cells that arm was dropping —
+        # J, J2, Q, P and P0 — leaving `held` empty.
+        assert len(moved) == 36, f"expected 36 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
@@ -1111,7 +1122,9 @@ class TestTheTableIsLoadBearing:
         with pytest.raises(AssertionError, match="SECURITY pin"):
             assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", row.django)
 
-    def test_the_lazy_check_reddens_in_all_three_directions(self) -> None:
+    def test_the_lazy_check_reddens_in_all_three_directions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """``assert_lazy_column`` is the flag-ON half and needs the same
         treatment: a claimed row that does NOT reach Django, a held row that
         silently DOES, and a floor row that leaks must each fail by name."""
@@ -1121,11 +1134,19 @@ class TestTheTableIsLoadBearing:
         assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
         with pytest.raises(AssertionError, match="does not answer Django's bytes"):
             assert_lazy_column(claimed, "plain", claimed.plain)
-        # A HELD row (row J, LiveView — the plain held set emptied when #2613
-        # closed row V) that starts matching Django must fail loudly, so the
+        # A HELD row that starts matching Django must fail loudly, so the
         # residue set cannot rot into a floor.
+        #
+        # BOTH stated sets are empty since #2621, so there is no real held row
+        # left to point at — and a branch with no exercise is a branch that
+        # rots. The set is therefore SUBSTITUTED for the duration of these
+        # three assertions, which keeps the held arm load-bearing against a
+        # REAL row's real recorded bytes (row J on LiveView, whose recorded
+        # column is still `"None"`) rather than a hand-built fixture. The
+        # production sets stay empty; `monkeypatch` restores them.
         held = ROW_BY_ID["J"]
-        assert "J" in LIVEVIEW_WRONG_UNDER_LAZY
+        monkeypatch.setitem(globals(), "LIVEVIEW_WRONG_UNDER_LAZY", frozenset({"J"}))
+        assert "J" in wrong_under_lazy("liveview"), "the substitution did not reach the reader"
         assert_lazy_column(held, "liveview", held.liveview)
         with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
             assert_lazy_column(held, "liveview", held.django)

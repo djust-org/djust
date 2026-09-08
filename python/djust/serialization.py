@@ -1675,6 +1675,32 @@ def render_form_value(value: Any) -> Any:
     return None
 
 
+def _crosses_as_encoded(value: Any) -> bool:
+    """Does ``impl FromPyObject for Value`` model this object as ``Encoded``?
+
+    ``_rust.crosses_as_encoded`` RUNS the conversion and asks what came out,
+    rather than re-stating its gate: a Python copy would be a second statement
+    of one question and would drift on the first widening (#1646). It answers
+    FALSE for the ``__dict__`` bulk-dump arm and for every EARLIER arm — a
+    ``bytes`` and a ``deque`` are claimed by PyO3's sequence extraction and
+    cross as a ``Value::List``.
+
+    :func:`normalize_django_value` asks it from TWO arms — the callable arm
+    (#2621) and the final fallback (#2477/#2489) — so the guarded import lives
+    here once rather than in each. Both arms want the same fail-SOFT answer
+    when the compiled extension is missing (a pure-Python install, or a build
+    predating the export): ``False``, i.e. keep the historical behaviour.
+    Raising would turn "we could not serialize it" into a 500 on the branch
+    least likely to be exercised.
+    """
+    try:
+        from . import _rust
+
+        return bool(_rust.crosses_as_encoded(value))
+    except (ImportError, AttributeError):
+        return False
+
+
 def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool = False) -> Any:
     """Convert Django/Python types to values djust's serializers can carry.
 
@@ -1739,7 +1765,14 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     - QuerySet                     -- list of normalized models
     - FieldFile / file-like        -- .url or None
     - Component / LiveComponent    -- str() (renders HTML)
-    - callable                     -- None (safety net, matches encoder)
+    - callable                     -- carried through UNCONVERTED under ADR-027
+                                      (#2621), so the resolution sink applies
+                                      Django's own call rules; None on the two
+                                      channels that cannot hold a live object —
+                                      ``state_roundtrip=True`` and a callable
+                                      the conversion does not model as an
+                                      ``Encoded``. None on both, with
+                                      ``template_resolve_lazy`` off
     - anything that crosses as a
       ``Value::Encoded`` (a dict
       view, a ``complex``, a
@@ -1970,8 +2003,42 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     except ImportError:
         pass  # components module is optional; skip check if not installed
 
-    # Safety net: skip callables (matches encoder behavior)
+    # Safety net: skip callables (matches encoder behavior) -- EXCEPT under
+    # ADR-027, where the resolution sink decides instead of this arm (#2621).
+    #
+    # This arm is why the LiveView path answered `None` for `{{ callable }}`,
+    # `{{ var.callable }}` and `{{ k }}`-on-a-class (rows J / J2 / Q of the
+    # characterization net) while the plain path -- which has no
+    # `normalize_django_value` in front of it -- answered Django's bytes with
+    # the flag ON. The value never reached Rust at all: `None` IS a `Value`,
+    # so the value stack answered first and the sidecar's raw object was never
+    # consulted. Rows P / P0 are the same cause with a sharper edge: with no
+    # handle to walk, the pre-ADR sidecar walk's unguarded string-key
+    # `get_item` reached `__class_getitem__` and rendered a `types.GenericAlias`
+    # spelled with the STRING key (a segfault until the #2624 depth ceiling).
+    #
+    # Under the flag the callable crosses RAW and `walk_live`'s root
+    # `maybe_call` decides, which is where Django's own rules already live:
+    # `alters_data` -> `CallOutcome::Empty`, `do_not_call_in_templates` -> as
+    # is, a raising body propagates (#2506 never fails open), and a component
+    # mutator is a bound method reached by LOOKUP, so the
+    # `TemplateMutatorGuard` re-stamp (#2507) governs it unchanged. Nothing
+    # here invokes the callable; the arm only stops dropping it.
+    #
+    # Two boundaries keep the arm:
+    #
+    # * `state_roundtrip=True` -- the session / signed-snapshot channel is
+    #   written by an encoder-less serializer and CANNOT hold a live object,
+    #   the same reason the `Decimal` / `datetime` / `set` branches above split
+    #   on it. A callable in public state still persists as `None`.
+    # * `crosses_as_encoded` false -- a callable the conversion does NOT model
+    #   as an `Encoded` (there is no handle to walk) keeps today's answer
+    #   rather than taking the `str()` fallback below.
     if callable(value):
+        from .config import template_resolve_lazy_enabled
+
+        if not state_roundtrip and template_resolve_lazy_enabled() and _crosses_as_encoded(value):
+            return value
         logger.debug(
             "Skipping callable %s during normalization",
             type(value).__name__,
@@ -2041,18 +2108,8 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     # object, for the reason the `Decimal` / `datetime` / `set` branches above
     # record: its output is written to the Django session by an encoder-less
     # serializer.
-    if not state_roundtrip:
-        try:
-            from . import _rust
-
-            if _rust.crosses_as_encoded(value):
-                return value
-        except (ImportError, AttributeError):
-            # No compiled extension (a pure-Python install, or a build that
-            # predates the export): fall through to the historical `str()`.
-            # Failing SOFT here matters because this is the fallback branch —
-            # raising would turn "we could not serialize it" into a 500.
-            pass
+    if not state_roundtrip and _crosses_as_encoded(value):
+        return value
 
     return str(value)
 
