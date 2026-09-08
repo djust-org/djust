@@ -196,10 +196,22 @@ def test_shards_record_their_own_durations_for_upload() -> None:
     ]
     assert len(uploads) == 1, f"expected exactly one durations upload step, got {uploads}"
     step = uploads[0]
+    with_ = step.get("with") or {}
     # Ancillary to the gate: an upload hiccup must not fail a blocking job.
     assert step.get("continue-on-error") is True, step
     # The artifact name must vary by shard, or four uploads collide into one.
-    assert "matrix.group" in str((step.get("with") or {}).get("name", "")), step
+    assert "matrix.group" in str(with_.get("name", "")), step
+    # `.test_durations` is a dotfile and upload-artifact drops hidden files
+    # by default. Without this the step is GREEN, runs in 0s, and uploads
+    # nothing — which is exactly how it first shipped, discovered only when
+    # `make test-durations-from-ci` reported no matching artifact.
+    assert with_.get("include-hidden-files") is True, (
+        "the durations file is a dotfile; without include-hidden-files the "
+        "upload silently produces no artifact and still reports success"
+    )
+    # The file is committed, so it is always present: `warn` could only ever
+    # hide a broken path. Silence already caused this once.
+    assert with_.get("if-no-files-found") == "error", with_
 
 
 def test_durations_file_is_committed_and_the_invocation_points_at_it() -> None:

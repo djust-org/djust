@@ -326,7 +326,17 @@ jobs:
         with:
           name: test-durations-shard-${{ matrix.group }}
           path: .test_durations
-          if-no-files-found: warn
+          # `.test_durations` is a DOTFILE, and upload-artifact excludes
+          # hidden files unless told otherwise. Without this the step is
+          # green, takes 0s, and produces no artifact — which is how the
+          # first version of it shipped: the run was green and
+          # `make test-durations-from-ci` then said "no artifact matches".
+          include-hidden-files: true
+          # `error`, not `warn`: the file is COMMITTED, so it is always on
+          # disk and this can only fire if the path or the recording flags
+          # broke. Silence must not be the failure mode twice. The step is
+          # `continue-on-error`, so a red one is visible without blocking.
+          if-no-files-found: error
 
       - name: Run Python linter
         if: matrix.group == 1
