@@ -404,6 +404,27 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
 /// Trait for loading parent templates
 /// This will be implemented by the Python integration layer
 pub trait TemplateLoader {
+    /// An OWNED, shareable handle to this loader (#2710).
+    ///
+    /// `{{ block.super }}` renders the parent body at the moment the
+    /// expression is resolved, and the resolver holds only `&Context` — so
+    /// the loader has to outlive the borrow the `Node::BlockSuperScope` arm
+    /// has. `Option<&L>` cannot, and `Context` has no lifetime to hang one
+    /// on, so the deferred source stores this instead.
+    ///
+    /// REQUIRED rather than defaulted, and that is the point: a
+    /// `None`-returning default would silently route whichever loader forgot
+    /// to implement it back onto the eager parent render, which is the bug —
+    /// and the loaders that would forget are the TEST loaders, i.e. exactly
+    /// the ones the suite measures through (#1646). Every implementation is
+    /// one line; a loader with per-instance mutable state should hand back a
+    /// snapshot with the same answers.
+    ///
+    /// Cheap for every loader in this repo: [`FilesystemTemplateLoader`] is
+    /// two `Vec<PathBuf>`s and its parse cache is a process-global static,
+    /// so a clone shares it.
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync>;
+
     /// Whether separate include nodes receive the same compiled target.
     fn shares_include_nodes(&self, _name: &str) -> bool {
         true
@@ -773,6 +794,7 @@ fn absolute_template_path(input: PathBuf) -> Result<PathBuf> {
 }
 
 /// Filesystem-based template loader for production use
+#[derive(Clone)]
 pub struct FilesystemTemplateLoader {
     template_dirs: Vec<std::path::PathBuf>,
     uncached_dirs: Vec<std::path::PathBuf>,
@@ -858,6 +880,13 @@ impl FilesystemTemplateLoader {
 }
 
 impl TemplateLoader for FilesystemTemplateLoader {
+    fn shared_handle(&self) -> Arc<dyn TemplateLoader + Send + Sync> {
+        // Two `Vec<PathBuf>`s; the parse cache is `PARSED_TEMPLATE_CACHE`, a
+        // process-global static keyed by RESOLVED path, so the clone shares
+        // it and a deferred `{{ block.super }}` render gets the same hits.
+        Arc::new(self.clone())
+    }
+
     fn shares_include_nodes(&self, name: &str) -> bool {
         if self.uncached_dirs.is_empty() {
             return true;

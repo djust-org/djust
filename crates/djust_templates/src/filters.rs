@@ -3043,7 +3043,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
         // Python raising is Django's own `except (ValueError, TypeError,
         // KeyError): return value`, so a `generator` comes back unchanged on
         // both engines.
-        Value::Encoded(e) if e.items.is_none() && e.live.is_some() => {
+        Value::Encoded(e) if carrier_answers_subscripts_from_the_live_object(e) => {
             match e.live_get_slice(start, stop, step) {
                 Some(Ok(sliced)) => Ok(sliced),
                 Some(Err(_)) | None => Ok(value.clone()),
@@ -6687,6 +6687,36 @@ pub(crate) fn python_iter(value: &Value) -> Result<std::result::Result<Vec<Value
     Ok(iter_values(value)?.ok_or(ValueOpError::NotIterable))
 }
 
+/// Does this carrier answer a SUBSCRIPT — `value[i]`, `value[slice(…)]` —
+/// from its live handle? (#2704)
+///
+/// ONE statement of the rule, read by the two sinks Django implements as a
+/// bare subscript ([`python_getitem`], which is `first` / `last` / `random`,
+/// and [`apply_slice`]). Two copies of it is the #1646 shape, and this one
+/// changed for a reason that would have reached only whichever copy the fix
+/// noticed: it used to be `e.items.is_none() && e.live.is_some()`.
+///
+/// The `items.is_none()` half was standing in for "not subscriptable" —
+/// before #2704 a bounded sequence became a `Value::List`, so the only
+/// carriers that HELD items were a `set`, a `frozenset` and a `dict_keys`,
+/// which genuinely refuse `x[0]`. #2704 moves every non-`list` sequence onto
+/// the carrier at ANY length, so a `range(3)` / `deque` / `array` / `bytes` /
+/// sized user class now carries items AND is subscriptable, and the proxy
+/// answered `TypeError: 'range' object is not subscriptable` for
+/// `{{ v|first }}` where Django answers `0`.
+///
+/// Asking the live object is both the fix and the more faithful rule: Django
+/// runs `value[…]` and reports whatever Python raises, so a `set` still
+/// refuses — because CPython refuses it, not because this predicate inferred
+/// it from a field that meant something else.
+///
+/// The eager escape hatch has no handle (`live` is `None`) and never reaches
+/// here: it keeps enumerating every bounded sequence into a `Value::List`,
+/// which the arms above answer.
+pub(crate) fn carrier_answers_subscripts_from_the_live_object(e: &djust_core::Encoded) -> bool {
+    e.live.is_some()
+}
+
 /// Python's `value[index]` for a NEGATIVE-or-positive integer index (#2451).
 ///
 /// `Ok(None)` is Python's `IndexError`, which `first` / `last` / `random` all
@@ -6735,18 +6765,20 @@ pub(crate) fn python_getitem(
         }
         // Iterable, not subscriptable (#2340).
         Value::DictView { .. } => Err(ValueOpError::NotSubscriptable),
-        // A carrier whose items were NOT enumerated is subscripted on the
-        // LIVE object, which is Django's own `value[0]` / `value[-1]`
-        // (#2695). Before this arm every `Encoded` fell to the refusal
-        // below, so `{{ v|first }}` over a `range(10**9)` raised where
-        // Django answers `0` in constant time — and the only way to answer
-        // it from carried data would have been to enumerate a billion items
-        // at the conversion, which is the hang the conversion now declines.
+        // A carrier is subscripted on the LIVE object, which is Django's own
+        // `value[0]` / `value[-1]` (#2695). Before this arm every `Encoded`
+        // fell to the refusal below, so `{{ v|first }}` over a `range(10**9)`
+        // raised where Django answers `0` in constant time — and the only way
+        // to answer it from carried data would have been to enumerate a
+        // billion items at the conversion, which is the hang the conversion
+        // now declines.
         //
-        // A `set`, a `frozenset` and a `dict_keys` carry `items` and keep
-        // the refusal: they are iterable and genuinely not subscriptable, so
-        // this arm must not claim them.
-        Value::Encoded(e) if e.items.is_none() && e.live.is_some() => {
+        // A `set`, a `frozenset` and a `dict_keys` still refuse, and now for
+        // the reason Python gives rather than by inference from `items`: the
+        // live subscript raises `TypeError` and this arm reports it — see
+        // [`carrier_answers_subscripts_from_the_live_object`] for why the
+        // `items.is_none()` half of the old guard had to go (#2704).
+        Value::Encoded(e) if carrier_answers_subscripts_from_the_live_object(e) => {
             match e.live_get_item(index) {
                 // `IndexError` — Django's `except IndexError: return ""`.
                 Some(Ok(found)) => Ok(found),

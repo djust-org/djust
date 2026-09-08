@@ -153,6 +153,22 @@ class _Members:
             # measured table and the same defect: `{{ p|length }}` was 6, the
             # characters of "(1+0j)", where Django says 0.
             "complex-one": complex(1),
+            # --- CARRIED since #2704: the non-`list` SEQUENCES -------------
+            # These four were in `EARLIER` — PyO3's sequence extraction
+            # claimed them and they crossed as a `Value::List` of their
+            # items. That made `{{ p }}` `[97, 98]` where Django renders
+            # `b'ab'`, so #2704 declines every non-`list` sequence at the
+            # conversion and `opaque_value` claims them here. They are swept
+            # against live Django by every template below like any other
+            # carried member.
+            "bytes": b"ab",
+            "deque": collections.deque(["a", PAYLOAD]),
+            "range": range(3),
+            "getitem-seq": instance(
+                "SeqLike",
+                __len__=lambda self: 2,
+                __getitem__=lambda self, i: ("a", PAYLOAD)[i],
+            ),
         }
         values["o-iter-attrs"].tag = PAYLOAD
         return values
@@ -210,14 +226,17 @@ DECLINED_ONLY_ON_THE_HATCH = frozenset(
     {"truthy-attrs", "one-shot-generator", "one-shot-falsy", "unbounded-reiterable"}
 )
 
+#: `bytes` / `deque` / `range` / `getitem-seq` used to be here — PyO3's
+#: sequence extraction claimed all four. #2704 moved every NON-`list` sequence
+#: off that arm (its `Value::List` display spelled `{{ v }}` as `[97, 98]`
+#: where Django renders `b'ab'`), so they are `CARRIED` now and swept against
+#: Django with the rest. What remains is the arms that are genuinely earlier
+#: and stay that way: PyO3's MAPPING extraction, and a real `list`.
 EARLIER: dict[str, str] = {
-    "bytes": "PyO3's sequence extraction — a Value::List of its ints",
-    "deque": "PyO3's sequence extraction",
-    "range": "PyO3's sequence extraction",
-    "getitem-seq": "PyO3's sequence extraction (an integer __getitem__)",
     "counter": "PyO3's mapping extraction — a dict subclass",
     "plain-dict": "PyO3's mapping extraction",
-    "plain-list": "PyO3's sequence extraction",
+    "plain-list": "PyO3's sequence extraction (a real `list`, whose own "
+    "`str()` IS the list repr — see #2704)",
 }
 
 
@@ -246,14 +265,6 @@ def declined_values() -> dict:
 
 def earlier_values() -> dict:
     return {
-        "bytes": b"ab",
-        "deque": collections.deque(["a", PAYLOAD]),
-        "range": range(3),
-        "getitem-seq": instance(
-            "SeqLike",
-            __len__=lambda self: 2,
-            __getitem__=lambda self, i: ("a", PAYLOAD)[i],
-        ),
         "counter": collections.Counter({"a": 1}),
         "plain-dict": {"a": PAYLOAD},
         "plain-list": ["a", PAYLOAD],
@@ -292,10 +303,18 @@ REFUSAL_CLASS_ONLY = {
     ("complex-zero", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
     ("complex-one", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
     ("o-bool-false", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
-    # A `mappingproxy[0]` is a KEY lookup, so Django raises KeyError where the
-    # carrier answers `'mappingproxy' object is not subscriptable`. Both refuse.
-    ("mappingproxy", "{{ p|first }}"),
-    ("mappingproxy", "{{ p|last }}"),
+    # `b"ab".lower()` is `b"ab"`, so Django's `"".join(… for c in phone)`
+    # joins INTS and raises TypeError; the carrier has no `lower` at all and
+    # refuses with AttributeError. Both refuse. Newly measurable: a `bytes`
+    # was in `EARLIER` and never swept until #2704 carried it.
+    ("bytes", "{{ p|phone2numeric }}"),
+    # `mappingproxy` `{{ p|first }}` / `{{ p|last }}` used to sit here: a
+    # `mappingproxy[0]` is a KEY lookup, so Django raised KeyError where the
+    # carrier answered `'mappingproxy' object is not subscriptable`. #2704
+    # made the subscript sinks ask the LIVE object instead of inferring
+    # subscriptability from whether `items` were enumerated, so CPython now
+    # raises the KeyError and both engines agree — the rows are deleted rather
+    # than left here as cover, which is what this set's own docstring asks for.
 }
 
 
@@ -392,13 +411,13 @@ class TestBothPathsAnswerDjango:
     def test_the_sweep_is_not_vacuous(self) -> None:
         """It has to be able to fail: the cells must not all be trivially equal.
 
-        Nineteen members and sixteen consumers is 304 cells, and the class is
+        Twenty-two members and sixteen consumers is 352 cells, and the class is
         only interesting because the consumers DISAGREE with each other about
         the same value. Asserted directly: the sweep contains cells that render
         and cells that refuse, on Django, for every member.
         """
         members = _Members.build()
-        assert len(members) == 18, "the member list moved — update the count"
+        assert len(members) == 22, "the member list moved — update the count"
         assert len(TEMPLATES) == 16
         rendering = refusing = 0
         for source in TEMPLATES:
@@ -553,9 +572,9 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         assert not (CARRIED & set(DECLINED))
         assert not (CARRIED & set(EARLIER))
         assert not (set(DECLINED) & set(EARLIER))
-        assert len(CARRIED) == 18
+        assert len(CARRIED) == 22
         assert len(DECLINED) == 4
-        assert len(EARLIER) == 7
+        assert len(EARLIER) == 3
 
 
 class TestTheDeclinesAreRecordedInTheDivergingDirection:
@@ -682,11 +701,17 @@ class TestTheNormalizerCarriesExactlyTheModelledClass:
             for key, value in declined_values().items():
                 got = normalize_django_value(value)
                 assert isinstance(got, str), (key, got)
-        # A `bytes` is NOT stringified by the normalizer — it has no branch and
-        # is not `crosses_as_encoded`, so it reaches the `str()` fallback. That
-        # is the behaviour `{{ p }}` == `b'ab'` depends on.
-        assert normalize_django_value(b"ab") == "b'ab'"
-        assert normalize_django_value(collections.deque(["a"])) == "deque(['a'])"
+        # A `bytes` and a `deque` used to be stringified here — they had no
+        # branch and were not `crosses_as_encoded`, so they reached the
+        # `str()` fallback. #2704 carries them, and `{{ p }}` still renders
+        # `b'ab'` / `deque(['a'])` because the carrier's display IS that same
+        # `str(o)`. The value the normalizer hands over changes; the bytes on
+        # the page do not.
+        assert normalize_django_value(b"ab") == b"ab"
+        assert _rust.render_template("{{ p }}", {"p": b"ab"}) == escape("b'ab'")
+        deq = collections.deque(["a"])
+        assert normalize_django_value(deq) is deq
+        assert _rust.render_template("{{ p }}", {"p": deq}) == escape("deque(['a'])")
 
     def test_a_set_nested_in_a_container_is_carried_too(self) -> None:
         """The recursion, which is where a real context puts one."""

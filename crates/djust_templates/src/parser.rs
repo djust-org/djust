@@ -4252,6 +4252,12 @@ mod tests {
     /// A loader with no entries — exercises the "no include resolution" path.
     struct NoIncludeLoader;
     impl crate::inheritance::TemplateLoader for NoIncludeLoader {
+        fn shared_handle(
+            &self,
+        ) -> std::sync::Arc<dyn crate::inheritance::TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(NoIncludeLoader)
+        }
+
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             Err(djust_core::DjangoRustError::TemplateError(format!(
                 "no template: {name}"
@@ -4260,6 +4266,7 @@ mod tests {
     }
 
     /// A HashMap-backed loader for `{% include %}` coverage tests.
+    #[derive(Clone)]
     struct MapLoader {
         templates: std::collections::HashMap<String, String>,
     }
@@ -4274,6 +4281,12 @@ mod tests {
         }
     }
     impl crate::inheritance::TemplateLoader for MapLoader {
+        fn shared_handle(
+            &self,
+        ) -> std::sync::Arc<dyn crate::inheritance::TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(self.clone())
+        }
+
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             match self.templates.get(name) {
                 Some(src) => {

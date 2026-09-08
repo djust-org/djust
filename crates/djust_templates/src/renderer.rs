@@ -681,7 +681,9 @@ fn sibling_updates<L: TemplateLoader>(
             // operands the handler declares literal (RESOLVE_ARG_POSITIONS)
             // are passed raw (#2041).
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
-            let context_map = context.to_hashmap();
+            // #2710: through the ONE bridge, so a deferred `block.super` is
+            // materialised for the flat map Python resolves against.
+            let context_map = bridged_context_map(context)?;
             // Forward the raw-Python sidecar so assign handlers can reach
             // Python-only context (request, view) the same way
             // `Node::CustomTag` handlers do (#1167).
@@ -855,9 +857,12 @@ pub(crate) fn compiled_template_operand(value: &Value) -> Result<Option<Compiled
 }
 
 fn render_template_object(handle: &Py<PyAny>, context: &Context) -> Result<String> {
+    // #2710: through the ONE bridge, so a deferred `block.super` is
+    // materialised for the flat map Python resolves against.
+    let context_map = bridged_context_map(context)?;
     Python::attach(|py| {
         let raw = context.render_raw_py_objects();
-        let data = crate::registry::build_py_context(py, &context.to_hashmap(), raw.as_deref())
+        let data = crate::registry::build_py_context(py, &context_map, raw.as_deref())
             .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
         py.import("djust.template.operands")?
             .getattr("render_template_object")?
@@ -1057,7 +1062,9 @@ fn call_custom_tag(
     // TOKENS instead (#2423); both rules apply, in that order, through
     // `resolve_custom_tag_args`.
     let resolved_args = resolve_custom_tag_args(name, args, context);
-    let context_map = context.to_hashmap();
+    // #2710: through the ONE bridge, so a deferred `block.super` is
+    // materialised for the flat map Python resolves against.
+    let context_map = bridged_context_map(context)?;
     // The optional raw-Python sidecar (``request``, ``view``, …) so handlers
     // like ``live_render`` (#1145) can reach Python objects from the parent's
     // render context. Existing handlers ignore extra keys.
@@ -1151,7 +1158,9 @@ fn call_block_custom_tag<L: TemplateLoader>(
     // Render children first to get block content
     let content = render_nodes_with_loader_mut(children, context, loader)?;
     let resolved_args = resolve_block_tag_args(name, args, context);
-    let context_map = context.to_hashmap();
+    // #2710: through the ONE bridge, so a deferred `block.super` is
+    // materialised for the flat map Python resolves against.
+    let context_map = bridged_context_map(context)?;
     // Forward raw-Python sidecar so block handlers can reach Python-only
     // context (request, view) the same way ``Node::CustomTag`` handlers do
     // (#1167).
@@ -1204,7 +1213,9 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     loader: Option<&L>,
 ) -> Result<(String, Vec<SiblingBinding>)> {
     let resolved_args = resolve_block_tag_args(name, args, context);
-    let context_map = context.to_hashmap();
+    // #2710: through the ONE bridge, so a deferred `block.super` is
+    // materialised for the flat map Python resolves against.
+    let context_map = bridged_context_map(context)?;
     let raw_py = context.render_raw_py_objects();
     let autoescape = context.autoescape();
 
@@ -1254,7 +1265,9 @@ fn call_raw_block_tag(
     context: &Context,
 ) -> Result<(String, Vec<SiblingBinding>)> {
     let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
-    let context_map = context.to_hashmap();
+    // #2710: through the ONE bridge, so a deferred `block.super` is
+    // materialised for the flat map Python resolves against.
+    let context_map = bridged_context_map(context)?;
     let raw_py = context.render_raw_py_objects();
     let (html, bindings) = crate::registry::call_raw_block_handler_with_bindings(
         name,
@@ -2206,11 +2219,163 @@ pub fn render_nodes_partial<L: TemplateLoader>(
 struct NoOpLoader;
 
 impl TemplateLoader for NoOpLoader {
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+        std::sync::Arc::new(NoOpLoader)
+    }
+
     fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
         Err(DjangoRustError::TemplateError(
             "Template loader not configured".to_string(),
         ))
     }
+}
+
+impl std::fmt::Debug for dyn TemplateLoader + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<TemplateLoader>")
+    }
+}
+
+/// A SIZED [`TemplateLoader`] over an owned handle (#2710).
+///
+/// `render_nodes_with_loader_mut<L: TemplateLoader>` takes `L` under an
+/// implicit `Sized` bound, so a bare `&dyn TemplateLoader` cannot be passed.
+/// Relaxing that bound to `?Sized` would touch every generic signature in
+/// this module for one call site; this delegates instead, so the deferred
+/// `{{ block.super }}` render reaches the same loader the enclosing render
+/// used — INCLUDING its `load_template_cached` override, which is what keeps
+/// the `{% for %}` loop-render cache's cross-render node identity (#2074).
+struct SharedLoader(std::sync::Arc<dyn TemplateLoader + Send + Sync>);
+
+impl TemplateLoader for SharedLoader {
+    fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+        std::sync::Arc::clone(&self.0)
+    }
+
+    fn shares_include_nodes(&self, name: &str) -> bool {
+        self.0.shares_include_nodes(name)
+    }
+
+    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+        self.0.load_template(name)
+    }
+
+    fn template_origin(&self, name: &str) -> Option<String> {
+        self.0.template_origin(name)
+    }
+
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        skip: &[String],
+    ) -> Result<(Vec<Node>, Option<String>)> {
+        self.0.load_template_skipping(name, skip)
+    }
+
+    fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
+        self.0.load_template_cached(name)
+    }
+}
+
+/// The parent body of one `{{ block.super }}` scope, unrendered (#2710).
+///
+/// Owns everything the render needs, because it outlives the borrow the
+/// `Node::BlockSuperScope` arm holds: the resolver that runs it
+/// (`Context::resolve`) has only `&Context`, and `Context` has no lifetime to
+/// carry `&[Node]` / `&L` on. The nodes are cloned once per scope ENTRY —
+/// only a template whose child body mentions `block.super` builds one of
+/// these nodes at all (`inheritance::nodes_reference_block_super` gates its
+/// construction), and the clone replaces a full parent RENDER, so it is
+/// cheaper than what it displaces.
+#[derive(Debug)]
+struct DeferredBlockSuper {
+    super_nodes: std::sync::Arc<Vec<Node>>,
+    /// `None` when the render was started without a loader — the
+    /// `NoOpLoader` case, where an `{% include %}` inside the parent body
+    /// refuses exactly as it does anywhere else in that render.
+    loader: Option<std::sync::Arc<dyn TemplateLoader + Send + Sync>>,
+}
+
+impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
+    fn render_block_super(&self, ctx: &Context) -> Result<String> {
+        // A CLONE of the live context, not a scope push on it, because the
+        // resolver hands us `&Context` and the render needs `&mut`. The two
+        // are equivalent for what Django does here: `BlockNode.render` wraps
+        // the body in `with context.push()`, so the parent's own bindings do
+        // not escape either way, and everything Django keeps ACROSS that push
+        // — `render_context`, where `{% cycle %}` and `{% ifchanged %}` state
+        // lives — is behind an `Arc` on `Context` and is SHARED by the clone.
+        // That sharing is load-bearing rather than incidental: a parent
+        // containing `{% cycle 'a' 'b' %}` referenced twice renders `a-b` on
+        // both engines, and a per-render copy would answer `a-a`.
+        //
+        // The clone is DISARMED first, so a `{{ block.super }}` inside the
+        // parent body — reachable only when that body is not itself a
+        // `BlockSuperScope`, i.e. when there is no further ancestor —
+        // resolves to nothing instead of re-entering this same parent
+        // forever. Django's `BlockNode.super()` answers `''` at that point
+        // for the same reason. A REAL grandparent arrives as a nested
+        // `Node::BlockSuperScope` inside `super_nodes` and arms its own
+        // source when it renders, so multi-level inheritance is the recursion
+        // rather than a special case.
+        let mut scoped = ctx.clone();
+        scoped.disarm_block_super();
+        match &self.loader {
+            Some(handle) => {
+                let loader = SharedLoader(std::sync::Arc::clone(handle));
+                scoped.with_scope(|inner| {
+                    render_nodes_with_loader_mut(&self.super_nodes, inner, Some(&loader))
+                })
+            }
+            None => scoped.with_scope(|inner| {
+                render_nodes_with_loader_mut(&self.super_nodes, inner, None::<&NoOpLoader>)
+            }),
+        }
+    }
+}
+
+/// The context map to hand a PYTHON-BRIDGED tag, with `block.super`
+/// materialised when one is armed (#2710).
+///
+/// #2710 defers the parent render to the moment an expression resolves
+/// `block.super`, which works for every operand channel the RENDERER owns
+/// because they all end in `Context::resolve`. One boundary is not the
+/// renderer's: a bridged tag receives the context as a FLAT MAP
+/// ([`djust_core::Context::to_hashmap`]) and Django's own Python code then
+/// resolves against that map — `{% blocktranslate with s=block.super %}` is
+/// the shape that finds it. A map has nothing to defer behind, so this is
+/// where the laziness ends.
+///
+/// The ONE statement of that rule, read by every `to_hashmap()` caller,
+/// because a second copy is #1646 and the sites are seven
+/// (`the_python_bridge_has_exactly_the_callers_it_claims` pins the SET, not
+/// a floor). Costs nothing when nothing is armed, which is every render that
+/// is not inside an overriding `{% block %}`.
+///
+/// **The residual divergence, stated rather than left silent**: a bridged tag
+/// inside such a block renders the parent even when it never asks — the class
+/// #2710 fixes, narrowed to this boundary. Django does not: its context
+/// carries the `BlockNode` and `super()` is a method. Closing it would mean
+/// scanning the bridged tag's own source text for the name, which is the
+/// "static detection is not evidence of evaluation" reasoning #2710 rejects,
+/// one level down. What this DOES preserve is the pre-#2710 behaviour at
+/// these seven sites exactly, so nothing that worked stops working.
+fn bridged_context_map(context: &Context) -> Result<std::collections::HashMap<String, Value>> {
+    let Some(parent_html) = context.render_armed_block_super()? else {
+        return Ok(context.to_hashmap());
+    };
+    let mut owned = context.clone();
+    // Disarmed on the copy so nothing can render the parent a SECOND time
+    // for the same tag: the binding below is now the answer.
+    owned.disarm_block_super();
+    let mut block_obj = indexmap::IndexMap::new();
+    block_obj.insert(
+        djust_core::ObjectKey::from("super"),
+        Value::String(parent_html),
+    );
+    owned.bind("block".to_string(), Value::Object(block_obj), false);
+    owned.mark_safe("block.super".to_string());
+    Ok(owned.to_hashmap())
 }
 
 pub fn render_node_with_loader_mut<L: TemplateLoader>(
@@ -3852,23 +4017,45 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
         }
 
         Node::BlockSuperScope { super_nodes, nodes } => {
-            // `{{ block.super }}` — Django's `BlockNode.super()` (#2517).
+            // `{{ block.super }}` — Django's `BlockNode.super()` (#2517,
+            // deferred in #2710).
             //
-            // The parent body renders FIRST, into a string bound as
-            // `block.super` for the child body. Django returns that string
-            // `mark_safe`'d (it is rendered template output, already escaped
-            // by whatever produced it), so the binding is marked safe here;
-            // escaping it again would double-escape every parent block.
-            let parent_html =
-                context.with_scope(|ctx| render_nodes_with_loader_mut(super_nodes, ctx, loader))?;
+            // The parent body used to render HERE, before the child body was
+            // entered, and the result was bound as `block.super`. Static
+            // detection that the child MENTIONS `block.super` is not evidence
+            // that evaluation will reach it, so a reference inside a false
+            // branch ran the parent anyway: measured against Django 5.2.16,
+            // `{% if show %}{{ block.super }}{% endif %}child` with `show`
+            // false called the parent once here and zero times there, and a
+            // parent that RAISES turned an otherwise-fine false branch into a
+            // 500. Identical output, different behaviour.
+            //
+            // So nothing renders here. The scope carries a deferred SOURCE
+            // ([`DeferredBlockSuper`], holding the parent nodes and an owned
+            // loader handle) and `Context::resolve` runs it when — and each
+            // time — an expression asks for `block.super`.
+            //
+            // `block` is still BOUND, to an empty object: `Context::bind` is
+            // what clears the frame's `invalid_block_super` flag, which is how
+            // `{{ block.super }}` in a base template keeps raising Django's
+            // "Did you use {{ block.super }} in a base template?". The `super`
+            // KEY is deliberately absent — the value comes from the deferred
+            // source, and a bound copy would be a second mechanism answering
+            // the same name (#1646), the eager one winning because `get` is
+            // tried before `resolve`.
+            let source: std::sync::Arc<dyn djust_core::context::BlockSuperSource> =
+                std::sync::Arc::new(DeferredBlockSuper {
+                    super_nodes: std::sync::Arc::new(super_nodes.clone()),
+                    loader: loader.map(|l| l.shared_handle()),
+                });
             context.with_scope(|scoped| {
-                let mut block_obj = indexmap::IndexMap::new();
-                block_obj.insert(
-                    djust_core::ObjectKey::from("super"),
-                    Value::String(parent_html),
+                scoped.bind(
+                    "block".to_string(),
+                    Value::Object(indexmap::IndexMap::new()),
+                    false,
                 );
-                scoped.bind("block".to_string(), Value::Object(block_obj), false);
                 scoped.mark_safe("block.super".to_string());
+                scoped.arm_block_super(source);
                 render_nodes_with_loader_mut(nodes, scoped, loader)
             })
         }
@@ -3963,7 +4150,9 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
             // as in render_nodes_with_loader_mut (#2041).
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
-            let context_map = context.to_hashmap();
+            // #2710: through the ONE bridge, so a deferred `block.super` is
+            // materialised for the flat map Python resolves against.
+            let context_map = bridged_context_map(context)?;
             // Forward raw-Python sidecar (#1167).
             let raw_py = context.render_raw_py_objects();
             crate::registry::call_assign_handler_with_py_sidecar(
@@ -6453,6 +6642,10 @@ mod tests {
     struct PanickingLoader;
 
     impl TemplateLoader for PanickingLoader {
+        fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(PanickingLoader)
+        }
+
         fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
             panic!("a child node blew up mid-render");
         }
@@ -8437,6 +8630,7 @@ mod tests {
     // specific to SafeString-marked values, not to includes in general.
 
     /// A tiny in-memory template loader for include tests.
+    #[derive(Clone)]
     struct MapLoader {
         templates: std::collections::HashMap<String, Vec<Node>>,
     }
@@ -8454,6 +8648,12 @@ mod tests {
     }
 
     impl crate::inheritance::TemplateLoader for MapLoader {
+        fn shared_handle(
+            &self,
+        ) -> std::sync::Arc<dyn crate::inheritance::TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(self.clone())
+        }
+
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             self.templates.get(name).cloned().ok_or_else(|| {
                 DjangoRustError::TemplateError(format!("template not found: {name}"))

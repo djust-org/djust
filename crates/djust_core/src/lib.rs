@@ -3621,13 +3621,77 @@ fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
     if ob.is_instance_of::<PyList>() {
         return true;
     }
-    // A cached `sys.modules` lookup, and only ever reached once the stated
-    // length is already past the cap — never on the hot path.
+    // A cached `sys.modules` lookup, and only ever reached FROM HERE once
+    // the stated length is already past the cap. (The other caller,
+    // `list_repr_is_this_objects_own_spelling`, asks it at any length — but
+    // only for an object `PySequence_Check` already claimed and the `PyList`
+    // arm already declined, so a dict, a model and an ordinary object never
+    // pay it.)
+    is_django_queryset(ob)
+}
+
+/// `isinstance(o, django.db.models.QuerySet)`, through a cached `sys.modules`
+/// lookup. ONE statement of the test, because two functions ask it about the
+/// same objects for two different reasons — the cap exemption
+/// ([`len_call_already_materialised_the_items`]) and the list-spelling
+/// exemption ([`list_repr_is_this_objects_own_spelling`]) — and a second copy
+/// is the #1646 shape.
+fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
     ob.py()
         .import("django.db.models")
         .and_then(|m| m.getattr("QuerySet"))
         .and_then(|cls| ob.is_instance(&cls))
         .unwrap_or(false)
+}
+
+/// Would `[a, b, c]` be this object's OWN spelling? (#2704)
+///
+/// `Value::List`'s `Display` is a **list** repr, so every object that crosses
+/// through [`bounded_sequence_items`] renders `{{ v }}` as `[3, 1, 2]`.
+/// Django renders `str(o)`, and for every non-`list` sequence that is the
+/// container's own spelling instead: `range(0, 3)`, `deque([3, 1, 2])`,
+/// `array('i', [3, 1, 2])`, `b'\x03\x01\x02'`, `<X object at 0x…>`. Measured
+/// against Django 5.2 for all five, in
+/// `python/tests/test_sized_sequence_conversion_2695_2693.py`.
+///
+/// #2695 made the divergence LENGTH-DEPENDENT rather than uniform, which is
+/// worse: past [`OPAQUE_ITEM_CAP`] the same shapes decline into the carrier
+/// and DO render `str(o)`, so `range(3)` was `[0, 1, 2]` and `range(10**9)`
+/// was `range(0, 1000000000)`. This retires the length-dependence by asking
+/// the SPELLING question at every length instead — the carrier is what a
+/// non-`list` sequence gets, and the cap only decides whether its items are
+/// read here or at the sink.
+///
+/// THREE exemptions, and each is a different reason:
+///
+/// * **The eager escape hatch** (`!resolve_lazy()`). There is no live handle
+///   there, so a decline lands on the terminal `Value::String(str(o))` and
+///   `{% for %}` walks the REPR character by character — `{{ v.0 }}` renders
+///   `[`, `|length` counts repr characters. That trades one wrong cell for
+///   nine, so the hatch keeps enumerating and keeps the list spelling, on the
+///   same reasoning [`stated_len_is_too_large_to_enumerate`] uses for its own
+///   `resolve_lazy()` term. An unfixed cell beats a wrong one.
+/// * **A `list`.** `str([3, 1, 2])` IS `[3, 1, 2]`, so there is nothing to
+///   fix; a `list` is the one shape whose Django answer this arm already
+///   spells. (A `tuple` never reaches here — the tuple arm above
+///   [`bounded_sequence_items`] claims it and `Value::Tuple` spells itself.)
+/// * **A Django `QuerySet`.** Its Django spelling is `<QuerySet [...]>`, so
+///   it IS divergent — but declining it is #2717's half, not this one: the
+///   `render_template` path hands the conversion a `_SidecarQuerySetProxy`
+///   with no `__getitem__`, so a declined queryset answers `{{ rows.0 }}`
+///   with `''`, and `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap`
+///   pins that it must not. #2717 is the issue that carries both halves
+///   (a carrier that can spell its own container sinks); doing it here would
+///   mean designing a lazy QuerySet carrier inside a spelling fix. Scoped
+///   deliberately rather than half-done (CLAUDE.md #1079).
+fn list_repr_is_this_objects_own_spelling(ob: &Bound<'_, PyAny>) -> bool {
+    if !resolve_lazy() {
+        return true;
+    }
+    if ob.is_instance_of::<PyList>() {
+        return true;
+    }
+    is_django_queryset(ob)
 }
 
 fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
@@ -3637,6 +3701,18 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
     // SAFETY: `ob` is a live, GIL-held reference; `PySequence_Check` only
     // reads the type's slots and cannot fail.
     if unsafe { pyo3::ffi::PySequence_Check(ob.as_ptr()) } == 0 {
+        return None;
+    }
+    if !list_repr_is_this_objects_own_spelling(ob) {
+        // #2704: a `deque` / `range` / `array` / `bytes` / sized user class
+        // crosses as the CARRIER instead, whose `{{ v }}` is `str(o)` and
+        // whose item sinks read the live object.
+        //
+        // BELOW `PySequence_Check` deliberately: the `QuerySet` half of that
+        // predicate is a `sys.modules` import plus an `isinstance`, and every
+        // dict, model and ordinary object reaches this function. Behind the
+        // slot check only a real sequence pays it, and a `list` — the common
+        // one — is answered by the `PyList` arm before the import.
         return None;
     }
     let len = ob.len().ok()?;
@@ -4308,15 +4384,22 @@ impl Encoded {
     /// not subscriptable) and a `KeyError` are told apart here and anything
     /// else is reported as the not-subscriptable case.
     ///
-    /// Only ever reached for a carrier whose items were NOT enumerated: a
-    /// `set` or a `dict_keys` keeps the inert `items` path and its existing
-    /// refusal. For `range(10**9)` this is `{{ v|first }}` -> `0` and
+    /// For `range(10**9)` this is `{{ v|first }}` -> `0` and
     /// `{{ v|last }}` -> `999999999`, both in constant time, both Django's
     /// own answers.
+    ///
+    /// Answers from the OBJECT whether or not `items` were enumerated
+    /// (#2704). It used to refuse a carrier holding `items`, as a stand-in
+    /// for "not subscriptable" — true only while the sole item-holding
+    /// carriers were a `set` / `frozenset` / `dict_keys`. #2704 moves every
+    /// non-`list` sequence onto the carrier at any length, so `range(3)` and
+    /// a `deque` hold items AND subscript, and the stand-in answered
+    /// `TypeError: 'range' object is not subscriptable` where Django answers
+    /// `0`. A `set` still refuses, now because CPython raises rather than
+    /// because a field was read as a proxy. Whether a caller asks at all is
+    /// `filters::carrier_answers_subscripts_from_the_live_object` — one
+    /// statement, two sinks, rather than a copy of the rule here (#1646).
     pub fn live_get_item(&self, index: i64) -> Option<PyResult<Option<Value>>> {
-        if self.items.is_some() {
-            return None;
-        }
         let handle = self.live.as_ref()?;
         Some(Python::attach(|py| match handle.bind(py).get_item(index) {
             Ok(found) => Ok(Some(found.extract::<Value>()?)),
@@ -4328,26 +4411,28 @@ impl Encoded {
     /// Python's `o[start:stop:step]` over the live handle — Django's `slice`
     /// filter, which is a bare `value[slice(*bits)]` passthrough (#2695).
     ///
-    /// `None` when there is nothing to slice (no handle, items already
-    /// enumerated) and `Some(Err(..))` when Python raises — both of which the
-    /// caller answers with Django's `except (ValueError, TypeError,
-    /// KeyError): return value`, i.e. the input unchanged. That is what a
-    /// `generator` gets, on both engines.
+    /// `None` when there is no handle to slice and `Some(Err(..))` when
+    /// Python raises — both of which the caller answers with Django's
+    /// `except (ValueError, TypeError, KeyError): return value`, i.e. the
+    /// input unchanged. That is what a `generator` gets, on both engines, and
+    /// what a `deque` gets on both (`deque[0:3]` is a `TypeError` in CPython).
     ///
     /// Load-bearing because the conversion now declines to enumerate a sized
     /// sequence past [`OPAQUE_ITEM_CAP`]: without this arm
     /// `{{ v|slice:":3" }}` over `collections.deque(range(100_001))` — or over
     /// `range(10**9)` — returned the WHOLE carrier unchanged, where Django
     /// renders three items.
+    ///
+    /// Slices whether or not `items` were enumerated — see
+    /// [`Encoded::live_get_item`] for why that stand-in had to go (#2704).
+    /// The container the slice returns is the OBJECT's, which is the whole
+    /// point: `range(3)[0:3]` is `range(0, 3)` and not `[0, 1, 2]`.
     pub fn live_get_slice(
         &self,
         start: Option<isize>,
         stop: Option<isize>,
         step: Option<isize>,
     ) -> Option<PyResult<Value>> {
-        if self.items.is_some() {
-            return None;
-        }
         let handle = self.live.as_ref()?;
         Some(Python::attach(|py| {
             // Built through Python's own `slice(...)` rather than

@@ -343,11 +343,28 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
         # Already materialised: exempt at any length (#2695 review).
         assert _rust.crosses_as_encoded(list(range(100_001))) is False
-        # Under the cap: unchanged, on both the sized and the ordinary shape.
+        # Under the cap: a `list` is unchanged.
         assert _rust.crosses_as_encoded(list(range(10))) is False
-        assert _rust.crosses_as_encoded(range(10)) is False
-        assert _rust.crosses_as_encoded(collections.deque(range(100_000))) is False
+        # A small `range` used to be `False` here — the cap was the only
+        # reason a sequence declined. #2704 added the SPELLING reason, which
+        # is length-independent: `{{ v }}` over a `range` is `range(0, 10)`
+        # in Django and was `[0, 1, …]` here, so every non-`list` sequence
+        # now crosses as the carrier at ANY length. The cap question this
+        # class measures is unaffected — it only decides whether the ITEMS
+        # are read at the conversion or at the sink.
+        assert _rust.crosses_as_encoded(range(10)) is True
+        # A `deque` one UNDER the cap is carried for the same #2704 reason as
+        # a small `range` — the spelling, not the length. What this class
+        # measures is unchanged and is asserted directly below: the cap is
+        # what decides whether the carrier holds ITEMS.
+        assert _rust.crosses_as_encoded(collections.deque(range(100_000))) is True
         assert _rust.crosses_as_encoded(list(range(100_000))) is False
+        # The cap's own effect — whether the carrier holds ITEMS — is not
+        # visible through `crosses_as_encoded` for a `deque` any more, and it
+        # is not this assertion's job: it is measured by
+        # `TestATerminatingCollectionPastTheCapIsUntouched` and by the liar
+        # rows above, which is where the two sides of the cap answer
+        # differently.
 
 
 #: A collection ONE past `OPAQUE_ITEM_CAP` that genuinely terminates. This is

@@ -439,17 +439,24 @@ LAZY_PARITY: frozenset[str] = frozenset(
         "str",
     )
     | _cells("liar", "length", "index0", "first", "last", "slice", "str")
-    | _cells(
-        "range_small",
-        *(s for s in SINKS if s not in ("slice", "str")),
-    )
+    # #2704: `range_big|slice` joins the six sinks above. Django slices the
+    # live object and gets a `range`, which now spells itself.
+    | _cells("range_big", "slice")
+    # #2704: the container-spelling cells. A non-`list` sequence crosses as
+    # the carrier at ANY length, so `{{ v }}` is `str(o)` — `range(0, 3)`,
+    # `deque([3, 1, 2])`, `array('i', [3, 1, 2])`, `b'\x03\x01\x02'`,
+    # `<QuerySetShape object at 0x…>` — and `|slice` is the live
+    # `value[slice(*bits)]`, which keeps the container Python hands back
+    # (`range(0, 3)`; a `deque` slice is a `TypeError` on BOTH engines, so
+    # both return the input unchanged).
+    | _cells("range_small", *SINKS)
+    | _cells("deque", *SINKS)
+    | _cells("array", *SINKS)
+    | _cells("bytes", *SINKS)
+    | _cells("queryset", *SINKS)
     | _cells("set", *(s for s in SINKS if s not in ("first", "last")))
     | _cells("frozenset", *(s for s in SINKS if s not in ("first", "last")))
     | _cells("dict_keys", *(s for s in SINKS if s not in ("first", "last")))
-    | _cells("deque", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("array", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("bytes", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("queryset", *(s for s in SINKS if s != "str"))
     # #2693: a one-shot iterator now answers ``dictsort`` too.
     | _cells("generator", *(s for s in SINKS if s not in ("first", "last")))
     | _cells("map", *(s for s in SINKS if s not in ("first", "last")))
@@ -468,14 +475,14 @@ LAZY_PARITY: frozenset[str] = frozenset(
 #:   and djust's message quotes Django's sentence verbatim
 #:   (``TypeError: 'set' object is not subscriptable``); only the exception
 #:   CLASS wrapping it differs. Pre-existing.
-#: * ``{slice,str}`` over ``range``/``deque``/``array``/``bytes``, and ``str``
-#:   over the QuerySet shape — those cross as a ``Value::List``, so
-#:   ``{{ v }}`` is ``[3, 1, 2]`` where Django renders ``deque([3, 1, 2])``.
-#:   A container-spelling divergence that predates both issues and is
-#:   independent of the cap: ``range(3)`` has it too.
-#: * ``range_big|slice`` is that same cell: the live slice answers Python's
-#:   ``range(0, 3)``, which then crosses as a list exactly as ``range(3)``
-#:   does. It is the class above, not a new one.
+#:
+#: The ``{slice,str}`` divergence over ``range``/``deque``/``array``/``bytes``
+#: and the ``str`` divergence over the QuerySet shape used to be listed here:
+#: those crossed as a ``Value::List``, so ``{{ v }}`` was ``[3, 1, 2]`` where
+#: Django renders ``deque([3, 1, 2])``, and ``range_big|slice`` inherited it
+#: because the live slice's ``range(0, 3)`` crossed as a list in turn. #2704
+#: closed all eleven cells by declining every non-``list`` sequence at the
+#: conversion, so they are in ``LAZY_PARITY`` above.
 
 
 #: Cells where djust on the EAGER escape hatch renders exactly Django's
@@ -604,8 +611,22 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         assert answers[("list_big", "for")].startswith("<588897 chars>0,1,2,3,")
         assert answers[("list_big", "join")].startswith("<588896 chars>0,1,2,3,")
 
-    @pytest.mark.parametrize("shape", ["list_big", "range_big"])
-    def test_a_collection_past_the_cap_slices_to_three_items(self, shape: str) -> None:
+    @pytest.mark.parametrize(
+        ("shape", "expected"),
+        [
+            ("list_big", "[0, 1, 2]"),
+            # `range(10**9)[0:3]` is `range(0, 3)` in Python, and Django
+            # renders `str()` of whatever the slice handed back. Until #2704
+            # that `range(0, 3)` crossed BACK as a `Value::List` and this
+            # cell rendered `[0, 1, 2]` — Django's answer for the `list`
+            # shape, not for this one. The differential agrees on both rows
+            # now (`range_big|slice` is in `LAZY_PARITY`).
+            ("range_big", "range(0, 3)"),
+        ],
+    )
+    def test_a_collection_past_the_cap_slices_to_three_items(
+        self, shape: str, expected: str
+    ) -> None:
         """``|slice`` had to grow a live arm with the conversion change: the
         fallback returns the value UNCHANGED, so a CARRIED 100 001-item
         sequence rendered all of them where Django renders three.
@@ -617,7 +638,7 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         """
         answers, reason = _render_in_child("djust", True, [(shape, "slice")], deadline=20)
         assert reason is None, reason
-        assert answers[(shape, "slice")] == "[0, 1, 2]"
+        assert answers[(shape, "slice")] == expected
 
     def test_the_liar_still_raises_rather_than_walking_forever(self) -> None:
         """#2678 must survive #2695. The liar states a billion and has no
@@ -773,6 +794,12 @@ class TestTheSerializationFloorHoldsOnTheNewHandle:
     `test_the_carrier_really_is_the_path_being_tested`, which is what would
     have caught the substitution. A `deque` is the ordinary sized-sequence
     case and is carried.
+
+    Since #2704 a `deque` is carried at BOTH sizes — the spelling decides
+    that, not the cap — so the parametrization now measures the carrier's
+    items-present and items-absent halves rather than carrier-vs-`Value::List`.
+    The `Value::List` half is stated explicitly with a `list` in the
+    non-vacuity test below, so both mechanisms are still floored here.
     """
 
     @staticmethod
@@ -800,13 +827,24 @@ class TestTheSerializationFloorHoldsOnTheNewHandle:
         assert "SECRET" not in out
 
     def test_the_carrier_really_is_the_path_being_tested(self) -> None:
-        """Non-vacuity: if the padded collection did NOT cross as a carrier,
-        the three cells above would be testing the old `Value::List` path
-        twice and the class would prove nothing (#1200)."""
+        """Non-vacuity: the class is only evidence if the padded collection
+        genuinely crosses as a carrier, and the `Value::List` path it is
+        being contrasted with is genuinely still reachable (#1200).
+
+        A `deque` is on the carrier at BOTH sizes since #2704 — the SPELLING
+        decides that, not the cap — so the second half can no longer be
+        spelled with a small `deque`. A `list` is where the floor's
+        `Value::List` path lives now (it is exempt from the decline at any
+        length), so it states that half, and it is floored too.
+        """
         from djust import _rust
 
         assert _rust.crosses_as_encoded(self._rows(100_001 - 3)) is True
-        assert _rust.crosses_as_encoded(self._rows(0)) is False
+        assert _rust.crosses_as_encoded(self._rows(0)) is True
+        rows_as_list = _model_rows(0)
+        assert _rust.crosses_as_encoded(rows_as_list) is False
+        assert _rust.render_template("{{ v.0.password }}", {"v": rows_as_list}) == ""
+        assert _rust.render_template("{{ v.0.username }}", {"v": rows_as_list}) == "alice"
 
 
 class TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap:
@@ -1118,3 +1156,95 @@ class TestDictsortConsumesTheLiveHandle:
         assert mine[("dict_gen", "consume_once")] == theirs[("dict_gen", "consume_once")]
         # And it really is spent: the loop after the sort renders nothing.
         assert mine[("dict_gen", "consume_once")].endswith("|")
+
+
+class TestANonListSequenceIsSpelledAsItself2704:
+    """#2704 — the container-spelling half, kept as the issue's own table.
+
+    ``Value::List``'s ``Display`` is a **list** repr, so every object PyO3's
+    sequence extraction claimed rendered ``{{ v }}`` as ``[3, 1, 2]``. Django
+    renders ``str(o)``, which for every non-``list`` sequence is the
+    container's own spelling. #2695 made that divergence LENGTH-DEPENDENT
+    rather than uniform — ``range(3)`` was ``[0, 1, 2]`` and ``range(10**9)``
+    was ``range(0, 1000000000)``, because only the second declined into the
+    carrier — so the fix asks the SPELLING question at every length instead.
+
+    The differential above is the exhaustive measurement (every sink x every
+    shape x both flag settings, against live Django); this class keeps the
+    issue's table readable, so the next reader sees what changed without
+    subtracting two frozensets.
+    """
+
+    #: ``(expression, {{ v }}, {{ v|slice:":3" }})`` as Django 5.2 renders it.
+    #: The ``|slice`` column is not a second question: Django's filter is a
+    #: bare ``value[slice(*bits)]``, so it hands back whatever container
+    #: Python does — and the INPUT unchanged when Python raises, which is
+    #: what a ``deque`` slice does.
+    TABLE = (
+        ("range(3)", "range(0, 3)", "range(0, 3)"),
+        (
+            "__import__('collections').deque([3, 1, 2])",
+            "deque([3, 1, 2])",
+            "deque([3, 1, 2])",
+        ),
+        (
+            "__import__('array').array('i', [3, 1, 2])",
+            "array('i', [3, 1, 2])",
+            "array('i', [3, 1, 2])",
+        ),
+        ("b'\\x03\\x01\\x02'", "b'\\x03\\x01\\x02'", "b'\\x03\\x01\\x02'"),
+    )
+
+    @pytest.mark.parametrize(("expr", "as_str", "as_slice"), TABLE)
+    def test_the_container_spells_itself_on_both_sinks(
+        self, expr: str, as_str: str, as_slice: str
+    ) -> None:
+        """Django is CALLED, not transcribed — the strings in ``TABLE`` are
+        only the readable form of what this compares, and are asserted
+        against live Django first so a stale row fails loudly."""
+        from django.template import Context as DjangoContext
+        from django.template import Template as DjangoTemplate
+        from django.utils.html import escape
+
+        from djust import _rust
+
+        for src, expected in (("{{ v }}", as_str), ('{{ v|slice:":3" }}', as_slice)):
+            django_says = DjangoTemplate(src).render(DjangoContext({"v": eval(expr)}))  # noqa: S307
+            assert django_says == escape(expected), (
+                f"the table is stale: Django renders {django_says!r} for {src}"
+            )
+            assert _rust.render_template(src, {"v": eval(expr)}) == django_says  # noqa: S307
+
+    def test_a_list_keeps_the_list_spelling_because_it_IS_its_own(self) -> None:
+        """The bound. A ``list`` is the one sequence whose ``str()`` is the
+        list repr, so it must NOT move onto the carrier — and a ``tuple`` is
+        claimed by the arm above it and spells itself."""
+        from djust import _rust
+
+        assert _rust.render_template("{{ v }}", {"v": [3, 1, 2]}) == "[3, 1, 2]"
+        assert _rust.render_template("{{ v }}", {"v": (3, 1, 2)}) == "(3, 1, 2)"
+        assert _rust.crosses_as_encoded([3, 1, 2]) is False
+        assert _rust.crosses_as_encoded((3, 1, 2)) is False
+
+    def test_the_divergence_is_no_longer_length_dependent(self) -> None:
+        """The sharpest row: #2695 left ``range(3)`` and ``range(10**9)``
+        spelled by DIFFERENT mechanisms, and only the second agreed."""
+        from djust import _rust
+
+        assert _rust.render_template("{{ v }}", {"v": range(3)}) == "range(0, 3)"
+        assert _rust.render_template("{{ v }}", {"v": range(10**9)}) == "range(0, 1000000000)"
+
+    def test_the_eager_hatch_keeps_the_list_spelling(self) -> None:
+        """The one exemption that is about the HATCH rather than the object:
+        with no live handle a decline lands on ``str(o)`` and ``{% for %}``
+        walks the repr character by character, so the hatch keeps
+        enumerating. An unfixed cell beats a wrong one — the same reasoning
+        ``stated_len_is_too_large_to_enumerate`` uses for its own flag term.
+        """
+        from adr027_flag import resolve_lazy
+
+        from djust import _rust
+
+        with resolve_lazy(False):
+            assert _rust.render_template("{{ v }}", {"v": range(3)}) == "[0, 1, 2]"
+            assert _rust.render_template("{{ v|first }}", {"v": range(3)}) == "0"

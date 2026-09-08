@@ -201,15 +201,48 @@ class TestTheBoundedSequenceGate:
     """The #2572 gate is a rule about the operation, not a list of shapes:
     a sequence crosses as a list only when it states a bound and honours it."""
 
-    def test_every_builtin_sequence_still_crosses_as_a_list(self) -> None:
+    def test_every_builtin_sequence_still_crosses_as_a_list_on_the_hatch(self) -> None:
+        """The #2572 gate, measured where it is still the ONLY rule.
+
+        #2704 added a second, length-independent reason for a sequence to
+        decline: its `Value::List` display is a list repr, which is only
+        `str(o)` for a real `list`. That reason applies under
+        `template_resolve_lazy` (where the carrier can spell `str(o)` and
+        answer the sinks from the object) and NOT on the eager escape hatch,
+        which has no handle. So the hatch is where "does it state a bound and
+        honour it" is still the whole question, and it is unchanged there.
+        """
+        from collections import deque
+
+        from adr027_flag import resolve_lazy
+
+        from djust import _rust
+
+        with resolve_lazy(False):
+            for shape in ([1, 2], (1, 2), range(3), b"ab", bytearray(b"ab"), deque([1, 2])):
+                assert _rust.crosses_as_encoded(shape) is False, shape
+
+    def test_under_the_default_only_a_list_and_a_tuple_keep_the_list_arm(self) -> None:
+        """The #2704 split, and the two gates agreeing about it.
+
+        A `tuple` is claimed ABOVE the sequence arm and spells itself; a
+        `list`'s own `str()` IS the list repr. Every other builtin sequence
+        crosses as the carrier so `{{ v }}` is the container's own spelling.
+        """
         from collections import deque
 
         from djust import _rust
 
-        for shape in ([1, 2], (1, 2), range(3), b"ab", bytearray(b"ab"), deque([1, 2])):
+        for shape in ([1, 2], (1, 2)):
             assert _rust.crosses_as_encoded(shape) is False, shape
+            assert _rust.crosses_as_encoded_by_conversion(shape) is False, shape
+        for shape in (range(3), b"ab", bytearray(b"ab"), deque([1, 2])):
+            assert _rust.crosses_as_encoded(shape) is True, shape
+            assert _rust.crosses_as_encoded_by_conversion(shape) is True, shape
 
-    def test_a_legacy_sequence_with_a_len_crosses_as_a_list(self) -> None:
+    def test_a_legacy_sequence_with_a_len_crosses_as_a_list_on_the_hatch(self) -> None:
+        from adr027_flag import resolve_lazy
+
         from djust import _rust
 
         class Bounded:
@@ -221,8 +254,14 @@ class TestTheBoundedSequenceGate:
                     raise IndexError(i)
                 return i
 
-        assert _rust.crosses_as_encoded(Bounded()) is False
-        assert _rust.crosses_as_encoded_by_conversion(Bounded()) is False
+        with resolve_lazy(False):
+            assert _rust.crosses_as_encoded(Bounded()) is False
+            assert _rust.crosses_as_encoded_by_conversion(Bounded()) is False
+        # Under the default it is a sized user class, whose Django spelling is
+        # `<Bounded object at 0x…>` and not `[0, 1]` — so #2704 carries it,
+        # and both gates say so.
+        assert _rust.crosses_as_encoded(Bounded()) is True
+        assert _rust.crosses_as_encoded_by_conversion(Bounded()) is True
 
     def test_a_legacy_sequence_without_a_len_is_carried_by_both_gates(self) -> None:
         """The cheap probe and the real conversion must agree, or
