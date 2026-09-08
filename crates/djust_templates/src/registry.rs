@@ -1399,18 +1399,27 @@ pub struct HandlerBinding {
 ///
 /// ONE builder for every registry (#1646) — this was spelled inline, three
 /// times, before #2547 added a fourth and fifth caller.
+///
+/// Values cross through [`djust_core::value_into_handler_pyobject`], NOT the
+/// plain `IntoPyObject` (#2731). The difference is one variant: an arbitrary
+/// Python object is a `Value::Encoded`, and the plain conversion flattens it
+/// to `e.display` — its `str()`. A handler resolves its operands with Django's
+/// own `Variable._resolve_lookup`, so it was walking a STRING: every dotted
+/// segment missed and the tag silently answered "nothing".
+/// `{% regroup rows by group %}` over a list of objects built ONE group with
+/// `grouper=None`, and `{% url 'v' rows.0.pk %}` raised `NoReverseMatch` — on
+/// the LiveView render path only, because the stateless path's sidecar happens
+/// to carry the live list and overwrite the flattened entry a line below.
+/// The handler conversion keeps the object an object whose lookups go through
+/// `context::lookup_segment`, the renderer's own step.
 pub(crate) fn build_py_context<'py>(
     py: Python<'py>,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
-    use pyo3::IntoPyObject;
-
     let py_context = pyo3::types::PyDict::new(py);
     for (key, value) in context {
-        let py_value = value
-            .clone()
-            .into_pyobject(py)
+        let py_value = djust_core::value_into_handler_pyobject(py, value.clone())
             .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
         py_context
             .set_item(key, py_value)
