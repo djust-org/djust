@@ -540,9 +540,15 @@ class TestTheContainerSpellingCallSitesAreTheSetNamed:
         `declined_list_spelling` — so "which shapes spell as a list" cannot
         drift between the conversion and the sink (#1646)."""
         text = (REPO_ROOT / "crates/djust_core/src/lib.rs").read_text(encoding="utf-8")
-        calls = re.findall(r"spelling_is_the_items_list_repr\(", text)
-        # One definition + one call.
-        assert len(calls) == 2, f"expected fn + 1 call site, found {len(calls)}"
+        # The definition and the call are counted SEPARATELY, not as one total
+        # of two. A bare `== 2` cannot tell "one fn + one call" from "no fn +
+        # two calls", so a rename that left a stale caller behind would read
+        # as green — the same shape as the matcher that could not distinguish
+        # a rename from a regression during the #2704/#2717 arc.
+        defs = re.findall(r"^fn spelling_is_the_items_list_repr\(", text, re.M)
+        calls = re.findall(r"(?<!fn )spelling_is_the_items_list_repr\(", text)
+        assert len(defs) == 1, f"expected exactly one definition, found {len(defs)}"
+        assert len(calls) == 1, f"expected exactly one call site, found {len(calls)}"
 
 
 class TestTheEagerHatchIsUnchanged:
@@ -596,3 +602,106 @@ class TestTheEagerHatchIsUnchanged:
         assert answer["encoded"] is False, "the hatch must never decline a sized sequence"
         assert answer["head"] == "[0, 1, 2, 3,"
         assert answer["length"] == "100001"
+
+
+@pytest.mark.django_db
+class TestASmallQuerySetIsUnmovedByTheDeclineChange2717:
+    """A SMALL, REAL queryset renders exactly what it rendered before #2717.
+
+    #2704's owner raised this after their PR merged, and it is the right
+    objection: #2704's `list_repr_is_this_objects_own_spelling` keeps a
+    `QuerySet` on the `Value::List` path at **any** length, while #2717's
+    `declined_list_spelling` opens with ``len > OPAQUE_ITEM_CAP`` and so can
+    only re-spell a carrier the cap declined. The two govern different things,
+    and **neither differential had measured the small case** — every queryset
+    cell in this file and in the #2695 file is padded past the cap or asserted
+    only against its own other side.
+
+    "The two sides of the cap agree" cannot catch both sides moving together,
+    which is exactly how the #2706 → #2717 chain started. So this pins the
+    small side against literals, measured on `origin/main` (the merged #2704
+    tree) before this branch was rebased onto it: all 14 cells came back
+    byte-identical after, and `crosses_as_encoded` is `False` on both.
+
+    A REAL queryset over a REAL table, and `filter(...)` rather than a slice:
+    a sliced queryset is a different object with different `__len__` /
+    `__getitem__` semantics, and the question is about the ordinary shape a
+    view puts in a context.
+    """
+
+    @staticmethod
+    def _rows():
+        """Three real rows, UNEVALUATED, deterministically ordered."""
+        from django.contrib.auth.models import User
+
+        return User.objects.filter(username__in=["u0", "u1", "u2"]).order_by("username")
+
+    @classmethod
+    def _render_rows(cls, src: str) -> str:
+        """Bound to the name the cells actually use.
+
+        The module-level `_render` binds `v`; these templates say `rows`, to
+        match the issue's own spelling. Mixing them renders `''` for every
+        cell — an unresolvable name, not an empty queryset — which is how the
+        first version of this class failed.
+        """
+        from djust import _rust
+
+        return _rust.render_template(src, {"rows": cls._rows()})
+
+    @pytest.fixture(autouse=True)
+    def _seed(self, db):
+        # `db` explicitly, not just the class marker: an autouse fixture that
+        # does not depend on it can run BEFORE the database is set up, and the
+        # rows go nowhere. The first version of this class did exactly that
+        # and three of its cells passed VACUOUSLY on an empty queryset
+        # (`{{ rows.0.password }}` is `''` either way, and an empty queryset is
+        # not a carrier either) — the literal cells are what caught it.
+        from django.contrib.auth.models import User
+
+        for i in range(3):
+            User.objects.create_user(
+                username=f"u{i}", email=f"u{i}@b.c", password="pbkdf2_sha256$SECRET"
+            )
+
+    @pytest.mark.parametrize(
+        ("src", "expected"),
+        [
+            # The cell the objection is about: a carrier would spell `str(...)`.
+            ("{{ rows }}", "[u0, u1, u2]"),
+            ("{{ rows.0 }}", "u0"),
+            ("{{ rows.0.username }}", "u0"),
+            ("{{ rows.0.email }}", "u0@b.c"),
+            ("{{ rows.0.password }}", ""),
+            ("{{ rows|length }}", "3"),
+            ("{{ rows|first }}", "u0"),
+            ("{{ rows|last }}", "u2"),
+            ('{{ rows|slice:":2" }}', "[u0, u1]"),
+            ("{% for r in rows %}{{ r.username }}|{% endfor %}", "u0|u1|u2|"),
+            ("{% if rows %}T{% else %}F{% endif %}", "T"),
+        ],
+    )
+    def test_the_cell_is_what_it_was_before_this_branch(self, src: str, expected: str) -> None:
+        assert self._render_rows(src) == expected
+
+    @pytest.mark.parametrize("src", ["{{ rows|pprint }}", '{{ rows|json_script:"x" }}'])
+    def test_the_dump_filters_still_dump_three_identity_maps(self, src: str) -> None:
+        """Asserted structurally rather than byte-for-byte: both dump every
+        field, including a `date_joined` the fixture cannot pin. Three maps is
+        the `Value::List` answer; a carrier would spell one string."""
+        out = self._render_rows(src)
+        assert out.count("__model__") == 3, out[:200]
+        assert "SECRET" not in out
+
+    def test_the_small_queryset_is_not_a_carrier_at_all(self) -> None:
+        """The mechanism behind every row above, and the reason #2717 cannot
+        have moved them: a 3-row queryset never reaches `Encoded::live`, so
+        `declined_list_spelling` is never asked about one.
+
+        This is also the line that would go red if #2704's QuerySet arm were
+        dropped — which is what makes the literals above a pin on that arm
+        rather than a restatement of #2717.
+        """
+        from djust import _rust
+
+        assert _rust.crosses_as_encoded(self._rows()) is False
