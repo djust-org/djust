@@ -1976,7 +1976,19 @@ fn localize_if_number(value: &Value) -> Result<String> {
             // Decided in Rust first: a non-temporal Encoded never attaches
             // to Python (this arm runs once per rendered value).
             if encoded.temporal_kind().is_none() {
-                return Ok(encoded.display.clone());
+                // `{{ v }}`'s sink, and the one that short-circuits `Display`
+                // (#2717). A carrier the conversion declined for LENGTH whose
+                // spelling is its items' list repr — a `list`, a `QuerySet`, a
+                // djust queryset proxy — has to be spelled from its live
+                // handle, or this returns `str(o)` of djust's own
+                // serialization dicts. `container_spelling` answers `None` in
+                // one integer compare for every other carrier, which is what
+                // keeps this arm's "never attaches to Python" claim true for
+                // them.
+                return Ok(match value.container_spelling() {
+                    Some(spelled) => spelled.to_string(),
+                    None => encoded.display.clone(),
+                });
             }
             // `localize_temporal` resolved once per process, not per value.
             // `None` remembers that the module is absent (a bare-Rust test

@@ -106,8 +106,14 @@ class TestNestedDictListResolve:
 @pytest.mark.django_db
 class TestFloorNotBypassedByItemAccess:
     """#1986 floor must still hold: item-access-first must not let a model's
-    sensitive field leak (proxies implement no __getitem__, so item access
-    falls through to the floored getattr)."""
+    sensitive field leak.
+
+    The mechanism is `_SidecarModelProxy` implementing no ``__getitem__``, so
+    item access on a MODEL falls through to the floored getattr. Named for the
+    model proxy specifically since #2717: `_SidecarQuerySetProxy` DOES
+    implement one now (the live walk needs it to answer ``{{ rows.0 }}``), and
+    it protects every result it hands back rather than relying on this
+    fall-through."""
 
     def test_password_still_refused_through_walk(self):
         from django.contrib.auth.models import User

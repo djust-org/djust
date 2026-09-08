@@ -325,15 +325,17 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         (`{% for %}` over 100 001 items is pinned by
         `TestATerminatingCollectionPastTheCapIsUntouched` below).
 
-        So the carried set is now "anything whose stated length exceeds the
-        cap AND has not already materialised its items" — the liar and a
-        `range` included, a `list` and a `QuerySet` excluded, because for
-        those two the decline saves nothing (a `list` holds its elements
-        already; `QuerySet.__len__` calls `_fetch_all()`). See
-        `len_call_already_materialised_the_items` and, for the content change
-        that exemption prevents,
+        So the carried set is "anything whose stated length exceeds the cap"
+        — the liar, a `range`, a `deque`, a `list` and a `QuerySet` alike.
+
+        A `list` and a `QuerySet` were EXEMPT between the #2695 review and
+        #2717, because their declined SPELLING was wrong; #2717 fixed the
+        spelling at the sink instead (`Encoded::declined_list_spelling`) and
+        dropped the exemption, which was costing 4 GB on a 150 000-row
+        table. See `spelling_is_the_items_list_repr` and
         `TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap` in
-        `test_sized_sequence_conversion_2695_2693.py`.
+        `test_sized_sequence_conversion_2695_2693.py`, which pins that the
+        rendered bytes did not move when the exemption went.
         """
         assert _rust.crosses_as_encoded(Liar()) is True
         assert _rust.crosses_as_encoded(range(10**9)) is True
@@ -341,9 +343,17 @@ class TestAStatedBoundIsTrustedOnlyToTheCap2678:
         # nothing about `len(deque)` builds it either — it is the ordinary
         # sized-sequence case, and it is carried.
         assert _rust.crosses_as_encoded(collections.deque(range(100_001))) is True
-        # Already materialised: exempt at any length (#2695 review).
-        assert _rust.crosses_as_encoded(list(range(100_001))) is False
-        # Under the cap: a `list` is unchanged.
+        # A `list` too, since #2717 — no shape is exempt for its LENGTH.
+        assert _rust.crosses_as_encoded(list(range(100_001))) is True
+        # And under the cap a `list` is NOT carried. That is what makes the
+        # line above a statement about the length rather than about `list`,
+        # and it is the whole difference between the two rules that now
+        # decline a sequence: #2704's is about SPELLING and claims a `deque`
+        # at any size, #2717's is about LENGTH and claims a `list` only past
+        # the cap. A `list` spells as its items either way, so only the cap
+        # can carry one.
+        assert _rust.crosses_as_encoded(list(range(3))) is False
+        # Under the cap: unchanged, on both the sized and the ordinary shape.
         assert _rust.crosses_as_encoded(list(range(10))) is False
         # A small `range` used to be `False` here — the cap was the only
         # reason a sequence declined. #2704 added the SPELLING reason, which

@@ -1636,6 +1636,43 @@ class _SidecarQuerySetProxy:
             return 0
         return len(object.__getattribute__(self, "_qs"))
 
+    def __getitem__(self, key: Any) -> Any:
+        """``qs[i]`` / ``qs[a:b]``, each result protected (#2717).
+
+        The third half of the sequence protocol this proxy forwards, and the
+        one it was missing. ``__iter__`` and ``__len__`` were here from
+        #1986; ``__getitem__`` was not, and the walk that reads it —
+        ``Context::walk_live``'s Django steps 1 and 3 — therefore answered
+        ``VariableDoesNotExist`` for ``{{ rows.0 }}`` on any queryset the
+        conversion had DECLINED to enumerate, because the object the walk
+        subscripts is this proxy and not the queryset behind it. Below
+        `OPAQUE_ITEM_CAP` the value stack answered instead and the gap never
+        showed; #2717 removed the length exemption that kept every queryset
+        below it, so the gap became the cell.
+
+        Each result is run through ``_protect_sidecar_value`` for the reason
+        ``__iter__`` runs its items through it: a bare ``qs[0]`` is a RAW
+        model and the next segment (``{{ rows.0.password }}``) would read it
+        unwrapped. A SLICE yields a ``list`` of models, which
+        ``_protect_sidecar_value`` returns unchanged (it has no list arm), so
+        the elements are protected here one at a time rather than trusting it
+        to recurse.
+
+        A ``.values()`` / ``.values_list()`` projection behaves exactly as
+        its own ``__len__`` of 0 says it should: every index is out of range
+        and every slice is empty. Same fail-closed refusal as ``__iter__``,
+        spelled as the zero-length sequence the rest of this proxy already
+        reports (vector 5 — a projection row carries no per-field floor).
+        """
+        if object.__getattribute__(self, "_is_projection"):
+            if isinstance(key, slice):
+                return []
+            raise IndexError("index out of range")
+        result = object.__getattribute__(self, "_qs")[key]
+        if isinstance(key, slice):
+            return [_protect_sidecar_value(item) for item in result]
+        return _protect_sidecar_value(result)
+
     def __djust_serialize__(self) -> Any:
         """Denylist-filtered LIST for terminal Value conversion (called by the
         Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop

@@ -1803,10 +1803,20 @@ impl Context {
                 // path (`{{ block.content.text }}`) — resolved to empty because
                 // `getattr(dict, "text")` raises `AttributeError`. Mirroring
                 // Django's order fixes nested JSONField/dict/list access.
-                // The #1986 proxies (`_SidecarModelProxy`/`_SidecarQuerySetProxy`)
-                // implement no `__getitem__`, so item access on them falls
-                // through to `getattr` and the serialization floor still governs
-                // — this does not open a floor bypass.
+                // `_SidecarModelProxy` implements no `__getitem__`, so item
+                // access on it falls through to `getattr` and the
+                // serialization floor still governs.
+                // `_SidecarQuerySetProxy` DOES implement one since #2717 —
+                // without it `{{ rows.0 }}` was `VariableDoesNotExist` for any
+                // queryset the conversion declined — and it is not a floor
+                // bypass either: every result it hands back is run through
+                // `_protect_sidecar_value` (a slice's elements one at a time),
+                // so the next segment reads a proxy, never a raw model, and a
+                // `.values()` projection refuses as the zero-length sequence
+                // its own `__len__` reports. Pinned by
+                // `TestTheSidecarQuerySetProxySubscripts` and the 112-cell
+                // sweep in `TestTheFloorHoldsOnEveryShapeTheDeclineNewlyClaims`
+                // (`python/tests/test_declined_container_spelling_2717.py`).
                 //
                 // Each step catches EXACTLY the exception set Django catches
                 // there, and no more (#2506). The walk previously used a bare
