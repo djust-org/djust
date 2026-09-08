@@ -324,13 +324,17 @@ class TestLiveHandleArm:
 
 
 class TestWrapperArm:
-    """Arm 2 — an ``Encoded`` with NO usable live handle crosses as a
+    """Arm 2 — an ``Encoded`` the floor does not govern crosses as a
     ``TemplateObject`` reading ``Encoded::attrs`` / ``Encoded::items``.
 
-    Reached for a CONTAINER handle, which the live arm deliberately refuses
-    (the leaf serialization floor cannot see inside one). Gate this arm off —
-    fall back to ``e.display`` — and this goes red: the handler receives the
-    text ``frozenset({<... object at 0x...>})`` and iterates its characters.
+    Reached for an ITERABLE the floor returned unchanged, which the live arm
+    deliberately refuses: ``_protect_sidecar_value`` is the LEAF floor and this
+    sink has no next segment to re-protect at, so handing one over would carry
+    raw models past it (see :class:`TestFloorHoldsForEveryCarrier`).
+
+    Gate this arm off — fall back to ``e.display`` — and this goes red: the
+    handler receives the text ``frozenset({<... object at 0x...>})`` and
+    iterates its characters.
     """
 
     def test_regroup_over_a_frozenset_source_matches_django(self):
@@ -354,20 +358,22 @@ class TestWrapperArm:
         view.set_state("tags", tags)
         assert view.render() == expected
 
-    def test_a_container_handle_is_NOT_handed_over_live(self):
-        """The container guard, pinned — it has no output of its own.
+    def test_an_ungoverned_iterable_is_NOT_handed_over_live(self):
+        """The floor gate, pinned — it has no output of its own.
 
-        A live handle that IS a container is refused by
-        ``value_into_handler_pyobject`` and takes the wrapper instead, because
-        ``_protect_sidecar_value`` is the LEAF floor: it proxies a ``Model``
-        and returns a ``list`` unchanged, so a container would carry raw models
-        past the floor to Python code that never walks another segment. Only an
-        ``isinstance`` decides it — the tree pass that would fix it is O(n) per
-        bridged TAG CALL.
+        A live handle the floor returned UNCHANGED and that is iterable is
+        refused by ``value_into_handler_pyobject`` and takes the wrapper
+        instead, because ``_protect_sidecar_value`` is the LEAF floor: it
+        proxies a ``Model`` and returns a ``frozenset`` unchanged, so handing
+        one over would carry raw models to Python code that never walks another
+        segment. The tree pass that would fix that is O(n) per bridged TAG
+        CALL.
 
-        Gate the guard off (hand containers over live) and this goes red while
-        every rendering test above stays green, which is exactly why the guard
-        needs a pin rather than an output assertion.
+        Gate the guard off (hand every live handle over) and this goes red
+        while every rendering test above stays green, which is exactly why the
+        guard needs a pin rather than an output assertion — and why shipping it
+        as an ``isinstance`` allowlist of five builtins let five other carriers
+        through (:class:`TestFloorHoldsForEveryCarrier`).
         """
         import djust.template_tags.regroup as regroup_module
 
@@ -469,3 +475,180 @@ class TestSerializationFloorAtThisSink:
         assert "password" not in row
         assert "is_staff" not in row
         assert row["username"] == "alice"
+
+
+# --------------------------------------------------------------------------
+# The carriers the LEAF floor cannot see inside (PR #2734 review, 🔴 2)
+# --------------------------------------------------------------------------
+
+SECRET = "pbkdf2_sha256$THIS-MUST-NOT-RENDER"
+
+
+def _a_user():
+    """A ``User`` with a pk, so it is hashable for the set / dict-key rows."""
+    from django.contrib.auth.models import User
+
+    return User(pk=1, username="alice", password=SECRET, is_staff=True)
+
+
+class _CustomSeq:
+    """A sequence that is none of the five builtins — the shape an
+    ``isinstance`` allowlist is structurally unable to cover."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __iter__(self):
+        return iter(self._items)
+
+
+CARRIERS = {
+    "list": lambda: [_a_user()],
+    "tuple": lambda: (_a_user(),),
+    "set": lambda: {_a_user()},
+    "frozenset": lambda: frozenset({_a_user()}),
+    "dict_values": lambda: {1: _a_user()}.values(),
+    "dict_keys": lambda: {_a_user(): 1}.keys(),
+    "deque": lambda: __import__("collections").deque([_a_user()]),
+    "generator": lambda: (u for u in [_a_user()]),
+    "custom_sequence": lambda: _CustomSeq([_a_user()]),
+}
+
+_BY_FLOOR_FIELD = (
+    "{% regroup rows by password as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+)
+_BY_ORDINARY_FIELD = (
+    "{% regroup rows by username as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+)
+
+
+class TestFloorHoldsForEveryCarrier:
+    """The serialization floor holds for a model in EVERY carrier shape.
+
+    The first version of this fix gated the live arm on an ``isinstance``
+    allowlist — ``list`` / ``tuple`` / ``dict`` / ``set`` / ``frozenset`` — and
+    shipped five leaks (PR #2734 review): ``collections.deque``, ``dict_keys``,
+    ``dict_values``, a generator and any custom ``__len__``/``__iter__`` class
+    are none of those, so each took the LIVE arm, and
+    ``{% regroup rows by password %}`` rendered the hash.
+
+    The gate is now the PROPERTY the floor actually has — take the live arm
+    only when the object is not iterable, or when the floor transformed it —
+    because an allowlist of container types is always one shape short. Each row
+    below carries its own non-vacuity control, so a cell that is "safe" because
+    nothing resolved at all cannot pass.
+    """
+
+    @pytest.mark.parametrize("carrier", sorted(CARRIERS))
+    def test_a_floor_field_does_not_render_from_any_carrier(self, carrier):
+        rendered = _rust_live_view(_BY_FLOOR_FIELD, CARRIERS[carrier]())
+        assert "THIS-MUST-NOT-RENDER" not in rendered, (
+            f"the serialization floor leaked through a {carrier} carrier: {rendered!r}"
+        )
+
+    @pytest.mark.parametrize("carrier", sorted(CARRIERS))
+    def test_non_vacuity_an_ordinary_field_DOES_render(self, carrier):
+        """The control for the row above: the carrier resolves at all.
+
+        Without this, a carrier that silently resolved to nothing would look
+        like the floor holding.
+        """
+        assert _rust_live_view(_BY_ORDINARY_FIELD, CARRIERS[carrier]()) == "[alice]"
+
+    @pytest.mark.parametrize("carrier", ["deque", "dict_values", "generator", "custom_sequence"])
+    def test_a_non_builtin_carrier_still_groups_exactly_as_django(self, carrier):
+        """Safe is not enough — the carriers must still be CORRECT.
+
+        A gate that sent everything to the wrapper would pass the floor rows
+        above while breaking these.
+        """
+        source = "{% regroup rows by group as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+        rows = list(objects())
+        wrapped = {
+            "deque": lambda: __import__("collections").deque(rows),
+            "dict_values": lambda: dict(enumerate(rows)).values(),
+            "generator": lambda: (r for r in rows),
+            "custom_sequence": lambda: _CustomSeq(rows),
+        }[carrier]
+        expected = DjangoTemplate(source).render(Context({"rows": wrapped()}))
+        assert expected == "[g0][g1][g0][g1]"
+        assert _rust_live_view(source, wrapped()) == expected
+
+
+class TestAboveTheItemCap:
+    """A carrier past ``OPAQUE_ITEM_CAP`` renders, and renders CORRECTLY.
+
+    ``opaque_value`` declines to enumerate a sequence whose stated length is
+    past the cap (100 000), so ``Encoded::items`` is ``None``. The first
+    version of this fix raised ``TypeError: 'list' object is not iterable`` out
+    of ``render()`` — a page that regrouped a large list went from
+    wrong-but-rendering to a 500 (PR #2734 review, 🔴 1).
+
+    ``TemplateObject.__iter__`` now falls back to the live object, putting
+    every element through the same floor, which is both what Django's own
+    handler does and what makes the output correct rather than merely present.
+    """
+
+    def test_it_renders_byte_identically_to_django(self):
+        source = "{% regroup rows by group as gs %}{% for g in gs %}[{{ g.grouper }}]{% endfor %}"
+        rows = [SlottedRow(i) for i in range(100_001)]
+        expected = DjangoTemplate(source).render(Context({"rows": rows}))
+        assert _rust_live_view(source, [SlottedRow(i) for i in range(100_001)]) == expected
+
+    def test_the_floor_still_holds_past_the_cap(self):
+        rows = [_a_user() for _ in range(100_001)]
+        assert "THIS-MUST-NOT-RENDER" not in _rust_live_view(_BY_FLOOR_FIELD, rows)
+
+
+class TestWrapperPythonProtocol:
+    """The wrapper stands in for a value that used to arrive as a ``str``.
+
+    Both of these were new-surface regressions rather than defects in the fix
+    (PR #2734 review): declaring ``__eq__`` makes PyO3 set ``__hash__ = None``,
+    and a pyclass with no ``__reduce__`` is unpicklable — so a ``{% load %}``ed
+    handler doing ``set(values)`` or ``copy.deepcopy(context)`` would have
+    started raising where it used to work.
+    """
+
+    def _wrapper(self):
+        import djust.template_tags.regroup as regroup_module
+
+        seen = {}
+        original = regroup_module.RegroupTagHandler.render
+
+        def spy(self, args, context, autoescape=True):
+            seen["tags"] = context.get("tags")
+            return original(self, args, context, autoescape)
+
+        regroup_module.RegroupTagHandler.render = spy
+        try:
+            view = RustLiveView("{% regroup tags by k as gs %}{{ gs|length }}")
+            view.set_state("tags", frozenset({Row(1)}))
+            view.render()
+        finally:
+            regroup_module.RegroupTagHandler.render = original
+        wrapper = seen["tags"]
+        assert type(wrapper).__name__ == "TemplateObject", "fixture must produce a wrapper"
+        return wrapper
+
+    def test_it_is_hashable(self):
+        wrapper = self._wrapper()
+        assert isinstance(hash(wrapper), int)
+        assert len({wrapper, wrapper}) == 1
+
+    def test_it_survives_deepcopy_and_pickle_as_the_string_it_replaced(self):
+        import copy
+        import pickle
+
+        wrapper = self._wrapper()
+        assert copy.deepcopy(wrapper) == str(wrapper)
+        assert pickle.loads(pickle.dumps(wrapper)) == str(wrapper)
+
+    def test_its_declared_module_path_resolves(self):
+        from djust import _rust
+
+        assert type(self._wrapper()) is _rust.TemplateObject
+        assert type(self._wrapper()).__module__ == "djust._rust"

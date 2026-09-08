@@ -5294,6 +5294,13 @@ impl TemplateObject {
             _ => None,
         }
     }
+
+    fn live_handle(&self) -> Option<&std::sync::Arc<Py<PyAny>>> {
+        match &self.value {
+            Value::Encoded(e) => e.live.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[pymethods]
@@ -5356,18 +5363,55 @@ impl TemplateObject {
             })
     }
 
-    /// The enumerated items, or a `TypeError` where Python's own `iter()`
-    /// declined at the conversion.
+    /// The object's items.
+    ///
+    /// Normally [`Encoded::items`], enumerated at the conversion — already
+    /// `Value`s, so a model among them is the floor-filtered dict
+    /// `normalize_django_value` made.
+    ///
+    /// `items` is `None` for the two carriers the conversion declined to
+    /// enumerate: a ONE-SHOT iterator (a generator — enumerating it would
+    /// consume it) and an object whose stated length is past
+    /// [`OPAQUE_ITEM_CAP`]. Those fall back to asking the live object, which
+    /// is what Django's own handler would have done (`RegroupNode` runs
+    /// `groupby` over whatever the operand resolved to), and every element
+    /// goes through the SAME floor as the whole-object arm — so a model in a
+    /// declined carrier crosses as its proxy, not raw.
+    ///
+    /// Raising here reached a render entry point as a 500 (PR #2734 review):
+    /// `{% regroup %}` over a list of 100 001 rows raised
+    /// `TypeError: 'list' object is not iterable` out of `render()` where it
+    /// used to render (wrongly, but render). The fallback is what makes it
+    /// render CORRECTLY instead of either.
+    ///
+    /// A one-shot iterator is consumed by this, exactly as Django consumes it.
+    /// An iterator with no end does not terminate — also exactly as Django's
+    /// `groupby`/`list` does not.
     fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Some(items) = self.items() else {
+        let py_list = PyList::empty(py);
+        if let Some(items) = self.items() {
+            for item in items {
+                py_list.append(value_into_handler_pyobject(py, item.clone())?)?;
+            }
+            return py_list.as_any().try_iter().map(|it| it.into_any());
+        }
+        let Some(handle) = self.live_handle() else {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "'{}' object is not iterable",
                 self.value_type_name()
             )));
         };
-        let py_list = PyList::empty(py);
-        for item in items {
-            py_list.append(value_into_handler_pyobject(py, item.clone())?)?;
+        // `try_iter` raises Python's own "not iterable" TypeError for an
+        // object that is not, which is the message to keep.
+        for item in handle.bind(py).try_iter()? {
+            let Some(protected) = context::protect_sidecar_strict(py, item?) else {
+                // The floor could not be enforced. Fail CLOSED — stop rather
+                // than hand the element on, exactly as `walk_live` does.
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "djust could not enforce the serialization floor on this element",
+                ));
+            };
+            py_list.append(protected)?;
         }
         py_list.as_any().try_iter().map(|it| it.into_any())
     }
@@ -5382,6 +5426,49 @@ impl TemplateObject {
             Ok(other) => values_structurally_equal(&self.value, &other.value),
             Err(_) => false,
         }
+    }
+
+    /// Consistent with [`TemplateObject::__eq__`], and REQUIRED because
+    /// declaring `__eq__` makes PyO3 set `__hash__ = None` (PR #2734 review).
+    /// A `str` used to arrive here, so a `{% load %}`ed handler doing
+    /// `set(values)` or using a value as a dict key would have started raising
+    /// `TypeError: unhashable type`.
+    ///
+    /// `Encoded`'s own `PartialEq` compares `type_name` / `display` / `repr`
+    /// among other fields, so two equal wrappers agree on all three and this
+    /// cannot hash them apart. It may hash UNEQUAL values together, which is
+    /// what a hash is allowed to do.
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match &self.value {
+            Value::Encoded(e) => {
+                e.type_name.hash(&mut hasher);
+                e.display.hash(&mut hasher);
+                e.repr.hash(&mut hasher);
+            }
+            other => other.to_string().hash(&mut hasher),
+        }
+        hasher.finish()
+    }
+
+    /// Pickle / `copy.deepcopy` degrade the wrapper to the `str` that used to
+    /// arrive here (PR #2734 review).
+    ///
+    /// A pyclass with no `__reduce__` is unpicklable, and `copy.deepcopy`
+    /// falls through to `__reduce_ex__`, so a handler that deep-copied its
+    /// context — or a `simple_tag` that pickled a value into a cache — would
+    /// have started raising. `str(o)` is exactly what this position held
+    /// before the fix, so the degraded form is the OLD behaviour rather than a
+    /// new one; a copy is data, and the live object it stood for cannot be
+    /// carried into a pickle anyway.
+    fn __reduce__(&self) -> (Py<PyAny>, (String,)) {
+        Python::attach(|py| {
+            (
+                py.get_type::<PyString>().into_any().unbind(),
+                (self.value.to_string(),),
+            )
+        })
     }
 }
 
@@ -5435,34 +5522,42 @@ impl TemplateObject {
 /// only ever expose `Encoded`'s measured facts, so the failure degrades to
 /// less information, never to more.
 ///
-/// # A CONTAINER handle takes the wrapper, not the live object
+/// # Which arm: the floor decides, by a PROPERTY rather than a type list
 ///
-/// `_protect_sidecar_value` is the LEAF wrapper — it proxies a `Model` and
-/// returns a `list` unchanged — which is correct for [`Context::walk_live`]
-/// because that walk re-protects after every segment. This sink has no next
-/// segment: it hands the object straight to Python code, which is precisely
-/// the second sink `djust.serialization.build_render_sidecar`'s docstring
-/// names. So a live handle that IS a container would carry raw models past
-/// the floor, and the tree pass that would fix it is an O(n) walk per bridged
-/// TAG CALL — a `{% url %}` inside a `{% for %}` pays it per iteration.
+/// `_protect_sidecar_value` is the LEAF floor — it proxies a `Model`, a
+/// `Manager` and a `QuerySet`, and returns anything else unchanged. That is
+/// correct for [`Context::walk_live`], which re-protects after every segment.
+/// This sink has no next segment: it hands the object straight to Python code,
+/// which is precisely the second sink
+/// `djust.serialization.build_render_sidecar`'s docstring names. So handing
+/// over an object the floor could not see INSIDE would carry raw models past
+/// it, and the tree pass that would fix that is an O(n) walk per bridged TAG
+/// CALL — a `{% url %}` inside a `{% for %}` pays it per iteration.
 ///
-/// A container only ever acquires a handle by being DECLINED at conversion:
-/// a `set` / `dict_keys` (whose elements are already carried as
-/// [`Encoded::items`]) or a list past [`OPAQUE_ITEM_CAP`] — 100 000 entries,
-/// where every other axis is degraded too. Both are served by the wrapper,
-/// which iterates `items` and exposes nothing else. So the container arm is
-/// decided by an `isinstance`, not by a walk.
-/// The builtin containers [`value_into_handler_pyobject`] refuses to hand a
-/// bridged tag handler as a LIVE object, because the leaf floor cannot see
-/// inside one. Mirrors `_protect_sidecar_tree`'s own `isinstance` tuple.
-fn py_is_container(obj: &Bound<'_, PyAny>) -> bool {
-    obj.is_instance_of::<PyList>()
-        || obj.is_instance_of::<pyo3::types::PyTuple>()
-        || obj.is_instance_of::<PyDict>()
-        || obj.is_instance_of::<pyo3::types::PySet>()
-        || obj.is_instance_of::<pyo3::types::PyFrozenSet>()
-}
-
+/// The live arm is therefore taken exactly when the object is **not
+/// iterable** — there is no "inside" for the leaf floor to miss. Every
+/// ordinary user object is here, which is the case this fix is for. An
+/// iterable takes the wrapper instead, and its `items` are `Value`s, so a
+/// model among them is already the floor-filtered dict
+/// `normalize_django_value` made.
+///
+/// **One property, not two.** The first version also took the live arm when
+/// `protect_sidecar_strict` had TRANSFORMED the object, to keep a `QuerySet`
+/// on its `_SidecarQuerySetProxy`. Gate-off measured that term as changing no
+/// outcome, and the reason is structural rather than a coverage gap: the floor
+/// transforms exactly `Model`, `Manager` and `QuerySet`
+/// (`djust.serialization._protect_sidecar_value`); a `Model` and a `Manager`
+/// are not iterable, so the first term already admits them, and a `QuerySet`
+/// never reaches this arm at all — it converts through `__djust_serialize__`
+/// to a `Value::List` of filtered dicts (measured: a handler receives a
+/// `list`). A term that cannot decide is a decoration (#2233).
+///
+/// **This was an `isinstance` allowlist of five builtins, and it shipped five
+/// leaks** (PR #2734 review): `collections.deque`, `dict_keys`, `dict_values`,
+/// a generator and any custom `__len__`/`__iter__` class are not `list` /
+/// `tuple` / `dict` / `set` / `frozenset`, so each took the live arm and
+/// `{% regroup rows by password %}` rendered the hash. An allowlist of
+/// container types is always one shape short; the property is not.
 pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bound<'_, PyAny>> {
     match value {
         Value::Encoded(ref encoded) => {
@@ -5470,9 +5565,13 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
                 return Ok(temporal);
             }
             if let Some(handle) = encoded.live.as_ref() {
-                let bound = handle.bind(py).clone();
-                if !py_is_container(&bound) {
-                    if let Some(protected) = context::protect_sidecar_strict(py, bound) {
+                if !encoded.iterable {
+                    // `protect_sidecar_strict` answering `None` is the floor
+                    // failing to enforce: fall to the wrapper, which can only
+                    // ever expose `Encoded`'s measured facts.
+                    if let Some(protected) =
+                        context::protect_sidecar_strict(py, handle.bind(py).clone())
+                    {
                         return Ok(protected);
                     }
                 }

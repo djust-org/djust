@@ -63,6 +63,24 @@ class CompiledTemplate:
 
     ...
 
+class TemplateObject:
+    """The shape an arbitrary Python object takes inside the context dict a
+    bridged Django tag handler receives (#2731).
+
+    Built only by the engine, never constructed from Python — it exists so a
+    handler's ``Variable._resolve_lookup`` walks an OBJECT rather than the
+    object's ``str()``. It answers mapping and attribute lookups from the
+    facts measured at the PyO3 boundary, and spells / iterates / compares as
+    the object it stands for. ``copy.deepcopy`` and ``pickle`` degrade it to
+    that ``str()``.
+    """
+
+    def __getitem__(self, key: object) -> object: ...
+    def __getattr__(self, name: str) -> object: ...
+    def __iter__(self) -> object: ...
+    def __len__(self) -> int: ...
+    def __bool__(self) -> bool: ...
+
 def compile_template(
     template_source: str, template_name: str | None = None, *, return_template: bool = False
 ) -> CompiledTemplate | None:
@@ -1328,6 +1346,7 @@ __all__ = [
     "render_template_with_dirs",
     "compile_template",
     "CompiledTemplate",
+    "TemplateObject",
     "template_cache_contains",
     "registry_generation",
     "new_registry_namespace",
