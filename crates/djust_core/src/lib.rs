@@ -3621,8 +3621,12 @@ fn len_call_already_materialised_the_items(ob: &Bound<'_, PyAny>) -> bool {
     if ob.is_instance_of::<PyList>() {
         return true;
     }
-    // A cached `sys.modules` lookup, and only ever reached once the stated
-    // length is already past the cap — never on the hot path.
+    // A cached `sys.modules` lookup, and only ever reached FROM HERE once
+    // the stated length is already past the cap. (The other caller,
+    // `list_repr_is_this_objects_own_spelling`, asks it at any length — but
+    // only for an object `PySequence_Check` already claimed and the `PyList`
+    // arm already declined, so a dict, a model and an ordinary object never
+    // pay it.)
     is_django_queryset(ob)
 }
 
