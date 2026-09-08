@@ -555,3 +555,13 @@ it('#2705 coalesces an old handler-level edit with its newer element-level edit'
     expect(JSON.parse(http[0].body).value).toBe('new');
     expect(sent).toHaveLength(0);
 });
+
+
+it('#2705 intentional navigation cancels timers before the delayed socket close', async () => {
+    const {window, clock, sent, http} = createHarness({search: {debounce: {wait: 5}}});
+    await window.djust.handleEvent('search', {query: 'old-view'});
+    window.djust.liveViewInstance.disconnect();
+    clock.advance(10_000);
+    expect(sent).toHaveLength(0);
+    expect(http).toHaveLength(0);
+});

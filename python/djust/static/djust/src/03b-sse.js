@@ -125,6 +125,9 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        // TurboNav may already have replaced the URL/DOM. Cancel immediately,
+        // before a delayed close callback could send old-view edits to the new URL.
+        cancelPendingRateLimits();
         if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;

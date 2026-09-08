@@ -18,7 +18,8 @@ global.window.djust = global.window.djust || {};
 
 // Stubs for functions LiveViewSSE calls inside handleMessage
 global.clientVdomVersion = 0;
-global.setCacheConfig = vi.fn();
+global.installMountEventConfig = vi.fn();
+global.cancelPendingRateLimits = vi.fn();
 global._stampDjIds = vi.fn();
 global.bindLiveViewEvents = vi.fn();
 global.handleServerResponse = vi.fn();
