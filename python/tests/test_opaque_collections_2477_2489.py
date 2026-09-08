@@ -794,21 +794,57 @@ class TestTheGateHasOneStatement:
         assert self._call_sites(added, "opaque_value") == 2
 
     def test_crosses_as_encoded_is_consulted_exactly_once_by_the_normalizer(self) -> None:
+        """The Rust export is named ONCE; the normalizer asks through a helper.
+
+        This pin used to count the bare name and read the answer as "the
+        normalizer consults the conversion at its final fallback, and nowhere
+        else". #2621 gave the question a SECOND asker — the callable arm — so
+        the invariant needed restating rather than relaxing: the one statement
+        moved into ``_crosses_as_encoded``, and what must stay singular is the
+        **export**, not the number of arms that consult it. Two arms asking one
+        helper is the #1646 cure; two arms each spelling the guarded import is
+        the #1646 bug.
+
+        Note the substring trap this pin walked into: ``_crosses_as_encoded(``
+        CONTAINS ``crosses_as_encoded(``, so the bare-name count silently went
+        1 -> 4 at the refactor and the failure read as a policy regression
+        rather than a rename. Both readers below are therefore spelled with
+        the prefix that disambiguates them.
+        """
         source = SERIALIZATION_PY.read_text(encoding="utf-8")
-        assert self._call_sites(source, "crosses_as_encoded") == 1, (
-            "the normalizer must consult the conversion at ONE place — its "
-            "final fallback. A second consultation is a second policy (#1646)"
+        assert self._call_sites(source, "_rust.crosses_as_encoded") == 1, (
+            "the module must name the Rust export at ONE place — inside "
+            "`_crosses_as_encoded`. A second spelling of the guarded import is a "
+            "second policy for one question (#1646)"
         )
-        removed = source.replace("if _rust.crosses_as_encoded(value):", "if False:", 1)
+        # The canary, both ways: a count that cannot move is not a pin.
+        removed = source.replace("return bool(_rust.crosses_as_encoded(value))", "return False", 1)
         assert removed != source, "the mutation text did not match"
-        assert self._call_sites(removed, "crosses_as_encoded") == 0
+        assert self._call_sites(removed, "_rust.crosses_as_encoded") == 0
         added = source.replace(
-            "if _rust.crosses_as_encoded(value):",
-            "_ = _rust.crosses_as_encoded(value)\n            if _rust.crosses_as_encoded(value):",
+            "return bool(_rust.crosses_as_encoded(value))",
+            "_ = _rust.crosses_as_encoded(value)\n"
+            "        return bool(_rust.crosses_as_encoded(value))",
             1,
         )
         assert added != source
-        assert self._call_sites(added, "crosses_as_encoded") == 2
+        assert self._call_sites(added, "_rust.crosses_as_encoded") == 2
+
+    def test_the_helper_has_exactly_the_two_arms_that_should_ask_it(self) -> None:
+        """And the other half: WHO asks. The callable arm (#2621) and the final
+        fallback (#2477/#2489) — a third asker is a new policy and has to come
+        here and say so."""
+        source = SERIALIZATION_PY.read_text(encoding="utf-8")
+        body = source.split("def normalize_django_value", 1)[1]
+        assert body.count("_crosses_as_encoded(value)") == 2, (
+            "expected exactly two call sites inside `normalize_django_value`: the "
+            "callable arm and the final fallback"
+        )
+        removed = body.replace(
+            "if not state_roundtrip and _crosses_as_encoded(value):", "if False:", 1
+        )
+        assert removed != body, "the mutation text did not match"
+        assert removed.count("_crosses_as_encoded(value)") == 1
 
     def test_the_predicate_asks_the_shared_gate_and_converts_nothing(self) -> None:
         """Both mistakes this predicate has already made, pinned as source.
