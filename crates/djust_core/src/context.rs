@@ -150,7 +150,40 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
-    values: AHashMap<String, Value>,
+    /// COPY-ON-WRITE, and that is a performance contract, not a style choice
+    /// (#2732).
+    ///
+    /// [`Context::clone`] is not a rare operation: the `{% for %}` arm takes
+    /// one per loop EXECUTION (`renderer.rs`, `let parent_context =
+    /// context.clone()`), `render_nodes_collecting` and `render_nodes_partial`
+    /// take one per render, and `{% filter %}` and the bridged-tag path take
+    /// more. Every one of those used to deep-copy every `Value` in frame 0 —
+    /// the whole view state — so a render cost time proportional to the
+    /// ENTIRE state multiplied by the number of loop entries, whether or not
+    /// the template read any of it.
+    ///
+    /// Measured, 2 000 unused rows in state, a template reading only a fixed
+    /// 250x8 `matrix`: 71.9 ms, against Django's flat 9.4 ms. Holding the
+    /// emitted cells at 2 000 and varying only the number of inner-loop
+    /// entries (250 / 500 / 125 / 1 000) gave 0.24-0.28 ms per ENTRY and flat
+    /// in iteration count — one deep copy of all state per loop entry, to
+    /// serve two small reads of the parent.
+    ///
+    /// Behind the `Deref`/`DerefMut` pair below, the sharing is invisible:
+    /// `DerefMut` goes through [`std::sync::Arc::make_mut`], so the first
+    /// write to a SHARED map copies it and mutates the unique copy, exactly as
+    /// the eager clone did. Semantics are unchanged by construction; only the
+    /// moment of the copy moves. Writes land on the freshly pushed top frame,
+    /// which is uniquely owned, so in practice the copy never happens.
+    ///
+    /// `Arc` and not `Rc`: `Context` already holds five other `Arc` fields
+    /// (`raw_py_objects`, `cycle_state`, `ifchanged_state`,
+    /// `loop_scope_counter`, `block_super`) and `Value` must be `Send` because
+    /// `RustLiveViewBackend` is a non-`unsendable` `#[pyclass]` holding a
+    /// `HashMap<String, Value>`. An `Rc` here would make `Context` `!Send` for
+    /// a saving of a few non-atomic refcount bumps per clone — O(stack depth),
+    /// against the O(entire state) deep copy this removes.
+    values: std::sync::Arc<AHashMap<String, Value>>,
     assignments: indexmap::IndexSet<String>,
     invalid_block_super: bool,
     safe_keys: AHashSet<String>,
@@ -173,8 +206,12 @@ impl std::ops::Deref for ScopeFrame {
     }
 }
 impl std::ops::DerefMut for ScopeFrame {
+    /// The copy half of the copy-on-write. `make_mut` clones the map only when
+    /// this frame's `Arc` is shared with a live [`Context::clone`]; the
+    /// resulting `&mut` is to a uniquely owned map either way, so every caller
+    /// behaves exactly as it did when the field was a plain `AHashMap`.
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.values
+        std::sync::Arc::make_mut(&mut self.values)
     }
 }
 
@@ -512,7 +549,7 @@ impl Context {
         }
         Self {
             stack: vec![ScopeFrame {
-                values: map,
+                values: std::sync::Arc::new(map),
                 ..ScopeFrame::default()
             }],
             node_identity: None,
@@ -2340,7 +2377,7 @@ impl Context {
         let mut result = HashMap::new();
         // Iterate from bottom to top so later frames override earlier ones
         for frame in &self.stack {
-            for (key, value) in &frame.values {
+            for (key, value) in frame.values.iter() {
                 result.insert(key.clone(), value.clone());
             }
         }
@@ -3029,6 +3066,171 @@ mod tests {
             assert_eq!(a.is_safe("p.a"), b.is_safe("p.a"), "…and on `p.a`");
             assert_eq!(a.is_safe("q"), b.is_safe("q"), "…and on the untouched `q`");
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // #2732 — `ScopeFrame::values` is copy-on-write.
+    //
+    // Two independent mechanisms, and each has its own test below, because a
+    // fix whose halves shadow each other is one fix and one decoration:
+    //
+    //   1. SHARING — `Context::clone` must not copy the values map. This is
+    //      the whole performance claim; `clone_shares_...` is its pin and goes
+    //      red the moment a clone deep-copies again.
+    //   2. ISOLATION — a write through a SHARED frame must copy first. This is
+    //      the correctness claim, and `write_through_a_shared_frame_...`
+    //      exercises it with the frame genuinely shared at mutation time
+    //      (`Arc::get_mut` in place of `make_mut` panics there, which is how
+    //      that test is known to reach the shared path rather than a
+    //      uniquely-owned one).
+    // ---------------------------------------------------------------------
+
+    /// A big-ish frame so a copy would be visibly wrong, not merely different.
+    fn ctx_with_rows(n: usize) -> Context {
+        let rows: Vec<Value> = (0..n).map(|i| Value::Integer(i as i64)).collect();
+        let mut map = HashMap::new();
+        map.insert("rows".to_string(), Value::List(rows));
+        map.insert("title".to_string(), Value::String("t".to_string()));
+        Context::from_dict(map)
+    }
+
+    /// The performance contract, as a mechanical property rather than a timing
+    /// assertion (#1795): a clone SHARES the values map.
+    ///
+    /// Before #2732 a `Context::clone` deep-copied every `Value` in every
+    /// frame, and the `{% for %}` arm takes one per loop EXECUTION — so a
+    /// render cost O(entire state x loop entries). Reinstating the eager copy
+    /// makes this assertion fail.
+    #[test]
+    fn clone_shares_the_values_map_rather_than_copying_it() {
+        let original = ctx_with_rows(1000);
+        let copy = original.clone();
+        assert!(
+            std::sync::Arc::ptr_eq(&original.stack[0].values, &copy.stack[0].values),
+            "Context::clone deep-copied frame 0's values — the #2732 per-loop-entry \
+             O(entire state) copy is back"
+        );
+    }
+
+    /// Every frame, not just the base one: a clone taken mid-render (inside a
+    /// `{% for %}`, a `{% with %}`, a `{% block %}`) has a deeper stack, and
+    /// each of its frames must share too.
+    #[test]
+    fn clone_shares_every_frame_not_only_the_base() {
+        let mut original = ctx_with_rows(10);
+        original.push();
+        original.set("inner".to_string(), Value::Integer(1));
+        original.push();
+        original.set("innermost".to_string(), Value::Integer(2));
+        let copy = original.clone();
+        assert_eq!(original.stack.len(), 3);
+        for (i, (a, b)) in original.stack.iter().zip(copy.stack.iter()).enumerate() {
+            assert!(
+                std::sync::Arc::ptr_eq(&a.values, &b.values),
+                "frame {i} was deep-copied by Context::clone"
+            );
+        }
+    }
+
+    /// The correctness contract: a write through a frame that is SHARED with a
+    /// live clone copies the map first, so the write cannot leak into the other
+    /// holder. This is the property `Arc::make_mut` provides and the reason the
+    /// sharing above is safe.
+    #[test]
+    fn write_through_a_shared_frame_does_not_leak_into_the_other_holder() {
+        let mut original = ctx_with_rows(4);
+        let before = original.clone();
+
+        // Frame 0 is shared with `before` at this moment — the mutation has to
+        // copy. `set` at depth 1 writes to frame 0.
+        assert_eq!(original.stack.len(), 1);
+        original.set("title".to_string(), Value::String("changed".to_string()));
+        original.set("added".to_string(), Value::Integer(7));
+
+        assert!(
+            matches!(before.get("title"), Some(Value::String(s)) if s == "t"),
+            "the write leaked backwards into the clone: {:?}",
+            before.get("title")
+        );
+        assert!(
+            before.get("added").is_none(),
+            "a key added after the clone appeared in the clone"
+        );
+        assert!(
+            matches!(original.get("title"), Some(Value::String(s)) if s == "changed"),
+            "the write did not land on the writer"
+        );
+        // ...and the copy really did happen, so they are no longer the same map.
+        assert!(!std::sync::Arc::ptr_eq(
+            &original.stack[0].values,
+            &before.stack[0].values
+        ));
+    }
+
+    /// The other direction: writing through the CLONE must not reach back into
+    /// the original. `Arc` sharing is symmetric, so both holders need the test —
+    /// a `make_mut` that somehow copied only for one of them would pass a
+    /// single-direction test.
+    #[test]
+    fn write_through_the_clone_does_not_leak_into_the_original() {
+        let original = ctx_with_rows(4);
+        let mut copy = original.clone();
+        copy.set("title".to_string(), Value::String("changed".to_string()));
+
+        assert!(
+            matches!(original.get("title"), Some(Value::String(s)) if s == "t"),
+            "the clone's write leaked into the original: {:?}",
+            original.get("title")
+        );
+    }
+
+    /// The render-shaped case, which is the one that actually runs: the
+    /// `{% for %}` arm clones the parent and then pushes a scope on the
+    /// ORIGINAL, binding the loop variable per iteration. Those per-iteration
+    /// binds must not be visible to the parent snapshot.
+    #[test]
+    fn loop_shaped_bind_on_a_pushed_frame_leaves_the_parent_snapshot_alone() {
+        let mut ctx = ctx_with_rows(3);
+        ctx.set("forloop".to_string(), Value::String("outer".to_string()));
+        let parent = ctx.clone();
+
+        ctx.with_scope(|inner| {
+            for i in 0..3 {
+                inner.set("row".to_string(), Value::Integer(i));
+                inner.set("forloop".to_string(), Value::Integer(100 + i));
+            }
+            assert!(matches!(inner.get("row"), Some(Value::Integer(2))));
+        });
+
+        // Exactly what `Node::For` reads out of its `parent_context`.
+        assert!(
+            matches!(parent.get("forloop"), Some(Value::String(s)) if s == "outer"),
+            "a loop-scope bind reached the parent snapshot: {:?}",
+            parent.get("forloop")
+        );
+        assert!(
+            parent.get("row").is_none(),
+            "the loop variable escaped into the parent snapshot"
+        );
+        // The parent snapshot's frame 0 is untouched, so it is still shared
+        // with the live context's frame 0 — no copy was needed at all.
+        assert!(std::sync::Arc::ptr_eq(
+            &ctx.stack[0].values,
+            &parent.stack[0].values
+        ));
+    }
+
+    /// `to_hashmap` reads through the `Arc` and must still flatten with later
+    /// frames winning — the one call site that iterated `&frame.values`
+    /// directly rather than through `Deref`.
+    #[test]
+    fn to_hashmap_still_flattens_with_later_frames_winning() {
+        let mut ctx = ctx_with_rows(2);
+        ctx.push();
+        ctx.set("title".to_string(), Value::String("shadowed".to_string()));
+        let flat = ctx.to_hashmap();
+        assert!(matches!(flat.get("title"), Some(Value::String(s)) if s == "shadowed"));
+        assert!(flat.contains_key("rows"));
     }
 
     #[test]
