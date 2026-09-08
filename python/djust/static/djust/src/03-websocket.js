@@ -350,6 +350,17 @@ class LiveViewWebSocket {
 
             // An abnormal close cannot use this socket, but the normal
             // same-origin HTTP fallback still accepts events with CSRF checks.
+            //
+            // #2721: this POST is out-of-band and races the client's own
+            // reconnect+remount. Traced, and it is bounded: the teardown
+            // response is never applied to the DOM (11-event-handler.js
+            // `if (teardown) return`), and the POST path restores from and
+            // saves back to the SESSION (mixins/request.py `post`). So if the
+            // remount's restore wins the race, the POST's session write is
+            // orphaned and the next WS save overwrites it — the edit is lost,
+            // exactly as it was before this PR. If the POST wins, the edit
+            // survives. Neither ordering corrupts client state, so the
+            // recovery is worth the extra request.
             if (this._intentionalDisconnect) cancelPendingRateLimits();
             else flushPendingRateLimits();
 
@@ -525,7 +536,15 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
-                installMountEventConfig(data);
+                // #2721: only the PAGE view's mount is a view-replacement
+                // boundary. Lazy/per-element/batch mounts land here too, on
+                // the same socket, and must not reset the page view's
+                // handler / cache / optimistic configuration. `view` is
+                // always echoed on real mount frames (runtime.py:2526); when
+                // it is absent AND no primary mount was ever requested, the
+                // two are `undefined` and this is the page mount.
+                if (data.view === this.primaryViewPath) installMountEventConfig(data);
+                else installAdditionalMountEventConfig(data);
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
@@ -1249,10 +1268,22 @@ class LiveViewWebSocket {
         }
     }
 
-    mount(viewPath, params = {}) {
+    /**
+     * Send a mount frame.
+     *
+     * @param {string} viewPath  Dotted view path.
+     * @param {Object} params    Initial mount kwargs.
+     * @param {Object} options   ``{primary: true}`` marks the PAGE-level view
+     *   (`autoMount`). #2721: everything else mounting on this socket — lazy
+     *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
+     *   view whose mount reply must not reset the page view's client config.
+     */
+    mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
+
+        if (options.primary) this.primaryViewPath = viewPath;
 
         if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
@@ -1342,7 +1373,7 @@ class LiveViewWebSocket {
                 // Always send mount message to initialize server-side session
                 // Pass URL query params so server mount can read filters (e.g., ?sender=80)
                 const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-                this.mount(viewPath, urlParams);
+                this.mount(viewPath, urlParams, { primary: true });
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
             }

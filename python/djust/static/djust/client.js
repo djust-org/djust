@@ -994,6 +994,17 @@ class LiveViewWebSocket {
 
             // An abnormal close cannot use this socket, but the normal
             // same-origin HTTP fallback still accepts events with CSRF checks.
+            //
+            // #2721: this POST is out-of-band and races the client's own
+            // reconnect+remount. Traced, and it is bounded: the teardown
+            // response is never applied to the DOM (11-event-handler.js
+            // `if (teardown) return`), and the POST path restores from and
+            // saves back to the SESSION (mixins/request.py `post`). So if the
+            // remount's restore wins the race, the POST's session write is
+            // orphaned and the next WS save overwrites it — the edit is lost,
+            // exactly as it was before this PR. If the POST wins, the edit
+            // survives. Neither ordering corrupts client state, so the
+            // recovery is worth the extra request.
             if (this._intentionalDisconnect) cancelPendingRateLimits();
             else flushPendingRateLimits();
 
@@ -1169,7 +1180,15 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
-                installMountEventConfig(data);
+                // #2721: only the PAGE view's mount is a view-replacement
+                // boundary. Lazy/per-element/batch mounts land here too, on
+                // the same socket, and must not reset the page view's
+                // handler / cache / optimistic configuration. `view` is
+                // always echoed on real mount frames (runtime.py:2526); when
+                // it is absent AND no primary mount was ever requested, the
+                // two are `undefined` and this is the page mount.
+                if (data.view === this.primaryViewPath) installMountEventConfig(data);
+                else installAdditionalMountEventConfig(data);
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
@@ -1893,10 +1912,22 @@ class LiveViewWebSocket {
         }
     }
 
-    mount(viewPath, params = {}) {
+    /**
+     * Send a mount frame.
+     *
+     * @param {string} viewPath  Dotted view path.
+     * @param {Object} params    Initial mount kwargs.
+     * @param {Object} options   ``{primary: true}`` marks the PAGE-level view
+     *   (`autoMount`). #2721: everything else mounting on this socket — lazy
+     *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
+     *   view whose mount reply must not reset the page view's client config.
+     */
+    mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
+
+        if (options.primary) this.primaryViewPath = viewPath;
 
         if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
@@ -1986,7 +2017,7 @@ class LiveViewWebSocket {
                 // Always send mount message to initialize server-side session
                 // Pass URL query params so server mount can read filters (e.g., ?sender=80)
                 const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-                this.mount(viewPath, urlParams);
+                this.mount(viewPath, urlParams, { primary: true });
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
             }
@@ -2738,8 +2769,13 @@ window.setCacheConfig = setCacheConfig;
  * Cache keys are deterministic: the same event name + params will always produce
  * the same key. This is intentional - it allows caching across repeated requests.
  *
- * Cache entries are scoped to the current mount: installMountEventConfig clears
- * them along with handler configuration before the next view receives events.
+ * Cache keys are NOT namespaced per view. The page view's own mount clears the
+ * cache (`installMountEventConfig`, 05-handler-rate-limit.js), so entries do not
+ * survive a navigation — but within one page they are shared: sticky children,
+ * components, and lazily-hydrated sibling views all mount onto the same socket
+ * and keep their entries (#2721). Two views on one page whose handlers share a
+ * name and are called with the same params therefore share a cache entry. Use
+ * `key_params` in the `@cache` decorator to disambiguate if needed.
  *
  * @param {string} eventName - The event handler name
  * @param {Object} params - Event parameters
@@ -2929,20 +2965,42 @@ function flushPendingRateLimits() {
 }
 window.addEventListener('pagehide', flushPendingRateLimits);
 
-// A mount replaces the complete configuration, including omitted/empty maps.
-// Share this between WS and SSE to avoid cross-view rules and cached patches.
+// The PAGE-LEVEL view's mount replaces the complete configuration, including
+// omitted/empty maps. Share this between WS and SSE to avoid cross-view rules
+// and cached patches surviving a navigation.
+//
+// #2721: call this ONLY for the page view's own mount frame. `case 'mount'`
+// is the reply to EVERY mount request on the socket — per-element lazy
+// hydration (13-lazy-hydration.js `mountElement`), `hydrateAll()`, and the
+// `mount_batch` fallback (#1031) all mount ADDITIONAL views onto the same
+// page over the SAME socket. Resetting on one of those wiped the primary
+// view's @debounce/@throttle/@cache config and its optimistic rules, silently
+// turning the decorators into no-ops. Sibling mounts take
+// `installAdditionalMountEventConfig` instead.
 function installMountEventConfig(data) {
     cancelPendingRateLimits();
     handlerRateConfig.clear();
-    handlerMountConfigured = true;
-    setHandlerConfig(data.handler_config);
     cacheConfig.clear();
     resultCache.clear();
     pendingCacheRequests.forEach(state => clearTimeout(state.timeoutId));
     pendingCacheRequests.clear();
-    setCacheConfig(data.cache_config);
     optimisticUpdates.clear();
     window.djust._optimisticRules = data.optimistic_rules || {};
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+}
+
+// An ADDITIONAL view mounting onto the page the primary view already owns
+// (lazy hydration / mount_batch fallback). Its config is ADDITIVE: it adds
+// its own handlers and cache rules and must not disturb any sibling's.
+function installAdditionalMountEventConfig(data) {
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+    if (data.optimistic_rules) {
+        window.djust._optimisticRules = data.optimistic_rules;
+    }
 }
 
 
@@ -6148,7 +6206,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // degrades to full-page HTTP re-renders that *look* like the app works.
     // The server intentionally returns a generic "View not found" (no allowlist
     // detail leaked), so the client points the developer at the likely cause.
-    if (!_djustHttpFallbackWarned) {
+    //
+    // #2721: a teardown flush reaches this path BY DESIGN — the WS branch
+    // above deliberately falls through because `LiveViewWebSocket` has no
+    // `sendTeardownEvent`. That says nothing about the socket's health, so
+    // warning here would be wrong AND would burn the once-per-session flag,
+    // silencing a later genuine degraded mount — inverting the point of #1674.
+    if (!teardown && !_djustHttpFallbackWarned) {
         _djustHttpFallbackWarned = true;
         console.warn(
             '[LiveView] Events are falling back to full-page HTTP re-renders '

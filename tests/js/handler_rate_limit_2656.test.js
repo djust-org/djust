@@ -476,6 +476,14 @@ describe('#2705 — pending edits survive teardown without crossing mounts', () 
         await mount({});
         expect(window.djust._optimisticRules).toEqual({});
         await window.djust.handleEvent('search', {query: 'new-view'});
+        // BEFORE the clock moves: the second mount carried no handler_config,
+        // so `search` must dispatch IMMEDIATELY. Asserting only after
+        // `advance` cannot tell "sent now" from "debounced, then sent" — which
+        // is what let the `handlerMountConfigured` guard survive gate-off.
+        // `window.handlerMetadata` still holds the OLD view's debounce
+        // (mixins/template.py Object.assign-es into it across navigations),
+        // so without the guard this is 0 here.
+        expect(sent).toHaveLength(1);
         clock.advance(10_000);
         expect(sent).toHaveLength(1);
         expect(sent[0].params).toEqual({query: 'new-view'});
@@ -583,4 +591,149 @@ it('#2705 a delayed old socket close cannot cancel a new mount edit', async () =
     expect(sent[0].params).toEqual({query: 'new-view'});
     expect(http).toHaveLength(0);
     expect(ws.viewMounted).toBe(true);
+});
+
+
+describe('#2721 — a sibling mount is not a view-replacement boundary', () => {
+    /**
+     * `case 'mount'` is the reply to EVERY mount request on the socket, not
+     * only the page view's. `13-lazy-hydration.js` mounts each `dj-lazy`
+     * element through `liveViewWS.mount()` on the SAME socket by design
+     * (`:146`), and so do `hydrateAll()` and the `mount_batch` fallback
+     * (#1031). Resetting the whole client config on any of those wiped the
+     * PAGE view's `@debounce` / `@throttle` / `@cache` gate and its optimistic
+     * rules — silently, with no error and no warning.
+     *
+     * The shape below is the proof: one page view + one `dj-lazy` sibling,
+     * both mounting on one socket, then a three-event burst on the page
+     * view's debounced handler. Driven through the real `autoMount` and
+     * `lazyHydration.hydrateAll()` paths, not a synthesized mount frame —
+     * the routing is what is under test.
+     */
+    const OPTIMISTIC = {search: {action: 'toggle_class', selector: '#btn', class: 'busy'}};
+
+    function twoViewHarness() {
+        const h = createHarness(null);
+        const ws = h.window.djust.liveViewInstance;
+        h.window.document.body.insertAdjacentHTML(
+            'beforeend',
+            '<div id="side" dj-view="test.Sidebar" dj-lazy="viewport"></div>'
+        );
+        h.deliverMount = async data => {
+            ws.ws.onmessage({data: JSON.stringify({type: 'mount', version: 1, ...data})});
+            await ws._inflight;
+        };
+        // The PAGE view mounts via the real `connect` -> `autoMount` route,
+        // which is what marks `test.V` as the primary view.
+        h.mountPage = async () => {
+            ws.ws.onmessage({data: JSON.stringify({type: 'connect', session_id: 's2721'})});
+            await ws._inflight;
+            await h.deliverMount({
+                view: 'test.V',
+                handler_config: {search: {debounce: {wait: 5}}},
+                cache_config: {search: {ttl: 60}},
+                optimistic_rules: OPTIMISTIC,
+            });
+        };
+        h.ws = ws;
+        return h;
+    }
+
+    it('a lazy sibling mount leaves the page view debounce and optimistic rules intact', async () => {
+        const {window, sent, clock, http, ws, mountPage, deliverMount} = twoViewHarness();
+        await mountPage();
+        expect(ws.primaryViewPath).toBe('test.V');
+
+        // The lazy sibling hydrates on the SAME socket.
+        window.djust.lazyHydration.hydrateAll();
+        await deliverMount({view: 'test.Sidebar',
+            handler_config: {sidebar_toggle: {debounce: {wait: 5}}}});
+
+        // ORDERING invariant: the page view's burst is still collapsed.
+        for (const q of ['a', 'b', 'c']) {
+            await window.djust.handleEvent('search', {query: q});
+        }
+        expect(sent).toHaveLength(0);   // pre-fix: 3
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].params.query).toBe('c');
+        // The page view's `@cache` config survived the sibling mount too —
+        // a cacheable send carries a cache request id (pre-fix: absent).
+        expect(sent[0].params._cacheRequestId).toBeTruthy();
+        expect(http).toHaveLength(0);
+        expect(window.djust._optimisticRules).toEqual(OPTIMISTIC);   // pre-fix: {}
+    });
+
+    it('the sibling mount ADDS its own handler config without disturbing the page view', async () => {
+        const {window, sent, clock, mountPage, deliverMount} = twoViewHarness();
+        await mountPage();
+        window.djust.lazyHydration.hydrateAll();
+        await deliverMount({view: 'test.Sidebar',
+            handler_config: {sidebar_toggle: {debounce: {wait: 5}}}});
+
+        // Both views' handlers are gated, each by its own config.
+        await window.djust.handleEvent('sidebar_toggle', {open: true});
+        await window.djust.handleEvent('search', {query: 'q'});
+        expect(sent).toHaveLength(0);
+        clock.advance(10_000);
+        expect(sent.map(s => s.eventName).sort()).toEqual(['search', 'sidebar_toggle']);
+    });
+
+    it('the PAGE view own remount is still a full reset', async () => {
+        const {window, sent, clock, mountPage, deliverMount} = twoViewHarness();
+        await mountPage();
+        window.djust.lazyHydration.hydrateAll();
+        await deliverMount({view: 'test.Sidebar',
+            handler_config: {sidebar_toggle: {debounce: {wait: 5}}}});
+
+        // A live_redirect / reconnect remount of the page view carries no
+        // config: everything the previous page installed must be gone.
+        await deliverMount({view: 'test.V'});
+        expect(window.djust._optimisticRules).toEqual({});
+        await window.djust.handleEvent('search', {query: 'after-remount'});
+        await window.djust.handleEvent('sidebar_toggle', {open: false});
+        expect(sent).toHaveLength(2);   // neither is debounced any more
+        clock.advance(10_000);
+        expect(sent).toHaveLength(2);
+    });
+});
+
+
+it('#2721 a teardown response is never parsed or applied to the next view', async () => {
+    const {window, clock} = createHarness({search: {debounce: {wait: 5}}});
+    let jsonReads = 0;
+    window.fetch = () => Promise.resolve({
+        ok: true,
+        json: () => {
+            jsonReads += 1;
+            return Promise.resolve({
+                patches: [{type: 'SetText', path: [], text: 'from the outgoing view'}],
+                timing: {pinned: 2721},
+            });
+        },
+    });
+    await window.djust.handleEvent('search', {query: 'last-edit'});
+    window.dispatchEvent(new window.Event('pagehide'));
+    clock.advance(10_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    // `11-event-handler.js` returns before `response.json()` when a teardown
+    // transport is active, so the outgoing view's patches never reach the DOM.
+    expect(jsonReads).toBe(0);
+    expect(window._lastPatchTiming).toBeUndefined();
+});
+
+
+it('#2721 a teardown flush does not burn the #1674 degraded-mount warning', async () => {
+    const {window, clock} = createHarness({search: {debounce: {wait: 5}}});
+    const warnings = [];
+    window.console.warn = (...args) => warnings.push(args.join(' '));
+    await window.djust.handleEvent('search', {query: 'last-edit'});
+    window.dispatchEvent(new window.Event('pagehide'));
+    clock.advance(10_000);
+    await Promise.resolve();
+    // The WS branch falls through by design (no `sendTeardownEvent` on
+    // `LiveViewWebSocket`), which says nothing about the socket's health.
+    expect(warnings.filter(w => /LIVEVIEW_ALLOWED_MODULES/.test(w))).toHaveLength(0);
 });

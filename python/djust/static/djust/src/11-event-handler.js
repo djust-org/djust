@@ -204,7 +204,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // degrades to full-page HTTP re-renders that *look* like the app works.
     // The server intentionally returns a generic "View not found" (no allowlist
     // detail leaked), so the client points the developer at the likely cause.
-    if (!_djustHttpFallbackWarned) {
+    //
+    // #2721: a teardown flush reaches this path BY DESIGN — the WS branch
+    // above deliberately falls through because `LiveViewWebSocket` has no
+    // `sendTeardownEvent`. That says nothing about the socket's health, so
+    // warning here would be wrong AND would burn the once-per-session flag,
+    // silencing a later genuine degraded mount — inverting the point of #1674.
+    if (!teardown && !_djustHttpFallbackWarned) {
         _djustHttpFallbackWarned = true;
         console.warn(
             '[LiveView] Events are falling back to full-page HTTP re-renders '

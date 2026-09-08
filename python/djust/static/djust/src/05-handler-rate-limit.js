@@ -62,20 +62,42 @@ function flushPendingRateLimits() {
 }
 window.addEventListener('pagehide', flushPendingRateLimits);
 
-// A mount replaces the complete configuration, including omitted/empty maps.
-// Share this between WS and SSE to avoid cross-view rules and cached patches.
+// The PAGE-LEVEL view's mount replaces the complete configuration, including
+// omitted/empty maps. Share this between WS and SSE to avoid cross-view rules
+// and cached patches surviving a navigation.
+//
+// #2721: call this ONLY for the page view's own mount frame. `case 'mount'`
+// is the reply to EVERY mount request on the socket — per-element lazy
+// hydration (13-lazy-hydration.js `mountElement`), `hydrateAll()`, and the
+// `mount_batch` fallback (#1031) all mount ADDITIONAL views onto the same
+// page over the SAME socket. Resetting on one of those wiped the primary
+// view's @debounce/@throttle/@cache config and its optimistic rules, silently
+// turning the decorators into no-ops. Sibling mounts take
+// `installAdditionalMountEventConfig` instead.
 function installMountEventConfig(data) {
     cancelPendingRateLimits();
     handlerRateConfig.clear();
-    handlerMountConfigured = true;
-    setHandlerConfig(data.handler_config);
     cacheConfig.clear();
     resultCache.clear();
     pendingCacheRequests.forEach(state => clearTimeout(state.timeoutId));
     pendingCacheRequests.clear();
-    setCacheConfig(data.cache_config);
     optimisticUpdates.clear();
     window.djust._optimisticRules = data.optimistic_rules || {};
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+}
+
+// An ADDITIONAL view mounting onto the page the primary view already owns
+// (lazy hydration / mount_batch fallback). Its config is ADDITIVE: it adds
+// its own handlers and cache rules and must not disturb any sibling's.
+function installAdditionalMountEventConfig(data) {
+    handlerMountConfigured = true;
+    setHandlerConfig(data.handler_config);
+    setCacheConfig(data.cache_config);
+    if (data.optimistic_rules) {
+        window.djust._optimisticRules = data.optimistic_rules;
+    }
 }
 
 
