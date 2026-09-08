@@ -3220,6 +3220,45 @@ mod tests {
         ));
     }
 
+    /// Why the `{% for %}` arm's parent clone was made CHEAP rather than
+    /// REMOVED (#2732).
+    ///
+    /// That arm clones the parent to serve two reads: `get("forloop")`, which
+    /// hoists trivially, and an `is_safe("<iterable>.<index>.<i>")` query in
+    /// the tuple-unpacking branch, which does not. `is_safe` consults the whole
+    /// stack, and the loop's own pushed frame revokes the safe subtree of every
+    /// name it binds — so when the loop's operand is rooted at one of its OWN
+    /// variable names (`{% for a, b in a %}`), the scoped context and the
+    /// parent give DIFFERENT answers. Serving that read from `ctx` would be a
+    /// silent behaviour change on a legal template, which is why the clone
+    /// stayed and got cheaper instead.
+    ///
+    /// This test exists to keep that reasoning falsifiable: if the two ever
+    /// agree, removing the clone becomes an option and this test says so.
+    #[test]
+    fn a_loop_frame_revoke_makes_the_scoped_and_parent_safety_answers_differ() {
+        let mut ctx = Context::new();
+        ctx.set("a".to_string(), Value::List(vec![Value::Tuple(vec![])]));
+        ctx.mark_safe("a.0.1".to_string());
+        let parent = ctx.clone();
+
+        ctx.with_scope(|inner| {
+            // What the `{% for a, b in a %}` arm does before iterating.
+            inner.revoke_safe_subtree("a");
+            inner.revoke_safe_subtree("b");
+            assert!(
+                parent.is_safe("a.0.1"),
+                "the parent lost the grant the loop is supposed to read"
+            );
+            assert!(
+                !inner.is_safe("a.0.1"),
+                "the scoped context AGREES with the parent — the `{{% for a, b in a %}}` \
+                 divergence is gone, and the #2732 clone could now be removed outright \
+                 rather than merely cheapened"
+            );
+        });
+    }
+
     /// `to_hashmap` reads through the `Arc` and must still flatten with later
     /// frames winning — the one call site that iterated `&frame.values`
     /// directly rather than through `Deref`.
