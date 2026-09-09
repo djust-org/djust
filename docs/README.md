@@ -84,6 +84,9 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[VDOM Patching Issue](vdom/VDOM_PATCHING_ISSUE.md)** - Form value preservation
 - **[VDOM Root Cause](vdom/VDOM_ROOT_CAUSE.md)** - Deep dive into VDOM issues
 
+### 🏗️ Architecture
+- **[The Value Boundary](architecture/VALUE_BOUNDARY.md)** - How a Python value crosses into Rust and becomes rendered output: the conversion, the `Value`/`Encoded` carriers, the ADR-027 live handle vs the by-name sidecar, where `OPAQUE_ITEM_CAP` governs, change detection, the partial-render dependency path, and the threading/GIL reality
+
 ### 📄 Templates
 - **[Template Inheritance Design](templates/TEMPLATE_INHERITANCE_DESIGN.md)** - Inheritance system design
 - **[Template Inheritance Integration](templates/TEMPLATE_INHERITANCE_INTEGRATION.md)** - Integration guide
