@@ -2863,8 +2863,10 @@ pub fn set_resolve_lazy(enabled: bool) {
 /// In `djust_core`:
 /// * [`stated_len_is_too_large_to_enumerate`] — the over-cap decline is
 ///   lazy-only.
-/// * [`Encoded::list_repr_is_this_objects_own_spelling`] — the declined
-///   container's spelling.
+/// * [`list_repr_is_this_objects_own_spelling`] — which conversion ARM claims
+///   a `list`/queryset, at ANY length. NOT the declined spelling: that is
+///   [`Encoded::declined_list_spelling`], which opens with
+///   `len > OPAQUE_ITEM_CAP` and does not read this flag.
 /// * [`opaque_gate`] ×3: the one-shot-iterator arm, the over-cap walk arm, and
 ///   the attribute-bearing decline (which decides whether an ordinary object
 ///   CARRIES a live handle rather than being bulk-dumped).

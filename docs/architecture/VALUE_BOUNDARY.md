@@ -20,9 +20,12 @@ running code and which were not.
 > names the ones that were not.
 >
 > The first version of this document then shipped a **tenth**, by citing a
-> shipped doc comment instead of running the case (§6.9). It is recorded rather
-> than quietly fixed, because it is the sharpest available evidence for the rule
-> this document exists to carry: **a doc comment is not evidence.**
+> shipped doc comment instead of running the case (§6.9) — and the fix for that
+> landed an **eleventh** one symbol over (§6.10). Both are recorded rather than
+> quietly fixed, because together they are the sharpest available evidence for
+> the rule this document exists to carry: **a doc comment is not evidence for a
+> checkable claim — a count, an absolute, a reachability statement — because
+> those can be run.** It remains the best evidence for intent, which cannot be.
 
 ---
 
@@ -38,7 +41,7 @@ flowchart TD
     C1 --> C2["deep_fingerprint per key<br/>python/djust/change_detection.py:90"]
     C2 -->|"changed keys only"| D["RustLiveView.set_changed_keys / update_state<br/>(PyO3)"]
 
-    D --> E["impl FromPyObject for Value<br/>crates/djust_core/src/lib.rs:3914"]
+    D --> E["impl FromPyObject for Value<br/>crates/djust_core/src/lib.rs:3916"]
     E --> F["Value<br/>(15 variants; lib.rs:221)"]
     E -.->|"objects no variant models"| G["Encoded<br/>(lib.rs:418) — measured facts<br/>+ optional live handle"]
     G --> F
@@ -57,7 +60,7 @@ flowchart TD
 
 The order below **is** the code's order, and the order is load-bearing: several
 arms are only correct because an earlier one already claimed the type.
-(`crates/djust_core/src/lib.rs:3914`–`4168`.)
+(`crates/djust_core/src/lib.rs:3916`–`4168`.)
 
 ```mermaid
 flowchart TD
@@ -67,7 +70,7 @@ flowchart TD
     D1 -->|yes| PRIM["the matching scalar variant"]
     D1 -->|no| D2{"tuple / namedtuple /<br/>bounded sequence /<br/>MultiValueDict / dict"}
     D2 -->|yes| CONT["Tuple / NamedTuple /<br/>List / Object"]
-    D2 -->|no| FB["the fallback block<br/>(lib.rs:4053)"]
+    D2 -->|no| FB["the fallback block<br/>(lib.rs:4055)"]
 
     FB --> F1{"datetime / date /<br/>time / timedelta?"}
     F1 -->|yes| ENC1["Encoded via django_json_encoded<br/>lib.rs:2100 — attrs from the two<br/>name tables, AND a live handle"]
@@ -75,7 +78,7 @@ flowchart TD
     F2 -->|yes| SER["recurse on the floored<br/>dict / list-of-dicts"]
     F2 -->|no| F3{"isinstance(models.Model)?"}
     F3 -->|yes| MOD["normalize_django_value<br/>then recurse (the floor)"]
-    F3 -->|no| F4{"opaque_value returns Some?<br/>lib.rs:4879 (gate at :4227)"}
+    F3 -->|no| F4{"opaque_value returns Some?<br/>lib.rs:4881 (gate at :4227)"}
     F4 -->|yes| ENC2["Encoded via opaque_value<br/>items maybe,<br/>live handle iff resolve_lazy()"]
     F4 -->|no| F5{"public __dict__ attrs?"}
     F5 -->|yes| OBJ["Value::Object<br/>(the bulk dump)"]
@@ -90,7 +93,7 @@ decline is lifted, so the `Value::Object` bulk-dump arm is reached only when
 `opaque_value` returns `None`. That happens when a probe on the object raises:
 `bool(o)`, `str(o)`, `repr(o)` or `type(o).__name__` — **or, and this is the
 one that is easy to miss, a failure while ENUMERATING the items** (`item.is_err()`
-at `lib.rs:4302`, and `item.ok()?` / `extract::<Value>().ok()?` in
+at `lib.rs:4304`, and `item.ok()?` / `extract::<Value>().ok()?` in
 `opaque_value`). `iter(o)` *failing* is not on that list: `try_iter().ok()`
 just sets `iterable = false`, which is the ordinary non-iterable case — and a
 non-iterable object does get a handle. Both halves measured in §6.6.
@@ -222,7 +225,7 @@ numbers are not.
 | 2 | Normalize DB values | `_normalize_db_values`, `python/djust/mixins/rust_bridge.py:83` |
 | 3 | Detect change | `deep_fingerprint`, `python/djust/change_detection.py:90` |
 | 4 | Hand across (PyO3) | `RustLiveView::set_changed_keys`, `crates/djust_live/src/lib.rs:336` |
-| 5 | Convert | `impl FromPyObject for Value`, `crates/djust_core/src/lib.rs:3914` |
+| 5 | Convert | `impl FromPyObject for Value`, `crates/djust_core/src/lib.rs:3916` |
 | 6 | Bind | `Context`, `crates/djust_core/src/context.rs:280` |
 | 7 | Resolve | `Context::resolve_without_builtins`, `context.rs:1755` |
 | 8 | Render | `render_nodes_partial` / `render_nodes_collecting`, `crates/djust_templates/src/renderer.rs:2193` / `:2173` |
@@ -296,8 +299,8 @@ attach the handle differently. (Seven further sites — `lib.rs:1655`, `:1718`,
 sets `live: None`. That is the handle's transience, mechanically: nothing
 restored from state can carry one.)
 
-**`opaque_value`** (`lib.rs:4879`) — the general carrier. It attaches a handle
-**iff** the thread-local flag is on (`lib.rs:4935`–`4916`):
+**`opaque_value`** (`lib.rs:4881`) — the general carrier. It attaches a handle
+**iff** the thread-local flag is on (`lib.rs:4937`–`4916`):
 
 ```rust
 let lazy = resolve_lazy();
@@ -321,7 +324,7 @@ either way. See §6.3.
 **Who does not get one.** The arms *above* `opaque_value` in the fallback block
 claim their types first, so nothing they claim can reach the handle: a `dict`, a
 `tuple`, a `list`, a `NamedTuple`, a `MultiValueDict`, anything with
-`__djust_serialize__` (`lib.rs:4078`), and any `models.Model` (`lib.rs:4113`).
+`__djust_serialize__` (`lib.rs:4080`), and any `models.Model` (`lib.rs:4115`).
 That last pair is the serialization floor: routing a model through the
 `__dict__` bulk dump would filter only `_`-prefixed keys and leak `password`.
 ADR-027 states it as an explicit non-goal: *"`Value::Object` never carries a
@@ -340,33 +343,39 @@ after each segment (`:2329`).
 
 ### 3.5 Where `OPAQUE_ITEM_CAP` actually governs
 
-`OPAQUE_ITEM_CAP = 100_000` (`lib.rs:4183`). Its primary job is **whether the
+`OPAQUE_ITEM_CAP = 100_000` (`lib.rs:4185`). Its primary job is **whether the
 items are enumerated at conversion time**. It does *not* gate the live handle,
 and it does not gate whether an object gets an `Encoded` at all — those are the
 two things it is most often assumed to do (§6.4).
 
 It is not *only* about enumeration, though: the same threshold feeds
-`stated_len_is_too_large_to_enumerate` (`lib.rs:3666`) and
-`Encoded::list_repr_is_this_objects_own_spelling` (`lib.rs:3819`), so it also
-participates in how a declined container is *spelled*. Both of those reads are
-themselves `resolve_lazy()`-conditional.
+`stated_len_is_too_large_to_enumerate` (`lib.rs:3667`) and
+`Encoded::declined_list_spelling` (`lib.rs:4472`, which opens with
+`len > OPAQUE_ITEM_CAP` at `:4473`), so it also participates in how a declined
+container is *spelled*.
 
-`opaque_gate` (`lib.rs:4227`) measures four facts without converting anything —
+Do not confuse the latter with `list_repr_is_this_objects_own_spelling`
+(`lib.rs:3820`), which reads similarly and is **length-independent** — it has no
+`OPAQUE_ITEM_CAP` in it at all, and decides which conversion *arm* claims a
+`list`/queryset at ANY length. `lib.rs:3808`–`3811` states the split. An earlier
+version of this paragraph named that one; see §6.10.
+
+`opaque_gate` (`lib.rs:4229`) measures four facts without converting anything —
 `truthy`, `len`, `iterable`, `unbounded` — and sets `unbounded` when either
 axis passes the cap:
 
 - a **sized** object whose stated `__len__` exceeds it
-  (`stated_len_is_too_large_to_enumerate`, `lib.rs:3665`; the check is at
-  `lib.rs:4295`);
-- an **unsized** iterable whose walk passes it (`lib.rs:4306`).
+  (`stated_len_is_too_large_to_enumerate`, `lib.rs:3667`; the check is at
+  `lib.rs:4297`);
+- an **unsized** iterable whose walk passes it (`lib.rs:4308`).
 
 `opaque_value` then leaves `items: None` for an unbounded object, for a one-shot
 iterator (`iter(o) is o` — reading it at conversion would consume the caller's
 object), and for a non-iterable. The *sinks* read such an object through the
-handle instead — `Encoded::consume_live_items` (`lib.rs:4411`) for `{% for %}`,
-`Encoded::declined_list_spelling` (`lib.rs:4470`) for `{{ v }}` / `pprint` /
+handle instead — `Encoded::consume_live_items` (`lib.rs:4413`) for `{% for %}`,
+`Encoded::declined_list_spelling` (`lib.rs:4472`) for `{{ v }}` / `pprint` /
 `json_script` — under their own termination rule,
-`Encoded::live_walk_terminates` (`lib.rs:4388`).
+`Encoded::live_walk_terminates` (`lib.rs:4390`).
 
 The intent is that rendered output not depend on which side of the cap a value
 falls — the work moves from the conversion to the sink, and #2717 exists because
@@ -390,7 +399,7 @@ Per ADR-027 (b) (`docs/adr/027-template-variable-resolution-follows-django.md:22
    shape, msgpack rolling-deploy compatibility, container `!=` change detection,
    and the floor's materialised form. On the LiveView path the normalization is
    `_normalize_db_values` (`python/djust/mixins/rust_bridge.py:83`); on the plain
-   conversion path it is the `models.Model` arm at `lib.rs:4113`, which calls
+   conversion path it is the `models.Model` arm at `lib.rs:4115`, which calls
    `djust.serialization.normalize_django_value`.
    *(The ADR cites lines 3073–3089 of that file for this. That range has since
    drifted onto an unrelated `Decimal`/`Display` doc comment — grep
@@ -512,7 +521,7 @@ Where there is no test, this table says so rather than implying coverage.
 | I1 | The handle never reaches the wire | `TestTheHandleNeverReachesTheWire2539`, `python/tests/test_adr027_characterization_net_2539.py:2006` |
 | I2 | `ENCODED_ATTR_NAMES` and `ENCODED_CALL_NAMES` share no name | `test_the_two_tables_are_disjoint` (cited at `crates/djust_core/src/lib.rs:2207`) |
 | I3 | The ADR-027 sink reads no `Encoded` attribute map and calls no `lookup_segment` | `TestTheSinkHasExactlyTheReadersItClaims`, `python/tests/test_encoded_attributes_2481.py:654` (cited at `context.rs:2299`) |
-| I4 | The conversion body has exactly the callers it claims | `TestTheSinkHasExactlyTheCallersItClaims`, `python/tests/test_encoded_truthiness_2458.py:445` and `python/tests/test_json_script_datetime_value_2448.py:643` (cited at `lib.rs:3923`) |
+| I4 | The conversion body has exactly the callers it claims | `TestTheSinkHasExactlyTheCallersItClaims`, `python/tests/test_encoded_truthiness_2458.py:445` and `python/tests/test_json_script_datetime_value_2448.py:643` (cited at `lib.rs:3925`) |
 | I5 | The serialization floor holds on the handle path, on both sides of the cap | `TestTheSerializationFloorHoldsOnTheNewHandle`, `python/tests/test_sized_sequence_conversion_2695_2693.py:775` |
 | I6 | The build-time sidecar pass's documented limit is pinned, not assumed | `test_the_limit_of_the_build_time_pass_is_pinned_not_assumed`, `python/tests/test_sidecar_on_all_render_paths_2501.py` |
 | I7 | A partial render skips nodes whose deps are disjoint from `changed_keys` | `test_render_nodes_partial_skips_unchanged`, `crates/djust_templates/src/lib.rs:733` |
@@ -585,12 +594,12 @@ two crates:
 
 | site | what it decides |
 |---|---|
-| `lib.rs:3666` | `stated_len_is_too_large_to_enumerate` — the over-cap decline is lazy-only |
-| `lib.rs:3819` | `list_repr_is_this_objects_own_spelling` — a declined container's spelling |
-| `lib.rs:4254` | `opaque_gate`, the one-shot-iterator arm |
-| `lib.rs:4307` | `opaque_gate`, the over-cap walk arm |
-| `lib.rs:4333` | `opaque_gate`, the attribute-bearing decline |
-| `lib.rs:4935` | `opaque_value` — the handle **attach** (§3.4 documents this one) |
+| `lib.rs:3668` | `stated_len_is_too_large_to_enumerate` — the over-cap decline is lazy-only |
+| `lib.rs:3821` | `list_repr_is_this_objects_own_spelling` — which conversion ARM claims a `list`/queryset, at any length (§3.5: *not* the declined spelling) |
+| `lib.rs:4256` | `opaque_gate`, the one-shot-iterator arm |
+| `lib.rs:4309` | `opaque_gate`, the over-cap walk arm |
+| `lib.rs:4335` | `opaque_gate`, the attribute-bearing decline |
+| `lib.rs:4937` | `opaque_value` — the handle **attach** (§3.4 documents this one) |
 | `context.rs:1800` | whether a dotted lookup **walks** the handle |
 | `crates/djust_templates/src/renderer.rs:5461` | `get_value_safe`'s `ignore_failures` arm: a filtered tag operand resolving to `Missing` becomes `None` under the flag |
 
@@ -601,7 +610,7 @@ observable — `{% firstof nope|default_if_none:"X" "Y" %}` renders `X` with the
 flag on and `Y` with it off (§6.9).
 
 > An earlier version of this section said "read at exactly two sites", and
-> sourced it to `lib.rs:2884`'s own doc comment, which said the same thing. Both
+> sourced it to `lib.rs:2886`'s own doc comment, which said the same thing. Both
 > were false. See §6.9 — this is the tenth false absolute on this boundary, and
 > the document acquired it in exactly the way it was written to prevent.
 
@@ -766,10 +775,10 @@ that push is what keeps the configured value honoured on the real path (§5.4).
 
 ### 6.6 The `Value::Object` bulk-dump arm — reachable under the default, and my first enumeration of how was wrong
 
-`opaque_gate`'s final decline (`lib.rs:4333`) is
+`opaque_gate`'s final decline (`lib.rs:4335`) is
 `!resolve_lazy() && truthy && !iterable && has_public_dict_attrs(ob)`. With the
 flag on that decline never fires, so `opaque_value` claims the object and the
-bulk-dump arm at `lib.rs:4160` is reached only when `opaque_value` returns
+bulk-dump arm at `lib.rs:4162` is reached only when `opaque_value` returns
 `None`. A truthy, non-iterable object with public attributes resolves under both
 flag states, **by different carriers** — an `Encoded` with a handle under the
 default, a `Value::Object` on the escape hatch.
@@ -797,7 +806,7 @@ class Boom:
 `bool`, `iter`, `str`, `repr` and `type().__name__` all succeed. `{{ v }}`
 renders `{&#x27;x&#x27;: 1}` — the `Value::Object` bulk dump. Through the
 isolating binding, `q.x` → `1` and `q.p` → `''`: no handle. The arm that
-declined it is `item.is_err()` at `lib.rs:4302`, with `item.ok()?` /
+declined it is `item.is_err()` at `lib.rs:4304`, with `item.ok()?` /
 `extract::<Value>().ok()?` in `opaque_value`.
 
 **And `iter(o)` failing is not a decline at all.** `ob.try_iter().ok()` merely
@@ -835,7 +844,7 @@ was never grepped.
 
 The nine failures this document was written against were all absolutes taken on
 trust. The first version of §5.4 added a tenth: *"read at exactly two sites"*,
-with `lib.rs:2884`'s own doc comment cited as the source. Both were false, and
+with `lib.rs:2886`'s own doc comment cited as the source. Both were false, and
 review found it by grepping.
 
 There are **eight** functional reads, in two crates (§5.4). The one that makes
@@ -851,19 +860,55 @@ and appears nowhere in the first version of this document:
 a filtered operand that resolves to nothing takes a different branch. That is
 observable output, changed by a flag the document said had two readers.
 
-**The lesson, stated as a rule because it cost this document its own standard: a
-doc comment is not evidence.** Citing one is the same act as citing an issue
-body or a PR description — it is someone's claim, and the nine failures in the
-opening note are what that is worth on this boundary. §3.4 already contradicted
-§5.4 by documenting `lib.rs:4935` as a third read; nobody noticed, because both
-sentences read as authoritative. The rule that catches this is the one already
-stated at the top and applied everywhere else here: **construct the case that
-would disprove the claim, and run it.** For a flag, that means finding output
-that changes when it flips — not counting call sites in the file you happen to
-be reading, and certainly not repeating the count a neighbouring comment
-asserts.
+**The lesson, stated as a rule because it cost this document its own standard:**
 
-`lib.rs:2884`'s comment is corrected in the same commit as the other four.
+> A doc comment is not evidence for a **checkable** claim — a count, an
+> absolute, a reachability statement — because those can be run. It remains the
+> best evidence for **intent**, which cannot be run.
+
+The distinction is load-bearing, and the first draft of this rule did not have
+it. "A doc comment is not evidence", full stop, would invalidate two things this
+document does legitimately: §3.2's `Encoded` field table (doc-comment summaries
+of what each field *means*) and §5.4's citation of the design rationale for the
+thread-local. Both are intent, both are flagged as read-not-run in §6.7, and
+both are fine. What is not fine is sourcing a *count* to a comment. A section
+about over-strong rules should not close on one.
+
+For a checkable claim the rule is the one already stated at the top and applied
+everywhere else here: **construct the case that would disprove it, and run it.**
+For a flag, that means finding output that changes when it flips — not counting
+call sites in the file you happen to be reading, and certainly not repeating the
+count a neighbouring comment asserts. §3.4 already contradicted §5.4 by
+documenting `lib.rs:4937` as a third read; nobody noticed, because both
+sentences read as authoritative.
+
+`lib.rs:2886`'s comment is corrected in the same commit as the other four.
+
+### 6.10 The eleventh — my fix for the tenth, one step over
+
+The correction to §5.4 (above) came with a self-found correction to §3.5: "the
+cap governs item enumeration, and **nothing else**" was too strong, because the
+threshold also participates in how a declined container is spelled. That is
+right. The predicate I named for it was not:
+`list_repr_is_this_objects_own_spelling` (`lib.rs:3820`) contains no
+`OPAQUE_ITEM_CAP` and is **length-independent** — it decides which conversion
+*arm* claims a `list`/queryset at any length. The cap-reading spelling predicate
+is `Encoded::declined_list_spelling` (`lib.rs:4472`), which §3.5 cited
+correctly twelve lines further down, and which `lib.rs:3808`–`3811` distinguishes
+from the other in as many words.
+
+I picked the neighbour, and it was a `resolve_lazy()` reader with "spelling" in
+its name — plausible enough to survive a re-read, and wrong.
+
+**This is the closing example because it is my own and it is the cleanest: a
+fix for a false absolute landed a new false claim one step over** — the
+chain-shaped failure `CLAUDE.md` names at #2142, and the third instance of it on
+this document. It is also the sharpest argument for the rule above. Two of the
+three false claims here (this one, and "read at exactly two sites") would have
+been caught by the same move and were not: pick the symbol you are about to
+name, open it, and check that the thing you are claiming about it is in the
+body. A neighbouring symbol with the right-sounding name is exactly what a
+careful re-read fails to catch.
 
 ---
 
