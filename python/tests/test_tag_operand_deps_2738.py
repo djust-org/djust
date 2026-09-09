@@ -22,6 +22,14 @@ The cure converges tag-operand extraction onto the renderer's own splitter,
 ``filter_lexer::split_pipes`` — the quote-aware split ``renderer::get_value_safe``
 already uses to RESOLVE these operands — so the analysis splits an operand
 exactly the way the renderer resolves it (#1646).
+
+**Scope, stated because the framing is easy to overstate.** What is retired is
+operand FILTER CHAINS. A compound EXPRESSION in an inline-if condition —
+``{{ a if x > y else b }}`` — still files ``x > y`` as one key and loses both
+names, because a compound expression needs ``extract_from_expression`` (what
+``{% if %}``'s condition uses) rather than the operand splitter. That is
+pre-existing rather than introduced here, and is tracked at **#2745**; the tests
+below deliberately do not claim it.
 """
 
 from __future__ import annotations
