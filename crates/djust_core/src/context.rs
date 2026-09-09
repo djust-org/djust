@@ -186,6 +186,19 @@ pub(crate) fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a V
     }
 }
 
+/// The map a [`Context`] scope frame holds, shared rather than copied (#2732).
+///
+/// Named so a caller OUTSIDE this crate can hold its state in exactly the shape
+/// frame 0 wants and hand it over with [`Context::from_shared`] — one atomic
+/// increment instead of a deep clone plus a rehashing rebuild (#2737). The
+/// hasher is part of the type: a `std::collections::HashMap` is a different
+/// type and cannot be shared into a frame, only rebuilt into one.
+///
+/// The copy-on-write contract lives on [`ScopeFrame::values`], which every
+/// holder — inside this crate or out — gets by mutating through
+/// [`std::sync::Arc::make_mut`].
+pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
+
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
@@ -238,7 +251,7 @@ struct ScopeFrame {
     /// for every future caller. The atomics buy that back for O(stack depth)
     /// refcount bumps per clone, against the O(entire state) deep copy this
     /// removes.
-    values: std::sync::Arc<AHashMap<String, Value>>,
+    values: SharedValues,
     assignments: indexmap::IndexSet<String>,
     invalid_block_super: bool,
     safe_keys: AHashSet<String>,
@@ -602,9 +615,32 @@ impl Context {
         for (k, v) in dict {
             map.insert(k, v);
         }
+        Self::from_shared(std::sync::Arc::new(map))
+    }
+
+    /// A `Context` over an ALREADY-SHARED base frame — no copy, no rebuild
+    /// (#2737).
+    ///
+    /// [`Context::from_dict`] is the right entry when the caller holds a map it
+    /// owns; it costs one rehashing pass plus a move per entry. A caller that
+    /// holds its state as a [`SharedValues`] across renders — a long-lived view
+    /// backend — pays that pass on EVERY render, plus the deep clone it has to
+    /// make first because `from_dict` consumes what it is given. For a view
+    /// with 5 000 opaque objects in state that was ~0.63 ms per render, charged
+    /// whether or not the template reads any of it.
+    ///
+    /// This takes the `Arc` instead, so the base frame is the caller's own map
+    /// and the whole cost is one atomic increment. It is the same
+    /// copy-on-write contract [`ScopeFrame::values`] already documents, one
+    /// level up: the caller mutates through [`std::sync::Arc::make_mut`], which
+    /// copies only when a render is actually holding the map at that moment.
+    ///
+    /// `from_dict` routes through here rather than building its own frame, so
+    /// there is ONE statement of what frame 0 is (#1646).
+    pub fn from_shared(values: SharedValues) -> Self {
         Self {
             stack: vec![ScopeFrame {
-                values: std::sync::Arc::new(map),
+                values,
                 ..ScopeFrame::default()
             }],
             node_identity: None,
@@ -3151,6 +3187,74 @@ mod tests {
             std::sync::Arc::ptr_eq(&original.stack[0].values, &copy.stack[0].values),
             "Context::clone deep-copied frame 0's values — the #2732 per-loop-entry \
              O(entire state) copy is back"
+        );
+    }
+
+    /// The same contract one level up (#2737): a caller that already holds its
+    /// state as a [`SharedValues`] hands it over without a copy.
+    ///
+    /// `from_dict` cannot do this — it consumes a map it must rehash into a
+    /// frame — so a long-lived view backend paid a deep clone plus a rebuild on
+    /// EVERY render. `Arc::ptr_eq` is the mechanical form of "it did not":
+    /// reinstating `Context::from_dict(state.clone())` at the render entry
+    /// makes this fail.
+    #[test]
+    fn from_shared_adopts_the_callers_map_rather_than_rebuilding_it() {
+        let mut map = AHashMap::new();
+        map.insert("rows".to_string(), Value::List(vec![Value::Integer(1)]));
+        let state: SharedValues = std::sync::Arc::new(map);
+
+        let context = Context::from_shared(state.clone());
+
+        assert!(
+            std::sync::Arc::ptr_eq(&state, &context.stack[0].values),
+            "from_shared rebuilt the map instead of adopting it — the #2737 \
+             per-render O(entire state) copy is back"
+        );
+    }
+
+    /// The correctness half of the above, and the reason sharing is safe: a
+    /// write THROUGH the context copies first, so the caller's map — which a
+    /// view backend keeps across renders — cannot be mutated by a render.
+    ///
+    /// This is the property that makes `from_shared` semantically identical to
+    /// the `from_dict(state.clone())` it replaces, where the deep copy provided
+    /// the isolation instead. `{% regroup %}` and `{% assign %}` are the live
+    /// callers that write into an enclosing frame this way.
+    #[test]
+    fn a_write_through_a_shared_context_does_not_reach_the_callers_map() {
+        let mut map = AHashMap::new();
+        map.insert("n".to_string(), Value::Integer(1));
+        let state: SharedValues = std::sync::Arc::new(map);
+
+        let mut context = Context::from_shared(state.clone());
+        context.set_at(0, "n".to_string(), Value::Integer(2));
+
+        // `matches!`, not `assert_eq!`: `Value` deliberately has no
+        // `PartialEq` (see its declaration), so the shape is asserted rather
+        // than compared.
+        assert!(
+            matches!(state.get("n"), Some(Value::Integer(1))),
+            "a render wrote through to the backend's own state map"
+        );
+        assert!(matches!(context.get("n"), Some(Value::Integer(2))));
+        assert!(
+            !std::sync::Arc::ptr_eq(&state, &context.stack[0].values),
+            "the write did not take a copy, so the two holders are still aliased"
+        );
+    }
+
+    /// `from_dict` must keep routing through `from_shared` — one statement of
+    /// what frame 0 is (#1646). A `from_dict` context is as shareable as a
+    /// `from_shared` one, which is what this asserts without reading the source.
+    #[test]
+    fn from_dict_produces_the_same_shareable_frame_shape() {
+        let original = ctx_with_rows(8);
+        let copy = original.clone();
+        assert!(
+            std::sync::Arc::ptr_eq(&original.stack[0].values, &copy.stack[0].values),
+            "a from_dict context's frame 0 is not shared, so the two \
+             constructors build different shapes"
         );
     }
 

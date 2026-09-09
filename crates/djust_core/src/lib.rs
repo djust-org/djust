@@ -18,7 +18,7 @@ pub mod locale;
 pub mod object_key;
 pub mod serialization;
 
-pub use context::Context;
+pub use context::{Context, SharedValues};
 pub use errors::{DjangoRustError, Result};
 pub use object_key::ObjectKey;
 

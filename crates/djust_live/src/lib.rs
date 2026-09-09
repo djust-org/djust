@@ -205,7 +205,21 @@ struct RenderTiming {
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
     template_source: String,
-    state: HashMap<String, Value>,
+    /// COPY-ON-WRITE, and that is a performance contract (#2737).
+    ///
+    /// Held in exactly the shape a `Context`'s base frame wants, so a render
+    /// is `Context::from_shared(self.state.clone())` — one atomic increment —
+    /// rather than `from_dict(self.state.clone())`, which deep-cloned every
+    /// key and every `Value` and then rebuilt them into a fresh map. That was
+    /// O(entire state) on EVERY render, charged whether or not the template
+    /// read any of it: ~0.63 ms per render for a view holding 5 000 opaque
+    /// objects, and it is the last such charge on the LiveView path after
+    /// #2733 removed the per-loop-entry one.
+    ///
+    /// Every mutation below goes through `Arc::make_mut`, which copies only
+    /// when a render is holding the map at that moment — the same contract
+    /// `ScopeFrame::values` documents, one level up.
+    state: djust_core::SharedValues,
     last_vdom: Option<VNode>,
     /// Cached HTML from the last render, used for text-only fast path detection.
     /// Not serialized — transient cache that's rebuilt on next render.
@@ -297,7 +311,7 @@ impl RustLiveViewBackend {
     fn new(template_source: String, template_dirs: Option<Vec<String>>) -> Self {
         Self {
             template_source,
-            state: HashMap::new(),
+            state: Default::default(),
             last_vdom: None,
             last_html: None,
             version: 0,
@@ -440,7 +454,7 @@ impl RustLiveViewBackend {
 
     /// Set a state variable
     fn set_state(&mut self, key: String, value: Value) {
-        self.state.insert(key, value);
+        std::sync::Arc::make_mut(&mut self.state).insert(key, value);
     }
 
     /// Update state with a dictionary
@@ -496,7 +510,7 @@ impl RustLiveViewBackend {
             .cloned()
             .collect();
         for key in &removed {
-            self.state.remove(key);
+            std::sync::Arc::make_mut(&mut self.state).remove(key);
             if !self.safe_keys.is_empty() {
                 self.safe_keys.remove(key);
                 let prefix = format!("{key}.");
@@ -570,7 +584,7 @@ impl RustLiveViewBackend {
     /// re-converts it (#2570; the Python bridge always syncs before the
     /// first render of a clone).
     fn clear_live_handles(&mut self) {
-        for value in self.state.values_mut() {
+        for value in std::sync::Arc::make_mut(&mut self.state).values_mut() {
             clear_live_handles_in(value);
         }
     }
@@ -654,7 +668,7 @@ impl RustLiveViewBackend {
     /// Get current state
     fn get_state(&self, py: Python) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
-        for (k, v) in &self.state {
+        for (k, v) in self.state.iter() {
             dict.set_item(k, v.into_pyobject(py)?)?;
         }
         Ok(dict.into())
@@ -673,7 +687,7 @@ impl RustLiveViewBackend {
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
 
-            let mut context = Context::from_dict(self.state.clone());
+            let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -714,7 +728,7 @@ impl RustLiveViewBackend {
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
 
-            let mut context = Context::from_dict(self.state.clone());
+            let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -1139,7 +1153,7 @@ impl RustLiveViewBackend {
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
 
-            let mut context = Context::from_dict(self.state.clone());
+            let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -1410,7 +1424,13 @@ impl RustLiveViewBackend {
         // Convert to serializable struct
         let serializable = SerializableViewState {
             template_source: self.template_source.clone(),
-            state: self.state.clone(),
+            // Deref THEN clone: the wire carries a plain map, exactly as
+            // before. Paid once per save, not once per render.
+            state: self
+                .state
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             last_vdom: self.last_vdom.clone(),
             version: self.version,
             timestamp: ts,
@@ -1446,7 +1466,7 @@ impl RustLiveViewBackend {
         // Note: template_dirs must be re-set after deserialization via set_template_dirs()
         Ok(Self {
             template_source: serializable.template_source,
-            state: serializable.state,
+            state: std::sync::Arc::new(serializable.state.into_iter().collect()),
             last_vdom: serializable.last_vdom,
             last_html: None, // Transient cache — rebuilt on next render
             version: serializable.version,
@@ -1567,7 +1587,7 @@ impl RustLiveViewBackend {
                 self.safe_keys.retain(|k| !k.starts_with(&prefix));
             }
         }
-        self.state.extend(updates);
+        std::sync::Arc::make_mut(&mut self.state).extend(updates);
     }
 
     /// Render the template (Rust API)
@@ -5311,5 +5331,153 @@ mod span_aware_call_sites_2557 {
              — a parse error there reaches Python with no location (#1646)",
             total - wrapped
         );
+    }
+}
+
+#[cfg(test)]
+mod state_is_shared_not_copied_2737 {
+    //! The per-render O(entire state) copy, as a mechanical property (#2737).
+    //!
+    //! `RustLiveViewBackend::state` is held as a [`djust_core::SharedValues`],
+    //! so a render ADOPTS it (`Context::from_shared`) instead of deep-cloning
+    //! every key and every `Value` and rebuilding them into a fresh map
+    //! (`Context::from_dict(self.state.clone())`). That copy was charged on
+    //! EVERY render whether or not the template read any of it, and it was the
+    //! last such charge on the LiveView path after #2733 removed the
+    //! per-loop-entry one.
+    //!
+    //! Asserted as identity and isolation, never as a duration: a timing
+    //! threshold is flaky under saturation and proves nothing about which
+    //! mechanism produced the number (#1795).
+    use super::*;
+
+    fn view_with_rows(n: usize) -> RustLiveViewBackend {
+        let mut view = RustLiveViewBackend::new_rust("<p>hello</p>".to_string());
+        let rows: Vec<Value> = (0..n).map(|i| Value::Integer(i as i64)).collect();
+        view.update_state_rust(HashMap::from([("rows".to_string(), Value::List(rows))]));
+        view
+    }
+
+    /// A render leaves the backend's own map in place — it borrows, it does not
+    /// replace.
+    ///
+    /// **This does NOT pin the sharing**, and the gate-off says so: reinstating
+    /// `Context::from_dict((*self.state).clone())` at the render entry leaves
+    /// this green, because the backend's own `Arc` is untouched either way.
+    /// Copy-on-write is invisible by construction — that is the point of it —
+    /// so no behavioural test in this crate can tell "shared" from
+    /// "deep-copied". The render entry is pinned by a PAIR instead:
+    /// `from_shared_adopts_the_callers_map_rather_than_rebuilding_it`
+    /// (behavioural, in `djust_core` — `from_shared` really does adopt) and
+    /// `TestTheRenderEntriesShareTheStateMap` (structural, in
+    /// `python/tests/test_state_shared_2737.py` — the render entries really do
+    /// call it). Recorded here rather than left for the next reader to
+    /// rediscover with a mutation (#1859).
+    #[test]
+    fn a_render_leaves_the_state_map_in_place() {
+        let mut view = view_with_rows(64);
+        let before = view.state.clone();
+        view.render_rust().expect("render");
+        assert!(
+            std::sync::Arc::ptr_eq(&before, &view.state),
+            "the render replaced the backend's state map"
+        );
+    }
+
+    /// The load-bearing one: while something is still holding the map, a write
+    /// MUST copy. That is what makes sharing safe, and it is the property the
+    /// old rebuild-per-render provided for free by never sharing at all.
+    ///
+    /// Gate-off: replacing `Arc::make_mut` with `Arc::get_mut(..).unwrap()` in
+    /// `set_state` panics here rather than passing, which is how this test is
+    /// known to reach the SHARED path and not a uniquely-owned one — the same
+    /// technique #2733 used for `ScopeFrame::values`.
+    #[test]
+    fn a_write_while_a_render_holds_the_map_copies_instead_of_aliasing() {
+        let mut view = view_with_rows(4);
+        let held = djust_core::Context::from_shared(view.state.clone());
+        assert!(held.get("n").is_none());
+
+        view.set_state("n".to_string(), Value::Integer(1));
+
+        assert!(
+            held.get("n").is_none(),
+            "the write aliased into a context that was already holding the map"
+        );
+        assert!(matches!(view.state.get("n"), Some(Value::Integer(1))));
+    }
+
+    /// Every mutating entry goes through the same copy-on-write door, not just
+    /// the one the fix was written against (#1104: N similar sites, N tests).
+    #[test]
+    fn every_mutating_entry_preserves_isolation_from_a_held_render() {
+        /// One mutating entry, by name, so the cases read as a table.
+        type MutatingEntry = (&'static str, Box<dyn Fn(&mut RustLiveViewBackend)>);
+
+        let cases: Vec<MutatingEntry> = vec![
+            (
+                "set_state",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    v.set_state("k".to_string(), Value::Integer(9))
+                }),
+            ),
+            (
+                "update_state_rust",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    v.update_state_rust(HashMap::from([("k".to_string(), Value::Integer(9))]))
+                }),
+            ),
+            (
+                "retain_state_keys_rust",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    v.retain_state_keys_rust(vec![]);
+                }),
+            ),
+        ];
+        for (label, mutate) in cases {
+            let mut view = view_with_rows(4);
+            let held = djust_core::Context::from_shared(view.state.clone());
+            mutate(&mut view);
+            assert!(
+                matches!(held.get("rows"), Some(Value::List(_))),
+                "{label} mutated a map a render was already holding"
+            );
+        }
+    }
+
+    /// The msgpack round trip produces an INDEPENDENT view: the `Arc` is
+    /// per-instance, and the wire still carries a plain map. The memory state
+    /// backend round-trips on every cache hit precisely to get this isolation
+    /// (#1410), so it is the property that must not have moved.
+    #[test]
+    fn a_round_tripped_view_does_not_share_the_originals_map() {
+        let view = view_with_rows(4);
+
+        // The bytes are built from `SerializableViewState` directly rather than
+        // through `serialize_msgpack`, which needs a `Python` token: this test
+        // runs under `--no-default-features`, where no interpreter is
+        // initialized. It is the same struct, the same encoder and the same
+        // `deserialize_msgpack` under test — only the token-taking wrapper is
+        // stepped around, and the wrapper's own body is one `PyBytes::new` over
+        // exactly these bytes.
+        let serializable = SerializableViewState {
+            template_source: view.template_source.clone(),
+            state: view
+                .state
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            last_vdom: view.last_vdom.clone(),
+            version: view.version,
+            timestamp: view.timestamp,
+        };
+        let bytes = rmp_serde::to_vec(&serializable).expect("serialize");
+
+        let clone = RustLiveViewBackend::deserialize_msgpack(&bytes).expect("deserialize");
+        assert!(
+            !std::sync::Arc::ptr_eq(&view.state, &clone.state),
+            "a round-tripped view aliases the original's state map"
+        );
+        assert!(matches!(clone.state.get("rows"), Some(Value::List(_))));
     }
 }
