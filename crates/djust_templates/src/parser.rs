@@ -2995,7 +2995,7 @@ fn extract_from_nodes(
             Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
             Node::Variable(var_expr, filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}
-                extract_from_variable(var_expr, variables);
+                extract_from_operand(var_expr, variables);
                 // Extract from filter args: {{ a|default:fallback }} — `fallback`
                 // must be tracked as a dependency too, otherwise a nested
                 // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
@@ -3026,7 +3026,7 @@ fn extract_from_nodes(
                 empty_nodes,
             } => {
                 // Extract from iterable: {% for item in variable.path %}
-                extract_from_variable(iterable, variables);
+                extract_from_operand(iterable, variables);
                 // Recurse into for body
                 extract_from_nodes(nodes, variables);
                 // Recurse into empty block
@@ -3045,6 +3045,20 @@ fn extract_from_nodes(
                 // - IDE autocomplete/type checking
                 // - Template debugging
                 // - Documentation generation
+
+                // The iterable WITHOUT its filter chain (#2738). The transfer
+                // below reads a dotted PATH off the iterable, and a filter is
+                // not part of one: splitting `rows|slice:':5'` on `.` yielded
+                // the whole string, so `{% for r in rows|slice:':5' %}{{ r.name }}`
+                // filed `name` under a key spelled `rows|slice:':5'` that no
+                // state key can ever match — the loop body's paths were lost
+                // AND a bogus key was minted. Quote-aware, like every other
+                // operand split here.
+                let iterable = crate::filter_lexer::split_pipes(iterable)
+                    .first()
+                    .copied()
+                    .unwrap_or(iterable)
+                    .trim();
                 for var_name in var_names {
                     if let Some(loop_var_paths) = variables.get(var_name) {
                         // Transfer paths from loop variable to iterable (but keep loop var)
@@ -3083,7 +3097,7 @@ fn extract_from_nodes(
             Node::With { assignments, nodes } => {
                 // Extract from with assignments: {% with x=variable.path %}
                 for (_var_name, expr) in assignments {
-                    extract_from_variable(expr, variables);
+                    extract_from_operand(expr, variables);
                 }
                 // Recurse into with body
                 extract_from_nodes(nodes, variables);
@@ -3095,7 +3109,7 @@ fn extract_from_nodes(
             } => {
                 // Extract from component props
                 for (_prop_name, prop_value) in props {
-                    extract_from_variable(prop_value, variables);
+                    extract_from_operand(prop_value, variables);
                 }
                 // Recurse into children
                 extract_from_nodes(children, variables);
@@ -3103,7 +3117,7 @@ fn extract_from_nodes(
             Node::RustComponent { props, name: _ } => {
                 // Extract from component props
                 for (_prop_name, prop_value) in props {
-                    extract_from_variable(prop_value, variables);
+                    extract_from_operand(prop_value, variables);
                 }
             }
             Node::AssignTag { args, name: _ } => {
@@ -3129,7 +3143,7 @@ fn extract_from_nodes(
                         && !value.starts_with('\'')
                         && !value.chars().all(|c| c.is_numeric() || c == '.')
                     {
-                        extract_from_variable(value, variables);
+                        extract_from_operand(value, variables);
                     }
                 }
                 variables.entry("*".to_string()).or_default();
@@ -3162,7 +3176,7 @@ fn extract_from_nodes(
                         && !value.starts_with('\'')
                         && !value.chars().all(|c| c.is_numeric() || c == '.')
                     {
-                        extract_from_variable(value, variables);
+                        extract_from_operand(value, variables);
                     }
                 }
                 // For block tags, also recurse into children
@@ -3181,9 +3195,9 @@ fn extract_from_nodes(
                 max_width,
                 asvar,
             } => {
-                extract_from_variable(value, variables);
-                extract_from_variable(max_value, variables);
-                extract_from_variable(max_width, variables);
+                extract_from_operand(value, variables);
+                extract_from_operand(max_value, variables);
+                extract_from_operand(max_width, variables);
                 // The `as <var>` form MUTATES the context for later siblings,
                 // exactly as `Node::AssignTag` does — so it needs the same
                 // `"*"` wildcard, or partial render skips it whenever its own
@@ -3200,7 +3214,7 @@ fn extract_from_nodes(
                         || (arg.starts_with('\'') && arg.ends_with('\''))
                         || arg.chars().all(|c| c.is_numeric() || c == '.'))
                     {
-                        extract_from_variable(arg, variables);
+                        extract_from_operand(arg, variables);
                     }
                 }
                 // See `Node::WidthRatio` above: the `as <var>` form mutates
@@ -3222,7 +3236,7 @@ fn extract_from_nodes(
                 // The operands are resolved every iteration, so they are
                 // dependencies exactly as an `{% if %}` condition is.
                 for var in vars {
-                    extract_from_variable(var, variables);
+                    extract_from_operand(var, variables);
                 }
                 extract_from_nodes(nodes, variables);
                 extract_from_nodes(else_nodes, variables);
@@ -3242,7 +3256,7 @@ fn extract_from_nodes(
                         if !((arg.starts_with('"') && arg.ends_with('"'))
                             || (arg.starts_with('\'') && arg.ends_with('\'')))
                         {
-                            extract_from_variable(arg, variables);
+                            extract_from_operand(arg, variables);
                         }
                     }
                 }
@@ -3260,7 +3274,7 @@ fn extract_from_nodes(
                     if !((val.starts_with('"') && val.ends_with('"'))
                         || (val.starts_with('\'') && val.ends_with('\'')))
                     {
-                        extract_from_variable(val, variables);
+                        extract_from_operand(val, variables);
                     }
                 }
             }
@@ -3288,7 +3302,7 @@ fn extract_from_nodes(
                             .chars()
                             .all(|c| c.is_numeric() || c == '.' || c == '-');
                     if !is_literal {
-                        extract_from_variable(trimmed, variables);
+                        extract_from_operand(trimmed, variables);
                     }
                 }
             }
@@ -3371,6 +3385,54 @@ fn extract_from_filter_arg(
     extract_from_variable(trimmed, variables);
 }
 
+/// Every context name a TAG OPERAND references: the variable at its head, and
+/// the ARGUMENT of every filter in its chain (#2738).
+///
+/// `{{ }}` never needed this. The parser splits a variable node into
+/// `Node::Variable(var_expr, filters, _)`, so [`extract_from_nodes`] already
+/// reaches each argument through [`extract_from_filter_arg`]. A TAG operand
+/// arrives as ONE raw string that still carries its chain, and
+/// [`extract_from_variable`] splits on `.` only — so `items|slice:n` became a
+/// single root key spelled `items|slice:n`, BOTH real names were lost, and
+/// `render_nodes_partial` skipped the node when either changed. The render
+/// then emitted STALE bytes with no error, because Django semantics have no
+/// "missing dependency" signal. `{% if %}` lost only the argument: its
+/// tokenizer's separator set contained `|` but not `:`, so `default:b` came
+/// through as one bogus token.
+///
+/// Split with [`crate::filter_lexer::split_pipes`] — the QUOTE-AWARE split
+/// `renderer::get_value_safe` uses to RESOLVE these same operands. Using the
+/// renderer's own splitter is the point: the analysis then splits an operand
+/// exactly the way the renderer resolves it, so the two cannot drift (#1646).
+/// A plain `str::split('|')` would read `{% if a|cut:"x|y" %}` as two filters.
+///
+/// Head and argument both go through [`extract_from_filter_arg`], which is
+/// already the ONE statement of "is this token a name or a literal", so a
+/// quoted or numeric operand contributes nothing from either position.
+///
+/// Degrades to exactly [`extract_from_filter_arg`] for a pipe-free operand,
+/// which is why every call site in [`extract_from_nodes`] can route through it
+/// rather than each deciding whether its own operand may carry a chain.
+fn extract_from_operand(
+    operand: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let mut segments = crate::filter_lexer::split_pipes(operand).into_iter();
+    let Some(head) = segments.next() else {
+        return;
+    };
+    extract_from_filter_arg(head, variables);
+    for spec in segments {
+        // `name` or `name:arg`. Only the argument can name a context value;
+        // the filter's own name never can. `split_once` takes the FIRST colon,
+        // so `date:"Y-m-d H:i"` yields the whole quoted argument, which
+        // `extract_from_filter_arg` then refuses as a literal.
+        if let Some((_, arg)) = spec.split_once(':') {
+            extract_from_filter_arg(arg, variables);
+        }
+    }
+}
+
 /// Extract variable paths from an expression (like in if tags)
 ///
 /// Handles:
@@ -3393,23 +3455,31 @@ fn extract_from_expression(
     // Simple approach: look for word.word.word patterns
     // More sophisticated: parse the full expression grammar
 
-    // Split by common operators and whitespace
+    // Split by common operators and whitespace.
+    //
+    // `|` is deliberately NOT a separator (#2738). In a Django `{% if %}` a
+    // pipe is always a FILTER, never a boolean operator — Django spells those
+    // `and` / `or` / `not` — so splitting on it tore `a|default:b` into `a`
+    // and `default:b`, and since `:` is not a separator either, the second
+    // half was entered as a context name spelled `default:b` while the real
+    // dependency `b` was never recorded at all. Keeping the operand whole lets
+    // `extract_from_operand` split it the way the RENDERER does.
     let tokens: Vec<&str> = expr
-        .split(|c: char| c.is_whitespace() || "()[]{}=!<>&|+-*/%,".contains(c))
+        .split(|c: char| c.is_whitespace() || "()[]{}=!<>&+-*/%,".contains(c))
         .filter(|s| !s.is_empty())
         .collect();
 
     for token in tokens {
         // Check if this looks like a variable path (contains dots)
         if token.contains('.') && !token.starts_with('"') && !token.starts_with('\'') {
-            extract_from_variable(token, variables);
+            extract_from_operand(token, variables);
         } else if !token.starts_with('"')
             && !token.starts_with('\'')
             && !token.chars().all(|c| c.is_numeric() || c == '.')
             && token.chars().any(|c| c.is_alphabetic())
         {
-            // Simple variable name without path
-            variables.entry(token.to_string()).or_default();
+            // Simple variable name, possibly carrying a filter chain.
+            extract_from_operand(token, variables);
         }
     }
 }
