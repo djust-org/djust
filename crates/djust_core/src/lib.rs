@@ -2852,11 +2852,35 @@ pub fn set_resolve_lazy(enabled: bool) {
 /// since movement 3; `LIVEVIEW_CONFIG["template_resolve_lazy"] = False` is
 /// the escape hatch.
 ///
-/// Read at exactly two sites, and that is the whole of the routing:
-/// [`opaque_gate`]'s attribute-bearing decline (which decides whether an
-/// ordinary object CARRIES a live handle rather than being bulk-dumped) and
-/// `Context::resolve_without_builtins` (which decides whether a dotted lookup
-/// WALKS that handle). Exposed so the setter can be tested end to end (#2017).
+/// Read at EIGHT functional sites, in two crates. This said "read at exactly
+/// two sites, and that is the whole of the routing" until
+/// `docs/architecture/VALUE_BOUNDARY.md`'s review grepped it (#1867); the two
+/// it named are the two the ADR discusses, not the two that exist. Naming a
+/// subset as if it were the set is what lets a later reader conclude a
+/// behaviour is unreachable when it is not — and that doc acquired the same
+/// false claim by citing THIS comment instead of running the case.
+///
+/// In `djust_core`:
+/// * [`stated_len_is_too_large_to_enumerate`] — the over-cap decline is
+///   lazy-only.
+/// * [`Encoded::list_repr_is_this_objects_own_spelling`] — the declined
+///   container's spelling.
+/// * [`opaque_gate`] ×3: the one-shot-iterator arm, the over-cap walk arm, and
+///   the attribute-bearing decline (which decides whether an ordinary object
+///   CARRIES a live handle rather than being bulk-dumped).
+/// * [`opaque_value`] — the handle ATTACH itself.
+/// * `Context::resolve_without_builtins` — whether a dotted lookup WALKS the
+///   handle.
+///
+/// In `djust_templates`:
+/// * `renderer::get_value_safe`'s `ignore_failures` arm — a filtered TAG
+///   operand that resolves to `Missing` becomes `None` under the flag, so
+///   `{% firstof nope|default_if_none:"X" "Y" %}` renders `X` with the flag on
+///   and `Y` with it off. Behaviourally observable, and in a different crate
+///   from every other read.
+///
+/// `djust_live`'s `resolve_lazy_enabled` is a PyO3 getter, not a routing read:
+/// it exists so the setter can be tested end to end (#2017).
 pub fn resolve_lazy() -> bool {
     RESOLVE_LAZY.with(|c| c.get())
 }
