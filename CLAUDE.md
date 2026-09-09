@@ -239,10 +239,22 @@ When investigating an issue with a code-location citation:
    with a `str(model)` fallback that exactly matched the reported symptom
    (`__str__` strings in serialized context). The method had **zero call
    sites** — dead code. The actual bug was upstream in
-   `python/djust/mixins/rust_bridge.py:_sync_state_to_rust` change-detection
-   comparing `list[Model]` via `Model.__eq__` (pk-only). Reproducer-first
-   TDD surfaced the real path; trying to fix the reporter-cited code would
-   have been a no-op.
+   `python/djust/mixins/rust_bridge.py:_sync_state_to_rust` change-detection,
+   which at the time compared `list[Model]` via `Model.__eq__` (pk-only).
+   Reproducer-first TDD surfaced the real path; trying to fix the
+   reporter-cited code would have been a no-op.
+
+   *Mechanism note (corrected 2026-09, #2738 PR).* The `Model.__eq__`
+   sentence described the code as it stood at #1206 and had gone stale:
+   since #2664 that comparison is `deep_fingerprint`
+   (`python/djust/change_detection.py:90`), under which a `Model` is a leaf
+   compared by `id()` (`:129`, `return (_TAG_ID, id(value))`). The eager
+   `_normalize_db_values` pass (`python/djust/mixins/rust_bridge.py:83`,
+   applied at `:693`) is still load-bearing for the same reason — it turns a
+   Model into a dict so a container compare detects a field mutation behind
+   a stable `id()`. The
+   case study is unchanged and still canonical; only the named mechanism
+   moved.
 
 5. **`_framework_attrs` snapshot-order invariant (#1393).** Any new attr
    assigned in `LiveView.__init__` must be placed BEFORE or AFTER the
