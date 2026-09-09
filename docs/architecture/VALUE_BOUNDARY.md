@@ -428,12 +428,12 @@ dicts *first*, so the structural walk has something to walk.
 `python/djust/mixins/rust_bridge.py:797`) against
 `_prev_context_fingerprints` and sends only what moved.
 
-> `CLAUDE.md`'s PR #1206 / #1205 case study says this comparison is
+> `CLAUDE.md`'s PR #1206 / #1205 case study said this comparison is
 > `Model.__eq__` (pk-only). That was true when it was written and stopped being
-> true at #2664. The correction is being made in PR #2742 rather than here, to
-> avoid two concurrent edits to the same five lines (#1172); this document was
-> written independently and reached the same conclusion, which is some
-> evidence the reading is right. The case study itself — reproducer-first TDD
+> true at #2664. Corrected in PR #2742 rather than here, to avoid two concurrent
+> edits to the same five lines (#1172); this document was written independently
+> and reached the same conclusion, which is some evidence the reading is right.
+> The case study itself — reproducer-first TDD
 > found the real path, the reporter-cited method was dead code — is unchanged
 > and still the point.
 
@@ -447,8 +447,9 @@ top-level node, the set of **top-level context roots** the node's subtree reads
 > Extraction from a **tag operand carrying a filter chain** was incomplete
 > until #2738 — `{% for x in items|slice:n %}` recorded one bogus root spelled
 > `items|slice:n` and lost both real names, so a partial render could emit stale
-> bytes. Being fixed in PR #2742; the structure described here (parse-time
-> extraction, the wildcard set, the intersection rule) is unchanged by it.
+> bytes. Fixed in PR #2742 (merged), which routes every operand site through
+> `extract_from_operand`; the structure described here (parse-time extraction,
+> the wildcard set, the intersection rule) is unchanged by it.
 
 **Eight** node types get the wildcard `"*"` because their dependencies cannot be
 inferred (`parser.rs:2944` and `:2950`–`2959`): `Include` on its own, then the
