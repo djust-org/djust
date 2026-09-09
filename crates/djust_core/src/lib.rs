@@ -522,9 +522,16 @@ pub struct Encoded {
     /// `datetime`s, so collecting them would convert a `datetime` whose own
     /// `min` is a `datetime` — `datetime.min.min is datetime.min` is `True` —
     /// and the conversion would not terminate. Measured, not reasoned about.
-    /// So `{{ p.max }}` stays empty where Django renders it; that cell is
-    /// unchanged by this field rather than closed by it, and is recorded as
-    /// such rather than quietly widened.
+    /// So that cell is unchanged by THIS field rather than closed by it, and is
+    /// recorded as such rather than quietly widened.
+    ///
+    /// It is no longer empty, though. This said "`{{ p.max }}` stays empty
+    /// where Django renders it" until `docs/architecture/VALUE_BOUNDARY.md`
+    /// falsification-tested it (#1867): ADR-027's live handle closed the cell
+    /// from the other side. `{{ p.max }}` renders
+    /// `Dec. 31, 9999, 11:59 p.m.`, answered by [`Context::walk_live`] off the
+    /// handle [`django_json_encoded`] attaches — not by this map, which still
+    /// deliberately omits all three names.
     ///
     /// **Nullary METHODS are in this map too since #2485**, put there by the
     /// SECOND producer [`collect_called_attrs`] from its own table
@@ -632,7 +639,17 @@ pub struct Encoded {
     /// alive at once, so their addresses are distinct.
     pub eq_class: Option<EqClass>,
     /// The LIVE object this value was measured from — ADR-027's handle
-    /// (#2539). `None` unless [`resolve_lazy`] was on at the conversion.
+    /// (#2539).
+    ///
+    /// [`opaque_value`] attaches one only when [`resolve_lazy`] is on;
+    /// [`django_json_encoded`] attaches one UNCONDITIONALLY, so a temporal
+    /// value carries a handle under either flag state. The observable
+    /// behaviour is still gated, because the SINK is
+    /// (`Context::resolve_without_builtins`) — which is why this field read
+    /// "`None` unless `resolve_lazy` was on at the conversion" for as long as
+    /// it did. Corrected by reading the two construction sites, not by
+    /// running: the field is not exposed to Python and the two cases are
+    /// behaviourally indistinguishable from there.
     ///
     /// **TRANSIENT.** It is not serialized (the `ENCODED_TAG` payload stays
     /// ELEVEN slots), not compared (`PartialEq for Encoded` does not mention
@@ -686,10 +703,19 @@ pub struct Encoded {
     ///
     /// [`Context::walk_live`]: crate::Context::walk_live
     ///
-    /// **When it is `Some`, [`Encoded::attrs`] is EMPTY** — see
-    /// [`opaque_value`]. The handle is the authority for attribute lookups,
+    /// **On an [`opaque_value`] carrier, [`Encoded::attrs`] is EMPTY when this
+    /// is `Some`.** The handle is the authority for attribute lookups there,
     /// and the eager `__dict__` dump it replaces is the unbounded recursion
     /// that segfaults on a reference cycle (#2516).
+    ///
+    /// It is NOT a property of the field. This said "when it is `Some`,
+    /// `attrs` is EMPTY" without the qualifier until
+    /// `docs/architecture/VALUE_BOUNDARY.md` falsification-tested it (#1867):
+    /// a [`django_json_encoded`] carrier has BOTH — `attrs` populated from
+    /// [`ENCODED_ATTR_NAMES`] + [`ENCODED_CALL_NAMES`], and a handle. Both
+    /// answer on one value: `{{ q.year }}` comes from the map and
+    /// `{{ q.resolution }}` from the handle, and gating the handle off leaves
+    /// the first standing.
     pub live: Option<std::sync::Arc<Py<PyAny>>>,
 }
 

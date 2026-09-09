@@ -1777,10 +1777,26 @@ impl Context {
         //
         // Placing it first is safe in the direction that matters: the arm
         // fires ONLY where the deepest resolvable prefix is an `Encoded`
-        // carrying a handle, and nothing acquires a handle unless the flag is
-        // on (`opaque_value`). A `list`, a `dict`, a tuple, a `Model`, a
-        // `__djust_serialize__` object and the whole datetime family never
-        // carry one, so their resolution is untouched under either flag state.
+        // carrying a handle. A `list`, a `dict`, a tuple, a `Model` and a
+        // `__djust_serialize__` object never carry one — the `FromPyObject`
+        // arms ABOVE `opaque_value` claim all five — so their resolution is
+        // untouched under either flag state.
+        //
+        // The DATETIME family is the exception, and this comment asserted the
+        // opposite until `docs/architecture/VALUE_BOUNDARY.md` falsification-
+        // tested it (#1867). `django_json_encoded` (`lib.rs`) sets
+        // `live: Some(..)` for every `datetime` / `date` / `time` /
+        // `timedelta` UNCONDITIONALLY — there is no `resolve_lazy()` guard on
+        // that construction site, unlike `opaque_value`'s. So a temporal value
+        // DOES reach this arm, and its resolution IS flag-dependent: `.year` is
+        // answered by `Encoded::attrs` either way (`ENCODED_ATTR_NAMES`), while
+        // `.min` / `.max` / `.resolution` — deliberately in NEITHER name table,
+        // because their values are themselves `datetime`s and collecting them
+        // would not terminate — are answered ONLY here, and render empty with
+        // the flag off. Measured through a filtered-operand rebinding
+        // (`{% with q=xs|first %}`), which is the one binding shape the by-name
+        // sidecar cannot reach via `Context::aliases`; through any other
+        // spelling the sidecar answers and the difference is invisible.
         if crate::resolve_lazy() {
             if let Some(answer) = self.walk_from_handle(key)? {
                 return Ok(answer);
