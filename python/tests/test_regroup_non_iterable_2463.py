@@ -308,7 +308,10 @@ class TestABoolSourceReachesTheHandlerAsAValue:
                     _rust.render_template_with_dirs(REGROUP, {"p": value}, [], None)
             assert seen == [("p", True), ("p", False)]
         finally:
-            handler.render = original
+            # `original` is a BOUND method; assigning it back would leave an
+            # instance attribute that shadows the class-level `render` on the
+            # live handler for the rest of the process (#2749).
+            del handler.render
 
     def test_the_encoder_has_a_Bool_arm(self) -> None:
         source = production(RENDERER)

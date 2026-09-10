@@ -312,7 +312,10 @@ class TestRawRegroupBridge:
                 "{% regroup nope by k as g %}[{{ g|length }}]", {"s": "ab"}, [], None
             )
         finally:
-            handler.render = original
+            # `original` is a BOUND method; assigning it back would leave an
+            # instance attribute that shadows the class-level `render` on the
+            # live handler for the rest of the process (#2749).
+            del handler.render
         assert seen == [("s", "ab"), ("nope", "ab")]
 
     @pytest.mark.parametrize(

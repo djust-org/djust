@@ -1622,6 +1622,59 @@ itself** — and in two cases the premise was the *recommended fix*.
   fails loudly: `test_both_render_paths_call_the_same_timezone_function` grew
   2 → 3 exactly because a real path was missing.
 
+## Process canonicalizations from the v1.2.0 template-perf drain (gate-off harness rules)
+
+Two rules from PRs #2724, #2725, #2726 — three independent agents in one
+day shipped the same shape, so it is a class, not an incident (#2727, #2730).
+They extend the existing gate-off requirements (#2129/#2135: assert the
+mutation applied, assert the source changed, count errors, refuse to report a
+number when the module did not import).
+
+- **A pin that asserts a count must derive the count, never restate it
+  (#2727).** A number typed into a test, a PR body, or a docstring is a claim
+  about the code, not a measurement of it, and it drifts silently the moment
+  the code moves. Compute the count from the artifact the pin names, in the
+  test, at run time; if it cannot be derived, the pin is an assertion of
+  intent and must say so. Three instances: PR #2725's body claimed "eleven
+  cells gained" (derived: ten, self-corrected in `30bdc0fc`); PR #2726's
+  matcher could not tell a rename from a regression, so it would have stayed
+  green through the drift it existed to catch; PR #2724's gate-off caught two
+  of its own tautologies (mutations landing on prose) plus one real one
+  (nothing exercised the `--write-baseline` doc-rewrite wiring), and the same
+  PR found `upload-artifact` reporting success while uploading nothing.
+  Corollaries: **a pin must distinguish the change it forbids from the changes
+  it permits** — test it against both a rename and a regression; and **a
+  harness that reports a number must assert its own preconditions** — that the
+  mutation applied, the source changed, the artifact was produced — because
+  `0` from a harness in which nothing ran is indistinguishable from `0` from a
+  harness that measured. Neighbouring canon (#1125 count-based site
+  enumeration, #1859 decorative pins, #1200/#1468/#2129 tautology discipline)
+  did not state this narrower, mechanical form.
+
+- **A gate-off harness must be bounded whenever the mutated path can fail
+  unboundedly (#2730).** A gate-off reverts the fix, so by construction it
+  reproduces — every time — the exact bug the fix fixes. For a correctness fix
+  that is a failed assertion; for a **resource** fix it is the resource
+  exhaustion itself, and the harness is the only thing in front of it.
+  PR #2726's harness had no deadline and no RSS ceiling: its M1 restored the
+  pre-#2695 unbounded walk, stalled at 7.4 GB, was SIGKILLed, and **left the
+  mutation in the tree**, which then had to be found and restored. PR #2725's
+  identical gap was saved only because a guard it was not mutating
+  (`stated_len_is_too_large_to_enumerate`) still declined past the cap. The
+  trigger is mechanical, not "this is a perf PR": *does the mutated path have
+  an unbounded failure mode?* — answerable from the issue, because the issue is
+  about the unbounded thing. **Rule:** impose a deadline **and** an RSS ceiling,
+  and report `HUNG` / `RUNAWAY-MEMORY` as **caught** outcomes carrying the
+  measurement (#2726's M1/M5 read as 6,342 MB and 6,229 MB), not as harness
+  deaths — a harness that dies discards the evidence. The inversion is why this
+  is canon: a runaway under gate-off is only possible if the suite already
+  reaches the unbounded path, so a bounded runaway is the strongest available
+  proof that the fix is load-bearing, while a clean pass routes into the
+  existing triage (equivalent mutation, shadowed mechanism, or the triggering
+  input is not in the suite). Both outcomes stay distinguishable only if the
+  harness survives to report them. Never `shutil.copy2` the original back
+  after a mutation — it preserves mtime and cargo reuses the mutant.
+
 ## Additional Documentation
 
 - `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
