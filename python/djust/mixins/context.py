@@ -143,6 +143,10 @@ class ContextMixin:
             self, obj: Any, template_content: str, variable_name: str
         ) -> Dict[str, Any]: ...
 
+        def _jit_serialize_model_list(
+            self, items: Any, template_content: str, variable_name: str
+        ) -> List[Any]: ...
+
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Get the context data for rendering. Override to customize context.
@@ -360,10 +364,12 @@ class ContextMixin:
                                     _jit_serializer_cache[cache_key] = (serializer, None)
                                 context[key] = [serializer(item) for item in value]
                             else:
-                                context[key] = [
-                                    self._jit_serialize_model(item, template_content, key)
-                                    for item in value
-                                ]
+                                # No field path for this list: the QuerySet
+                                # contract, not the single-model identity map
+                                # (#2736).
+                                context[key] = self._jit_serialize_model_list(
+                                    value, template_content, key
+                                )
                             jit_serialized_keys.add(key)
             except Exception as e:
                 logger.warning("JIT auto-serialization failed: %s", e, exc_info=True)
@@ -474,9 +480,7 @@ class ContextMixin:
                     result[k] = [normalize_django_value(item) for item in v]
             elif is_model_list(v):
                 if template_content:
-                    result[k] = [
-                        self._jit_serialize_model(item, template_content, child_name) for item in v
-                    ]
+                    result[k] = self._jit_serialize_model_list(v, template_content, child_name)
                 else:
                     result[k] = [normalize_django_value(item) for item in v]
             elif isinstance(v, dict):

@@ -335,3 +335,44 @@ def test_reset_djust_globals_strips_an_instance_level_render_shadow_2749():
     reset_djust_globals()
     assert "render" not in vars(handler)
     assert set(vars(handler)) == before, "only the shadow may be stripped"
+
+
+#: The i18n-bridge tests that read the tag registries after a render through
+#: the module's own `DjustTemplateBackend` (#2747). Each must pass ALONE.
+I18N_REGISTRY_READERS_2747 = (
+    "test_string_if_invalid_reaches_a_blocktranslate_placeholder",
+    "test_blocktranslate_is_registered_through_the_raw_body_kind_only",
+    "test_the_two_legacy_spellings_get_distinct_handlers_with_their_own_end_tag",
+    "test_raw_block_handler_declares_bindings_and_marks_output_safe",
+)
+
+
+@pytest.mark.parametrize("name", I18N_REGISTRY_READERS_2747)
+def test_i18n_registry_reader_passes_alone_in_a_fresh_process_2747(name):
+    """A registry assertion made at the wrong namespace passes only after a
+    sibling (#2747).
+
+    A `DjustTemplateBackend` registers the tags its `{% load %}` bridges into
+    its OWN registry namespace (#2709) and restores namespace 0 when the render
+    returns. Four `test_i18n_tags_bridge_2558` tests rendered through the
+    module's backend and then asserted `_rust.has_*_tag_handler` /
+    `owned_tags()` at the top level — namespace 0 — which holds
+    `blocktranslate` only after a LiveView-entry sibling has rendered on the
+    same worker. Green in file order, red the moment xdist `--dist load`
+    stranded them on another worker (#2747's second failing set, blamed on the
+    Rust registry). The pin is the literal property: each passes in a process
+    of its own, with no sibling before it.
+    """
+    import subprocess
+    import sys
+
+    nodeid = f"python/tests/test_i18n_tags_bridge_2558.py::{name}"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", nodeid, "-q", "-p", "no:cacheprovider"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, f"{nodeid} is not self-contained:\n{proc.stdout[-3000:]}"
+    assert "1 passed" in proc.stdout, proc.stdout[-500:]

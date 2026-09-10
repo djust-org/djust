@@ -2743,13 +2743,38 @@ pub fn extract_template_variables(
     // Walk the AST and extract variable paths
     extract_from_nodes(&nodes, &mut variables);
 
-    // Deduplicate and sort paths for each variable
+    // Normalize, deduplicate and sort paths for each variable.
+    //
+    // A numeric segment is an INDEX into a sequence, never a model field — an
+    // identifier cannot start with a digit — so `{{ rows.0.username }}` names
+    // the element field `username` of `rows`, and `{{ rows.0 }}` names a whole
+    // element (an empty path, the same as `{{ rows }}`). Left in, `0.username`
+    // reached the JIT serializer as an attribute path and serialized `[{}]`
+    // for every list and QuerySet, saved or not (#2736). This is the one
+    // chokepoint every producer above flows through, so the for-loop
+    // transfer and the tag-operand walk cannot drift from it (#1646).
     for paths in variables.values_mut() {
+        for path in paths.iter_mut() {
+            if path.split('.').any(is_index_segment) {
+                *path = path
+                    .split('.')
+                    .filter(|segment| !is_index_segment(segment))
+                    .collect::<Vec<_>>()
+                    .join(".");
+            }
+        }
+        paths.retain(|path| !path.is_empty());
         paths.sort();
         paths.dedup();
     }
 
     Ok(variables)
+}
+
+/// A dotted-path segment that is a sequence index (`0` in `rows.0.username`)
+/// rather than an attribute name.
+fn is_index_segment(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Collect the set of `dj-model="<field>"` attribute *values* that appear as
@@ -3291,7 +3316,19 @@ fn extract_from_nodes(
                 false_expr,
                 filters: _,
             } => {
-                for expr in [true_expr, condition, false_expr] {
+                // The condition is an EXPRESSION, not an operand (#2745): the
+                // renderer evaluates it with `evaluate_condition_for_if`, the
+                // same machinery as `{% if %}`, so `x > y` / `x and y` are
+                // legal here. Routing it through `extract_from_operand` (the
+                // #2738 shape) entered the whole `x > y` as ONE bogus key and
+                // lost both names, so a partial render after only `y` changed
+                // emitted stale bytes. `extract_from_expression` is what the
+                // `Node::If` arm above uses; it tokenizes on the operator set
+                // and hands each token to the operand helper.
+                extract_from_expression(condition, variables);
+                // The two ARMS are operands — a dotted path or a literal —
+                // and stay on the operand helper.
+                for expr in [true_expr, false_expr] {
                     let trimmed = expr.trim();
                     if trimmed.is_empty() {
                         continue;

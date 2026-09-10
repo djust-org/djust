@@ -144,6 +144,31 @@ def plain_render(source: str, context: dict) -> str:
     return str(DJUST.from_string(source).render(dict(context)))
 
 
+def in_djust_scope():
+    """The registry namespace a `plain_render` registered its `{% load %}` into.
+
+    A `DjustTemplateBackend` owns a registry namespace (#2709): the tags its
+    `{% load i18n %}` bridges live THERE, and `rendering_with_backend` restores
+    namespace 0 when the render returns. So a test that renders through
+    `DJUST` and then reads `_rust.has_*_tag_handler` / `owned_tags()` at the
+    top level is reading namespace 0 — which holds `blocktranslate` only after
+    a LiveView-entry render (no backend in scope) has run on the SAME worker.
+    Four tests here did exactly that and were green only because a
+    `test_liveview_entry_matches_django[...]` sibling happened to precede them;
+    xdist `--dist load` splits a module across workers, so any corpus reshuffle
+    could strand them (#2747's second failing set, red when run alone). Read
+    the registries inside this scope and the test is self-contained.
+    """
+    return template_libraries.rendering_with_backend(DJUST)
+
+
+def owned_handler(name: str):
+    """The handler `DJUST`'s `{% load %}` registered for `name`."""
+    with in_djust_scope():
+        owned = template_libraries._engine_state("_owned_tags", template_libraries._owned_tags)
+        return owned[name][1]
+
+
 def liveview_render(source: str, context: dict) -> str:
     """The REAL LiveView entry: ``LiveViewTestClient.mount()`` + ``.render()``
     → ``_sync_state_to_rust`` → ``RustLiveView.render`` (#1650)."""
@@ -512,7 +537,7 @@ def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
         debug = False
 
     plain_render(L + "{% blocktranslate %}x{% endblocktranslate %}", CTX)
-    handler = template_libraries._owned_tags["blocktranslate"][1]
+    handler = owned_handler("blocktranslate")
     with translation.override(None):
         with template_libraries.rendering_with_backend(_Backend()):
             assert handler.render([], "{{ missing }}", dict(CTX))[0] == "INVALID"
@@ -1011,22 +1036,19 @@ def test_no_library_filter_is_refused_any_more():
 
 def test_blocktranslate_is_registered_through_the_raw_body_kind_only():
     plain_render(L + "{% blocktranslate %}x{% endblocktranslate %}", CTX)
-    for name in ("blocktranslate", "blocktrans"):
-        assert _rust.has_raw_block_tag_handler(name)
-        assert not _rust.has_tag_handler(name)
-        assert not _rust.has_block_tag_handler(name)
-        assert not _rust.has_assign_tag_handler(name)
-    owned = template_libraries.owned_tags()
+    with in_djust_scope():
+        for name in ("blocktranslate", "blocktrans"):
+            assert _rust.has_raw_block_tag_handler(name)
+            assert not _rust.has_tag_handler(name)
+            assert not _rust.has_block_tag_handler(name)
+            assert not _rust.has_assign_tag_handler(name)
+        owned = template_libraries.owned_tags()
     assert owned["blocktranslate"] == owned["blocktrans"] == "i18n"
 
 
 def test_the_two_legacy_spellings_get_distinct_handlers_with_their_own_end_tag():
     plain_render(L + "{% blocktrans %}x{% endblocktrans %}", CTX)
-    handlers = {
-        name: handler
-        for name, (label, handler) in template_libraries._owned_tags.items()
-        if name in ("blocktranslate", "blocktrans")
-    }
+    handlers = {name: owned_handler(name) for name in ("blocktranslate", "blocktrans")}
     assert isinstance(handlers["blocktranslate"], template_libraries.LibraryRawBlockTagHandler)
     assert handlers["blocktranslate"] is not handlers["blocktrans"]
     assert handlers["blocktranslate"].end_name == "endblocktranslate"
@@ -1121,7 +1143,7 @@ def test_underscore_literal_is_consulted_at_every_filter_argument_site():
 
 def test_raw_block_handler_declares_bindings_and_marks_output_safe():
     plain_render(L + "{% blocktranslate %}x{% endblocktranslate %}", CTX)
-    handler = template_libraries._owned_tags["blocktranslate"][1]
+    handler = owned_handler("blocktranslate")
     assert handler.RETURNS_BINDINGS is True
     with translation.override(None):
         output, bindings = handler.render([], "<b>{{ hostile }}</b>", dict(CTX))

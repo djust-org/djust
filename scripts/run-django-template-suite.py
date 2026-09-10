@@ -45,7 +45,9 @@ Usage::
 
 Exit codes — ``run``: 0 ran to completion (any percentage: the ratchet is
 NOT enforced here); 2 could not run (clone failed, tag mismatch, the child
-produced no records, too many restarts). ``compare``: 0 no drop, 1 a drop,
+produced no records, too many restarts). ``compare``: 0 no drop, 1 a drop
+in either percentage OR a cell that was OK in the baseline and is FAIL/ERROR
+now (#2722 — the per-cell arm catches the swap the aggregates cannot see),
 2 a file is missing or unreadable.
 
 ``make django-template-suite`` wraps ``run`` with the artifact paths CI

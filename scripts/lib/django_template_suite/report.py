@@ -17,6 +17,16 @@ summary prints it as a WARNING.
 
 SKIP and XFAIL are excluded from every denominator; ``percent = ok / (ok +
 fail + error)`` rounded half-up to two decimals, ``0/0 → 0.00``.
+
+``not_ok`` (#2722)
+    every id whose status is not OK — FAIL, ERROR, SKIP and XFAIL — keyed to
+    that status. It is the per-cell half of the ratchet: the two percentages
+    cannot see a swap that fixes five cells and breaks five others, so
+    ``compare`` also reports every id that is FAIL/ERROR now and was NOT in
+    the baseline's ``not_ok``. The not-OK set is stored rather than the OK
+    set because it is ~30 ids against ~1440. SKIP and XFAIL are in it so a
+    cell that was never counted cannot read as "was OK". The set is only
+    ever derived from a run's records (``summarize``), never hand-typed.
 """
 
 from __future__ import annotations
@@ -30,6 +40,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 _COUNTED = ("OK", "FAIL", "ERROR")
+_FAILING = ("FAIL", "ERROR")
+_NOT_OK = ("FAIL", "ERROR", "SKIP", "XFAIL")
 
 
 def percent(ok: int, ran: int) -> float:
@@ -84,6 +96,7 @@ class Summary:
     skipped: int = 0
     xfail: int = 0
     crashes: list[str] = field(default_factory=list)
+    not_ok: dict[str, str] = field(default_factory=dict)
 
     @property
     def untouched_failures(self) -> int:
@@ -99,6 +112,7 @@ class Summary:
         }
         data["untouched_failures"] = self.untouched_failures
         data["crashes"] = list(self.crashes)
+        data["not_ok"] = {test_id: self.not_ok[test_id] for test_id in sorted(self.not_ok)}
         return data
 
 
@@ -145,6 +159,8 @@ def summarize(records: Iterable[dict[str, Any]]) -> Summary:
     summary = Summary()
     for record in results_by_id(records).values():
         status = record.get("status")
+        if status in _NOT_OK:
+            summary.not_ok[record["id"]] = status
         if status == "SKIP":
             summary.skipped += 1
             continue
@@ -301,13 +317,24 @@ def rewrite_doc_claims(paths: Iterable[Path], result: dict[str, Any]) -> list[Pa
 
 
 def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[int, list[str]]:
-    """The ratchet: 1 if either percentage dropped below the baseline, else 0.
+    """The ratchet: 1 if either percentage dropped below the baseline OR any
+    cell that was OK in the baseline is FAIL/ERROR now, else 0.
 
     A tag mismatch is a WARNING and 0 — the numbers are not comparable, and
     refusing would block the Django-bump PR that is exactly when the
     baseline must be regenerated. A current run in which nothing reached
     the djust engine is 1: the adapter did not install, and a 100 % whole
     label in that state is not an improvement.
+
+    The per-cell arm (#2722) is independent of the percentages: a swap that
+    fixes five cells and breaks five keeps both numbers and still exits 1,
+    with the broken ids named. "Was OK in the baseline" means "not in the
+    baseline's ``not_ok``" — the OK set is not stored. An id in ``not_ok``
+    that is absent from the run (removed or renamed upstream, or a
+    ``--label`` subset) is listed as informational, never a regression,
+    following the tag-mismatch arm. A baseline written before ``not_ok``
+    existed, or a run JSON without per-test records, gets a WARNING and the
+    percentage ratchet alone.
     """
     lines: list[str] = []
     base_tag, cur_tag = baseline.get("tag"), current.get("tag")
@@ -361,6 +388,64 @@ def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[int, lis
             % (format_percent(base_all["percent"]), format_percent(cur_all["percent"]))
         )
         code = 1
+    per_cell_code, per_cell_lines = _compare_cells(baseline, current)
+    lines.extend(per_cell_lines)
+    code = max(code, per_cell_code)
     if code == 0:
         lines.append("OK: no drop against the baseline")
     return code, lines
+
+
+def _compare_cells(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[int, list[str]]:
+    """The per-cell arm of ``compare``: (1, lines) on a regressed cell."""
+    lines: list[str] = []
+    base_not_ok = baseline.get("not_ok")
+    if not isinstance(base_not_ok, dict):
+        lines.append(
+            "WARNING: the baseline has no per-cell `not_ok` set — only the percentages "
+            "are ratcheted; regenerate it with --write-baseline"
+        )
+        return 0, lines
+    tests = current.get("tests")
+    if not isinstance(tests, list):
+        lines.append(
+            "WARNING: the run JSON has no per-test `tests` records — only the "
+            "percentages are ratcheted"
+        )
+        return 0, lines
+
+    records = {t["id"]: t for t in tests if isinstance(t, dict) and "id" in t}
+    regressed = sorted(
+        test_id
+        for test_id, rec in records.items()
+        if rec.get("status") in _FAILING and test_id not in base_not_ok
+    )
+    fixed = sorted(
+        test_id
+        for test_id in base_not_ok
+        if test_id in records and records[test_id].get("status") == "OK"
+    )
+    absent = sorted(test_id for test_id in base_not_ok if test_id not in records)
+
+    if fixed:
+        lines.append(
+            "%d cell(s) not OK in the baseline are OK now (regenerate the baseline "
+            "with --write-baseline to keep them):" % len(fixed)
+        )
+        lines.extend("  %-5s -> OK    %s" % (base_not_ok[test_id], test_id) for test_id in fixed)
+    if absent:
+        lines.append(
+            "%d baseline not-OK id(s) absent from this run (removed or renamed upstream, "
+            "or a --label subset) — informational, not a regression:" % len(absent)
+        )
+        lines.extend("  %-5s (absent) %s" % (base_not_ok[test_id], test_id) for test_id in absent)
+    if regressed:
+        lines.append("FAIL: %d cell(s) were OK in the baseline and are not now:" % len(regressed))
+        for test_id in regressed:
+            line = "  %-5s %s" % (records[test_id].get("status"), test_id)
+            if records[test_id].get("message"):
+                line += " | %s" % records[test_id]["message"]
+            lines.append(line)
+        return 1, lines
+    lines.append("per-cell: no cell that was OK in the baseline regressed")
+    return 0, lines
