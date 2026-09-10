@@ -1808,8 +1808,7 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
                                       channels that cannot hold a live object —
                                       ``state_roundtrip=True`` and a callable
                                       the conversion does not model as an
-                                      ``Encoded``. None on both, with
-                                      ``template_resolve_lazy`` off
+                                      ``Encoded``.
     - anything that crosses as a
       ``Value::Encoded`` (a dict
       view, a ``complex``, a
@@ -2072,9 +2071,7 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     #   as an `Encoded` (there is no handle to walk) keeps today's answer
     #   rather than taking the `str()` fallback below.
     if callable(value):
-        from .config import template_resolve_lazy_enabled
-
-        if not state_roundtrip and template_resolve_lazy_enabled() and _crosses_as_encoded(value):
+        if not state_roundtrip and _crosses_as_encoded(value):
             return value
         logger.debug(
             "Skipping callable %s during normalization",

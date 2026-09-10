@@ -1,11 +1,13 @@
 """ADR-027 movement 2 (#2539): the security requirements of the WIRING, each
-with the test that proves it, run with the kill-switch **ON**.
+with the test that proves it.
 
-The characterization net next door proves the flag-OFF byte identity and the
-per-cell flag-ON delta. This file proves the five numbered requirements the
-movement-1 Security Check posted on #2539, plus the ADR's own Security items —
-and it runs them with the flag ON, because with it OFF nothing here is
-reachable and every assertion would be vacuous.
+These originally ran with the ``template_resolve_lazy`` kill-switch **ON**;
+ADR-027 Step 5 (#2628) deleted the switch and every arm it selected, so the
+former flag-ON ("lazy") behaviour is now the only one and these run against
+it unconditionally. The tests that existed to pin the OFF path, or the switch
+itself, went with the switch. This file proves the five numbered requirements
+the movement-1 Security Check posted on #2539, plus the ADR's own Security
+items.
 
 One-to-one with the plan's section 3:
 
@@ -29,7 +31,6 @@ Refs #2539, #2535 (ADR-027), #2506, #2507, #2509, #2528, #1468.
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any, Callable
 
 import pytest
@@ -48,25 +49,8 @@ from djust.testing import LiveViewTestClient  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# The flag, and the three real entries
+# The three real entries
 # ---------------------------------------------------------------------------
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool = True):
-    """Flip the kill-switch through the REAL wiring and ASSERT it landed."""
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, "the flag did not reach Rust"
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
-
-
 def plain_render(source: str, context: dict) -> str:
     from djust.template_backend import DjustTemplateBackend
 
@@ -186,8 +170,7 @@ class TestTheFloorHolds2539:
         # The premise: Django itself renders the hash, so an empty cell here
         # is djust's floor and not the template failing to resolve.
         assert "pbkdf2" in django_render(source, make_ctx())
-        with resolve_lazy(True):
-            out = render(source, make_ctx())
+        out = render(source, make_ctx())
         assert "pbkdf2" not in out, f"the serialization floor leaked: {out!r}"
 
     @pytest.mark.parametrize("render", ENTRIES)
@@ -195,9 +178,8 @@ class TestTheFloorHolds2539:
         """Non-vacuity: an engine that resolved NOTHING through a handle would
         pass every assertion above. The public field on the same object, in
         the same shape, resolves."""
-        with resolve_lazy(True):
-            assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
-            assert render("{{ p.get_user.username }}", {"p": Presenter(make_user())}) == "alice"
+        assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
+        assert render("{{ p.get_user.username }}", {"p": Presenter(make_user())}) == "alice"
 
 
 @pytest.mark.django_db
@@ -231,8 +213,7 @@ class TestTheFloorFailsClosedInTheSink2539:
 
         # The control FIRST, so a harness that never reaches the floor at all
         # cannot pass the fail-closed assertion by accident.
-        with resolve_lazy(True):
-            assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
+        assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
 
         calls: list[int] = []
 
@@ -241,8 +222,7 @@ class TestTheFloorFailsClosedInTheSink2539:
             raise RuntimeError("floor enforcement broke")
 
         monkeypatch.setattr(serialization, "_protect_sidecar_value", exploding)
-        with resolve_lazy(True):
-            out = render("{{ p.user.password }}", {"p": Presenter(make_user())})
+        out = render("{{ p.user.password }}", {"p": Presenter(make_user())})
         assert calls, "the floor was never consulted — this test proves nothing"
         assert "pbkdf2" not in out, f"the raw model flowed on past a broken floor: {out!r}"
         assert out == "", f"expected string_if_invalid, got {out!r}"
@@ -274,7 +254,7 @@ class TestLeadingUnderscoreIsRefused2539:
         with pytest.raises(Exception) as django_exc:
             django_render(source, ctx)
         assert "underscore" in str(django_exc.value)
-        with resolve_lazy(True), pytest.raises(Exception) as djust_exc:
+        with pytest.raises(Exception) as djust_exc:
             render(source, ctx)
         assert "underscore" in str(djust_exc.value)
 
@@ -282,8 +262,7 @@ class TestLeadingUnderscoreIsRefused2539:
     def test_the_public_sibling_resolves(self, render) -> None:
         """Non-vacuity: the same objects answer a PUBLIC attribute, so the
         refusals above are the guard and not a dead walk."""
-        with resolve_lazy(True):
-            assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
+        assert render("{{ p.user.username }}", {"p": Presenter(make_user())}) == "alice"
 
     def test_the_sink_refuses_it_even_when_the_parser_does_not(self) -> None:
         """The defence-in-depth half, reachable from Python: a `{% for %}`
@@ -342,17 +321,15 @@ def make_recording_card(calls: list) -> type:
 
 @pytest.mark.django_db
 class TestMutatorsAreNeverAutoCalled2539:
-    """3.4 / #2507, with the flag ON — which is when it first becomes
-    load-bearing on this path: a handle is what lets a lookup REACH
-    `unmount` at all."""
+    """3.4 / #2507. Load-bearing on this path because a handle is what lets
+    a lookup REACH `unmount` at all."""
 
     @pytest.mark.parametrize("render", ENTRIES)
     @pytest.mark.parametrize("method", MUTATORS)
     def test_an_overridden_mutator_is_not_run(self, render, method: str) -> None:
         calls: list = []
         card = make_recording_card(calls)()
-        with resolve_lazy(True):
-            out = render("[{{ c.%s }}]" % method, {"c": card})
+        out = render("[{{ c.%s }}]" % method, {"c": card})
         assert [c for c in calls if c != "mount"] == [], f"{method} was CALLED during the render"
         assert out == "[]", f"{method} rendered {out!r}"
 
@@ -375,10 +352,9 @@ class TestMutatorsAreNeverAutoCalled2539:
             guarded.alters_data = True  # type: ignore[attr-defined]
 
         probe = _Probe()
-        with resolve_lazy(True):
-            assert render("{{ o.plain }}", {"o": probe}) == "PLAIN"
-            assert probe.plain_called is True
-            assert render("{{ o.guarded }}", {"o": _Probe()}) == ""
+        assert render("{{ o.plain }}", {"o": probe}) == "PLAIN"
+        assert probe.plain_called is True
+        assert render("{{ o.guarded }}", {"o": _Probe()}) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -413,12 +389,12 @@ class CountingAttr:
 @pytest.mark.django_db
 class TestOneExpressionInvokesACallableOnce2539:
     """A template expression must invoke a user callable EXACTLY ONCE, on
-    every entry, under BOTH flag states.
+    every entry.
 
     This is the #2507 family — side effects during a render — rather than a
     correctness nicety, and it is a permanent pin rather than a fixed path:
-    movements 3 and 4 flip the default and delete the pre-ADR walk, and this
-    assertion has to survive both.
+    movement 3 flipped the default and ADR-027 Step 5 (#2628) deleted the
+    kill-switch and the pre-ADR walk, and this assertion survives both.
 
     # The regression it exists for
 
@@ -453,27 +429,18 @@ class TestOneExpressionInvokesACallableOnce2539:
     ]
 
     @pytest.mark.parametrize("render", ENTRIES)
-    @pytest.mark.parametrize("enabled", [False, True], ids=["lazy-off", "lazy-on"])
     @pytest.mark.parametrize(("source", "make_obj", "read_count"), SHAPES)
-    def test_exactly_one_invocation(
-        self, render, enabled: bool, source: str, make_obj, read_count
-    ) -> None:
+    def test_exactly_one_invocation(self, render, source: str, make_obj, read_count) -> None:
         # The premise, from Django itself: ONE invocation, and an empty cell.
         reference = make_obj()
         assert django_render(source, {"d": reference}) == ""
         assert read_count(reference) == 1, "premise: Django auto-calls exactly once"
 
         obj = make_obj()
-        with resolve_lazy(enabled):
-            out = render(source, {"d": obj})
+        out = render(source, {"d": obj})
         count = read_count(obj)
-        # The SECURITY half, and it holds in BOTH flag states — this is the
-        # assertion that must survive movements 3 and 4. Django invokes once,
-        # so anything above one is a side effect the template did not ask for
-        # (#2507). Fewer than one is the pre-ADR under-resolution the movement
-        # FIXES, not a hazard: with the flag off the plain entries answer
-        # `{{ d.value }}` from the eager `__dict__` dump and never reach a
-        # walk at all, which is exactly net row K3.
+        # The SECURITY half. Django invokes once, so anything above one is a
+        # side effect the template did not ask for (#2507).
         assert count <= 1, (
             f"the engine invoked the callable {count} times for one {source!r} — Django "
             f"invokes it once. A resolution that produced nothing is an ANSWER: if the "
@@ -481,25 +448,22 @@ class TestOneExpressionInvokesACallableOnce2539:
             f"through to the pre-ADR sidecar walk, both walk the SAME object, both "
             f"auto-call, and the side effect happens twice."
         )
-        if enabled:
-            # The PARITY half. With the sink routed, the count is Django's
-            # exactly — which is what makes the bound above non-vacuous: it is
-            # measured against a path that really does invoke.
-            assert count == 1, (
-                f"with the ADR-027 flag ON the engine invoked the callable {count} times "
-                f"for one {source!r}; Django invokes it once"
-            )
-            assert out == "", out
+        # The PARITY half. With the sink routed, the count is Django's
+        # exactly — which is what makes the bound above non-vacuous: it is
+        # measured against a path that really does invoke.
+        assert count == 1, (
+            f"the engine invoked the callable {count} times for one {source!r}; "
+            f"Django invokes it once"
+        )
+        assert out == "", out
 
     @pytest.mark.parametrize("render", ENTRIES)
-    @pytest.mark.parametrize("enabled", [False, True], ids=["lazy-off", "lazy-on"])
-    def test_a_resolving_expression_also_invokes_once(self, render, enabled: bool) -> None:
+    def test_a_resolving_expression_also_invokes_once(self, render) -> None:
         """Non-vacuity: the count is not one because the engine never reached
         the object. The SUCCEEDING spelling of the same lookup renders the
         called value and still counts one."""
         obj = Counting()
-        with resolve_lazy(enabled):
-            assert render("{{ d.the_value }}", {"d": obj}) == "42"
+        assert render("{{ d.the_value }}", {"d": obj}) == "42"
         assert obj.num_calls == 1
 
 
@@ -537,50 +501,27 @@ class TestTheHandleIsReleasedAtTeardown2539:
                 return ctx
 
         _V.template = "<div dj-root>{{ obj.cls_attr }}</div>"
-        with resolve_lazy(True):
-            client = LiveViewTestClient(_V)
-            client.mount()
-            html = client.render()
-            assert "class-level" in html, "premise: the handle resolved the attribute"
-            view = client.view_instance
-            ref = weakref.ref(view.obj)
-            # The view's own attribute is not what this measures — drop it, so
-            # the only thing that could still hold the object is Rust state.
-            view.obj = None
-            gc.collect()
-            assert ref() is not None, (
-                "premise: with the flag ON the Rust state holds the object — if this "
-                "fails the test cannot show the clear doing anything"
-            )
-            _clear_live_handles(view)
-            gc.collect()
-            assert ref() is None, (
-                "a handle survived the teardown: the object is still reachable from "
-                "RustLiveView.state, so a connection retains every object it ever "
-                "resolved through"
-            )
-
-    def test_the_clear_is_a_no_op_with_the_flag_off(self) -> None:
-        """Non-vacuity in the other direction: with no handles to drop, the
-        teardown neither raises nor disturbs a view."""
-        from djust.websocket import _clear_live_handles
-
-        class _V(LiveView):
-            def mount(self, request, **kwargs):
-                self.n = 1
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx["n"] = self.n
-                return ctx
-
-        _V.template = "<div dj-root>{{ n }}</div>"
-        with resolve_lazy(False):
-            client = LiveViewTestClient(_V)
-            client.mount()
-            assert "1" in client.render()
-            _clear_live_handles(client.view_instance)
-        _clear_live_handles(None)  # and a torn-down consumer with no view
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html = client.render()
+        assert "class-level" in html, "premise: the handle resolved the attribute"
+        view = client.view_instance
+        ref = weakref.ref(view.obj)
+        # The view's own attribute is not what this measures — drop it, so
+        # the only thing that could still hold the object is Rust state.
+        view.obj = None
+        gc.collect()
+        assert ref() is not None, (
+            "premise: the Rust state holds the object through its handle — if this "
+            "fails the test cannot show the clear doing anything"
+        )
+        _clear_live_handles(view)
+        gc.collect()
+        assert ref() is None, (
+            "a handle survived the teardown: the object is still reachable from "
+            "RustLiveView.state, so a connection retains every object it ever "
+            "resolved through"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -608,8 +549,7 @@ class TestTheTagBridgeStaysClosed2539:
 
         _rust.register_tag_handler("a2539_probe", _Probe())
         try:
-            with resolve_lazy(True):
-                out = _rust.render_template("{% a2539_probe o %}", {"o": Presenter(make_user())})
+            out = _rust.render_template("{% a2539_probe o %}", {"o": Presenter(make_user())})
         finally:
             _rust.unregister_tag_handler("a2539_probe")
         assert out == "ok"
@@ -621,43 +561,6 @@ class TestTheTagBridgeStaysClosed2539:
         )
         assert "Presenter object at" in crossed
 
-    def test_the_flag_is_what_narrowed_it(self) -> None:
-        """The declared behaviour change, made explicit: with the flag OFF the
-        same value crosses as the `dict` of its `__dict__`; with it ON it
-        crosses as the display string. The exposure NARROWS — a handler that
-        used to receive a live-ish mapping of the object's attributes now
-        receives a string — and that is stated here rather than discovered."""
-        seen: list = []
-
-        class _Probe:
-            def render(self, args, _context):
-                seen.append(args[0])
-                return "ok"
-
-        _rust.register_tag_handler("a2539_probe_off", _Probe())
-        try:
-            with resolve_lazy(False):
-                _rust.render_template("{% a2539_probe_off o %}", {"o": Presenter(make_user())})
-        finally:
-            _rust.unregister_tag_handler("a2539_probe_off")
-        crossed_off = seen[0]
-        assert "alice" in str(crossed_off), (
-            "the flag-OFF shape stopped carrying the object's ATTRIBUTES — the declared "
-            f"behaviour change above is no longer the change it describes: {crossed_off!r}"
-        )
-        # And the flag-ON shape carries none of them. THIS is the narrowing:
-        # a handler that used to be handed the presenter's whole `__dict__`
-        # (with the user's fields inside it) is now handed `str(o)`.
-        with resolve_lazy(True):
-            _rust.register_tag_handler("a2539_probe_on", _Probe())
-            try:
-                _rust.render_template("{% a2539_probe_on o %}", {"o": Presenter(make_user())})
-            finally:
-                _rust.unregister_tag_handler("a2539_probe_on")
-        crossed_on = seen[1]
-        assert "alice" not in str(crossed_on), crossed_on
-        assert crossed_on != crossed_off
-
 
 # ---------------------------------------------------------------------------
 # 3.8 — exceptions never fail open (#2506)
@@ -667,13 +570,13 @@ GUARD_SOURCE = "{% if not d.doc.is_restricted %}{{ d.doc.title }}{% else %}(with
 
 @pytest.mark.django_db
 class TestExceptionsNeverFailOpen2539:
-    """3.8 / #2506, with the flag ON. An authorization check spelled as an
+    """3.8 / #2506. An authorization check spelled as an
     exception must not render as an authorised value."""
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_gated_content_never_renders(self, render) -> None:
         assert django_render(GUARD_SOURCE, {"d": Holder(Guarded())}) == "(withheld)"
-        with resolve_lazy(True), pytest.raises(Exception) as exc:
+        with pytest.raises(Exception) as exc:
             render(GUARD_SOURCE, {"d": Holder(Guarded())})
         cause = exc.value.__cause__ if type(exc.value) is Exception else exc.value
         assert isinstance(cause, PermissionDenied)
@@ -688,10 +591,9 @@ class TestExceptionsNeverFailOpen2539:
         class _Shut(_Open):
             is_restricted = True
 
-        with resolve_lazy(True):
-            for doc, expected in ((_Open(), "public memo"), (_Shut(), "(withheld)")):
-                assert django_render(GUARD_SOURCE, {"d": Holder(doc)}) == expected
-                assert render(GUARD_SOURCE, {"d": Holder(doc)}) == expected
+        for doc, expected in ((_Open(), "public memo"), (_Shut(), "(withheld)")):
+            assert django_render(GUARD_SOURCE, {"d": Holder(doc)}) == expected
+            assert render(GUARD_SOURCE, {"d": Holder(doc)}) == expected
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_silent_failure_renders_empty_and_a_loud_one_propagates(self, render) -> None:
@@ -710,10 +612,9 @@ class TestExceptionsNeverFailOpen2539:
             def loud(self):
                 raise _Loud("loud")
 
-        with resolve_lazy(True):
-            assert render("{{ r.quiet }}", {"r": _Raiser()}) == ""
-            with pytest.raises(Exception):
-                render("{{ r.loud }}", {"r": _Raiser()})
+        assert render("{{ r.quiet }}", {"r": _Raiser()}) == ""
+        with pytest.raises(Exception):
+            render("{{ r.loud }}", {"r": _Raiser()})
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_silent_failure_does_not_keep_walking(self, render) -> None:
@@ -732,8 +633,7 @@ class TestExceptionsNeverFailOpen2539:
 
         source = "{{ r.quiet.isupper }}"
         assert django_render(source, {"r": _Raiser()}) == ""
-        with resolve_lazy(True):
-            assert render(source, {"r": _Raiser()}) == ""
+        assert render(source, {"r": _Raiser()}) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -748,22 +648,11 @@ class TestAltersDataContinues2539:
     def test_the_walk_continues_from_the_empty_string(self, render) -> None:
         source = "{{ m.delete.isupper }}"
         assert django_render(source, {"m": Mutator()}) == "False"
-        with resolve_lazy(True):
-            assert render(source, {"m": Mutator()}) == "False"
-
-    @pytest.mark.parametrize("render", ENTRIES)
-    def test_the_flag_off_answer_is_the_old_one(self, render) -> None:
-        """The gate-off sibling, in-suite: with the flag OFF the pre-ADR walk
-        collapses both of Django's invalids into `Missing` and renders empty.
-        So this behaviour change is the flag's, and switching it off restores
-        the old bytes — which is movement 2's whole contract."""
-        with resolve_lazy(False):
-            assert render("{{ m.delete.isupper }}", {"m": Mutator()}) == ""
+        assert render(source, {"m": Mutator()}) == "False"
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_terminal_is_still_empty(self, render) -> None:
-        with resolve_lazy(True):
-            assert render("{{ m.delete }}", {"m": Mutator()}) == ""
+        assert render("{{ m.delete }}", {"m": Mutator()}) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -782,23 +671,16 @@ class TestIgnoreFailuresSubstitutesNone2539:
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_missing_operand_reaches_the_filter_as_none(self, render) -> None:
         assert django_render(self.SOURCE, {"y": 1}) == "yes"
-        with resolve_lazy(True):
-            assert render(self.SOURCE, {"y": 1}) == "yes"
-
-    @pytest.mark.parametrize("render", ENTRIES)
-    def test_the_flag_off_answer_is_the_old_one(self, render) -> None:
-        with resolve_lazy(False):
-            assert render(self.SOURCE, {"y": 1}) == "no"
+        assert render(self.SOURCE, {"y": 1}) == "yes"
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_present_operand_is_untouched(self, render) -> None:
         """Non-vacuity in the other direction: the substitution fires on a
         RESOLUTION FAILURE only. A present falsy operand still answers itself,
         and a present non-None one is not replaced."""
-        with resolve_lazy(True):
-            assert render(self.SOURCE, {"x": 0, "y": 1}) == "no"
-            assert render(self.SOURCE, {"x": None, "y": 1}) == "yes"
-            assert render("{{ x|default_if_none:'D' }}", {"x": "v"}) == "v"
+        assert render(self.SOURCE, {"x": 0, "y": 1}) == "no"
+        assert render(self.SOURCE, {"x": None, "y": 1}) == "yes"
+        assert render("{{ x|default_if_none:'D' }}", {"x": "v"}) == "v"
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_an_unfiltered_missing_operand_is_unchanged(self, render) -> None:
@@ -807,220 +689,13 @@ class TestIgnoreFailuresSubstitutesNone2539:
         `Missing` and `None` are both falsy to every consumer, and swapping
         them where the value is EMITTED would change bytes for no Django
         reason."""
-        with resolve_lazy(True):
-            assert render("{% if x %}yes{% else %}no{% endif %}", {}) == "no"
-            assert render("{% firstof x 'fallback' %}", {}) == "fallback"
-            assert render("{% for i in x %}[{{ i }}]{% endfor %}", {}) == ""
+        assert render("{% if x %}yes{% else %}no{% endif %}", {}) == "no"
+        assert render("{% firstof x 'fallback' %}", {}) == "fallback"
+        assert render("{% for i in x %}[{{ i }}]{% endfor %}", {}) == ""
 
 
 # ---------------------------------------------------------------------------
-# The switch itself
-# ---------------------------------------------------------------------------
-@pytest.mark.django_db
-class TestTheSwitch2539:
-    def test_the_flag_defaults_on_and_round_trips(self) -> None:
-        """Was ``..._defaults_off_...`` through movement 2; #2539 movement 3
-        flipped the shipped default and this is one of the two lines that
-        state it (the other is the net's ``test_the_default_is_on``)."""
-        from djust.config import config, template_resolve_lazy_enabled
-
-        assert config._defaults["template_resolve_lazy"] is True
-        with resolve_lazy(True):
-            assert template_resolve_lazy_enabled() is True
-            assert _rust.resolve_lazy_enabled() is True
-        with resolve_lazy(False):
-            assert template_resolve_lazy_enabled() is False
-            assert _rust.resolve_lazy_enabled() is False
-
-    def test_a_thread_that_never_pushed_reads_the_default(self) -> None:
-        """The Rust default, which is what an embedder and any not-yet-rendered
-        worker thread get. A `sync_to_async` pool thread that has never called
-        `apply_render_env` must not inherit another thread's flag.
-
-        Two claims in one assertion, and #2539 movement 3 is why they are
-        stated separately below: the flag is THREAD-LOCAL (the worker does not
-        see the ON pushed on this thread) and the Rust default TRACKS the
-        Python one. Asserting the literal `False` conflated them while the
-        shipped default happened to be OFF; against `_defaults` the test is
-        about the coupling rather than the value (#1200), so it keeps working
-        whichever way a future movement points the default.
-        """
-        import threading
-
-        from djust.config import LiveViewConfig
-
-        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
-        seen: list = []
-
-        def worker():
-            seen.append(_rust.resolve_lazy_enabled())
-
-        # Push the OPPOSITE of the shipped default on this thread, so "the
-        # worker read the default" cannot be "the worker inherited this one".
-        with resolve_lazy(not shipped):
-            assert _rust.resolve_lazy_enabled() is (not shipped)
-            thread = threading.Thread(target=worker)
-            thread.start()
-            thread.join()
-        assert seen == [shipped], (
-            f"a thread that never pushed read {seen!r}; expected the shipped default "
-            f"{shipped!r}. Either the flag is not thread-local, or the Rust `Cell` default "
-            f"has drifted from config.py's."
-        )
-
-    @pytest.mark.parametrize("shipped_default", [True, False])
-    def test_a_failed_config_read_pushes_the_DEFAULT(self, monkeypatch, shipped_default) -> None:
-        """The kill-switch fails to the SHIPPED DEFAULT, and that is where it
-        differs from the two ambient settings beside it.
-
-        The timezone and number-format handoffs return early on a failed read,
-        keeping the thread's previous value — right for a FORMAT, because the
-        last good one is the conservative answer. This flag selects a
-        resolution MECHANISM, and the thread is reused: returning early would
-        let a render whose config read failed inherit the previous render's
-        mechanism, which is the opposite of what a kill-switch is for.
-
-        Parametrized over BOTH possible defaults (#2539 movement 3), with
-        ``_defaults`` monkeypatched, so the test asserts the COUPLING —
-        "a failed read lands on whatever is shipped" — rather than the literal
-        value. Pinning the literal is what made the movement-2 version of this
-        test (``..._pushes_the_flag_OFF``) go red on the flip for a reason that
-        had nothing to do with the behaviour it was guarding (#1200).
-        """
-        from djust import config as config_module
-        from djust.config import LiveViewConfig
-        from djust.render_env import apply_resolve_lazy
-
-        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
-
-        # Start from the OPPOSITE of the default, so landing on the default
-        # cannot be the state the thread was already in.
-        with resolve_lazy(not shipped_default):
-            assert _rust.resolve_lazy_enabled() is (not shipped_default)
-
-            def exploding() -> bool:
-                raise RuntimeError("settings unreadable")
-
-            monkeypatch.setattr(config_module, "template_resolve_lazy_enabled", exploding)
-            apply_resolve_lazy()
-            assert _rust.resolve_lazy_enabled() is shipped_default, (
-                f"a config read that raised left the previous value in place, or landed on a "
-                f"hardcoded literal — it must fail to the shipped default "
-                f"({shipped_default!r})"
-            )
-
-    @pytest.mark.parametrize("shipped_default", [True, False])
-    def test_the_READER_also_falls_to_the_default_when_get_config_raises(
-        self, monkeypatch, shipped_default
-    ) -> None:
-        """The OTHER fallback, which the test above cannot reach.
-
-        There are two, and they answer different failures.
-        :func:`djust.render_env.apply_resolve_lazy`'s arm covers "the reader
-        itself blew up"; :func:`djust.config.template_resolve_lazy_enabled`'s
-        covers "``get_config()`` blew up" — a broken ``settings`` module, a
-        Django ``ImproperlyConfigured`` during startup. The sibling above
-        monkeypatches the reader, so the reader's own arm never runs and a
-        hardcoded literal there would go unnoticed.
-
-        Found by gate-off, not by inspection: mutating
-        ``default = template_resolve_lazy_default()`` back to
-        ``default = False`` left the whole suite green (#1468). Two mechanisms,
-        one test — the shadowing shape (#2233). Kept as two tests rather than
-        collapsed, because the two failures are genuinely different and each
-        needs the coupling asserted; parametrized over both defaults for the
-        same reason the sibling is, so this is about the coupling and not the
-        value (#1200).
-        """
-        from djust import config as config_module
-        from djust.config import LiveViewConfig
-
-        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
-
-        def exploding() -> dict:
-            raise RuntimeError("settings unreadable")
-
-        monkeypatch.setattr(config_module, "get_config", exploding)
-        assert config_module.template_resolve_lazy_enabled() is shipped_default, (
-            f"the reader landed on a hardcoded literal rather than the shipped default "
-            f"({shipped_default!r}) when get_config() raised"
-        )
-
-    def test_the_unimportable_config_arm_still_answers_the_shipped_default(
-        self, monkeypatch
-    ) -> None:
-        """The THIRD fallback, and the only one that must state a literal.
-
-        :func:`djust.render_env._resolve_lazy_default` asks ``config.py`` for
-        the default; if ``config.py`` itself will not import there is nothing
-        left to ask, so its ``except`` arm hardcodes ``True``. The #2620 review
-        gate-off (D2c) found that literal survived mutation with **0 failed** —
-        an uncovered hardcoded default two functions below the one movement 3
-        was filed to remove, and carrying the same ``# pragma: no cover`` that
-        made the first one invisible.
-
-        The remedy is not to delete the literal — it cannot be deleted, because
-        the module it would read from is the broken one — but to COUPLE it. The
-        shipped default is captured BEFORE the import is broken, so this asserts
-        "the third statement agrees with the first" rather than re-stating
-        ``True``: a movement that flips ``_defaults`` turns this red and forces
-        the literal to move with it, which is the drift the arm's own comment
-        warns about. Not parametrized over both defaults for that reason — the
-        coupling IS the assertion here, and half the parametrization would be
-        asserting that a hardcoded literal is not hardcoded.
-        """
-        import sys
-
-        from djust import render_env
-        from djust.config import LiveViewConfig
-
-        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
-
-        # `None` in `sys.modules` is what CPython leaves behind for a module
-        # whose import failed, and `from .config import ...` raises
-        # `ImportError` against it — a faithful "the config module is broken"
-        # rather than a stubbed-out shape (#1037).
-        monkeypatch.setitem(sys.modules, "djust.config", None)
-        with pytest.raises(ImportError):
-            from djust.config import template_resolve_lazy_default  # noqa: F401
-
-        assert render_env._resolve_lazy_default() is shipped, (
-            f"the unimportable-config arm answered "
-            f"{render_env._resolve_lazy_default()!r} but the shipped default is "
-            f"{shipped!r} — the third statement of the default has drifted from "
-            f"config.py's `_defaults`"
-        )
-
-    @pytest.mark.parametrize("render", ENTRIES)
-    def test_the_switch_is_what_gates_the_behaviour(self, render) -> None:
-        """The in-suite gate-off: the SAME template and the SAME context
-        answer Django's bytes with the flag on and today's with it off. If
-        this ever passes in both states, the flag has stopped gating."""
-        # A filtered loop cannot use a source-path alias in the eager hatch.
-        # Its elements retain their live handles under the default path.
-        source = "{% for x in p|slice:':1' %}{{ x.cls_attr }}{% endfor %}"
-
-        class _Cls:
-            cls_attr = "class-level"
-
-        class _Outer:
-            cls_attr = "OUTER"
-
-        def ctx():
-            return {"p": [_Cls(), _Cls()], "x": _Outer()}
-
-        assert django_render(source, ctx()) == "class-level"
-        with resolve_lazy(True):
-            on = render(source, ctx())
-        with resolve_lazy(False):
-            off = render(source, ctx())
-        assert on != off, "the ADR-027 flag changed nothing — it is not wired"
-        assert on == "class-level", on
-        assert off == "", off
-
-
-# ---------------------------------------------------------------------------
-# The conversion differential, under BOTH flag states (risk 12)
+# The conversion differential (risk 12)
 # ---------------------------------------------------------------------------
 SHAPES: list[Callable[[], Any]] = [
     lambda: None,
@@ -1047,42 +722,30 @@ SHAPES: list[Callable[[], Any]] = [
 
 
 @pytest.mark.django_db
-class TestTheTwoConversionsAgreeUnderBothFlags2539:
+class TestTheTwoConversionsAgree2539:
     """Risk 12: `crosses_as_encoded` is a cheap PROBE and
     `extract::<Value>()` is the real conversion. They decide the same question
     for the LiveView path (`normalize_django_value`) and the plain path, so a
-    disagreement is a silent divergence between the two entries — and the flag
-    moves the answer for a whole class of object, which is exactly when a
-    probe drifts from the thing it approximates."""
+    disagreement is a silent divergence between the two entries. (Until
+    ADR-027 Step 5, #2628, this ran under both states of the kill-switch,
+    which moved the answer for a whole class of object.)"""
 
-    @pytest.mark.parametrize("enabled", [False, True], ids=["lazy-off", "lazy-on"])
-    def test_the_probe_and_the_conversion_answer_the_same_bit(self, enabled: bool) -> None:
-        with resolve_lazy(enabled):
-            disagreements = []
-            for make in SHAPES:
-                obj = make()
-                probe = _rust.crosses_as_encoded(obj)
-                actual = _rust.crosses_as_encoded_by_conversion(obj)
-                if probe != actual:
-                    disagreements.append((type(obj).__name__, probe, actual))
-            assert disagreements == [], f"probe/conversion drift: {disagreements}"
-
-    def test_the_flag_moves_at_least_one_shape(self) -> None:
-        """Non-vacuity: the sweep above would pass trivially if the flag
-        changed nothing about which objects cross as `Encoded`."""
-        with resolve_lazy(False):
-            off = [_rust.crosses_as_encoded(make()) for make in SHAPES]
-        with resolve_lazy(True):
-            on = [_rust.crosses_as_encoded(make()) for make in SHAPES]
-        assert off != on, "the flag did not move any conversion — the sweep proves nothing"
+    def test_the_probe_and_the_conversion_answer_the_same_bit(self) -> None:
+        disagreements = []
+        for make in SHAPES:
+            obj = make()
+            probe = _rust.crosses_as_encoded(obj)
+            actual = _rust.crosses_as_encoded_by_conversion(obj)
+            if probe != actual:
+                disagreements.append((type(obj).__name__, probe, actual))
+        assert disagreements == [], f"probe/conversion drift: {disagreements}"
 
     def test_no_container_or_model_ever_carries_a_handle(self) -> None:
         """ADR §Decision (b), enforced by the existing arm ORDER rather than
         by a new rule: a `list`, a `dict`, a tuple, a `Model` and anything
-        with `__djust_serialize__` are claimed ABOVE `opaque_value`, so the
-        flag cannot give any of them a handle. That is what keeps the #2532
+        with `__djust_serialize__` are claimed ABOVE `opaque_value`, so none
+        of them can ever be given a handle. That is what keeps the #2532
         zero-crossing invariant true by construction."""
-        with resolve_lazy(True):
-            for make in (lambda: [1, 2], lambda: (1, 2), lambda: {"a": 1}, make_user):
-                obj = make()
-                assert _rust.crosses_as_encoded(obj) is False, type(obj).__name__
+        for make in (lambda: [1, 2], lambda: (1, 2), lambda: {"a": 1}, make_user):
+            obj = make()
+            assert _rust.crosses_as_encoded(obj) is False, type(obj).__name__

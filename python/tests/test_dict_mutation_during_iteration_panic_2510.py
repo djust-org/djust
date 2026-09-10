@@ -14,9 +14,12 @@ lazy-object `_setup()`). If that code mutates the SAME dict being iterated
 
   1. `public_dict_attrs` (the `__dict__` bulk-dump carrier, reached by any
      "truthy, non-iterable object with public attributes" — a real
-     `HttpRequest` is exactly this shape).
-  2. The genuine-`PyDict` arm a few lines above it (`Value::Object` for an
-     actual Python dict whose VALUES include something reentrant).
+     `HttpRequest` is exactly this shape). Deleted with the
+     `template_resolve_lazy` flag in ADR-027 Step 5 (#2628): an ordinary
+     object now always crosses as a live handle, and a dotted lookup walks
+     ONE attribute at a time, so this carrier no longer exists to iterate.
+  2. The genuine-`PyDict` arm (`Value::Object` for an actual Python dict
+     whose VALUES include something reentrant).
 
 Neither is Django- or `HttpRequest`-specific: any object whose attribute
 access can mutate its own `__dict__` on first touch — which is precisely
@@ -34,8 +37,6 @@ import functools
 from pathlib import Path
 
 import pytest
-
-from adr027_flag import resolve_lazy
 
 from djust import _rust
 
@@ -72,33 +73,25 @@ class _RequestLike:
 
 
 class TestPublicDictAttrsArm:
-    """`public_dict_attrs` — the `__dict__` bulk-dump carrier."""
+    """The former `public_dict_attrs` `__dict__` bulk-dump carrier — deleted
+    in ADR-027 Step 5 (#2628); the object now crosses as a live handle."""
 
     def test_a_lazy_attribute_that_mutates_its_parent_does_not_panic(self):
-        """The template never references `.user` — `public_dict_attrs`
-        dumps the WHOLE `__dict__` regardless of which attribute the
-        template needs, so the hazard fires even for `{{ c.path }}`."""
+        """The template never references `.user` — the bulk dump used to
+        walk the WHOLE `__dict__` regardless of which attribute the
+        template needs, so the hazard fired even for `{{ c.path }}`."""
         req = _RequestLike()
         html = _rust.render_template("{{ c.path }}", {"c": req})
         assert html == "/"
 
-    def test_the_mutation_still_happens_but_does_not_corrupt_the_result(self):
-        """On the ESCAPE-HATCH axis since #2539 movement 3 — the mutation is
-        the bulk dump touching an attribute the template never asked for, and
-        only the hatch still bulk-dumps."""
-        req = _RequestLike()
-        with resolve_lazy(False):
-            _rust.render_template("{{ c.path }}", {"c": req})
-        assert req.newly_added_key == "mutated mid-iteration"
-
-    def test_under_the_default_the_hazard_is_never_reached(self):
+    def test_the_hazard_is_never_reached(self):
         """The structural cure, not a second guard (#2539 movement 3).
 
-        The whole #2510 hazard is that `public_dict_attrs` dumps the ENTIRE
+        The whole #2510 hazard was that `public_dict_attrs` dumped the ENTIRE
         `__dict__` whichever attribute the template needs, so a lazy attribute
-        with a side effect fires on a template that never mentions it. Under
-        the shipped default the lookup walks the live object ONE SEGMENT AT A
-        TIME, so `{{ c.path }}` touches `path` and nothing else: the dict is
+        with a side effect fired on a template that never mentions it. The
+        lookup now walks the live object ONE SEGMENT AT A TIME, so
+        `{{ c.path }}` touches `path` and nothing else: the dict is
         never iterated, so it cannot resize mid-iteration and the unrelated
         attribute is never evaluated.
 
@@ -109,18 +102,19 @@ class TestPublicDictAttrsArm:
         req = _RequestLike()
         assert _rust.render_template("{{ c.path }}", {"c": req}) == "/"
         assert not hasattr(req, "newly_added_key"), (
-            "the shipped default evaluated an attribute the template never named — "
+            "the render evaluated an attribute the template never named — "
             "the segment walk is bulk-dumping again"
         )
 
     def test_cached_property_is_not_actually_the_same_hazard(self):
         """Checked, not assumed (#1468): `cached_property.__get__` writes
         `instance.__dict__[name]` only on ATTRIBUTE ACCESS
-        (`obj.computed`). `public_dict_attrs` iterates `obj.__dict__`
-        DIRECTLY and never calls `getattr(obj, name)` for a name that is
-        not already a key — so an un-accessed `cached_property` is simply
-        absent from the dict being walked, and this case cannot panic
-        regardless of the fix. Kept as a documented negative, since the
+        (`obj.computed`). The former `public_dict_attrs` iterated
+        `obj.__dict__` DIRECTLY and never called `getattr(obj, name)` for a
+        name that is not already a key — so an un-accessed `cached_property`
+        was simply absent from the dict being walked, and this case cannot
+        panic regardless of the fix (the live-handle walk touches only the
+        attribute the template names). Kept as a documented negative, since the
         plan's own text originally claimed this was an equivalent trigger
         and it is not.
         """
@@ -167,7 +161,7 @@ class _LazyLikeDictValue:
 
 class TestTheGenuinePyDictArm:
     """The `Value::Object` map-building arm for an actual Python `dict`,
-    a few lines above `public_dict_attrs` in the same match chain — a
+    once a few lines above `public_dict_attrs` in the same match chain — a
     structurally identical hazard on a different carrier."""
 
     def test_a_dict_value_that_mutates_the_dict_during_conversion_does_not_panic(self):
@@ -186,42 +180,6 @@ class TestTheGenuinePyDictArm:
         d["other"] = "y"
         _rust.render_template("{{ c.other }}", {"c": d})
         assert d.get("newly_added_key") == "mutated mid-iteration"
-
-
-class TestReentrancyDoesNotOverreach:
-    """The fix's scope is "don't panic on THIS dict resizing mid-iteration",
-    not "refuse all reentrancy" — an attribute mutating some OTHER,
-    unrelated dict must keep working exactly as it does today."""
-
-    def test_mutating_an_unrelated_dict_is_unaffected(self):
-        """On the ESCAPE-HATCH axis since #2539 movement 3.
-
-        The premise is that the bulk dump evaluates `b` (calling `__bool__`)
-        while rendering `{{ c.a }}`. Under the shipped default nothing
-        evaluates `b` at all — which is the point of the sibling in
-        `TestPublicDictAttrsArm`, and would make this test measure the absence
-        of the reentrancy rather than its harmlessness.
-        """
-        unrelated: dict = {}
-
-        class MutatesElsewhere:
-            def __init__(self):
-                self.a = "a-value"
-                self.b = _Toucher(unrelated)
-
-        class _Toucher:
-            def __init__(self, target):
-                self._target = target
-
-            def __bool__(self):
-                self._target["touched"] = True
-                return True
-
-        obj = MutatesElsewhere()
-        with resolve_lazy(False):
-            html = _rust.render_template("{{ c.a }}", {"c": obj})
-        assert html == "a-value"
-        assert unrelated == {"touched": True}
 
 
 class _IndexTrigger:
@@ -340,8 +298,8 @@ class TestASecondReReviewFoundTheOriginalBugStillLiveAtTheTopLevel:
     """A THIRD review round found the most significant instance yet: the
     literal ORIGINAL #2510 trigger — a top-level context dict mutating
     itself — was still exploitable, because fixing every NESTED arm inside
-    `impl FromPyObject for Value` (`public_dict_attrs`, the nested-`PyDict`
-    arm) does nothing for the OUTERMOST container. `render_template`,
+    `impl FromPyObject for Value` (the since-deleted `public_dict_attrs`, the
+    nested-`PyDict` arm) does nothing for the OUTERMOST container. `render_template`,
     `render_template_with_dirs`, and `RustLiveView.update_state` all took
     their context as `HashMap<String, Value>` (directly, or via a local
     `.extract()` call) — PyO3's OWN blanket `HashMap<K, V>: FromPyObject`

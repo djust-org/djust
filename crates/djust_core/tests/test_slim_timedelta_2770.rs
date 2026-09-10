@@ -315,6 +315,7 @@ fn aware_datetime(py: Python<'_>) -> Encoded {
         eq_class: None,
         live: None,
         display_safe: false,
+        str_raised: false,
     }
 }
 
@@ -408,6 +409,7 @@ fn temporal_object_restores_the_zone_from_either_tzinfo_shape() {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
         );
         for (label, e) in [("new", new_shape), ("old", old_shape)] {

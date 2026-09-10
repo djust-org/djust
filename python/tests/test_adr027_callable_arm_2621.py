@@ -1,4 +1,4 @@
-"""ADR-027 #2621 — ``normalize_django_value``'s callable arm, gated on the flag.
+"""ADR-027 #2621 — ``normalize_django_value``'s callable arm.
 
 The six cells movement 3 (#2539, PR #2620) left held were, by the time this
 landed, five — rows **J**, **J2**, **Q**, **P** and **P0** on the LiveView
@@ -15,8 +15,8 @@ callables"), so on the LiveView path:
   with the STRING key (P / P0 — a segfault until #2624's depth ceiling).
 
 The plain path has no ``normalize_django_value`` in front of it and answered
-Django's bytes for all five under the flag, which is what made the cause
-legible: the arm, not the sink.
+Django's bytes for all five, which is what made the cause legible: the arm,
+not the sink.
 
 The other two cells this issue inherited closed before it: **O** (a ``__str__``
 returning ``SafeData``) via ``Encoded::display_safe``, PR #2665 — runtime-only
@@ -27,16 +27,18 @@ the per-cell bytes; this file carries what the net does not — the arm's TRUTH
 TABLE, the guard rails a raw callable now meets at the sink, and the two
 channels that must NOT widen.
 
-Gate-off (#1468): every ON-column assertion here has an OFF-column sibling in
-the same test asserting ``"None"``. Restoring the unconditional ``return
-None`` makes the ON half fail while the OFF half keeps passing, so neither
-half can be green for the wrong reason.
+The arm was gated on ADR-027's ``template_resolve_lazy`` kill-switch when
+this landed, and every ON-column assertion had an OFF-column sibling
+asserting ``"None"``. ADR-027 Step 5 (#2628) deleted the switch, so the
+former ON behaviour is now unconditional and the OFF siblings went with it;
+the gate that remains is ``crosses_as_encoded`` alone. Gate-off (#1468):
+restoring the unconditional ``return None`` makes every carried-callable
+assertion here fail.
 """
 
 from __future__ import annotations
 
 import collections
-import contextlib
 import functools
 import json
 import re
@@ -59,30 +61,6 @@ HEX = re.compile(r"0x[0-9a-f]+")
 
 def scrub(text: str) -> str:
     return HEX.sub("0x…", text)
-
-
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool):
-    """Flip the ADR-027 flag through the REAL wiring and ASSERT it landed.
-
-    Copied in shape from the characterization net's context manager for the
-    reason that file gives: a fixture that sets the config and ASSUMES the
-    push would make every flag-ON assertion vacuous if the wiring broke.
-    """
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, (
-        "the ADR-027 flag did not reach Rust — apply_render_env() is not wiring it"
-    )
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +176,9 @@ class TestTheArmsTruthTable2621:
     """``normalize_django_value`` on a callable, across the three inputs that
     decide the arm. Unit level, no template — the arm's contract on its own.
 
-    Both gate conditions are independently reachable, which is what keeps this
-    a truth table rather than one condition plus a decoration (the shadowing
-    trap): a lambda flips on the FLAG, and — on this ``main`` — a
-    ``CallableBytes`` flips on ``crosses_as_encoded`` with the flag ON. That
-    second one is reachable BY VALUE today and structurally always (a missing
+    Since ADR-027 Step 5 (#2628) deleted the kill-switch, the one gate left
+    is ``crosses_as_encoded`` — on this ``main`` a ``CallableBytes`` flips on
+    it. That is reachable BY VALUE today and structurally always (a missing
     compiled extension); see the note on
     ``test_a_real_shape_agrees_with_whatever_the_gate_answers``.
     """
@@ -226,19 +202,10 @@ class TestTheArmsTruthTable2621:
     ]
 
     @pytest.mark.parametrize("value", CROSSING)
-    def test_a_crossing_callable_is_carried_with_the_flag_on(self, value: Any) -> None:
-        with resolve_lazy(True):
-            assert normalize_django_value(value) is value, (
-                "the arm still dropped a callable the sink can resolve"
-            )
-
-    @pytest.mark.parametrize("value", CROSSING)
-    def test_the_same_callable_is_dropped_with_the_flag_off(self, value: Any) -> None:
-        """The gate-off sibling, in the suite (#1468): OFF is byte-identical
-        to the pre-#2621 behaviour, which is what makes the ON assertion above
-        a claim about the FLAG rather than about callables in general."""
-        with resolve_lazy(False):
-            assert normalize_django_value(value) is None
+    def test_a_crossing_callable_is_carried(self, value: Any) -> None:
+        assert normalize_django_value(value) is value, (
+            "the arm still dropped a callable the sink can resolve"
+        )
 
     def test_the_no_handle_half_of_the_gate_drops_rather_than_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -256,8 +223,7 @@ class TestTheArmsTruthTable2621:
         monkeypatch.setattr(
             "djust.serialization._crosses_as_encoded", lambda _value: False, raising=True
         )
-        with resolve_lazy(True):
-            assert normalize_django_value(lambda: "x") is None
+        assert normalize_django_value(lambda: "x") is None
 
     @pytest.mark.parametrize("value", NOT_CROSSING)
     def test_a_real_shape_agrees_with_whatever_the_gate_answers(self, value: Any) -> None:
@@ -280,22 +246,19 @@ class TestTheArmsTruthTable2621:
         even on a ``main`` where no callable shape declines by value.
         """
         crosses = _crosses_as_encoded(value)
-        with resolve_lazy(True):
-            carried = normalize_django_value(value)
+        carried = normalize_django_value(value)
         if crosses:
             assert carried is value, "a modelled callable was dropped anyway"
         else:
             assert carried is None, "an unmodelled callable was handed to the renderer"
 
     @pytest.mark.parametrize("value", CROSSING)
-    def test_the_state_channel_drops_it_on_both_settings(self, value: Any) -> None:
+    def test_the_state_channel_drops_it(self, value: Any) -> None:
         """``state_roundtrip=True`` is the session / signed-snapshot boundary:
         an encoder-less serializer writes it, so it CANNOT hold a live object.
         Same reason the ``Decimal`` / ``datetime`` / ``set`` branches split on
         this flag."""
-        for enabled in (True, False):
-            with resolve_lazy(enabled):
-                assert normalize_django_value(value, state_roundtrip=True) is None
+        assert normalize_django_value(value, state_roundtrip=True) is None
 
     def test_the_arm_never_invokes_what_it_carries(self) -> None:
         """Normalization only stops DROPPING the callable — deciding whether
@@ -303,9 +266,8 @@ class TestTheArmsTruthTable2621:
         normalization called it, `alters_data` would already have been
         violated one layer too early."""
         CALLS.clear()
-        with resolve_lazy(True):
-            for fn in (plain_lambda, mutator, marked, loud, needs_args):
-                normalize_django_value(fn)
+        for fn in (plain_lambda, mutator, marked, loud, needs_args):
+            normalize_django_value(fn)
         assert CALLS == [], f"normalization CALLED something: {CALLS}"
 
 
@@ -341,7 +303,7 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
         return "{{ f.inner }}" if key == "nested_in_a_dict" else "{{ f }}"
 
     @pytest.mark.parametrize("key", sorted(SHAPES))
-    def test_the_liveview_path_answers_django_with_the_flag_on(self, key: str) -> None:
+    def test_the_liveview_path_answers_django(self, key: str) -> None:
         source, make_ctx = self._source(key), self.SHAPES[key]
         expected = observe(django_render, source, make_ctx())
         actual = observe(liveview_render, source, make_ctx())
@@ -350,22 +312,12 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
         )
 
     @pytest.mark.parametrize("key", sorted(SHAPES))
-    def test_the_flag_off_column_is_still_none(self, key: str) -> None:
-        """The gate-off sibling. Every one of these rendered ``None`` before
-        #2621, and still does with the flag OFF — so the ON assertions above
-        measure the change rather than a property callables always had."""
-        source, make_ctx = self._source(key), self.SHAPES[key]
-        with resolve_lazy(False):
-            assert observe(liveview_render, source, make_ctx()) == "None"
-
-    @pytest.mark.parametrize("key", sorted(SHAPES))
-    def test_the_two_djust_paths_agree_with_the_flag_on(self, key: str) -> None:
+    def test_the_two_djust_paths_agree(self, key: str) -> None:
         """#1646: the arm was a LiveView-only divergence, so the closing claim
         is that the divergence is GONE, not merely that one path improved."""
         source, make_ctx = self._source(key), self.SHAPES[key]
-        with resolve_lazy(True):
-            plain = observe(plain_render, source, make_ctx())
-            liveview = observe(liveview_render, source, make_ctx())
+        plain = observe(plain_render, source, make_ctx())
+        liveview = observe(liveview_render, source, make_ctx())
         assert plain == liveview, f"{key}: plain={plain!r} liveview={liveview!r}"
 
     def test_a_mutator_is_refused_rather_than_run(self) -> None:
@@ -373,8 +325,7 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
         reaches the name (the neighbouring cell proves the lookup ran) and the
         mutator segment is empty, with no call recorded."""
         CALLS.clear()
-        with resolve_lazy(True):
-            out = liveview_render("[{{ ok }}][{{ f }}]", {"ok": plain_lambda, "f": mutator})
+        out = liveview_render("[{{ ok }}][{{ f }}]", {"ok": plain_lambda, "f": mutator})
         assert out == "[foo bar][]", out
         assert "mutator" not in CALLS, f"the alters_data callable RAN: {CALLS}"
 
@@ -382,9 +333,8 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
         """A swallowed exception here would be the fail-open shape #2506
         exists to refuse — and would be INVISIBLE, since the cell would render
         the empty string a legitimately-empty callable also renders."""
-        with resolve_lazy(True):
-            with pytest.raises(RuntimeError, match="boom from the callable body"):
-                liveview_render("{{ f }}", {"f": loud})
+        with pytest.raises(RuntimeError, match="boom from the callable body"):
+            liveview_render("{{ f }}", {"f": loud})
 
     def test_a_no_handle_callable_renders_what_the_gate_decided(self) -> None:
         """The no-handle half, end to end — asserted against the gate.
@@ -406,8 +356,9 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
            Django answer. Hard-coding ``None`` would go red on that merge and
            read as a regression in the wrong file.
 
-        What holds either way: the render agrees with what the gate decided,
-        and the escape hatch is unmoved.
+        What holds either way: the render agrees with what the gate decided.
+        (The ``template_resolve_lazy`` escape hatch this test also pinned was
+        deleted in ADR-027 Step 5, #2628.)
         """
 
         def ctx() -> dict:
@@ -418,12 +369,7 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
             "the Django side of the differential stopped being what it was measured to be"
         )
         crosses = _crosses_as_encoded(CallableBytes(b"ab"))
-        with resolve_lazy(False):
-            assert observe(liveview_render, "{{ f }}", ctx()) == "None", (
-                "the ADR-027 escape hatch moved — it drops every callable, unconditionally"
-            )
-        with resolve_lazy(True):
-            rendered = observe(liveview_render, "{{ f }}", ctx())
+        rendered = observe(liveview_render, "{{ f }}", ctx())
         if crosses:
             assert rendered == django_bytes, (
                 f"the arm carried it to the sink but the render is {rendered!r}, "
@@ -462,8 +408,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         request = factory.get("/callable-2621/")
         SessionMiddleware(lambda _r: None).process_request(request)
         request.session.save()
-        with resolve_lazy(True):
-            _CallableStateView().get(request)
+        _CallableStateView().get(request)
 
         saved = request.session["liveview_/callable-2621/"]
         assert saved["cb"] is None, f"a live callable reached the session: {saved['cb']!r}"
@@ -486,10 +431,9 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         pin. It stays green with the change gated off, because `get_state()`
         reads the view's public attributes and the attribute walk drops a
         callable before this arm ever sees it (the sibling below). The value
-        is that the claim in this class's docstring is measured on both
-        settings rather than reasoned from the session channel — and that a
-        future change routing context values into client state has to come
-        here and face it.
+        is that the claim in this class's docstring is measured rather than
+        reasoned from the session channel — and that a future change routing
+        context values into client state has to come here and face it.
         """
 
         class _StateView(LiveView):
@@ -499,18 +443,16 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
                 self.cb = plain_lambda
                 self.plain = "visible"
 
-        for enabled in (True, False):
-            with resolve_lazy(enabled):
-                client = LiveViewTestClient(_StateView)
-                client.mount()
-                client.render()
-                assert client.view_instance is not None
-                state = client.view_instance.get_state()
-            blob = json.dumps(state)
-            assert "0x" not in blob and "<function" not in blob, (
-                f"a function address reached the client payload with the flag {enabled}: {blob}"
-            )
-            assert state == {"plain": "visible"}, state
+        client = LiveViewTestClient(_StateView)
+        client.mount()
+        client.render()
+        assert client.view_instance is not None
+        state = client.view_instance.get_state()
+        blob = json.dumps(state)
+        assert "0x" not in blob and "<function" not in blob, (
+            f"a function address reached the client payload: {blob}"
+        )
+        assert state == {"plain": "visible"}, state
 
     def test_a_public_callable_ATTRIBUTE_is_still_dropped_before_the_arm(self) -> None:
         """The boundary #2621 does NOT move, stated so nobody reads the gate
@@ -521,8 +463,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         first (``mixins/context.py``'s ``if callable(value): continue``), and
         that exclusion is deliberate and load-bearing — without it every
         ``@event_handler`` on the view would become a context variable. So
-        ``{{ cb }}`` for ``self.cb = fn`` renders EMPTY on both flag settings,
-        where Django's ``Context({"cb": fn})`` renders the call's result.
+        ``{{ cb }}`` for ``self.cb = fn`` renders EMPTY, where Django's ``Context({"cb": fn})`` renders the call's result.
 
         #2621 is about the context DICT — what ``get_context_data`` returns,
         which is what the characterization net's rows exercise. A future
@@ -536,23 +477,20 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
                 self.cb = plain_lambda
                 self.plain = "visible"
 
-        for enabled in (True, False):
-            with resolve_lazy(enabled):
-                client = LiveViewTestClient(_AttrView)
-                client.mount()
-                html = client.render()
-            match = DJ_ROOT.search(html)
-            assert match is not None, html
-            assert match.group(1) == "[][visible]", (
-                f"the public-attribute walk changed with the flag {enabled}: {match.group(1)!r}"
-            )
+        client = LiveViewTestClient(_AttrView)
+        client.mount()
+        html = client.render()
+        match = DJ_ROOT.search(html)
+        assert match is not None, html
+        assert match.group(1) == "[][visible]", (
+            f"the public-attribute walk changed: {match.group(1)!r}"
+        )
 
     def test_the_display_string_is_what_a_handle_hands_back_not_the_object(self) -> None:
         """A carried callable is a `Value::Encoded` with a transient handle,
         and `IntoPyObject` maps an `Encoded` to its DISPLAY string — so a
         custom-tag handler receives text, never the live function (#2509)."""
-        with resolve_lazy(True):
-            carried = normalize_django_value(plain_lambda)
+        carried = normalize_django_value(plain_lambda)
         assert carried is plain_lambda
         assert _rust.crosses_as_encoded(carried) is True
 
@@ -586,16 +524,6 @@ class TestTheQuestionHasOneStatement2621:
 
         monkeypatch.delattr(djust._rust, "crosses_as_encoded", raising=True)
         assert _crosses_as_encoded(lambda: 1) is False
-        with resolve_lazy(True):
-            # With the question unanswerable, the callable arm falls back to
-            # the historical drop rather than propagating the AttributeError.
-            assert normalize_django_value(lambda: 1) is None
-
-    def test_the_flag_is_read_through_the_config_helper(self) -> None:
-        """`config.py` is the only file allowed to spell the settings key
-        (`test_the_config_reader_is_the_only_one`), so the arm must call the
-        reader rather than reach for `LIVEVIEW_CONFIG` itself."""
-        source = self._serialization_source()
-        assert "template_resolve_lazy_enabled" in source
-        assert '"template_resolve_lazy"' not in source
-        assert "'template_resolve_lazy'" not in source
+        # With the question unanswerable, the callable arm falls back to
+        # the historical drop rather than propagating the AttributeError.
+        assert normalize_django_value(lambda: 1) is None

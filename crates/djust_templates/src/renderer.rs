@@ -1985,6 +1985,26 @@ fn localize_if_number(value: &Value) -> Result<String> {
             use pyo3::prelude::*;
             // Decided in Rust first: a non-temporal Encoded never attaches
             // to Python (this arm runs once per rendered value).
+            // A carrier whose `__str__` RAISED at conversion (#2628,
+            // `handle_only_encoded`): Django calls `str()` exactly here,
+            // at `{{ v }}`, and propagates — `{{ v.attr }}` never calls
+            // it, which is why the object still crossed with its handle.
+            // Re-raised as the user's own exception, like any error a
+            // template author's code raises mid-render (#2429 decided
+            // `{{ p }}` over a raising `__str__` propagates on both
+            // engines). Before the temporal branch: a `datetime` whose
+            // tzinfo raises inside `__str__` is this carrier too.
+            if encoded.str_raised {
+                if let Some(handle) = encoded.live.as_ref() {
+                    return Python::attach(|py| -> Result<String> {
+                        let text = handle
+                            .bind(py)
+                            .str()
+                            .map_err(DjangoRustError::PythonException)?;
+                        Ok(text.to_string_lossy().into_owned())
+                    });
+                }
+            }
             if encoded.temporal_kind().is_none() {
                 // `{{ v }}`'s sink, and the one that short-circuits `Display`
                 // (#2717). A carrier the conversion declined for LENGTH whose
@@ -5466,9 +5486,10 @@ fn get_value_safe_inner(
         // for the other where the value is EMITTED (`{% firstof %}`) would
         // change bytes for no Django reason.
         //
-        // Gated on the flag with the rest of the movement: it is a behaviour
-        // change, and this movement's contract is flag-OFF byte identity.
-        if ignore_failures && djust_core::resolve_lazy() && matches!(value, Value::Missing) {
+        // Shipped behind the ADR-027 flag with the rest of movement 2 (whose
+        // contract was flag-OFF byte identity); unconditional since Step 5
+        // (#2628) deleted the flag.
+        if ignore_failures && matches!(value, Value::Missing) {
             value = Value::None;
         }
         // Django skips the entire filter chain when a missing strict operand
@@ -7981,6 +8002,7 @@ mod tests {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -7998,6 +8020,7 @@ mod tests {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -8017,6 +8040,7 @@ mod tests {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -8036,6 +8060,7 @@ mod tests {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -8054,6 +8079,7 @@ mod tests {
                 eq_class: None,
                 live: None,
                 display_safe: false,
+                str_raised: false,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`

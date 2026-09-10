@@ -643,15 +643,11 @@ pub struct Encoded {
     /// The LIVE object this value was measured from — ADR-027's handle
     /// (#2539).
     ///
-    /// [`opaque_value`] attaches one only when [`resolve_lazy`] is on;
-    /// [`django_json_encoded`] attaches one UNCONDITIONALLY, so a temporal
-    /// value carries a handle under either flag state. The observable
-    /// behaviour is still gated, because the SINK is
-    /// (`Context::resolve_without_builtins`) — which is why this field read
-    /// "`None` unless `resolve_lazy` was on at the conversion" for as long as
-    /// it did. Corrected by reading the two construction sites, not by
-    /// running: the field is not exposed to Python and the two cases are
-    /// behaviourally indistinguishable from there.
+    /// Both producers — [`opaque_value`] and [`django_json_encoded`] —
+    /// attach one unconditionally. (Until ADR-027 Step 5, #2628, the first
+    /// was gated on the ADR-027 kill-switch flag and the SINK in
+    /// `Context::resolve_without_builtins` was gated on it too; the flag and
+    /// both gates are gone.)
     ///
     /// **TRANSIENT.** It is not serialized (the `ENCODED_TAG` payload stays
     /// ELEVEN slots), not compared (`PartialEq for Encoded` does not mention
@@ -719,6 +715,16 @@ pub struct Encoded {
     /// `{{ q.resolution }}` from the handle, and gating the handle off leaves
     /// the first standing.
     pub live: Option<std::sync::Arc<Py<PyAny>>>,
+    /// `str(o)` RAISED at conversion, so `display` is a stand-in and the
+    /// `{{ o }}` sink must call `str()` on [`Encoded::live`] itself — and
+    /// propagate what it raises, as Django does (ADR-027 Step 5, #2628;
+    /// decided for `{{ p }}` by #2429). Set only by [`handle_only_encoded`].
+    ///
+    /// **TRANSIENT**, exactly like `live`: not serialized, not compared. A
+    /// carrier that came back from a state round trip has no handle to defer
+    /// to, and renders `display` — the stand-in — which is the same
+    /// degradation `live`'s own round-trip limit already has (#2767).
+    pub str_raised: bool,
 }
 
 /// Which of Python's equality contracts a [`Value::Encoded`] obeys (#2480).
@@ -1700,6 +1706,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1763,6 +1770,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1820,6 +1828,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1879,6 +1888,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1936,6 +1946,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1984,6 +1995,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -2030,6 +2042,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                                 display_safe: false,
+                                str_raised: false,
                             })));
                         }
                     }
@@ -2243,116 +2256,8 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // The wire still carries the measured fields; live handles are transient.
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
         display_safe: false,
+        str_raised: false,
     })
-}
-
-/// Is this `__dict__` key one a template can reach? (#2478)
-///
-/// The ONE statement of the `_`-prefix rule, with two callers by design:
-/// [`public_dict_attrs`], which BUILDS the map, and
-/// [`has_public_dict_attrs`], which only asks whether it would be empty. Two
-/// copies of a filter that decide the same question about the same keys is the
-/// #1646 shape; the same argument [`public_dict_attrs`]'s own doc makes about
-/// its two callers, one level down.
-///
-/// It is Django's `_resolve_lookup` convention (`Variable.__init__` refuses a
-/// path segment starting with `_`) and what keeps a user attribute from
-/// colliding with the four `_TAG` constants the codec reserves.
-fn is_public_attr_name(name: &str) -> bool {
-    !name.starts_with('_')
-}
-
-/// Does this object have at least one public `__dict__` attribute? (#2477)
-///
-/// The KEYS only. [`opaque_value`] needs this to decide one thing — whether an
-/// object belongs to the `__dict__` bulk-dump arm — and building the map to
-/// answer it would convert every attribute VALUE through
-/// `extract::<Value>()`, recursively, and then throw the result away for the
-/// arm below to build again. That is the ordinary case (a presenter, a service
-/// object, any plain instance in a template context), so paying for it twice
-/// per value per render is not a rounding error.
-///
-/// `false` for an object with no `__dict__` at all — a C type, or one with
-/// `__slots__` — which is what [`public_dict_attrs`] returns `None` for, and
-/// the two agree because the question they answer is the same one.
-fn has_public_dict_attrs(ob: &Bound<'_, PyAny>) -> bool {
-    let Ok(obj_dict) = ob.getattr("__dict__") else {
-        return false;
-    };
-    let Ok(items) = obj_dict.cast::<PyDict>() else {
-        return false;
-    };
-    items
-        .keys()
-        .iter()
-        .filter_map(|k| k.extract::<String>().ok())
-        .any(|k| is_public_attr_name(&k))
-}
-
-/// An object's PUBLIC `__dict__`, as a [`Value::Object`]'s map (#2478).
-///
-/// The ONE statement of "which attributes does an ordinary Python object
-/// expose to a template", and it has TWO callers by design: the `__dict__`
-/// bulk-dump arm of [`FromPyObject`], which turns the map into a
-/// `Value::Object`, and [`opaque_value`], which carries it on the `Encoded`.
-/// Those two arms decide the same question about the same objects and are
-/// selected between by the object's TRUTHINESS — so a second copy of this
-/// filter is the #1646 shape, one arm growing a rule the other does not. It
-/// was two copies for exactly as long as it took to write the second.
-///
-/// **Iterated as a `PyDict`**, not through `extract::<HashMap<..>>()` (#2203
-/// review): a std `HashMap` randomises iteration order PER INSTANCE and a
-/// fresh one is built on every conversion, so extracting through one made
-/// `{{ obj }}` reorder on every render rather than merely between restarts.
-///
-/// **`_`-prefixed names are skipped**, which is both Django's `_resolve_lookup`
-/// convention (`Variable.__init__` refuses a path segment starting with `_`)
-/// and what keeps a user attribute from colliding with the four `_TAG`
-/// constants the codec reserves.
-///
-/// Returns `None` when the object has no `__dict__` at all — a C type, or one
-/// with `__slots__` — which is DIFFERENT from an empty one and is what lets
-/// the caller tell "no attributes" from "not that kind of object".
-fn public_dict_attrs(ob: &Bound<'_, PyAny>) -> Option<IndexMap<ObjectKey, Value>> {
-    let obj_dict = ob.getattr("__dict__").ok()?;
-    let items = obj_dict.cast::<PyDict>().ok()?;
-    // The `_`-prefix rule is [`is_public_attr_name`], so this builder and the
-    // key-only probe beside it cannot disagree about which names are public
-    // (#1646).
-    //
-    // Snapshotted into an owned `Vec` BEFORE any recursive
-    // `v.extract::<Value>()` call (#2510). `items.iter()` is a LIVE PyO3
-    // iterator directly over `ob.__dict__`; extracting one attribute's VALUE
-    // can run arbitrary Python (any dunder check on an unresolved
-    // `SimpleLazyObject` — e.g. Django's `request.user` before anything has
-    // forced it — triggers `_setup()`). Django's own
-    // `AuthenticationMiddleware.get_user` resolves it by doing
-    // `request._cached_user = auth.get_user(request)`, which writes a NEW
-    // key into `request.__dict__` — the EXACT dict this loop is iterating.
-    // The template need not even reference `.user`: this walk dumps the
-    // WHOLE `__dict__` regardless of which attribute was asked for, so any
-    // object with an unresolved lazy attribute anywhere in its `__dict__`
-    // hits this, not just one whose lazy attribute happens to be requested.
-    // Collecting into a `Vec` first fully drains the PyO3 iterator before any
-    // Python callback can run, so a later mutation has nothing left to
-    // invalidate.
-    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = items.iter().collect();
-    // Attribute names, so the keys stay `ObjectKey::Str` — a `__dict__`
-    // cannot have a non-string key.
-    let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
-    for (k, v) in pairs {
-        let Ok(k) = k.extract::<String>() else {
-            continue;
-        };
-        // Skip private/dunder attrs and Django's internal `_state`.
-        if !is_public_attr_name(&k) {
-            continue;
-        }
-        if let Ok(val) = v.extract::<Value>() {
-            map.insert(ObjectKey::Str(k), val);
-        }
-    }
-    Some(map)
 }
 
 /// `getattr(o, name)` for each `name`, as a [`Value::Object`]'s map (#2481).
@@ -2574,6 +2479,7 @@ pub fn slim_timedelta_encoded(
         eq_class: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
         display_safe: false,
+        str_raised: false,
     })
 }
 
@@ -2998,116 +2904,6 @@ pub fn set_django_value_repr(enabled: bool) {
 /// a setter alone cannot be (#2017).
 pub fn django_value_repr() -> bool {
     DJANGO_VALUE_REPR.load(Ordering::Relaxed)
-}
-
-thread_local! {
-    /// ADR-027's kill-switch, per THREAD (#2539). Default `true` since
-    /// movement 3 (#2539) flipped the shipped default.
-    ///
-    /// # Why this default has to track `config.py`'s
-    ///
-    /// This value is what a thread that never called
-    /// `djust.render_env.apply_resolve_lazy` answers — a caller reaching
-    /// `_rust.render_template` / `render_template_with_dirs` DIRECTLY, and
-    /// `ComponentActor::render`, which never pushes. While movement 2 shipped
-    /// the Python default OFF the two agreed; after the flip a `false` here
-    /// would mean a fresh thread silently resolves by the OLD mechanism while
-    /// every framework entry resolves by the new one — two defaults seeded
-    /// from one intent, which is the #1646 shape. So the two literals move
-    /// together, pinned by two tests that construct a FRESH `threading.Thread`
-    /// — the only place this value is observable:
-    /// `TestTheFlagReachesEveryRenderEntry2539::
-    /// test_the_rust_default_tracks_the_python_default` and
-    /// `TestTheSwitch2539::test_a_thread_that_never_pushed_reads_the_default`.
-    /// Empirically confirmed: flipping this literal to `false` and rebuilding
-    /// reddens exactly those two.
-    ///
-    /// NOT `TestThePlainEntriesAgree`, which an earlier draft of this comment
-    /// named. That test compares the backend against the raw entries
-    /// IN-PROCESS, on a pytest thread the backend has already pushed on — so
-    /// the raw entry inherits the pushed value and never reads this default.
-    /// It stayed green against the mutant. A pin you have not watched fail is
-    /// a pin whose failure mode is unknown (#1859).
-    ///
-    /// Fail-direction: `true` is also the *closed* direction for the
-    /// serialization floor. The old sidecar walk this replaces keeps
-    /// `protect_sidecar`'s `Err(_) => obj` arm, the unguarded `get_item` that
-    /// segfaults on a class object, and the `__dict__` dump; the sink has none
-    /// of those. See `python/djust/render_env.py::apply_resolve_lazy`.
-    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(RESOLVE_LAZY_DEFAULT) };
-}
-
-/// The shipped ADR-027 default — the ONE literal `RESOLVE_LAZY` above and
-/// `RenderEnv::default()` both read, so a thread that never pushed and a
-/// captured environment on a fresh thread cannot disagree (#1646). Moves
-/// together with `djust.config.LiveViewConfig._defaults`, pinned by
-/// `test_the_rust_default_tracks_the_python_default`.
-pub const RESOLVE_LAZY_DEFAULT: bool = true;
-
-/// Set this thread's ADR-027 lazy-resolution flag (#2539).
-///
-/// # Why a thread-local and not a `Context` field
-///
-/// Half of the work this flag gates lives inside `impl FromPyObject for Value`
-/// — a trait method with no `Context` and no config parameter, reached
-/// recursively from every nested dict value and list element. A `Context`
-/// field cannot reach it, so the two halves would need two mechanisms seeded
-/// from one reader, which is the #1646 shape this repo keeps paying for.
-///
-/// It is a thread-local rather than a process global for the reason the
-/// timezone (#2209) and the number format (#2221) are: djust renders run in
-/// `sync_to_async` worker threads and two connections render concurrently.
-/// It is pushed by `djust.render_env.apply_render_env`, beside those two —
-/// the module that exists precisely so "a render path cannot acquire one
-/// ambient setting and miss the other".
-///
-/// A nested render inherits the enclosing render's value, exactly as the
-/// timezone does; a thread that never called `apply_render_env` reads the
-/// shipped default (`true` since #2539 movement 3). That is also what
-/// disposes of the `{% include … only %}`
-/// fresh-`Context` problem `auto_call` has (`renderer.rs`'s `Context::new()`
-/// there does not carry `auto_call`): a thread-local is not per-`Context`.
-pub fn set_resolve_lazy(enabled: bool) {
-    RESOLVE_LAZY.with(|c| c.set(enabled));
-}
-
-/// This thread's ADR-027 lazy-resolution flag (#2539). `true` by default
-/// since movement 3; `LIVEVIEW_CONFIG["template_resolve_lazy"] = False` is
-/// the escape hatch.
-///
-/// Read at EIGHT functional sites, in two crates. This said "read at exactly
-/// two sites, and that is the whole of the routing" until
-/// `docs/architecture/VALUE_BOUNDARY.md`'s review grepped it (#1867); the two
-/// it named are the two the ADR discusses, not the two that exist. Naming a
-/// subset as if it were the set is what lets a later reader conclude a
-/// behaviour is unreachable when it is not — and that doc acquired the same
-/// false claim by citing THIS comment instead of running the case.
-///
-/// In `djust_core`:
-/// * [`stated_len_is_too_large_to_enumerate`] — the over-cap decline is
-///   lazy-only.
-/// * [`list_repr_is_this_objects_own_spelling`] — which conversion ARM claims
-///   a `list`/queryset, at ANY length. NOT the declined spelling: that is
-///   [`Encoded::declined_list_spelling`], which opens with
-///   `len > OPAQUE_ITEM_CAP` and does not read this flag.
-/// * [`opaque_gate`] ×3: the one-shot-iterator arm, the over-cap walk arm, and
-///   the attribute-bearing decline (which decides whether an ordinary object
-///   CARRIES a live handle rather than being bulk-dumped).
-/// * [`opaque_value`] — the handle ATTACH itself.
-/// * `Context::resolve_without_builtins` — whether a dotted lookup WALKS the
-///   handle.
-///
-/// In `djust_templates`:
-/// * `renderer::get_value_safe`'s `ignore_failures` arm — a filtered TAG
-///   operand that resolves to `Missing` becomes `None` under the flag, so
-///   `{% firstof nope|default_if_none:"X" "Y" %}` renders `X` with the flag on
-///   and `Y` with it off. Behaviourally observable, and in a different crate
-///   from every other read.
-///
-/// `djust_live`'s `resolve_lazy_enabled` is a PyO3 getter, not a routing read:
-/// it exists so the setter can be tested end to end (#2017).
-pub fn resolve_lazy() -> bool {
-    RESOLVE_LAZY.with(|c| c.get())
 }
 
 /// The code points CPython's `repr()` escapes: the union of the general
@@ -3867,18 +3663,14 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 ///   and still renders every item at `{% for %}`, because its walk
 ///   terminates.
 ///
-/// * **`resolve_lazy()` is on** — the shipped default. The decline only
-///   improves on the hang because ADR-027's carrier holds a LIVE HANDLE, so
-///   `{{ v }}`, `{{ v.0 }}`, `{{ v|length }}` and `{% if v %}` are answered
-///   from the object itself. On the eager escape hatch there is no handle
-///   and a decline lands on the terminal `str(o)`, where those four answer
-///   from the REPR — `{{ v.0 }}` renders `[`, `|length` counts repr
-///   characters. That is a silently wrong answer where the hatch previously
-///   had a slow-but-correct one, so the hatch keeps enumerating in full and
-///   both #2678's and #2695's hangs stay unfixed there. An unfixed cell
-///   beats a wrong one.
+/// The decline only improves on the hang because ADR-027's carrier holds a
+/// LIVE HANDLE, so `{{ v }}`, `{{ v.0 }}`, `{{ v|length }}` and `{% if v %}`
+/// are answered from the object itself. (Until ADR-027 Step 5 — #2628 — this
+/// predicate also required the ADR-027 kill-switch flag, because the
+/// eager escape hatch had no handle and a decline there landed on `str(o)`;
+/// the hatch is gone and the cap is the whole condition.)
 ///
-/// TWO conditions and not three. A `list` and a Django `QuerySet` were
+/// ONE condition and not two. A `list` and a Django `QuerySet` were
 /// EXEMPT from #2695 until #2717, because their declined spelling was wrong
 /// — `{{ rows }}` over a 100 001-row queryset rendered 66 MB of djust's own
 /// identity dicts where the same queryset one row shorter rendered
@@ -3888,7 +3680,7 @@ fn surrogatepass_bytes_to_string(bytes: &[u8]) -> String {
 /// [`Encoded::declined_list_spelling`], which answers the three container
 /// sinks from the live handle. Nothing is exempt now.
 fn stated_len_is_too_large_to_enumerate(len: usize) -> bool {
-    len > OPAQUE_ITEM_CAP && resolve_lazy()
+    len > OPAQUE_ITEM_CAP
 }
 
 /// Is this object's SPELLING its ITEMS' list repr, rather than its own
@@ -4005,15 +3797,10 @@ fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
 /// non-`list` sequence gets, and the cap only decides whether its items are
 /// read here or at the sink.
 ///
-/// THREE exemptions, and each is a different reason:
+/// TWO exemptions, and each is a different reason (a third — the eager
+/// escape hatch, which had no live handle to decline onto — was deleted with
+/// the ADR-027 kill-switch flag in Step 5, #2628):
 ///
-/// * **The eager escape hatch** (`!resolve_lazy()`). There is no live handle
-///   there, so a decline lands on the terminal `Value::String(str(o))` and
-///   `{% for %}` walks the REPR character by character — `{{ v.0 }}` renders
-///   `[`, `|length` counts repr characters. That trades one wrong cell for
-///   nine, so the hatch keeps enumerating and keeps the list spelling, on the
-///   same reasoning [`stated_len_is_too_large_to_enumerate`] uses for its own
-///   `resolve_lazy()` term. An unfixed cell beats a wrong one.
 /// * **A `list`.** `str([3, 1, 2])` IS `[3, 1, 2]`, so there is nothing to
 ///   fix; a `list` is the one shape whose Django answer this arm already
 ///   spells. (A `tuple` never reaches here — the tuple arm above
@@ -4041,9 +3828,6 @@ fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
 ///   moving together. Retiring this arm is its own change with its own
 ///   before/after, not a side effect of a length fix (CLAUDE.md #1079).
 fn list_repr_is_this_objects_own_spelling(ob: &Bound<'_, PyAny>) -> bool {
-    if !resolve_lazy() {
-        return true;
-    }
     if ob.is_instance_of::<PyList>() {
         return true;
     }
@@ -4097,8 +3881,9 @@ fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, 
 /// `MyList[0]`; that alias is truthy, re-iterable, has no `__len__`, and
 /// `iter()` yields a starred copy of itself — a FRESH object each level, so
 /// no identity check ends it. The conversion built one carrier per level
-/// until the stack overflowed (SIGSEGV), on both settings of
-/// `template_resolve_lazy`, because both walks end in the same conversion.
+/// until the stack overflowed (SIGSEGV) — on both settings of the since-
+/// deleted ADR-027 kill-switch flag, because both walks ended in the
+/// same conversion.
 ///
 /// Python's own recursion limit (`sys.getrecursionlimit()`, 1000 by default):
 /// the depth at which CPython itself refuses to `repr`, `json.dumps`,
@@ -4120,8 +3905,9 @@ pub const MAX_CONVERSION_DEPTH: usize = 1000;
 
 thread_local! {
     /// The current [`Value`] conversion nesting on this thread. A
-    /// thread-local for the reason [`RESOLVE_LAZY`] is one: `extract` is a
-    /// trait method with no parameter to thread a counter through.
+    /// thread-local because `extract` is a trait method with no parameter to
+    /// thread a counter through (the same reason the deleted ADR-027
+    /// kill-switch cell was one).
     static CONVERSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -4373,21 +4159,23 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
                 return Ok(Value::Encoded(Box::new(encoded)));
             }
-            // For arbitrary Python objects (e.g. Django model instances), try to
-            // extract public attributes from __dict__ so that template expressions
-            // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring
-            // callers to manually convert to dicts.
-            //
-            // Reached now by exactly the shape `opaque_value` hands back: a
-            // TRUTHY, NON-iterable object with public attributes. Those keep
-            // their `Value::Object` exactly as before — retiring this arm is a
-            // separate, much larger decision than #2477/#2489.
-            if let Some(map) = public_dict_attrs(&ob.to_owned()) {
-                if !map.is_empty() {
-                    return Ok(Value::Object(map));
-                }
-            }
-            Ok(Value::String(py_str_lossy(&ob.to_owned())?))
+            // The terminal arm, reached only when a probe in `opaque_value`
+            // raised (`bool(o)`, `str(o)`, `repr(o)`, `type(o).__name__`, or
+            // an item enumeration). The object still crosses WITH its live
+            // handle — see [`handle_only_encoded`] — because the lookups
+            // Django answers without those probes (`{{ o.attr }}`,
+            // `{{ o.0 }}`, a refused mutator) must keep resolving against the
+            // real object. The `__dict__` bulk-dump arm that used to sit here
+            // (`Value::Object` from the object's public attributes) answered
+            // exactly those lookups for a probe-failing object under the
+            // default until ADR-027 Step 5 (#2628) deleted it with the
+            // kill-switch flag; this is its Django-shaped replacement, and
+            // `python/tests/test_sidecar_on_all_render_paths_2501.py`
+            // (`TestComponentMutatorsAreNeverAutoCalled`,
+            // `TestDjangosExceptionSetsAtEverySegment`) is what found the gap.
+            Ok(Value::Encoded(Box::new(handle_only_encoded(
+                &ob.to_owned(),
+            ))))
         }
     }
 }
@@ -4465,27 +4253,20 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         // `iter(o) is o` — a one-shot iterator. Reading it here would consume
         // the caller's object, so it is NOT enumerated at conversion.
         //
-        // Under ADR-027 (the shipped default) it is ADMITTED with `items`
-        // left `None`: the `Encoded` carries a live handle, and the
-        // `{% for %}` sink consumes it once through
-        // [`Encoded::consume_live_items`] — Django's `list(values)` in
-        // `ForNode.render`, row V (#2613). Before this a generator or
-        // `MultiValueDict.lists()` fell to the terminal `str()` path and
-        // `{% for %}` walked the REPR character by character: silent wrong
-        // output. On the eager escape hatch there is no handle to consume
-        // later, so the decline stands there (enumerating at conversion is a
-        // new wrong answer, not an unfixed one).
+        // Under ADR-027 it is ADMITTED with `items` left `None`: the
+        // `Encoded` carries a live handle, and the `{% for %}` sink consumes
+        // it once through [`Encoded::consume_live_items`] — Django's
+        // `list(values)` in `ForNode.render`, row V (#2613). Before this a
+        // generator or `MultiValueDict.lists()` fell to the terminal `str()`
+        // path and `{% for %}` walked the REPR character by character: silent
+        // wrong output.
         if it.as_any().is(ob) {
-            return if resolve_lazy() {
-                Some(OpaqueFacts {
-                    truthy,
-                    len,
-                    iterable: true,
-                    unbounded: false,
-                })
-            } else {
-                None
-            };
+            return Some(OpaqueFacts {
+                truthy,
+                len,
+                iterable: true,
+                unbounded: false,
+            });
         }
         // An object that states a `__len__` has stated its own bound, and the
         // walk is skipped — which is what keeps this gate O(1) for a `set`
@@ -4508,12 +4289,10 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
         // would never return.
         //
         // Past the cap on either axis the object is UNBOUNDED for this
-        // conversion (#2670, #2678). Under ADR-027 it is admitted with a live
-        // handle and no items — `{{ v }}` is still `str(v)`, and `{{ v.0 }}`
-        // walks the real object as Django's `current[int(bit)]` does, instead
-        // of indexing the characters of `str(v)`. On the eager escape hatch
-        // there is no handle to read it through later, so the decline stands
-        // there, exactly as it does for a one-shot iterator.
+        // conversion (#2670, #2678). It is admitted with a live handle and no
+        // items — `{{ v }}` is still `str(v)`, and `{{ v.0 }}` walks the real
+        // object as Django's `current[int(bit)]` does, instead of indexing
+        // the characters of `str(v)`.
         //
         // Counted, not collected: the items are not converted here.
         match len {
@@ -4529,9 +4308,6 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
                     }
                     seen += 1;
                     if seen > OPAQUE_ITEM_CAP {
-                        if !resolve_lazy() {
-                            return None;
-                        }
                         unbounded = true;
                         break;
                     }
@@ -4539,25 +4315,14 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
             }
         }
     }
-    // The `__dict__` bulk-dump arm's cell, left to it. See the gate section of
-    // [`opaque_value`]'s doc for why both qualifiers are load-bearing.
-    //
-    // The KEY-ONLY probe, and that is a measurement rather than a style: this
-    // is the arm an ordinary truthy object with attributes takes, and building
-    // the full map to decline it would convert every attribute value only for
-    // the `__dict__` arm below to convert them again.
-    //
-    // LIFTED under ADR-027's flag (#2539): the whole point of the sink is that
-    // an ordinary object crosses as itself — `{{ o }}` is `str(o)`, as Django
-    // renders it — and reaches its attributes through a LIVE walk rather than
-    // through a bulk dump of its `__dict__`. This one condition is the switch
-    // between the two carriers, and it is what rows I / T / K3 / K4 turn on.
-    // The ONE-SHOT iterator decline above is deliberately NOT lifted: reading
-    // a generator at conversion time would consume the caller's object, which
-    // is a NEW wrong answer rather than an unfixed one (row V, movement 3).
-    if !resolve_lazy() && truthy && !iterable && has_public_dict_attrs(ob) {
-        return None;
-    }
+    // An ordinary truthy, non-iterable object with attributes is CLAIMED
+    // here — `{{ o }}` is `str(o)`, as Django renders it, and its attributes
+    // are reached through the LIVE walk on the handle `opaque_value`
+    // attaches. The decline that used to sit at this point (kill-switch off
+    // AND truthy AND non-iterable AND a public `__dict__`, which handed such
+    // an object to the `__dict__` bulk-dump arm on the escape hatch) was
+    // deleted with the flag in ADR-027 Step 5 (#2628); rows I / T / K3 / K4
+    // of the characterization net are what it turned on.
     Some(OpaqueFacts {
         truthy,
         len,
@@ -5156,13 +4921,9 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // ADR-027's transient handle (#2539). `Bound::unbind` needs no GIL token
     // and makes no Python CALL — it is a refcount bump plus an `Arc`
     // allocation, so attaching one adds no Rust→Python crossing to the
-    // per-render budget (#2532).
-    let lazy = resolve_lazy();
-    let live = if lazy {
-        Some(std::sync::Arc::new(ob.clone().unbind()))
-    } else {
-        None
-    };
+    // per-render budget (#2532). Unconditional since Step 5 (#2628) deleted
+    // the ADR-027 kill-switch flag that used to gate it.
+    let live = Some(std::sync::Arc::new(ob.clone().unbind()));
     Some(Encoded {
         type_name,
         // No encoder spelling exists for these; `str(o)` is what the
@@ -5189,35 +4950,20 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         cmp_key: None,
         live,
         display_safe,
-        // The object's PUBLIC `__dict__` (#2478) — the same map, built by the
-        // same function, that the `__dict__` bulk-dump arm below would have
-        // built. That IS the fix: this arm now claims a falsy object WITH
-        // attributes, and it can only do so without regressing `{{ obj.a }}`
-        // because #2481 gave `Encoded` somewhere to put them.
-        //
-        // Empty for an object with no `__dict__` (a C type: `set`,
-        // `frozenset`, `complex`, a `dict_keys`) — which is every value this
-        // arm claimed before #2478, so their behaviour is unchanged.
-        //
-        // Built only on the CLAIMING path; the decline above asks
-        // `has_public_dict_attrs` instead, which reads the keys and converts
-        // no values.
-        //
-        // NOT built at all when a handle is attached (#2539). The handle is
-        // the authority for every attribute lookup under ADR-027, so building
-        // the map as well would be two mechanisms answering one question
-        // (#1646) — and the wrong one would WIN, because `Context::get`'s step
-        // 2 reads `attrs` and never auto-calls (Django resolves
-        // `{{ d.value }}` on a callable object by CALLING `d` first, which no
-        // eager map can express). It is also the recursion that segfaults:
-        // `public_dict_attrs` converts every attribute VALUE with no visited
-        // set, so an object whose `__dict__` reaches back to its own container
-        // kills the process (#2516 row H).
-        attrs: if lazy {
-            IndexMap::new()
-        } else {
-            public_dict_attrs(ob).unwrap_or_default()
-        },
+        str_raised: false,
+        // EMPTY: the handle is the authority for every attribute lookup under
+        // ADR-027, so building an eager `__dict__` map as well would be two
+        // mechanisms answering one question (#1646) — and the wrong one would
+        // WIN, because `Context::get`'s step 2 reads `attrs` and never
+        // auto-calls (Django resolves `{{ d.value }}` on a callable object by
+        // CALLING `d` first, which no eager map can express). The eager map
+        // was also the recursion that segfaulted: it converted every
+        // attribute VALUE with no visited set, so an object whose `__dict__`
+        // reached back to its own container killed the process (#2516 row H).
+        // The `__dict__` builder (#2478) was deleted in ADR-027
+        // Step 5 (#2628); `django_json_encoded` is now the one producer of a
+        // non-empty `attrs`.
+        attrs: IndexMap::new(),
         items,
         // The equality CONTRACT, measured from the live object (#2480). The
         // one producer that sets this: `django_json_encoded` leaves it `None`
@@ -5229,6 +4975,66 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // guessing one.
         eq_class: equality_class(ob),
     })
+}
+
+/// The carrier for an object one of [`opaque_value`]'s probes REFUSED to
+/// measure (ADR-027 Step 5, #2628).
+///
+/// `opaque_value` fails closed on a raising `__bool__`, `__str__`,
+/// `__repr__`, `__next__` or `type(o).__name__`. Until Step 5 such an object
+/// fell to the eager `__dict__` bulk dump, which — by never calling any of
+/// those — still answered `{{ o.attr }}`, refused `{{ o.mutator }}`, and let
+/// a raising `__getattr__` PROPAGATE from the sidecar walk exactly as Django's
+/// `_resolve_lookup` does. Deleting that arm without this one turned a
+/// `LiveComponent` whose `__str__` renders a template it does not have into a
+/// render-time `ValueError` on `{{ c.mount }}`, and silenced a
+/// `__getattr__`-raising object's `RuntimeError` on `{{ o.0 }}` into a
+/// character of its repr (`Context::string_index`).
+///
+/// So the object keeps its LIVE HANDLE, and every measurement is best-effort:
+/// the probe that raised is answered by the next spelling down (`str` →
+/// `repr` → `<TypeName object>`; `bool` → truthy; no length, no items). What
+/// Django would raise on — `{{ o }}` over a raising `__str__`, `{% if o %}`
+/// over a raising `__bool__` — renders the fallback instead of raising, which
+/// is the one cell this carrier does not make Django-exact; it is no worse
+/// than the dict dump it replaces on that cell and strictly better on every
+/// lookup that walks the handle.
+fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
+    let type_name = ob
+        .get_type()
+        .getattr("__name__")
+        .ok()
+        .and_then(|n| n.extract::<String>().ok())
+        .unwrap_or_else(|| "object".to_string());
+    let text = ob.str().ok();
+    let str_raised = text.is_none();
+    let display_safe = text
+        .as_ref()
+        .is_some_and(|t| python_string_is_safe(t.as_any()));
+    let repr = ob
+        .repr()
+        .ok()
+        .and_then(|r| py_string_lossy(&r).ok())
+        .unwrap_or_else(|| format!("<{type_name} object>"));
+    let display = text
+        .and_then(|t| py_string_lossy(&t).ok())
+        .unwrap_or_else(|| repr.clone());
+    Encoded {
+        type_name,
+        json: display.clone(),
+        display,
+        truthy: ob.is_truthy().unwrap_or(true),
+        len: None,
+        iterable: false,
+        repr,
+        cmp_key: None,
+        live: Some(std::sync::Arc::new(ob.clone().unbind())),
+        display_safe,
+        str_raised,
+        attrs: IndexMap::new(),
+        items: None,
+        eq_class: None,
+    }
 }
 
 /// The Python types [`equality_class`] dispatches on, resolved once per

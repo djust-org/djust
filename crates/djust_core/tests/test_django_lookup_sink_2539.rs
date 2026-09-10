@@ -575,18 +575,15 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
         );
 
         // 16. THE ROUTE (§2.4), through the real `Context::resolve`. A value
-        //     that crossed under the flag carries a handle; a dotted lookup
-        //     the value stack cannot answer walks it. The flag-OFF control is
-        //     the same context and the same key, answering nothing — which is
-        //     what makes this the switch and not the carriage.
+        //     that crossed carries a handle; a dotted lookup the value stack
+        //     cannot answer walks it. (The flag-OFF control that used to sit
+        //     beside this — same context, same key, answering nothing — went
+        //     with the `template_resolve_lazy` flag in ADR-027 Step 5, #2628.)
         let cls_instance = get("Cls").call0().expect("Cls()");
-        djust_core::set_resolve_lazy(true);
-        let live_value: djust_core::Value = cls_instance
-            .extract()
-            .expect("16 conversion under the flag");
+        let live_value: djust_core::Value = cls_instance.extract().expect("16 conversion");
         match &live_value {
             djust_core::Value::Encoded(e) => {
-                assert!(e.live.is_some(), "16: no handle attached under the flag");
+                assert!(e.live.is_some(), "16: no handle attached");
                 assert_eq!(e.display, "<Cls>", "16: the display is str(o)");
                 assert!(
                     e.attrs.is_empty(),
@@ -610,32 +607,22 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
             routed.resolve("o.absent").expect("16 resolve").is_none(),
             "16 the route: a missing segment must resolve to nothing"
         );
-        djust_core::set_resolve_lazy(false);
-        assert!(
-            routed.resolve("o.cls_attr").expect("16 off").is_none(),
-            "16 the SWITCH: the same value and key resolve nothing with the flag off"
-        );
 
-        // 17. The eager `__dict__` dump is what the handle REPLACES. With the
-        //     flag off the same object crosses as a `Value::Object` of its
-        //     attributes (or is declined into one); with it on, `{{ o }}` is
-        //     `str(o)`. Both directions asserted so neither can drift.
+        // 17. The eager `__dict__` dump is what the handle REPLACED. An
+        //     attribute-bearing object crosses as an `Encoded` whose display
+        //     is `str(o)`, with a handle and NO eager attribute map — never
+        //     as a `Value::Object` of its attributes (that arm was deleted in
+        //     ADR-027 Step 5, #2628).
         let plain = get("Plain").call0().expect("Plain()");
-        let eager: djust_core::Value = plain.extract().expect("17 eager conversion");
-        assert!(
-            matches!(eager, djust_core::Value::Object(_)),
-            "17: with the flag OFF an attribute-bearing object is bulk-dumped, got {eager:?}"
-        );
-        djust_core::set_resolve_lazy(true);
-        let lazy: djust_core::Value = plain.extract().expect("17 lazy conversion");
+        let lazy: djust_core::Value = plain.extract().expect("17 conversion");
         match &lazy {
             djust_core::Value::Encoded(e) => {
                 assert_eq!(e.display, "<Plain>", "17: display");
                 assert!(e.live.is_some(), "17: handle");
+                assert!(e.attrs.is_empty(), "17: no eager attribute dump");
             }
-            other => panic!("17: expected an Encoded under the flag, got {other:?}"),
+            other => panic!("17: expected an Encoded, got {other:?}"),
         }
-        djust_core::set_resolve_lazy(false);
 
         // 18. The handle is TRANSIENT. A msgpack round trip drops it and
         //     leaves every other field intact, so a state entry that came
@@ -665,7 +652,6 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
     let escaped = Python::attach(|py| {
         let m = PyModule::from_code(py, FIXTURES, c_str!("sink_2539.py"), c_str!("sink_2539"))
             .expect("compile fixtures");
-        djust_core::set_resolve_lazy(true);
         let value: djust_core::Value = m
             .getattr("Cls")
             .expect("Cls")
@@ -673,7 +659,6 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
             .expect("Cls()")
             .extract()
             .expect("19 conversion");
-        djust_core::set_resolve_lazy(false);
         value
     });
     let cloned = escaped.clone();

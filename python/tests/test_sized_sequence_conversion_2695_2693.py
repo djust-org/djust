@@ -31,13 +31,15 @@ only avoids the cost of BUILDING them. A ``list`` holds its elements and
 — see ``TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap`` for the 66 MB
 of serialization dicts that exemption prevents.
 
-Every claim above is checked against REAL Django 5.2, in a subprocess, on both
-settings of ``template_resolve_lazy``: #2691 was reverted once for verifying
-only the four sinks that never need the items.
+Every claim above is checked against REAL Django 5.2, in a subprocess: #2691
+was reverted once for verifying only the four sinks that never need the items.
+The ``template_resolve_lazy`` escape hatch this file once ran a second column
+for was deleted in ADR-027 Step 5 (#2628); the live-handle behaviour is the
+only one now.
 
 Any cell where djust does not answer Django's string is either in
-``LAZY_PARITY`` / ``EAGER_PARITY`` (it agrees) or it is not — and the two sets
-are pinned, so adding a divergence and removing one are equally loud.
+``LAZY_PARITY`` (it agrees) or it is not — and the set is pinned, so adding a
+divergence and removing one are equally loud.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ import pytest
 # --------------------------------------------------------------------------
 # The differential child.
 #
-# One process per (engine, template_resolve_lazy); it renders the cells named
+# One process per engine; it renders the cells named
 # on argv and writes one JSON line per cell, FLUSHED — so a parent that has to
 # kill it still knows every answer it did produce, and which cell it died on.
 # --------------------------------------------------------------------------
@@ -66,7 +68,7 @@ _CHILD = textwrap.dedent(
     import django
     from django.conf import settings
 
-    ENGINE, LAZY, CELLS = sys.argv[1], sys.argv[2] == "lazy", json.loads(sys.argv[3])
+    ENGINE, CELLS = sys.argv[1], json.loads(sys.argv[2])
 
     settings.configure(
         SECRET_KEY="x", DEBUG=False, USE_TZ=False,
@@ -78,7 +80,6 @@ _CHILD = textwrap.dedent(
             ),
             "NAME": "e", "DIRS": [], "APP_DIRS": False, "OPTIONS": {},
         }],
-        LIVEVIEW_CONFIG={"template_resolve_lazy": LAZY},
     )
     django.setup()
     from django.template import engines
@@ -255,7 +256,7 @@ SINKS = (
 #: same billion. Measured with a 60 s deadline and a 4 GiB ceiling on both:
 #:
 #: ===============  ======================  ======================
-#: cell             Django 5.2              djust (lazy)
+#: cell             Django 5.2              djust
 #: ===============  ======================  ======================
 #: ``for``          60 s, no output         >4 GiB after 33 s
 #: ``join``         >4 GiB after 32 s       >4 GiB after 12 s
@@ -297,7 +298,6 @@ def _drain(stream, sink: list[str]) -> None:
 
 def _render_in_child(
     engine: str,
-    lazy: bool,
     cells: list[tuple[str, str]],
     deadline: float = _DEADLINE,
 ) -> tuple[dict[tuple[str, str], str], str | None]:
@@ -321,7 +321,6 @@ def _render_in_child(
             "-c",
             _CHILD,
             engine,
-            "lazy" if lazy else "eager",
             json.dumps([list(c) for c in cells]),
         ],
         stdout=subprocess.PIPE,
@@ -362,7 +361,7 @@ def _render_in_child(
     return answers, reason
 
 
-def _batch_cells(engine: str, lazy: bool) -> list[tuple[str, str]]:
+def _batch_cells(engine: str) -> list[tuple[str, str]]:
     """Every cell that TERMINATES on this column, so one child can answer all
     of them."""
     cells = []
@@ -373,14 +372,6 @@ def _batch_cells(engine: str, lazy: bool) -> list[tuple[str, str]]:
             if engine == "django" and shape == "liar":
                 if sink in LIAR_NON_TERMINATING_FOR_DJANGO:
                     continue
-            if engine == "djust" and not lazy and shape in ("range_big", "liar"):
-                # The eager escape hatch has no live handle to read an object
-                # through, so it keeps enumerating in full and both #2678's
-                # and #2695's hangs stay unfixed there — deliberately, since
-                # a decline would land on ``str(o)`` and answer ``{{ v.0 }}``
-                # with a bracket. Asserted by
-                # ``TestTheEagerHatchStillEnumerates``.
-                continue
             cells.append((shape, sink))
     return cells
 
@@ -388,15 +379,14 @@ def _batch_cells(engine: str, lazy: bool) -> list[tuple[str, str]]:
 @pytest.fixture(scope="module")
 def grids() -> dict[str, dict[tuple[str, str], str]]:
     out = {}
-    for key, engine, lazy in (
-        ("django", "django", True),
-        ("lazy", "djust", True),
-        ("eager", "djust", False),
+    for key, engine in (
+        ("django", "django"),
+        ("lazy", "djust"),
     ):
-        answers, reason = _render_in_child(engine, lazy, _batch_cells(engine, lazy))
+        answers, reason = _render_in_child(engine, _batch_cells(engine))
         assert reason is None, (
             f"the {key} grid did not finish: {reason}. It stopped at "
-            f"{[c for c in _batch_cells(engine, lazy) if c not in answers][:1]}"
+            f"{[c for c in _batch_cells(engine) if c not in answers][:1]}"
         )
         out[key] = answers
     return out
@@ -423,8 +413,7 @@ _ALL_SINKS_AGREE = (
     "dict_list",
 )
 
-#: Cells where djust (``template_resolve_lazy`` ON, the shipped default)
-#: renders exactly what Django 5.2 renders.
+#: Cells where djust renders exactly what Django 5.2 renders.
 LAZY_PARITY: frozenset[str] = frozenset(
     {f"{shape}|{sink}" for shape in _ALL_SINKS_AGREE for sink in SINKS}
     # #2695: every sink a stated billion can answer without a walk.
@@ -485,37 +474,8 @@ LAZY_PARITY: frozenset[str] = frozenset(
 #: conversion, so they are in ``LAZY_PARITY`` above.
 
 
-#: Cells where djust on the EAGER escape hatch renders exactly Django's
-#: string. The hatch has no live handle, so every carrier-answered cell above
-#: is missing here: a one-shot iterator falls to ``str(o)`` and ``{% for %}``
-#: walks the repr CHARACTER by character. That is #2613/#2674's documented
-#: non-fix, restated by measurement rather than assumed.
-EAGER_PARITY: frozenset[str] = frozenset(
-    {f"{shape}|{sink}" for shape in _ALL_SINKS_AGREE for sink in SINKS}
-    | _cells("range_small", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("set", *(s for s in SINKS if s not in ("first", "last")))
-    | _cells("frozenset", *(s for s in SINKS if s not in ("first", "last")))
-    | _cells("dict_keys", *(s for s in SINKS if s not in ("first", "last")))
-    | _cells("deque", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("array", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("bytes", *(s for s in SINKS if s not in ("slice", "str")))
-    | _cells("queryset", *(s for s in SINKS if s != "str"))
-    # A one-shot iterator has no handle here, so it keeps the terminal
-    # ``str(o)`` and `{% for %}` walks the REPR character by character. The
-    # cells that still agree do so because BOTH engines answer nothing:
-    # ``dictsort`` over ints is a `TypeError` on Django too, and ``in`` fails
-    # soft. `dict_gen` / `dict_iter` lose even those two, because Django
-    # genuinely sorts them and the hatch cannot.
-    | _cells("generator", "in_miss", "dictsort", "dictsortreversed", "str")
-    | _cells("map", "in_miss", "dictsort", "dictsortreversed", "str")
-    | _cells("zip", "in_hit", "in_miss", "dictsort", "dictsortreversed", "str")
-    | _cells("dict_gen", "in_hit", "in_miss", "str")
-    | _cells("dict_iter", "in_hit", "in_miss", "str")
-)
-
-
 class TestTheDjangoDifferential:
-    """Every sink x every shape, against real Django 5.2, on both settings."""
+    """Every sink x every shape, against real Django 5.2."""
 
     def test_lazy_parity_set_is_exactly_what_is_pinned(self, grids) -> None:
         django, lazy = grids["django"], grids["lazy"]
@@ -543,18 +503,6 @@ class TestTheDjangoDifferential:
             "these cells now agree with Django and are not in LAZY_PARITY — "
             "add them, so the next regression is loud: " + ", ".join(sorted(gained))
         )
-
-    def test_eager_parity_set_is_exactly_what_is_pinned(self, grids) -> None:
-        django, eager = grids["django"], grids["eager"]
-        agree = {
-            f"{shape}|{sink}"
-            for (shape, sink), answer in eager.items()
-            if (shape, sink) in django and django[(shape, sink)] == answer
-        }
-        assert agree == EAGER_PARITY, {
-            "lost": sorted(EAGER_PARITY - agree),
-            "gained": sorted(agree - EAGER_PARITY),
-        }
 
     def test_the_grid_really_covered_every_sink_and_shape(self, grids) -> None:
         """The differential is only evidence if it ran. #2691 was reverted for
@@ -587,7 +535,7 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         In a child with a deadline because the failure mode is a non-return:
         an in-process assertion cannot report "did not hang".
         """
-        answers, reason = _render_in_child("djust", True, [("range_big", sink)], deadline=20)
+        answers, reason = _render_in_child("djust", [("range_big", sink)], deadline=20)
         assert reason is None, f"{sink} over range(10**9) did not return: {reason}"
         assert answers[("range_big", sink)] == expected
 
@@ -597,7 +545,6 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         the conversion's cap."""
         answers, reason = _render_in_child(
             "djust",
-            True,
             [("list_big", "for"), ("list_big", "join"), ("list_big", "length")],
             deadline=30,
         )
@@ -636,14 +583,14 @@ class TestASizedSequenceIsNotMaterialisedAtConversion:
         `Value::List` arm, while `range(10**9)` is carried and reaches the
         live one. Only the second exercises `Encoded::live_get_slice`.
         """
-        answers, reason = _render_in_child("djust", True, [(shape, "slice")], deadline=20)
+        answers, reason = _render_in_child("djust", [(shape, "slice")], deadline=20)
         assert reason is None, reason
         assert answers[(shape, "slice")] == expected
 
     def test_the_liar_still_raises_rather_than_walking_forever(self) -> None:
         """#2678 must survive #2695. The liar states a billion and has no
         ``__iter__``, so its walk cannot end and the sink keeps the cap."""
-        answers, reason = _render_in_child("djust", True, [("liar", "for")], deadline=20)
+        answers, reason = _render_in_child("djust", [("liar", "for")], deadline=20)
         assert reason is None, f"the liar walked instead of raising: {reason}"
         assert "yielded more than 100000 items" in answers[("liar", "for")]
 
@@ -672,7 +619,7 @@ class TestBothHalvesOfTheSinkTerminationRuleAreCovered:
         ],
     )
     def test_an_unbounded_walk_raises_at_the_cap(self, shape: str, half: str) -> None:
-        answers, reason = _render_in_child("djust", True, [(shape, "for")], deadline=20)
+        answers, reason = _render_in_child("djust", [(shape, "for")], deadline=20)
         assert reason is None, (
             f"{shape} did not return from `{{% for %}}` ({reason}) — with "
             f"{half} gone the sink walks it forever instead of raising"
@@ -683,7 +630,7 @@ class TestBothHalvesOfTheSinkTerminationRuleAreCovered:
         """The reason an error is the right answer rather than a limitation:
         Django's own ``{% for %}`` over ``itertools.count()`` never comes
         back."""
-        _, reason = _render_in_child("django", True, [("count", "for")], deadline=8)
+        _, reason = _render_in_child("django", [("count", "for")], deadline=8)
         assert reason in ("HANG", "RUNAWAY-MEMORY"), (
             "Django ANSWERED `{% for %}` over itertools.count() — if it now "
             "terminates, djust's RuntimeError is no longer the better answer"
@@ -697,7 +644,7 @@ class TestNeitherEngineReturnsFromAWalkOfAStatedBillion:
     @pytest.mark.parametrize("sink", WALKING_SINKS)
     def test_django_does_not_return_either(self, sink: str) -> None:
         for engine in ("django", "djust"):
-            answers, reason = _render_in_child(engine, True, [("range_big", sink)], deadline=8)
+            answers, reason = _render_in_child(engine, [("range_big", sink)], deadline=8)
             assert reason in ("HANG", "RUNAWAY-MEMORY"), (
                 f"{engine} ANSWERED {sink} over range(10**9) with "
                 f"{answers.get(('range_big', sink))!r} — if it now terminates, "
@@ -722,38 +669,21 @@ class TestALyingLengthIsUnfixedRatherThanNewlyBroken:
     def test_a_small_lying_length_still_does_not_return(self) -> None:
         """Under the cap, so the conversion still enumerates — the pre-#2695
         behaviour, unchanged."""
-        _, reason = _render_in_child("djust", True, [("lying_len_small", "length")], deadline=8)
+        _, reason = _render_in_child("djust", [("lying_len_small", "length")], deadline=8)
         assert reason in ("HANG", "RUNAWAY-MEMORY"), reason
 
     def test_a_big_lying_length_now_answers_the_cheap_sinks(self) -> None:
         """Past the cap the conversion declines, so `{{ v|length }}` is
         answered from the object instead of being paid for."""
-        answers, reason = _render_in_child(
-            "djust", True, [("lying_len_big", "length")], deadline=20
-        )
+        answers, reason = _render_in_child("djust", [("lying_len_big", "length")], deadline=20)
         assert reason is None, reason
         assert answers[("lying_len_big", "length")] == "1000000000"
 
     def test_a_big_lying_length_still_does_not_return_from_a_full_walk(self) -> None:
         """And the walk it cannot bound is still unbounded — said out loud so
         the next reader does not take `live_walk_terminates` for a proof."""
-        _, reason = _render_in_child("djust", True, [("lying_len_big", "for")], deadline=8)
+        _, reason = _render_in_child("djust", [("lying_len_big", "for")], deadline=8)
         assert reason in ("HANG", "RUNAWAY-MEMORY"), reason
-
-
-class TestTheEagerHatchStillEnumerates:
-    """``template_resolve_lazy=False`` has no live handle to read an object
-    through, so a decline would land on ``str(o)`` and answer ``{{ v.0 }}``
-    with a bracket. #2678 chose the unfixed cell over the wrong one and #2695
-    keeps that choice; this pins it as a decision rather than an oversight."""
-
-    @pytest.mark.parametrize("shape", ["range_big", "liar"])
-    def test_the_hatch_does_not_return_for_a_stated_billion(self, shape: str) -> None:
-        answers, reason = _render_in_child("djust", False, [(shape, "length")], deadline=8)
-        assert reason in ("HANG", "RUNAWAY-MEMORY"), (
-            f"the eager hatch answered {shape}|length with "
-            f"{answers.get((shape, 'length'))!r} — if it is fixed, say so here"
-        )
 
 
 def _model_rows(padding: int) -> list:
@@ -1157,7 +1087,7 @@ class TestDictsortConsumesTheLiveHandle:
     def test_a_one_shot_iterator_sorts_where_it_used_to_answer_empty(
         self, shape: str, sink: str, expected: str
     ) -> None:
-        answers, reason = _render_in_child("djust", True, [(shape, sink)], deadline=20)
+        answers, reason = _render_in_child("djust", [(shape, sink)], deadline=20)
         assert reason is None, reason
         assert answers[(shape, sink)] == expected
 
@@ -1172,9 +1102,9 @@ class TestDictsortConsumesTheLiveHandle:
         transcription would get wrong.
         """
         cell = [("dict_gen", "consume_once")]
-        mine, reason = _render_in_child("djust", True, cell, deadline=20)
+        mine, reason = _render_in_child("djust", cell, deadline=20)
         assert reason is None, reason
-        theirs, reason = _render_in_child("django", True, cell, deadline=20)
+        theirs, reason = _render_in_child("django", cell, deadline=20)
         assert reason is None, reason
         assert mine[("dict_gen", "consume_once")] == theirs[("dict_gen", "consume_once")]
         # And it really is spent: the loop after the sort renders nothing.
@@ -1256,18 +1186,3 @@ class TestANonListSequenceIsSpelledAsItself2704:
 
         assert _rust.render_template("{{ v }}", {"v": range(3)}) == "range(0, 3)"
         assert _rust.render_template("{{ v }}", {"v": range(10**9)}) == "range(0, 1000000000)"
-
-    def test_the_eager_hatch_keeps_the_list_spelling(self) -> None:
-        """The one exemption that is about the HATCH rather than the object:
-        with no live handle a decline lands on ``str(o)`` and ``{% for %}``
-        walks the repr character by character, so the hatch keeps
-        enumerating. An unfixed cell beats a wrong one — the same reasoning
-        ``stated_len_is_too_large_to_enumerate`` uses for its own flag term.
-        """
-        from adr027_flag import resolve_lazy
-
-        from djust import _rust
-
-        with resolve_lazy(False):
-            assert _rust.render_template("{{ v }}", {"v": range(3)}) == "[0, 1, 2]"
-            assert _rust.render_template("{{ v|first }}", {"v": range(3)}) == "0"

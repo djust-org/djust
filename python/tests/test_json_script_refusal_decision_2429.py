@@ -25,9 +25,10 @@ differently** than #2429's table:
 * `range(2)` emits ``{"a": "range(0, 2)"}`` for the same reason — it was
   ``{"a": [0, 1]}`` before #2704 — and a generator emits its repr, and is
   CONSUMED on the way, so the value is gone afterwards;
-* an object carrying a populated ``__dict__`` emits ``{"a": {"name": "n"}}``
-  — a nested JSON **object**, not a string. The issue's `{obj: "v"}` /
-  `{"a": obj}` rows sample only the `__dict__`-less shape;
+* an object carrying a populated ``__dict__`` emits its ``str()`` like any
+  other object (``{"a": "WITHDICT"}``). Until ADR-027 it emitted a nested JSON
+  **object** built from the instance dict; that arm was deleted with the
+  kill-switch in Step 5 (#2628);
 * the asymmetry the issue notes for `date` is **seven types wide**, not one:
   `tuple` / `Decimal` / `date` / `datetime` / `time` / `timedelta` / `UUID` are
   refused by Django as KEYS and accepted by it as VALUES, because
@@ -52,14 +53,13 @@ For every value Django refuses, djust's output is **byte-identical** to its
 output for an ordinary serialisable stand-in::
 
     {"a": Obj()}            and {"a": "OBJ"}              -> {"a": "OBJ"}
-    {"a": WithDict()}       and {"a": {"name": "n"}}      -> {"a": {"name": "n"}}
+    {"a": WithDict()}       and {"a": "WITHDICT"}         -> {"a": "WITHDICT"}
     {"a": frozenset({1})}   and {"a": "frozenset({1})"}   -> {"a": "frozenset({1})"}
     {"a": b"k"}             and {"a": "b'k'"}             -> {"a": "b'k'"}
 
-The PyO3 boundary (`FromPyObject for Value`) converts an arbitrary object to a
-structural `Value` — its `__dict__` as an `Object`, else its `str()` as a
-`String` — *deliberately*, because that is what makes `{{ obj.name }}` work at
-all. By the time any filter runs, the Python type Django refuses on no longer
+The PyO3 boundary (`FromPyObject for Value`) converts an arbitrary object to an
+`Encoded` carrying a live handle, whose display is its `str()` —
+*deliberately*, because that is what makes `{{ obj.name }}` work at all. By the time any filter runs, the Python type Django refuses on no longer
 exists. A value-position refusal would therefore have to refuse the
 **stand-in** too: an ordinary dict of ordinary strings.
 
@@ -129,8 +129,6 @@ if not settings.configured:  # pragma: no cover — import-time bootstrap
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
-from adr027_flag import resolve_lazy, shipped_default  # noqa: E402
-
 from djust import _rust  # noqa: E402
 
 TPL = '{{ p|json_script:"d" }}'
@@ -141,20 +139,21 @@ class _E(enum.Enum):
 
 
 class _Obj:
-    """No instance attributes, so the `__dict__` arm cannot fire."""
+    """No instance attributes."""
 
     def __str__(self) -> str:
         return "OBJ"
 
 
 class _WithDict:
-    """A populated `__dict__`, which the boundary turns into a mapping — on
-    the ADR-027 escape hatch. Under the shipped default the object crosses as
-    `Encoded` and the boundary sees its `str()` instead (#2539 movement 3).
+    """A populated `__dict__`. Until ADR-027 the boundary turned it into a
+    mapping; the object now crosses as `Encoded` and the boundary sees its
+    `str()` (#2539 movement 3; the escape hatch that kept the old arm was
+    deleted in Step 5, #2628).
 
     ``__str__`` is defined for the same reason `_Obj`'s is: without it the
-    default's answer carries the instance ADDRESS, and no row of a recorded
-    table can compare against an address.
+    answer carries the instance ADDRESS, and no row of a recorded table can
+    compare against an address.
     """
 
     def __init__(self) -> None:
@@ -334,25 +333,14 @@ class TestTheDivergentSetReDerived:
         """
         assert _body(_djust({"a": b"k"})) == '{"a": "b\'k\'"}'
 
-    def test_an_object_with_attributes_emits_a_nested_OBJECT(self) -> None:
+    def test_an_object_with_attributes_emits_the_objects_string(self) -> None:
         """Not sampled by the issue, and the sharper half of the value story.
 
-        The boundary turns an arbitrary object into its `__dict__`, so
-        `json_script` writes a real JSON object where Django raises.
-
-        On the ESCAPE-HATCH axis since #2539 movement 3 — see the sibling for
-        what the shipped default writes, and why it is the better answer.
-        """
-        with resolve_lazy(False):
-            assert _body(_djust({"a": _WithDict()})) == '{"a": {"name": "n"}}'
-
-    def test_under_the_default_it_emits_the_objects_string(self) -> None:
-        """The same cell under the shipped default (#2539 movement 3).
-
-        The `__dict__` bulk-dump arm is not reached, so `json_script` writes
-        `str(o)` rather than a JSON object built from the instance dict. Worth
-        pinning by name in THIS file rather than only in the ADR-027 net,
-        because `json_script` writes into the PAGE.
+        `json_script` writes `str(o)` — not a JSON object built from the
+        instance dict, which is what the deleted `__dict__` bulk-dump arm
+        wrote before ADR-027 (#2539 movement 3; #2628). Worth pinning by name
+        in THIS file rather than only in the ADR-027 net, because
+        `json_script` writes into the PAGE.
 
         What this row does NOT say is which direction that is. `_WithDict`
         has a `__str__` returning a constant, so it can only ever look like a
@@ -414,11 +402,10 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
         "refused,stand_in",
         [
             ({"a": _Obj()}, {"a": "OBJ"}),
-            # Under the shipped default the object crosses as `Encoded` and
-            # the boundary sees `str(o)`, so the stand-in that is byte-identical
-            # to it is a STRING rather than the instance dict (#2539 movement
-            # 3). The dict stand-in is the hatch's, pinned by
-            # `test_an_object_with_attributes_emits_a_nested_OBJECT`.
+            # The object crosses as `Encoded` and the boundary sees `str(o)`,
+            # so the stand-in that is byte-identical to it is a STRING rather
+            # than the instance dict (#2539 movement 3; the dict arm was
+            # deleted with the kill-switch, #2628).
             ({"a": _WithDict()}, {"a": "WITHDICT"}),
             ({"a": frozenset({1})}, {"a": "frozenset({1})"}),
             ({"a": {1}}, {"a": "{1}"}),
@@ -476,7 +463,8 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
 # exhibit the widening (#1867: the citation is real, the invariant it asserts
 # is false, and the fixture was built so it could not notice). These are the
 # falsifying cases, so the next reader finds the direction measured rather
-# than hoped.
+# than hoped. The OFF-path (`__dict__` dump) halves of these rows went with
+# the kill-switch (#2628); what remains pins what `str(o)` puts on the page.
 
 
 @dataclasses.dataclass
@@ -506,7 +494,7 @@ class _StrNamesPrivateState:
 
 
 class _AttributesButNoStr:
-    """Attributes and no `__str__` — the shape where the flip DOES narrow."""
+    """Attributes and no `__str__` — the shape where the flip DID narrow."""
 
     def __init__(self) -> None:
         self.password = "hunter2"
@@ -514,77 +502,47 @@ class _AttributesButNoStr:
 
 
 class TestTheDirectionIsShapeDependent:
-    """The movement-3 change is a change of SHAPE, not a narrowing.
+    """The movement-3 change was a change of SHAPE, not a narrowing.
 
-    Each row asserts BOTH axes of the SAME object, so the direction is read
-    off a measurement rather than asserted as a summary. The ON arm pushes
-    ``shipped_default()`` rather than a literal ``True``: the default is read,
-    never re-stated (#1200), so a future movement that flips it back turns
-    these rows red for the right reason rather than leaving them green on a
-    stale literal.
+    Each row pins what `str(o)` emits for a shape the deleted `__dict__` dump
+    handled differently: the dump FILTERED underscore-prefixed attributes,
+    `str(o)` filters nothing (wider for a dataclass or a leaky `__str__`),
+    and an object with attributes but no `__str__` emits only its default
+    repr (narrower). The escape-hatch halves of these rows were deleted with
+    the flag (#2628); the surviving assertions are the ones about the page.
     """
 
     def test_a_dataclass_emits_MORE_under_the_default(self) -> None:
-        """WIDER. The dump filtered `_session_token`; the dataclass repr does not."""
+        """WIDER. The deleted dump filtered `_session_token`; the dataclass repr
+        does not."""
         obj = _DataclassCreds("u", "pw", "TOK-abc123", "AK-9")
-
-        with resolve_lazy(False):
-            hatch = _body(_djust({"a": obj}))
-        with resolve_lazy(shipped_default()):
-            default = _body(_djust({"a": obj}))
-
-        assert hatch == '{"a": {"user": "u", "password": "pw", "api_key": "AK-9"}}', hatch
-        assert "_session_token" not in hatch, (
-            "this row proves nothing unless the escape hatch actually filtered the "
-            f"underscore-prefixed field: {hatch!r}"
-        )
-        assert "TOK-abc123" not in hatch
-
+        default = _body(_djust({"a": obj}))
         assert "_session_token" in default, default
         assert "TOK-abc123" in default, (
-            "the shipped default no longer emits the private dataclass field — if the "
-            "sink learned to filter, ADR-027's erratum item 4 can be restated as a "
-            f"narrowing after all: {default!r}"
+            "the private dataclass field is no longer emitted — if the sink learned "
+            "to filter, ADR-027's erratum item 4 can be restated as a narrowing after "
+            f"all: {default!r}"
         )
 
     def test_a_leaky_str_emits_MORE_under_the_default(self) -> None:
-        """WIDER. The dump saw only `label`; `str(o)` names `_secret`."""
+        """WIDER. The deleted dump saw only `label`; `str(o)` names `_secret`."""
         obj = _StrNamesPrivateState()
-
-        with resolve_lazy(False):
-            hatch = _body(_djust({"a": obj}))
-        with resolve_lazy(shipped_default()):
-            default = _body(_djust({"a": obj}))
-
-        assert hatch == '{"a": {"label": "innocuous"}}', hatch
-        assert "SSN-123-45-6789" not in hatch
-
+        default = _body(_djust({"a": obj}))
         assert "SSN-123-45-6789" in default, default
 
     def test_the_same_widening_reaches_a_BARE_variable_not_only_json_script(self) -> None:
         """`{{ o }}` moves with `{{ o|json_script }}`, and the erratum named
         only the filter. The bare spelling is the more common one."""
         obj = _StrNamesPrivateState()
-
-        with resolve_lazy(False):
-            hatch = _rust.render_template("{{ p }}", {"p": obj})
-        with resolve_lazy(shipped_default()):
-            default = _rust.render_template("{{ p }}", {"p": obj})
-
-        assert "SSN-123-45-6789" not in hatch, hatch
+        default = _rust.render_template("{{ p }}", {"p": obj})
         assert "SSN-123-45-6789" in default, default
 
     def test_an_object_with_no_str_emits_LESS_under_the_default(self) -> None:
         """NARROWER — the direction the PR claimed for every shape, true for
-        this one. Kept beside the two above so the row that supports the
-        original wording and the rows that refute it are read together."""
+        this one (the deleted dump emitted `password`). Kept beside the two
+        above so the row that supports the original wording and the rows that
+        refute it are read together."""
         obj = _AttributesButNoStr()
-
-        with resolve_lazy(False):
-            hatch = _body(_djust({"a": obj}))
-        with resolve_lazy(shipped_default()):
-            default = _body(_djust({"a": obj}))
-
-        assert "hunter2" in hatch, hatch
+        default = _body(_djust({"a": obj}))
         assert "hunter2" not in default, default
         assert "_AttributesButNoStr object at" in default, default

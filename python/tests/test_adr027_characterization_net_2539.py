@@ -1,7 +1,14 @@
-"""ADR-027 movement 1 (#2539): the characterization net, against the CURRENT
-sidecar. No routing change — every djust cell below is TODAY's bytes, the
-wrong ones included, so that the flip (movement 3) has an explicit, per-cell
-delta to show rather than a silent pass.
+"""ADR-027's characterization net (#2539), after the kill-switch was deleted
+(ADR-027 Step 5, #2628).
+
+Movement 1 recorded TODAY's bytes per cell, wrong ones included, so the flip
+(movement 3) had a per-cell delta to show. Movements 2–3 added the
+``template_resolve_lazy`` axis and flipped its default ON; #2621 closed the
+last held cells; #2628 deleted the flag and every code arm it selected. What
+survives is the former flag-ON behaviour, unconditionally, and this file now
+pins ONE contract: **every non-floor row renders Django's bytes on both djust
+paths**. The recorded OFF-path columns and the ``*_WRONG_TODAY`` /
+``*_WRONG_UNDER_LAZY`` sets went with the flag.
 
 Three columns, three real entries
 ---------------------------------
@@ -16,12 +23,9 @@ Three columns, three real entries
   ``view.render(request)`` → ``_sync_state_to_rust`` (the ``_JSON_FRIENDLY``
   filter, ``_protect_sidecar_value``, ``update_state``, ``set_raw_py_values``).
   NOT the ``RustLiveView`` + ``set_raw_py_values(dict(ctx))`` stand-in of
-  ``test_sidecar_on_all_render_paths_2501.py::liveview_render``: that stand-in
-  hands the raw context to the sidecar directly, which the real sequence never
-  does for a ``list`` (it is ``_JSON_FRIENDLY`` and never enters the sidecar),
-  so it passes ``for-class-attribute`` where the real entry renders empty —
-  rows N0/N0b here, the #1650 reproduction-fidelity gap the 2501 file's
-  "RustLiveView" column carries (recorded, not fixed: #1079).
+  ``test_sidecar_on_all_render_paths_2501.py::liveview_render`` — the #1650
+  reproduction-fidelity lesson ``TestTheHarnessIsTheRealPath`` makes
+  executable.
 
 Normalisation, two mechanisms for two reasons
 ---------------------------------------------
@@ -29,39 +33,32 @@ Every column passes through ``ADDR`` (``0x[0-9a-f]+`` → ``0x…``) because a
 function/generator repr always carries an address (rows J, J2, V). AND the
 fixture classes whose INSTANCE is rendered bare (``Plain``, ``Cls``,
 ``Outer``, ``Mutating``, ``SafeObj``) define a fixed ``__repr__``, because row
-T's LiveView ``|length`` counts ``len(str(o))`` and an address-bearing repr
-makes that count platform-dependent (11-char macOS vs 14-char Linux
-addresses). With both, every cell is a literal, platform-stable byte string.
+T's ``|length`` counts ``len(str(o))`` and an address-bearing repr makes that
+count platform-dependent. With both, every cell is a literal, platform-stable
+byte string.
 
 What is pinned, per issue
 -------------------------
-* #2502 — ``do_not_call_in_templates`` renders the marker dict (row A; the
-  three plain paths are the strict xfail at
-  ``test_object_attribute_resolution_2501.py::test_do_not_call_in_templates_is_used_as_is``).
-* #2504 — a filtered / dict-view ``{% for %}`` operand cannot reach attributes
-  (rows N, N2), plus the unfiled real-entry instance: a plain object inside a
-  TOP-LEVEL list/tuple reaches no attribute on the LiveView path, filter or no
-  filter (rows N0, N0b).
-* #2505 — local bindings no longer read the shadowed OUTER object. The eager
-  hatch resolves unfiltered source aliases on plain entries (M3, M6), while
-  filtered/LiveView cases retain the object-attribute misses recorded below.
-  The default live-handle path matches Django for all three rows.
-* #2513 — the page-shell path wires no sidecar on either branch.
+* #2502 — ``do_not_call_in_templates`` renders the bound method as-is (row A).
+* #2504 — a filtered / dict-view ``{% for %}`` operand reaches attributes
+  (rows N, N2), and so does a plain object inside a top-level list/tuple on
+  the LiveView path (rows N0, N0b).
+* #2505 — local bindings never read a shadowed OUTER object (M2, M3, M6).
 * #2506 / #2507 — permanent security pins: a lookup exception never fails
   OPEN; ``{{ c.unmount }}`` never runs a mutator.
-* The dormant sink ``Context::walk_live`` (``crates/djust_core/src/context.rs``)
-  is defined, unit-tested (``crates/djust_core/tests/test_django_lookup_sink_2539.rs``)
-  and routed NOWHERE — ``TestTheSinkIsDefinedButUnrouted2539``.
+* E1–E4 — the serialization floor (SECURE_DEFAULTS Pattern 1) differs from
+  Django DELIBERATELY and is never moved to Django's bytes.
+* The sink ``Context::walk_live`` (``crates/djust_core/src/context.rs``) has
+  exactly one caller, ``walk_from_handle``, reached UNCONDITIONALLY from
+  ``resolve_without_builtins`` — ``TestTheSinkHasExactlyOneCaller2539``.
 
-Refs #2539, #2535 (ADR-027), #2502, #2504, #2505, #2506, #2507, #2513, #2516,
-#2517, #2528, #1646, #1650, #1468, #1039, #1125, #1104, #1079.
+Refs #2539, #2535 (ADR-027), #2628, #2621, #2502, #2504, #2505, #2506, #2507,
+#2516, #2517, #2624, #1646, #1650, #1468, #1039, #1125, #1104.
 """
 
 from __future__ import annotations
 
 import ast
-import contextlib
-import dataclasses
 import inspect
 import json
 import os
@@ -352,21 +349,10 @@ def observe(render: Callable[[str, dict], str], source: str, context: dict) -> A
 
 
 # ---------------------------------------------------------------------------
-# The expectation table — TODAY's bytes, per path, the wrong ones included
+# The expectation table — Django's bytes, plus the floor
 # ---------------------------------------------------------------------------
-class _Sentinel:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __repr__(self) -> str:
-        return self.name
-
-
-#: The process dies in this cell today. No row records it since #2624 (the
-#: former crash cells are `FORMER_CRASH_CELLS`, asserted in a child by
-#: `TestTheFormerCrashCells`); a row that records it again is excluded from
-#: the in-process cells and `test_no_cell_is_a_crash_cell` names it.
-SEGFAULT = _Sentinel("SEGFAULT")
+#: The process died in cells H-plain / P-plain / P-liveview / P0-* before
+#: #2624. They are asserted in a child by `TestTheFormerCrashCells`.
 
 
 @dataclass(frozen=True)
@@ -374,38 +360,25 @@ class Row:
     id: str
     source: str
     make_ctx: Callable[[], dict]
+    #: Django's own bytes, measured every run by
+    #: `test_django_renders_what_the_table_says`. Every djust cell is held to
+    #: this column — except a floor row.
     django: Any
-    plain: Any
-    liveview: Any
-    #: E1–E4: the serialization floor (SECURE_DEFAULTS Pattern 1). These
-    #: cells differ from Django DELIBERATELY and must never be "moved to
-    #: Django's bytes" — the wrong-row check treats them as a security pin.
-    floor: bool = False
+    #: E1–E4: the serialization floor (SECURE_DEFAULTS Pattern 1). Holds the
+    #: bytes djust renders INSTEAD of Django's; these cells differ from Django
+    #: DELIBERATELY and must never be "moved to Django's bytes".
+    floor: str | None = None
 
 
 CLASS_LEVEL_2 = "class-level,class-level,"
-OUTER_2 = "OUTER,OUTER,"
 MARKER_DICT = "{&#x27;do_not_call_in_templates&#x27;: True}"
-LAMBDA_REPR = "&lt;function &lt;lambda&gt; at 0x…&gt;"
-GEN_REPR = "&lt;generator object gen at 0x…&gt;"
-CLS_CLASS_REPR = f"&lt;class &#x27;{Cls.__module__}.Cls&#x27;&gt;"
-#: Rows P / P0 on the pre-ADR walk: its step 1 is the UNGUARDED string-key
-#: item call, which on a `list`-subclass CLASS honours `__class_getitem__`
-#: and yields a `types.GenericAlias` spelled with the string key. Converting
-#: that alias used to recurse until the stack overflowed (#2624); it now
-#: renders as `str(alias)`, which is the wrong bytes rather than a dead
-#: process. Django's metaclass guard skips step 1, which is why its answer
-#: is the class attribute (P) or the INT-keyed alias (P0).
-MYCLASS_ALIAS_STRKEY = (
-    f"{MyClass.__module__}.MyClass[&#x27;class_property&#x27;] | "
-    f"{MyClass.__module__}.MyClass[&#x27;class_method&#x27;]"
-)
-MYCLASS_ALIAS_0_STRKEY = f"{MyClass.__module__}.MyClass[&#x27;0&#x27;]"
+#: Row P0: Django's step 3 is `current[int(bit)]`, which on a `list`-subclass
+#: CLASS honours `__class_getitem__` and yields an INT-keyed `types.GenericAlias`.
 MYCLASS_ALIAS_0 = f"{MyClass.__module__}.MyClass[0]"
 
 
-def _r(id_, source, make_ctx, django, plain, liveview, *, floor=False) -> Row:
-    return Row(id_, source, make_ctx, django, plain, liveview, floor)
+def _r(id_, source, make_ctx, django, *, floor=None) -> Row:
+    return Row(id_, source, make_ctx, django, floor)
 
 
 def _fresh_j() -> dict:
@@ -424,84 +397,41 @@ ROWS: list[Row] = [
         "{{ o.keep }}",
         lambda: {"o": Mutating()},
         "&lt;bound method Mutating.keep of &lt;Mutating&gt;&gt;",
-        MARKER_DICT,
-        MARKER_DICT,
     ),
-    _r("B", "{{ o.attr.sub }}", lambda: {"o": Nested()}, "deep", "deep", "deep"),
-    _r("C", "{{ d.1 }}", lambda: {"d": {1: "one"}}, "one", "one", "one"),
-    _r("D1", "{{ x.0 }}", lambda: {"x": ["zero", "one"]}, "zero", "zero", "zero"),
-    _r("D2", "{{ x.0 }}", lambda: {"x": {"0": "strkey"}}, "strkey", "strkey", "strkey"),
-    _r("D3", "{{ x.0 }}", lambda: {"x": {0: "intkey"}}, "intkey", "intkey", "intkey"),
-    _r("E1", "{{ u.password }}", lambda: {"u": make_user()}, "pbkdf2$hash", "", "", floor=True),
+    _r("B", "{{ o.attr.sub }}", lambda: {"o": Nested()}, "deep"),
+    _r("C", "{{ d.1 }}", lambda: {"d": {1: "one"}}, "one"),
+    _r("D1", "{{ x.0 }}", lambda: {"x": ["zero", "one"]}, "zero"),
+    _r("D2", "{{ x.0 }}", lambda: {"x": {"0": "strkey"}}, "strkey"),
+    _r("D3", "{{ x.0 }}", lambda: {"x": {0: "intkey"}}, "intkey"),
+    _r("E1", "{{ u.password }}", lambda: {"u": make_user()}, "pbkdf2$hash", floor=""),
     _r(
         "E2",
         "{{ p.get_user.password }}",
         lambda: {"p": Presenter(make_user())},
         "pbkdf2$hash",
-        "",
-        "",
-        floor=True,
+        floor="",
     ),
     _r(
         "E3",
         "{{ p.user.password }}",
         lambda: {"p": Presenter(make_user())},
         "pbkdf2$hash",
-        "",
-        "",
-        floor=True,
+        floor="",
     ),
     _r(
         "E4",
         "{% for u in us %}[{{ u.password }}]{% endfor %}",
         lambda: {"us": [make_user()]},
         "[pbkdf2$hash]",
-        "[]",
-        "[]",
-        floor=True,
+        floor="[]",
     ),
-    _r(
-        "F1",
-        "{{ r.attr_err }}",
-        lambda: {"r": Raiser()},
-        Raises(AttributeError),
-        Raises(AttributeError),
-        Raises(AttributeError),
-    ),
-    _r(
-        "F2",
-        "{{ r.key_err }}",
-        lambda: {"r": Raiser()},
-        Raises(KeyError),
-        Raises(KeyError),
-        Raises(KeyError),
-    ),
-    _r("F3", "{{ r.silent }}", lambda: {"r": Raiser()}, "", "", ""),
-    _r(
-        "F4",
-        "{{ r.loud }}",
-        lambda: {"r": Raiser()},
-        Raises(RuntimeError),
-        Raises(RuntimeError),
-        Raises(RuntimeError),
-    ),
-    _r(
-        "F5",
-        "{{ r.loud_false }}",
-        lambda: {"r": Raiser()},
-        Raises(NotSilent),
-        Raises(NotSilent),
-        Raises(NotSilent),
-    ),
-    _r("F6", "{{ r.silent_method }}", lambda: {"r": Raiser()}, "", "", ""),
-    _r(
-        "G",
-        "{% if x|default_if_none:y %}yes{% else %}no{% endif %}",
-        lambda: {"y": 1},
-        "yes",
-        "no",
-        "no",
-    ),
+    _r("F1", "{{ r.attr_err }}", lambda: {"r": Raiser()}, Raises(AttributeError)),
+    _r("F2", "{{ r.key_err }}", lambda: {"r": Raiser()}, Raises(KeyError)),
+    _r("F3", "{{ r.silent }}", lambda: {"r": Raiser()}, ""),
+    _r("F4", "{{ r.loud }}", lambda: {"r": Raiser()}, Raises(RuntimeError)),
+    _r("F5", "{{ r.loud_false }}", lambda: {"r": Raiser()}, Raises(NotSilent)),
+    _r("F6", "{{ r.silent_method }}", lambda: {"r": Raiser()}, ""),
+    _r("G", "{% if x|default_if_none:y %}yes{% else %}no{% endif %}", lambda: {"y": 1}, "yes"),
     # G2 / G3 guard the two halves of the #2539 `ignore_failures` fix, and
     # both are RIGHT today — which is what makes them regression guards rather
     # than progress rows: each goes red if its defect returns.
@@ -512,358 +442,128 @@ ROWS: list[Row] = [
     # None substitution in the shared pipe branch, which claimed `{% with %}`,
     # `{% include … with %}` and every tag/filter argument along with the five
     # tags that really do ignore failures — and rendered `[D]` here.
-    _r(
-        "G2",
-        "{% with x=y|default_if_none:'D' %}[{{ x }}]{% endwith %}",
-        lambda: {},
-        "[]",
-        "[]",
-        "[]",
-    ),
+    _r("G2", "{% with x=y|default_if_none:'D' %}[{{ x }}]{% endwith %}", lambda: {}, "[]"),
     # G3 is the TYPED half, and the reason row G alone was not enough: row G's
     # `y` is 1, so a fallback that came back as the STRING "1" answered `yes`
     # by luck. `y = 0` is Django's own `test_if_tag_badarg02` value and tells
     # the two apart — `Value::Integer(0)` is falsy, `Value::String("0")` is
     # not. The dispatch table takes a `&str`, so the fallback was stringified
     # until the resolution site started returning the argument's own value.
-    _r(
-        "G3",
-        "{% if x|default_if_none:y %}yes{% else %}no{% endif %}",
-        lambda: {"y": 0},
-        "no",
-        "no",
-        "no",
-    ),
+    _r("G3", "{% if x|default_if_none:y %}yes{% else %}no{% endif %}", lambda: {"y": 0}, "no"),
     # H-plain used to SEGFAULT: the eager `__dict__` walk recursed through the
-    # cycle. Fixed by the conversion's depth ceiling (#2624), on both flags.
-    _r("H", "{{ x }}", cycle, "1", "1", "1"),
-    _r(
-        "I",
-        "{{ o }}",
-        lambda: {"o": Plain()},
-        "&lt;Plain&gt;",
-        "{&#x27;inst_attr&#x27;: &#x27;in-dict&#x27;}",
-        "&lt;Plain&gt;",
-    ),
-    _r("J", "{{ callable }}", _fresh_j, "foo bar", LAMBDA_REPR, "None"),
-    _r("J2", "{{ var.callable }}", _fresh_j2, "foo bar", LAMBDA_REPR, "None"),
-    _r("K", "{{ d.the_value }}", lambda: {"d": Doodad(42)}, "42", "42", "42"),
-    _r("K2", "{{ d.the_value }}", lambda: {"d": DoodadAlters(42)}, "", "", ""),
-    _r("K3", "{{ d.value }}", lambda: {"d": Doodad(42)}, "", "42", ""),
-    _r("K4", "{{ d.value }}", lambda: {"d": DoodadAlters(42)}, "", "42", ""),
-    _r("L", "{{ d.items }}", lambda: {"d": {"items": "the-key"}}, "the-key", "the-key", "the-key"),
+    # cycle. Fixed by the conversion's depth ceiling (#2624).
+    _r("H", "{{ x }}", cycle, "1"),
+    _r("I", "{{ o }}", lambda: {"o": Plain()}, "&lt;Plain&gt;"),
+    _r("J", "{{ callable }}", _fresh_j, "foo bar"),
+    _r("J2", "{{ var.callable }}", _fresh_j2, "foo bar"),
+    _r("K", "{{ d.the_value }}", lambda: {"d": Doodad(42)}, "42"),
+    _r("K2", "{{ d.the_value }}", lambda: {"d": DoodadAlters(42)}, ""),
+    _r("K3", "{{ d.value }}", lambda: {"d": Doodad(42)}, ""),
+    _r("K4", "{{ d.value }}", lambda: {"d": DoodadAlters(42)}, ""),
+    _r("L", "{{ d.items }}", lambda: {"d": {"items": "the-key"}}, "the-key"),
     _r(
         "M",
         "{% for x in p|slice:':2' %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Plain()},
         CLASS_LEVEL_2,
-        ",,",
-        ",,",
     ),
     _r(
         "M2",
         "{% for x in p|slice:':2' %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        ",,",
-        ",,",
     ),
     _r(
         "M3",
         "{% for x in p %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         CLASS_LEVEL_2,
-        CLASS_LEVEL_2,
-        ",,",
     ),
     _r(
         "M4",
         "{% for x in p %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": 5},
         CLASS_LEVEL_2,
-        CLASS_LEVEL_2,
-        ",,",
     ),
     _r(
         "M5",
         "{% for x in p|slice:':2' %}{{ x.cls_attr }},{% endfor %}",
         lambda: {"p": [Cls(), Cls()], "x": 5},
         CLASS_LEVEL_2,
-        ",,",
-        ",,",
     ),
     _r(
         "M6",
         "{% with x=p.0 %}{{ x.cls_attr }}{% endwith %}",
         lambda: {"p": [Cls(), Cls()], "x": Outer()},
         "class-level",
-        "class-level",
-        "",
     ),
     _r(
         "N",
         "{% for r in rows|slice:':1' %}{{ r.cls_attr }},{% endfor %}",
         lambda: {"rows": [Cls(), Cls()]},
         "class-level,",
-        ",",
-        ",",
     ),
     _r(
         "N2",
         "{% for r in dd.values %}{{ r.cls_attr }},{% endfor %}",
         lambda: {"dd": {"a": Cls()}},
         "class-level,",
-        ",",
-        ",",
     ),
     _r(
         "N0",
         "{% for r in rows %}{{ r.cls_attr }},{% endfor %}",
         lambda: {"rows": [Cls(), Cls()]},
         CLASS_LEVEL_2,
-        CLASS_LEVEL_2,
-        ",,",
     ),
-    _r(
-        "N0b",
-        "{{ rows.0.cls_attr }}",
-        lambda: {"rows": (Cls(), Cls())},
-        "class-level",
-        "class-level",
-        "",
-    ),
-    _r(
-        "O",
-        "{{ s }}",
-        lambda: {"s": SafeObj()},
-        "<b>s</b>",
-        "<b>s</b>",
-        "<b>s</b>",
-    ),
-    # P used to SEGFAULT on both paths; see MYCLASS_ALIAS_STRKEY (#2624).
+    _r("N0b", "{{ rows.0.cls_attr }}", lambda: {"rows": (Cls(), Cls())}, "class-level"),
+    _r("O", "{{ s }}", lambda: {"s": SafeObj()}, "<b>s</b>"),
+    # P used to SEGFAULT on both paths (#2624).
     _r(
         "P",
         "{{ class_var.class_property }} | {{ class_var.class_method }}",
         lambda: {"class_var": MyClass},
         "Example property | Example method",
-        MYCLASS_ALIAS_STRKEY,
-        MYCLASS_ALIAS_STRKEY,
     ),
     # P0 is the NUMERIC-index form (#2624) — undeclared until that issue,
-    # and a segfault on both paths and both flags. Django's step 3 is
-    # `current[int(bit)]`, so ITS answer is the int-keyed alias, not the
-    # class attribute; the ADR-027 sink matches it, the pre-ADR walk spells
-    # the alias with the string key.
-    _r(
-        "P0",
-        "{{ class_var.0 }}",
-        lambda: {"class_var": MyClass},
-        MYCLASS_ALIAS_0,
-        MYCLASS_ALIAS_0_STRKEY,
-        MYCLASS_ALIAS_0_STRKEY,
-    ),
-    _r("Q", "{{ k }}", lambda: {"k": Cls}, "&lt;Cls&gt;", CLS_CLASS_REPR, "None"),
-    _r(
-        "R",
-        "{{ g.x }}",
-        lambda: {"g": GetItemRaiser()},
-        Raises(RuntimeError),
-        Raises(RuntimeError),
-        Raises(RuntimeError),
-    ),
-    _r("S", "{% if r.silent %}T{% else %}F{% endif %}", lambda: {"r": Raiser()}, "F", "F", "F"),
-    _r(
-        "T",
-        "{% if o %}T{% else %}F{% endif %}/{{ o|length }}",
-        lambda: {"o": Plain()},
-        "T/0",
-        "T/1",
-        "T/7",
-    ),
-    _r("U", "{{ u.username }}", lambda: {"u": make_user()}, "alice", "alice", "alice"),
-    _r("V", "{% for i in g %}{{ i }}{% endfor %}", lambda: {"g": gen()}, "12", GEN_REPR, GEN_REPR),
-    _r("W", "{{ np.foo }}", lambda: {"np": NpLike()}, "attr-foo", "attr-foo", "attr-foo"),
+    # and a segfault on both paths. Django's step 3 is `current[int(bit)]`,
+    # so ITS answer is the int-keyed alias, not the class attribute; the
+    # ADR-027 sink matches it.
+    _r("P0", "{{ class_var.0 }}", lambda: {"class_var": MyClass}, MYCLASS_ALIAS_0),
+    _r("Q", "{{ k }}", lambda: {"k": Cls}, "&lt;Cls&gt;"),
+    _r("R", "{{ g.x }}", lambda: {"g": GetItemRaiser()}, Raises(RuntimeError)),
+    _r("S", "{% if r.silent %}T{% else %}F{% endif %}", lambda: {"r": Raiser()}, "F"),
+    _r("T", "{% if o %}T{% else %}F{% endif %}/{{ o|length }}", lambda: {"o": Plain()}, "T/0"),
+    _r("U", "{{ u.username }}", lambda: {"u": make_user()}, "alice"),
+    _r("V", "{% for i in g %}{{ i }}{% endfor %}", lambda: {"g": gen()}, "12"),
+    _r("W", "{{ np.foo }}", lambda: {"np": NpLike()}, "attr-foo"),
 ]
 
 ROW_BY_ID: dict[str, Row] = {row.id: row for row in ROWS}
 
-#: Rows whose djust cell is NOT Django's answer today, per path — a stated
-#: SET, not a floor (#1125): an unrelated PR that fixes or breaks a cell must
-#: edit the table AND this set. The floor rows (E1–E4) are listed apart.
-PLAIN_WRONG_TODAY = frozenset("A G I J J2 K3 K4 M M2 M5 N N2 P P0 Q T V".split())
-LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b P P0 Q T V".split())
+#: The serialization floor — a stated SET (#1125), listed apart because these
+#: are the only cells that may differ from Django.
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
-#: The same question with ADR-027's kill-switch ON — a STATED set (#1125),
-#: like the two above, and deliberately NOT a fourth recorded column.
-#:
-#: A fourth column would state the flag-ON bytes as DATA, which is the same
-#: kind of recorded expectation the three columns already are — and would let
-#: a wrong flag-ON answer be recorded as correct, the way a curated table
-#: blinds you on the axis it did not sample. What movement 2 claims is
-#: *"with the flag ON the wrong set shrinks to this smaller set, and every row
-#: outside it equals **Django's** column"* — a claim about ``row.django``,
-#: which ``test_django_renders_what_the_table_says`` measures against the real
-#: Django engine every run. A row still in the set must keep TODAY's recorded
-#: bytes, so "wrong in a new way" fails too.
-#:
-#: **Both sets are now empty** (#2621): with the flag ON every non-floor row
-#: answers Django's bytes on both paths. The set is kept — not deleted — for
-#: two reasons: it is what ``assert_lazy_column`` reads, so a future
-#: regression has a named place to land rather than a diff that edits an
-#: assertion; and movement 4 (#2628) is the PR that deletes both sets with
-#: the flag itself. An empty stated set is a stronger claim than a populated
-#: one, and ``TestTheTableIsLoadBearing`` still exercises the held-row branch
-#: against a synthetic row so the machinery cannot rot while unused.
-#:
-#: How each of the six cells #2621 inherited was closed:
-#:
-#: * Row **O** (a ``__str__`` returning ``SafeData``) — closed before #2621
-#:   opened: ``Encoded`` keeps string-conversion safety as runtime-only
-#:   metadata, without a wire grant.
-#:
-#: * Row **V** (a generator) — closed by #2613: ``opaque_gate`` admits a
-#:   ONE-SHOT iterator with a live handle and no items, and the ``{% for %}``
-#:   sink consumes it once through ``Encoded::consume_live_items`` — Django's
-#:   ``list(values)``. With the flag OFF there is no handle, so the recorded
-#:   (declined) bytes stand there.
-#:
-#: * Rows **J** / **J2** / **Q** / **P** / **P0**, LiveView only — closed by
-#:   #2621. ``normalize_django_value`` replaced ANY callable with ``None``
-#:   before Rust saw it (``serialization.py``'s "safety net: skip callables"),
-#:   so a lambda and a class never reached the sink on that path at all, and
-#:   for P / P0 the absent handle left the pre-ADR walk's unguarded string-key
-#:   item call to answer (#2624 made that an answer rather than a segfault).
-#:   That arm is now gated on the flag, so under ADR-027 a callable crosses
-#:   RAW and ``walk_live``'s root ``maybe_call`` decides — Django's own rules,
-#:   at the sink. The arm still fires for ``state_roundtrip=True`` (the
-#:   session channel cannot hold a live object) and for a callable the
-#:   conversion does not model as an ``Encoded``.
-PLAIN_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
-LIVEVIEW_WRONG_UNDER_LAZY: frozenset[str] = frozenset()
+#: Every (row, path) cell, all run in-process since #2624 retired the crash
+#: cells (`TestTheFormerCrashCells` still asserts those in a child).
+CELLS = [pytest.param(row, path, id=f"{row.id}-{path}") for row in ROWS for path in PATHS]
 
 
-def recorded(row: Row, path: str) -> Any:
-    return getattr(row, path)
-
-
-#: (row, path) cells that run IN-PROCESS: every cell not recorded as SEGFAULT.
-CELLS = [
-    pytest.param(row, path, id=f"{row.id}-{path}")
-    for row in ROWS
-    for path in PATHS
-    if recorded(row, path) is not SEGFAULT
-]
-CRASH_CELLS = [(row.id, path) for row in ROWS for path in PATHS if recorded(row, path) is SEGFAULT]
-
-
-# The two assertion functions the table is read through. Module-level so that
-# `TestTheTableIsLoadBearing` can call the SAME functions on a mutated row.
-def assert_column_is_todays_bytes(row: Row, path: str, actual: Any) -> None:
-    expected = recorded(row, path)
-    assert expected is not SEGFAULT, (
-        f"row {row.id} on {path} is a crash cell; not an in-process cell"
-    )
-    assert actual == expected, (
-        f"row {row.id} on {path}: today's bytes moved.\n  recorded: {expected!r}\n  actual:   {actual!r}"
-        f"\n  Django:   {row.django!r}\nIf this is ADR-027 landing, move the row to Django's bytes "
-        f"and update PLAIN_WRONG_TODAY / LIVEVIEW_WRONG_TODAY."
-    )
-
-
-def assert_wrong_rows_are_wrong_and_right_rows_are_right(row: Row, path: str, actual: Any) -> None:
-    """Derived from the table, not stored: a cell recorded EQUAL to Django
-    must still equal Django; a cell recorded DIFFERENT must still differ AND
-    still be today's bytes. A fixed shape therefore fails loudly by name."""
-    expected = recorded(row, path)
-    if expected == row.django:
-        assert actual == row.django, (
-            f"row {row.id} on {path} REGRESSED away from Django's bytes: "
-            f"{actual!r} != {row.django!r}"
-        )
-        return
-    if row.floor:
-        assert actual != row.django and actual == expected, (
+def assert_matches_django(row: Row, path: str, actual: Any) -> None:
+    """THE contract since #2628: a non-floor cell equals **Django's** column,
+    which `test_django_renders_what_the_table_says` measures against the real
+    Django engine every run; a floor cell renders its recorded floor bytes
+    and never Django's. Module-level so `TestTheTableIsLoadBearing` can call
+    the SAME function on a wrong answer."""
+    if row.floor is not None:
+        assert actual != row.django and actual == row.floor, (
             f"row {row.id} on {path}: the serialization floor moved — {actual!r}. This cell is a "
-            f"SECURITY pin (SECURE_DEFAULTS Pattern 1) and is never moved to Django's bytes."
-        )
-        return
-    assert actual != row.django, (
-        f"row {row.id} on {path} now matches Django ({actual!r}) — ADR-027 landed here; "
-        f"move the row to Django's bytes and drop {row.id!r} from the *_WRONG_TODAY set."
-    )
-    assert actual == expected, (
-        f"row {row.id} on {path} is wrong in a NEW way: {actual!r} (recorded {expected!r}, "
-        f"Django {row.django!r})"
-    )
-
-
-# ---------------------------------------------------------------------------
-# The ADR-027 kill-switch, as a test axis (#2539 movement 2)
-# ---------------------------------------------------------------------------
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool):
-    """Flip ``LIVEVIEW_CONFIG['template_resolve_lazy']`` for the block.
-
-    Pushes it through the REAL wiring — ``apply_render_env()``, the one place
-    every render path acquires its ambient settings — and then ASSERTS the
-    Rust thread-local actually took the value. A fixture that set the config
-    and assumed the push would make every flag-ON assertion below vacuous if
-    the wiring broke; a setter with no getter cannot be tested end to end
-    (#2017), which is why ``_rust.resolve_lazy_enabled`` exists.
-    """
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, (
-        "the ADR-027 flag did not reach Rust — apply_render_env() is not wiring it"
-    )
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
-
-
-#: The flag axis. ``off`` runs today's assertions byte-identically — that IS
-#: the no-behaviour-change proof — and ``on`` runs the shrunken-wrong-set ones.
-FLAGS = [pytest.param(False, id="lazy-off"), pytest.param(True, id="lazy-on")]
-
-
-def wrong_under_lazy(path: str) -> frozenset:
-    return PLAIN_WRONG_UNDER_LAZY if path == "plain" else LIVEVIEW_WRONG_UNDER_LAZY
-
-
-def assert_lazy_column(row: Row, path: str, actual: Any) -> None:
-    """With the flag ON: a row OUTSIDE the stated wrong set equals **Django's**
-    column; a row inside it still differs from Django AND still renders
-    today's recorded bytes. Module-level for the same reason its two siblings
-    are — ``TestTheTableIsLoadBearing`` calls it on a mutated row."""
-    expected = recorded(row, path)
-    if row.floor:
-        assert actual != row.django and actual == expected, (
-            f"row {row.id} on {path}: the serialization floor moved with the ADR-027 flag ON "
-            f"— {actual!r}. This cell is a SECURITY pin (SECURE_DEFAULTS Pattern 1); matching "
-            f"Django here is a leak, never progress."
-        )
-        return
-    if row.id in wrong_under_lazy(path):
-        assert actual != row.django, (
-            f"row {row.id} on {path} now matches Django with the flag ON ({actual!r}) — "
-            f"drop {row.id!r} from the *_WRONG_UNDER_LAZY set."
-        )
-        assert actual == expected, (
-            f"row {row.id} on {path} is wrong in a NEW way with the flag ON: {actual!r} "
-            f"(recorded {expected!r}, Django {row.django!r})"
+            f"SECURITY pin (SECURE_DEFAULTS Pattern 1); matching Django here is a leak, never "
+            f"progress."
         )
         return
     assert actual == row.django, (
-        f"row {row.id} on {path} does not answer Django's bytes with the ADR-027 flag ON: "
-        f"{actual!r} != {row.django!r}. Either the movement regressed this cell, or the cell "
-        f"belongs in the *_WRONG_UNDER_LAZY set with a named reason."
+        f"row {row.id} on {path} does not answer Django's bytes: {actual!r} != {row.django!r}"
     )
 
 
@@ -882,127 +582,19 @@ class TestTheDifferentialTable:
         )
 
     @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_default_column_answers_django_outside_the_held_set(
-        self, row: Row, path: str
-    ) -> None:
-        """Movement 3's headline gate (#2539), and the one that changed hands.
-
-        Until the flip this was ``test_the_djust_column_is_todays_bytes`` and
-        asserted the RECORDED column with no context manager — i.e. the OFF
-        bytes, by default. The default is now ON, so the ambient claim is the
-        LAZY one: outside the held sets a cell answers Django. The recorded
-        column did not move and is still asserted, one test down, under an
-        EXPLICIT ``resolve_lazy(False)`` — the hatch axis.
-        """
+    def test_the_djust_column_answers_django(self, row: Row, path: str) -> None:
+        """The headline gate. Until #2628 this was the flag-ON claim, made
+        under an explicit push and again under the shipped default; the flag
+        is gone, so the ambient render is the only state there is."""
         actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_lazy_column(row, path, actual)
-
-    @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_default_is_byte_identical_to_the_flag_pushed_on(self, row: Row, path: str) -> None:
-        """The flip's actual content, per cell: the SHIPPED DEFAULT and an
-        explicit ``resolve_lazy(True)`` render the same bytes.
-
-        The two tests either side of this one assert the default against
-        Django and the pushed flag against Django; both would stay green if
-        the default silently selected a THIRD behaviour that happened to agree
-        with Django on the rows under test. This asserts the two states are the
-        same state — which is the whole claim of movement 3 — and it is what
-        goes red if `config.py`'s default and the Rust `Cell` default ever
-        disagree again (#1646).
-        """
-        ambient = observe(RENDER[path], row.source, row.make_ctx())
-        with resolve_lazy(True):
-            pushed = observe(RENDER[path], row.source, row.make_ctx())
-        assert ambient == pushed, (
-            f"row {row.id} on {path}: the shipped default renders {ambient!r} but the flag "
-            f"pushed ON renders {pushed!r}. The default is no longer the ON path."
-        )
-
-    @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_flag_off_column_is_the_committed_bytes(self, row: Row, path: str) -> None:
-        """The ESCAPE HATCH: the switch OFF renders exactly what the table
-        records. Until movement 3 this was the same claim the ambient tests
-        made — the default was OFF — and its value was that it made the claim
-        EXPLICITLY. After the flip it is the only place the recorded column is
-        asserted, which is what keeps the hatch a real rollback rather than a
-        setting nothing exercises."""
-        with resolve_lazy(False):
-            actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_column_is_todays_bytes(row, path, actual)
-
-    @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_wrong_rows_are_wrong_and_right_rows_are_right(self, row: Row, path: str) -> None:
-        """The derived (non-stored) twin of the test above, on the hatch axis.
-
-        Moved under an explicit ``resolve_lazy(False)`` by movement 3 for the
-        same reason its sibling was: it reads the recorded column, so ambiently
-        it now asserts the OFF bytes against an ON render. Its value is
-        unchanged — a fixed shape fails loudly by name rather than by a stored
-        byte comparison."""
-        with resolve_lazy(False):
-            actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_wrong_rows_are_wrong_and_right_rows_are_right(row, path, actual)
-
-    @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_flag_on_column_answers_django_outside_the_stated_set(
-        self, row: Row, path: str
-    ) -> None:
-        """Movement 2's delta, per cell. NOT a fourth recorded column — see
-        ``PLAIN_WRONG_UNDER_LAZY``: outside the stated set the assertion is
-        against ``row.django``, which is measured against the real Django
-        engine by ``test_django_renders_what_the_table_says``."""
-        with resolve_lazy(True):
-            actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_lazy_column(row, path, actual)
-
-    def test_the_flag_moves_the_cells_it_claims_and_no_others(self) -> None:
-        """The two states in ONE test, so the DELTA is asserted rather than
-        inferred from two independent runs. A row that is right today must
-        still be right with the flag on (no regression), and every row the
-        movement claims must actually move (no silent hold)."""
-        moved, held, regressed = set(), set(), set()
-        for row in ROWS:
-            for path in PATHS:
-                if recorded(row, path) is SEGFAULT or row.floor:
-                    continue
-                with resolve_lazy(False):
-                    off = observe(RENDER[path], row.source, row.make_ctx())
-                with resolve_lazy(True):
-                    on = observe(RENDER[path], row.source, row.make_ctx())
-                cell = f"{row.id}-{path}"
-                if off != row.django and on == row.django:
-                    moved.add(cell)
-                elif off != row.django:
-                    held.add(cell)
-                elif on != row.django:
-                    regressed.add(cell)
-        assert regressed == set(), (
-            f"the ADR-027 flag REGRESSED cells that answer Django today: {sorted(regressed)}"
-        )
-        expected_held = {f"{rid}-{path}" for path in PATHS for rid in wrong_under_lazy(path)} - {
-            f"{rid}-{path}" for rid, path in CRASH_CELLS
-        }
-        assert held == expected_held, (
-            f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
-        )
-        # 27 at the flip, 29 since #2613 moved row V on both paths, 31 since
-        # #2624: P-plain and P0-plain joined once they stopped crashing (the
-        # flag's metaclass guard answers both with Django's bytes). 36 since
-        # #2621 gated `normalize_django_value`'s callable arm on the flag,
-        # which moved the five LiveView cells that arm was dropping —
-        # J, J2, Q, P and P0 — leaving `held` empty.
-        assert len(moved) == 36, f"expected 36 cells to move, got {len(moved)}: {sorted(moved)}"
+        assert_matches_django(row, path, actual)
 
 
 class TestThePlainEntriesAgree:
     """The two raw entries `DjustTemplateBackend` binds answer the backend's
-    bytes on every non-crash row — the #1646 twin check. The former crash
-    rows (H, P, P0) share the backend's conversion and are also asserted by
-    `TestTheFormerCrashCells` through the backend in a child."""
+    bytes on every row — the #1646 twin check."""
 
-    NON_CRASH_PLAIN = [pytest.param(row, id=row.id) for row in ROWS if row.plain is not SEGFAULT]
-
-    @pytest.mark.parametrize("row", NON_CRASH_PLAIN)
+    @pytest.mark.parametrize("row", ROWS, ids=[r.id for r in ROWS])
     @pytest.mark.parametrize(
         "entry",
         [
@@ -1011,153 +603,45 @@ class TestThePlainEntriesAgree:
         ],
     )
     def test_a_raw_entry_answers_the_backends_bytes(self, row: Row, entry) -> None:
-        """The #1646 twin check, run in the AMBIENT state on purpose.
-
-        What this does NOT pin, despite an earlier draft of this docstring
-        claiming it: the agreement between `config.py`'s default and the Rust
-        `RESOLVE_LAZY` default. The two raw entries do not push the flag — but
-        they run on the pytest thread, which the backend pushed on one line
-        earlier, so they inherit the PUSHED value and never read the Rust
-        default at all. Gating that default off and rebuilding leaves this test
-        green; the two tests that go red are
-        `TestTheFlagReachesEveryRenderEntry2539::
-        test_the_rust_default_tracks_the_python_default` and
-        `TestTheSwitch2539::test_a_thread_that_never_pushed_reads_the_default`,
-        both of which construct a FRESH thread — the only place the Rust
-        default is observable.
-
-        What it does pin is still worth having: the two raw entries and the
-        backend agree on every non-crash row in whatever state the thread is
-        in, which is the #1646 twin check the class was written for.
-        """
         via_backend = observe(plain_render, row.source, row.make_ctx())
         via_entry = observe(entry, row.source, row.make_ctx())
         assert via_entry == via_backend, f"row {row.id}: {entry.__name__} diverges from the backend"
-        # The backend's own column, under the shipped default — the lazy one
-        # since movement 3. The recorded (OFF) column is asserted by
-        # `TestTheDifferentialTable::test_the_flag_off_column_is_the_committed_bytes`.
-        assert_lazy_column(row, "plain", via_backend)
+        assert_matches_django(row, "plain", via_backend)
 
 
 class TestTheTableIsSelfConsistent:
-    def test_every_row_has_three_columns_and_a_unique_id(self) -> None:
+    def test_every_row_has_a_django_column_and_a_unique_id(self) -> None:
         assert len(ROWS) == 48
         assert len(ROW_BY_ID) == 48
+        assert len(CELLS) == 48 * 2
         for row in ROWS:
-            for column in ("django", "plain", "liveview"):
-                assert recorded(row, column) is not None, f"row {row.id} lacks {column}"
-            assert row.django is not SEGFAULT, f"row {row.id}: Django never segfaults"
+            assert row.django is not None, f"row {row.id} lacks a Django column"
 
-    def test_the_wrong_sets_are_exactly_the_stated_sets(self) -> None:
-        plain_wrong = {r.id for r in ROWS if r.plain != r.django and not r.floor}
-        liveview_wrong = {r.id for r in ROWS if r.liveview != r.django and not r.floor}
-        assert plain_wrong == PLAIN_WRONG_TODAY, (
-            f"plain: +{plain_wrong - PLAIN_WRONG_TODAY} -{PLAIN_WRONG_TODAY - plain_wrong}"
-        )
-        assert liveview_wrong == LIVEVIEW_WRONG_TODAY, (
-            f"liveview: +{liveview_wrong - LIVEVIEW_WRONG_TODAY} "
-            f"-{LIVEVIEW_WRONG_TODAY - liveview_wrong}"
-        )
-        floor = {r.id for r in ROWS if r.floor}
+    def test_the_floor_rows_are_exactly_the_stated_set(self) -> None:
+        floor = {r.id for r in ROWS if r.floor is not None}
         assert floor == FLOOR_ROWS
         for rid in floor:
             row = ROW_BY_ID[rid]
-            assert row.plain != row.django and row.liveview != row.django, rid
-
-    def test_the_lazy_wrong_sets_are_subsets_of_todays(self) -> None:
-        """A row that answers Django TODAY cannot be listed as wrong under the
-        flag — that would be a regression the movement is claiming as
-        expected. And no floor row may appear in either set: a floor cell is
-        wrong DELIBERATELY and is governed by ``Row.floor``, not by these."""
-        assert PLAIN_WRONG_UNDER_LAZY <= PLAIN_WRONG_TODAY
-        assert LIVEVIEW_WRONG_UNDER_LAZY <= LIVEVIEW_WRONG_TODAY
-        assert not (PLAIN_WRONG_UNDER_LAZY & FLOOR_ROWS)
-        assert not (LIVEVIEW_WRONG_UNDER_LAZY & FLOOR_ROWS)
-        for rid in PLAIN_WRONG_UNDER_LAZY | LIVEVIEW_WRONG_UNDER_LAZY:
-            assert rid in ROW_BY_ID, rid
-
-    def test_no_cell_is_a_crash_cell(self) -> None:
-        """The three #2516/#2517 crash cells (H-plain, P-plain, P-liveview)
-        and the undeclared numeric-index variant (P0, #2624) all render since
-        the conversion gained a depth ceiling. A cell recorded as SEGFAULT
-        again is a regression, not a held finding."""
-        assert CRASH_CELLS == []
-        assert len(CELLS) == 48 * 2
+            assert row.floor != row.django, rid
+            assert "pbkdf2$hash" in row.django and "pbkdf2$hash" not in row.floor, rid
 
 
 class TestTheTableIsLoadBearing:
-    """#1039 / #1468: the table's assertion functions go red in both
-    directions. Each mutation asserts it APPLIED before its result is read
-    (the v1.1.0-13 gate-off rule)."""
+    """#1039 / #1468: `assert_matches_django` goes red in every direction."""
 
-    def test_a_perturbed_recorded_cell_reddens_the_bytes_check(self) -> None:
-        row = ROW_BY_ID["B"]
-        assert_column_is_todays_bytes(row, "plain", "deep")  # the genuine bytes pass
-        mutated = dataclasses.replace(row, plain=row.plain + "x")
-        assert mutated != row, "the mutation did not apply"
-        with pytest.raises(AssertionError, match="today's bytes moved"):
-            assert_column_is_todays_bytes(mutated, "plain", "deep")
-
-    def test_a_wrong_row_moved_to_djangos_bytes_reddens_the_wrong_check(self) -> None:
-        """An unrelated PR that 'tidies' a wrong cell into Django's bytes while
-        the engine still renders the old ones is caught by the wrong-check."""
+    def test_a_non_django_answer_fails_by_name(self) -> None:
         row = ROW_BY_ID["I"]
-        todays_bytes = row.plain
-        assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", todays_bytes)
-        mutated = dataclasses.replace(row, plain=row.django)
-        assert mutated != row, "the mutation did not apply"
-        with pytest.raises(AssertionError, match="REGRESSED"):
-            assert_wrong_rows_are_wrong_and_right_rows_are_right(mutated, "plain", todays_bytes)
-
-    def test_a_fixed_shape_fails_by_name(self) -> None:
-        """The flip's delta: the engine starts answering Django's bytes on a
-        row recorded wrong. The check must fail and name ADR-027."""
-        row = ROW_BY_ID["I"]
-        with pytest.raises(AssertionError, match="ADR-027 landed here"):
-            assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", row.django)
+        assert_matches_django(row, "plain", row.django)  # the genuine answer passes
+        with pytest.raises(AssertionError, match="does not answer Django's bytes"):
+            assert_matches_django(row, "plain", row.django + "x")
 
     def test_a_floor_cell_that_leaks_fails_as_a_security_pin(self) -> None:
         row = ROW_BY_ID["E1"]
-        assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", "")
+        assert_matches_django(row, "plain", row.floor)
         with pytest.raises(AssertionError, match="SECURITY pin"):
-            assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", row.django)
-
-    def test_the_lazy_check_reddens_in_all_three_directions(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``assert_lazy_column`` is the flag-ON half and needs the same
-        treatment: a claimed row that does NOT reach Django, a held row that
-        silently DOES, and a floor row that leaks must each fail by name."""
-        # A row the movement claims (row I, plain) that fails to reach Django.
-        claimed = ROW_BY_ID["I"]
-        assert "I" not in PLAIN_WRONG_UNDER_LAZY, "the fixture row stopped being a claimed one"
-        assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
-        with pytest.raises(AssertionError, match="does not answer Django's bytes"):
-            assert_lazy_column(claimed, "plain", claimed.plain)
-        # A HELD row that starts matching Django must fail loudly, so the
-        # residue set cannot rot into a floor.
-        #
-        # BOTH stated sets are empty since #2621, so there is no real held row
-        # left to point at — and a branch with no exercise is a branch that
-        # rots. The set is therefore SUBSTITUTED for the duration of these
-        # three assertions, which keeps the held arm load-bearing against a
-        # REAL row's real recorded bytes (row J on LiveView, whose recorded
-        # column is still `"None"`) rather than a hand-built fixture. The
-        # production sets stay empty; `monkeypatch` restores them.
-        held = ROW_BY_ID["J"]
-        monkeypatch.setitem(globals(), "LIVEVIEW_WRONG_UNDER_LAZY", frozenset({"J"}))
-        assert "J" in wrong_under_lazy("liveview"), "the substitution did not reach the reader"
-        assert_lazy_column(held, "liveview", held.liveview)
-        with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
-            assert_lazy_column(held, "liveview", held.django)
-        # And wrong in a NEW way is not the same as still wrong.
-        with pytest.raises(AssertionError, match="wrong in a NEW way"):
-            assert_lazy_column(held, "liveview", held.liveview + "x")
-        # The floor, with the flag ON.
-        floor = ROW_BY_ID["E1"]
-        assert_lazy_column(floor, "plain", floor.plain)
+            assert_matches_django(row, "plain", row.django)
         with pytest.raises(AssertionError, match="SECURITY pin"):
-            assert_lazy_column(floor, "plain", floor.django)
+            assert_matches_django(row, "plain", row.floor + "x")
 
 
 class TestTheDjangoSideIsNonTrivial:
@@ -1236,12 +720,6 @@ settings.configure(
             "OPTIONS": {},
         }
     ],
-    # ADR-027's kill-switch, taken from argv so the child exercises the REAL
-    # config path (#2539). The key is always set EXPLICITLY, never left to the
-    # shipped default -- so `lazy` is the ON axis and its absence is the
-    # escape-hatch axis, whichever way the default points. (Before movement 3
-    # the default was OFF and the two coincided; they no longer do.)
-    LIVEVIEW_CONFIG={"template_resolve_lazy": sys.argv[3:4] == ["lazy"]},
 )
 urlpatterns = []
 django.setup()
@@ -1322,7 +800,7 @@ CRASH_SIGNALS = {-signal.SIGSEGV, -signal.SIGBUS, -signal.SIGABRT}
 #: The cells that USED to kill the process — the three #2516/#2517 crash
 #: cells plus the numeric-index variant #2624 found undeclared. Every one
 #: renders since the conversion gained a depth ceiling (#2624); each is still
-#: run in a CHILD, on both flags, because "does not segfault" is a claim only
+#: run in a CHILD, because "does not segfault" is a claim only
 #: a subprocess can make, and a returning crash must flip to a named failure
 #: rather than take the suite with it.
 FORMER_CRASH_CELLS = [
@@ -1334,7 +812,7 @@ FORMER_CRASH_CELLS = [
 ]
 
 
-def run_child(key: str, path: str, *, lazy: bool = False) -> subprocess.CompletedProcess:
+def run_child(key: str, path: str) -> subprocess.CompletedProcess:
     """The repo's `python/` goes FIRST on `PYTHONPATH` so a worktree run
     imports the checkout under test, not an installed djust (#2533)."""
     env = dict(os.environ)
@@ -1343,7 +821,7 @@ def run_child(key: str, path: str, *, lazy: bool = False) -> subprocess.Complete
         p for p in (str(PYTHON_DIR), env.get("PYTHONPATH", "")) if p
     )
     return subprocess.run(
-        [sys.executable, "-c", CHILD, key, path, *(["lazy"] if lazy else [])],
+        [sys.executable, "-c", CHILD, key, path],
         capture_output=True,
         text=True,
         cwd=str(ROOT),
@@ -1375,61 +853,33 @@ class TestTheFormerCrashCells:
     `__class_getitem__` in the walk) and P0 (its numeric-index form, #2624)
     USED to kill the process. Each is asserted in a child so that a returning
     crash flips to a NAMED failure rather than taking the suite with it, and
-    the rendered bytes are held to the same columns the in-process cells are:
-    today's recorded bytes with the flag OFF, ``assert_lazy_column`` ON.
-
-    Before #2624 the flag fixed H-plain and P-plain (nothing walks a
-    `__dict__` eagerly; the sink carries Django's metaclass guard) and HELD
-    P-liveview, where ``normalize_django_value`` replaces the class before
-    Rust sees it and the pre-ADR walk's unguarded item call reached
-    `__class_getitem__`. That call still happens; converting the alias it
-    yields no longer overflows the stack, so P-liveview renders the string-
-    keyed alias on both flags — wrong bytes, tracked with J / J2 / Q at #2621,
-    rather than a dead worker.
-    """
+    the rendered bytes are held to the same contract the in-process cells are:
+    Django's column."""
 
     @pytest.mark.parametrize(
         ("key", "path"), FORMER_CRASH_CELLS, ids=[f"{k}-{p}" for k, p in FORMER_CRASH_CELLS]
     )
-    def test_the_cell_renders_with_the_flag_off(self, key: str, path: str) -> None:
+    def test_the_cell_renders(self, key: str, path: str) -> None:
         proc = run_child(key, path)
         assert proc.returncode not in CRASH_SIGNALS, (
             f"row {key} on {path} CRASHES again (rc={proc.returncode}) — the #2624 depth "
             f"ceiling or its neighbours regressed; stderr tail={proc.stderr[-500:]!r}"
         )
         assert proc.returncode == 0, proc.stderr[-2000:]
-        assert child_module_normalized(proc) == recorded(ROW_BY_ID[key], path)
-
-    @pytest.mark.parametrize(
-        ("key", "path"), FORMER_CRASH_CELLS, ids=[f"{k}-{p}" for k, p in FORMER_CRASH_CELLS]
-    )
-    def test_the_cell_renders_with_the_flag_on(self, key: str, path: str) -> None:
-        proc = run_child(key, path, lazy=True)
-        assert proc.returncode not in CRASH_SIGNALS, (
-            f"row {key} on {path} CRASHES again with the flag ON (rc={proc.returncode}); "
-            f"stderr tail={proc.stderr[-500:]!r}"
-        )
-        assert proc.returncode == 0, proc.stderr[-2000:]
-        assert_lazy_column(ROW_BY_ID[key], path, child_module_normalized(proc))
+        assert_matches_django(ROW_BY_ID[key], path, child_module_normalized(proc))
 
     @pytest.mark.django_db
     @pytest.mark.parametrize("path", PATHS)
     def test_the_child_renders_a_non_crash_row_like_the_in_process_entry(self, path: str) -> None:
         """The child harness is the same path and not a no-op: row A through
-        the child equals row A through the in-process column.
-
-        BOTH sides run on the HATCH axis. ``run_child`` without ``lazy=True``
-        sets the key explicitly ``False`` in the child's ``LIVEVIEW_CONFIG``,
-        so after movement 3 the in-process side has to be pushed OFF too or
-        the two are compared across different flag states — which is a
-        harness-fidelity bug, not a finding (#1650).
-        """
+        the child equals row A through the in-process column, and both are
+        Django's bytes (not the #2502 marker dict the OFF path rendered)."""
         proc = run_child("A", path)
         assert proc.returncode == 0, proc.stderr[-2000:]
         row = ROW_BY_ID["A"]
-        assert child_rendered(proc) == recorded(row, path) == MARKER_DICT
-        with resolve_lazy(False):
-            assert observe(RENDER[path], row.source, row.make_ctx()) == MARKER_DICT
+        in_process = observe(RENDER[path], row.source, row.make_ctx())
+        assert child_rendered(proc) == in_process == row.django
+        assert in_process != MARKER_DICT
 
 
 # ---------------------------------------------------------------------------
@@ -1449,41 +899,26 @@ class KeepProbe:
 
 @pytest.mark.django_db
 class TestDoNotCallRendersTheMarkerDict2502:
-    """#2502 on the REAL LiveView entry. The plain paths are the strict xfail
-    at `test_object_attribute_resolution_2501.py::test_do_not_call_in_templates_is_used_as_is`,
-    which the flip deletes."""
+    """#2502 on the REAL LiveView entry: the marker dict the OFF path rendered
+    for `{{ o.keep }}` is gone with the flag (#2628). The lookup walks the
+    live object, so `do_not_call_in_templates` is honoured by the SEGMENT
+    WALK — the bound method is rendered as-is, which is Django's answer."""
 
-    def test_the_real_entry_renders_the_marker_dict(self) -> None:
-        """#2502's bug, pinned on the HATCH axis where it still lives."""
-        row = ROW_BY_ID["A"]
-        with resolve_lazy(False):
-            assert liveview_render(row.source, row.make_ctx()) == MARKER_DICT
-        assert django_render(row.source, row.make_ctx()).startswith("&lt;bound method")
-
-    def test_the_shipped_default_closes_2502(self) -> None:
-        """...and the flip closes it (#2539 movement 3).
-
-        The pin above records the mechanism; this one records that the shipped
-        default no longer has it. Under the default the lookup walks the live
-        object, so ``do_not_call_in_templates`` is honoured by the SEGMENT
-        WALK — the bound method is rendered as-is, which is Django's answer —
-        instead of by a conversion that mangles the stamped method into the
-        marker dict on its way through.
-        """
+    def test_2502_is_closed(self) -> None:
         row = ROW_BY_ID["A"]
         django = django_render(row.source, row.make_ctx())
+        assert django.startswith("&lt;bound method")
         for path in PATHS:
             actual = observe(RENDER[path], row.source, row.make_ctx())
             assert actual == django, (
-                f"#2502 on {path}: the default renders {actual!r}, Django renders {django!r}"
+                f"#2502 on {path}: djust renders {actual!r}, Django renders {django!r}"
             )
             assert actual != MARKER_DICT
 
     @pytest.mark.parametrize("render", ALL_FOUR)
     def test_the_guard_is_load_bearing(self, render) -> None:
-        """Sibling: the marker dict is the CONVERSION mangling a kept bound
-        method, not the guard failing — `keep` is never called on any path,
-        while an unstamped method on the same object IS."""
+        """Sibling: `keep` is never called on any path, while an unstamped
+        method on the same object IS."""
         stamped = KeepProbe()
         render("{{ o.keep }}", {"o": stamped})
         assert getattr(stamped, "kept_called", False) is False, (
@@ -1497,102 +932,44 @@ class TestDoNotCallRendersTheMarkerDict2502:
 @pytest.mark.django_db
 class TestFilteredAndDictViewOperands2504:
     """#2504 on the real LiveView entry, plus the unfiled real-entry instance
-    (N0/N0b): a plain object inside a top-level list/tuple reaches NO
-    attribute on the LiveView path, filter or no filter — a `list` is
-    `_JSON_FRIENDLY` in `_sync_state_to_rust` and never enters the sidecar."""
+    (N0/N0b): a plain object inside a top-level list/tuple. The by-name
+    sidecar could not reach these because a `list` is `_JSON_FRIENDLY` and
+    never entered it; the object inside the list now carries its own handle,
+    so the loop variable resolves against the live object and the containing
+    list stops mattering."""
 
     @pytest.mark.parametrize("row_id", ["N", "N2", "N0", "N0b"])
-    def test_the_real_entry_reaches_no_attribute(self, row_id: str) -> None:
-        """#2504's bug, pinned on the HATCH axis where it still lives."""
-        row = ROW_BY_ID[row_id]
-        with resolve_lazy(False):
-            assert liveview_render(row.source, row.make_ctx()) == row.liveview
-        assert row.liveview.strip(",") == ""
-        assert django_render(row.source, row.make_ctx()).strip(","), "premise: Django renders it"
-
-    @pytest.mark.parametrize("row_id", ["N", "N2", "N0", "N0b"])
-    def test_the_shipped_default_closes_2504(self, row_id: str) -> None:
-        """...and the flip closes it (#2539 movement 3).
-
-        The sidecar could not reach these because a `list` is `_JSON_FRIENDLY`
-        and never entered it. Under the default the object inside the list
-        carries its own handle, so the loop variable resolves against the live
-        object and the containing list stops mattering.
-        """
+    def test_2504_is_closed(self, row_id: str) -> None:
         row = ROW_BY_ID[row_id]
         django = django_render(row.source, row.make_ctx())
+        assert django.strip(","), "premise: Django renders it"
         actual = liveview_render(row.source, row.make_ctx())
         assert actual == django, (
-            f"#2504 row {row_id}: the default renders {actual!r}, Django renders {django!r}"
+            f"#2504 row {row_id}: djust renders {actual!r}, Django renders {django!r}"
         )
-        assert actual.strip(","), "the attribute is still unreachable under the default"
-
-    def test_the_alias_mechanism_is_the_discriminating_one_on_the_plain_path(self) -> None:
-        """Sibling: the UNFILTERED operand on the plain path resolves (an alias
-        is registered), the filtered one does not — so the empty cells above
-        are the alias guard refusing, not the walk failing.
-
-        On the HATCH axis: the alias mechanism is what the flip REPLACES, so
-        this discriminates only while the old walk is the one running."""
-        unfiltered, filtered = ROW_BY_ID["N0"], ROW_BY_ID["N"]
-        with resolve_lazy(False):
-            assert plain_render(unfiltered.source, unfiltered.make_ctx()) == CLASS_LEVEL_2
-            assert plain_render(filtered.source, filtered.make_ctx()) == ","
+        assert actual.strip(","), "the attribute is still unreachable"
 
 
 @pytest.mark.django_db
 class TestShadowingNeverResolvesAgainstTheOuterObject2505:
     """Local bindings cannot resolve attributes on a shadowed outer object.
 
-    The eager hatch still misses filtered/LiveView object attributes, while
-    supported source aliases and the default lazy path match Django.
-    """
+    The shadowing bug was the by-NAME sidecar answering the OUTER object for
+    a loop/`with` variable that reuses its name. The bound value carries its
+    own handle, so the name is never looked up in a by-name map and cannot
+    collide — the structural cure rather than a shadowing rule."""
 
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
     @pytest.mark.parametrize("path", PATHS)
-    def test_the_hatch_never_uses_the_shadowed_object(self, row_id: str, path: str) -> None:
-        """Pin the hatch's remaining misses without restoring stale lookups."""
-        row = ROW_BY_ID[row_id]
-        with resolve_lazy(False):
-            actual = RENDER[path](row.source, row.make_ctx())
-        assert "OUTER" not in actual
-        assert actual == recorded(row, path)
-        assert "OUTER" not in django_render(row.source, row.make_ctx())
-
-    @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
-    @pytest.mark.parametrize("path", PATHS)
-    def test_the_shipped_default_closes_2505(self, row_id: str, path: str) -> None:
-        """...and the flip closes it (#2539 movement 3).
-
-        The shadowing bug was the by-NAME sidecar answering the OUTER object
-        for a loop/`with` variable that reuses its name. Under the default the
-        bound value carries its own handle, so the name is never looked up in
-        a by-name map and cannot collide — the structural cure rather than a
-        shadowing rule.
-        """
+    def test_2505_is_closed(self, row_id: str, path: str) -> None:
         row = ROW_BY_ID[row_id]
         django = django_render(row.source, row.make_ctx())
+        assert "OUTER" not in django
         actual = RENDER[path](row.source, row.make_ctx())
         assert actual == django, (
-            f"#2505 row {row_id} on {path}: the default renders {actual!r}, "
-            f"Django renders {django!r}"
+            f"#2505 row {row_id} on {path}: djust renders {actual!r}, Django renders {django!r}"
         )
-        assert "OUTER" not in actual, "the outer object still answers under the default"
-
-    def test_the_controls_pin_the_head_short_circuit(self) -> None:
-        """M4/M5 with a SCALAR outer `x` (no sidecar entry for the head): the
-        plain path is CORRECT unfiltered — the alias resolves — and empty
-        filtered. This is the cell a fix to the `raw.contains_key(head)`
-        short-circuit that broke the alias path would redden.
-
-        On the HATCH axis: it pins the OLD walk's short-circuit, which the
-        default no longer routes through."""
-        m4, m5 = ROW_BY_ID["M4"], ROW_BY_ID["M5"]
-        with resolve_lazy(False):
-            assert plain_render(m4.source, m4.make_ctx()) == CLASS_LEVEL_2
-            assert plain_render(m5.source, m5.make_ctx()) == ",,"
-            assert liveview_render(m4.source, m4.make_ctx()) == ",,"
-            assert liveview_render(m5.source, m5.make_ctx()) == ",,"
+        assert "OUTER" not in actual, "the outer object still answers"
 
 
 def render_page_shell(template: str, *, with_serialized_context: bool, card_cls=ShellCard) -> str:
@@ -1675,13 +1052,10 @@ class TestTheHarnessIsTheRealPath:
             calls.append(1)
             return original(self, *args, **kwargs)
 
-        # Pushed OFF so the asserted bytes are the recorded ones regardless of
-        # which way the shipped default points; the CLAIM is the spy, and the
-        # render is here only to prove it was a real one (#2539 movement 3
-        # flipped the default, which is why this needs the explicit push).
+        # The CLAIM is the spy; the render is here only to prove it was a real
+        # one (row A, held to Django's bytes like every other cell).
         with mock.patch.object(RustBridgeMixin, "_sync_state_to_rust", spy):
-            with resolve_lazy(False):
-                assert liveview_render("{{ o.keep }}", {"o": Mutating()}) == MARKER_DICT
+            assert liveview_render("{{ o.keep }}", {"o": Mutating()}) == ROW_BY_ID["A"].django
         assert calls, "the LiveView column did not go through _sync_state_to_rust"
 
     def test_no_code_in_this_file_calls_the_stand_in(self) -> None:
@@ -1831,14 +1205,12 @@ class TestMutatorsAreNeverAutoCalled2507:
     path (both branches) for every guarded name on a subclass that OVERRIDES
     it.
 
-    Honest note: today this passes for the trivial reason — the shell wires
-    no sidecar (#2513), so no lookup ever reaches `unmount` there. It becomes
-    load-bearing at movement 3, when a handle first reaches `unmount` on this
-    path, and the flip PR must gate it off (drop the `__init_subclass__`
-    re-stamp ⇒ red). The load-bearing pins TODAY are
-    `TestComponentMutatorsAreNeverAutoCalled` (all four columns, gate-off
-    25/26 reddened) and `TestMutatorsRefusedOnTheLiveViewPath` in the 2501
-    file — cited, not copied.
+    Since #2589 the shell carries a sidecar and the live handle reaches
+    `unmount` on this path, so this is load-bearing (gate-off: drop the
+    `__init_subclass__` re-stamp ⇒ red). Its siblings are
+    `TestComponentMutatorsAreNeverAutoCalled` (all four columns) and
+    `TestMutatorsRefusedOnTheLiveViewPath` in the 2501 file — cited, not
+    copied.
     """
 
     @pytest.mark.parametrize("with_serialized_context", SHELL_BRANCHES)
@@ -1881,7 +1253,7 @@ class TestMutatorsAreNeverAutoCalled2507:
 
 
 # ---------------------------------------------------------------------------
-# 5. The dormant sink is defined and NOT routed
+# 5. The sink has exactly one caller, reached unconditionally
 # ---------------------------------------------------------------------------
 def _production(source: str) -> str:
     """Rust source with `//` comment lines and any `#[cfg(test)]` module
@@ -1910,11 +1282,11 @@ def _fn_body(source: str, header: str) -> str:
 
 
 class TestTheSinkHasExactlyOneCaller2539:
-    """Movement 2's re-pointing of `TestTheSinkIsDefinedButUnrouted2539`.
-    `Context::walk_live` is still defined once, still reads no `Encoded`
-    attribute map and still calls no `lookup_segment` — and it now has
-    EXACTLY ONE caller, `Context::walk_from_handle`, and none anywhere else
-    in the workspace."""
+    """`Context::walk_live` is defined once, reads no `Encoded` attribute map,
+    calls no `lookup_segment`, and has EXACTLY ONE caller —
+    `Context::walk_from_handle` — and none anywhere else in the workspace.
+    Since #2628 the route to it is UNCONDITIONAL: the `crate::resolve_lazy()`
+    gate that used to enclose it was deleted with the flag."""
 
     def test_the_sink_is_defined_once(self) -> None:
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
@@ -1951,16 +1323,16 @@ class TestTheSinkHasExactlyOneCaller2539:
                 f"{path.relative_to(ROOT)} calls walk_live — a SECOND routing point"
             )
 
-    def test_the_route_is_gated_on_the_flag(self) -> None:
-        """The call site is reached only behind `resolve_lazy()`, which is
-        what makes the flag-OFF byte identity structural rather than a
-        measurement that could rot."""
+    def test_the_route_is_unconditional(self) -> None:
+        """The call site in `resolve_without_builtins` is the surviving shape
+        of the former flag-ON arm: no `resolve_lazy` gate encloses it (#2628)."""
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
         body = _fn_body(ctx, "fn resolve_without_builtins")
-        assert "crate::resolve_lazy()" in body, "the routing arm is not gated on the flag"
-        assert "walk_from_handle" in body, "resolve_without_builtins does not route"
-        gate = body.index("crate::resolve_lazy()")
-        assert gate < body.index("walk_from_handle"), "the gate is not above the route"
+        assert "if let Some(answer) = self.walk_from_handle(key)? {" in body, (
+            "resolve_without_builtins does not route through walk_from_handle"
+        )
+        assert "resolve_lazy" not in body, "the deleted ADR-027 gate is back"
+        assert "resolve_lazy" not in ctx, "the deleted ADR-027 flag is read somewhere in context.rs"
 
     def test_it_keeps_the_existing_reader_pins(self) -> None:
         """`TestTheSinkHasExactlyTheReadersItClaims` (#2481) counts ONE
@@ -1997,10 +1369,14 @@ class TestTheSinkHasExactlyOneCaller2539:
         assert moved != ctx, "the MOVE mutation did not apply"
         assert len(CALLERS.findall(moved)) == 1, "the move must keep the COUNT at one"
         assert "walk_live" not in _fn_body(moved, "fn walk_from_handle")
-        # The GATE removed.
-        ungated = ctx.replace("if crate::resolve_lazy() {", "if true {", 1)
-        assert ungated != ctx, "the GATE mutation did not apply"
-        assert "crate::resolve_lazy()" not in _fn_body(ungated, "fn resolve_without_builtins")
+        # The route GATED again.
+        gated = ctx.replace(
+            "if let Some(answer) = self.walk_from_handle(key)? {",
+            "if crate::resolve_lazy() { if let Some(answer) = self.walk_from_handle(key)? {",
+            1,
+        )
+        assert gated != ctx, "the GATE mutation did not apply"
+        assert "resolve_lazy" in _fn_body(gated, "fn resolve_without_builtins")
 
 
 class TestTheHandleNeverReachesTheWire2539:
@@ -2049,21 +1425,23 @@ class TestTheHandleNeverReachesTheWire2539:
         )
         assert "self.clone().into_pyobject(py)" in borrowed
 
-    def test_opaque_handles_are_gated_and_temporal_handles_are_type_checked(self) -> None:
+    def test_opaque_and_temporal_handles_have_exactly_four_producers(self) -> None:
         core = self._core()
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
-        assert "resolve_lazy()" in body
+        assert "resolve_lazy" not in body, "the deleted ADR-027 gate is back (#2628)"
         producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
-        # THREE producers since #2770: `opaque_value` (flag-gated),
-        # `django_json_encoded` (isinstance-checked against the four temporal
-        # types) and `slim_timedelta_encoded` (EXACT-type-checked against
-        # `timedelta` — the slim builder for the nested `utcoffset` / `dst`
-        # results, which attaches the handle the full path would have).
-        assert core.count(producer) == 3
+        # FOUR producers since #2628: `opaque_value` (unconditional since
+        # #2628), `handle_only_encoded` (the terminal arm for an object one of
+        # `opaque_value`'s probes refused — #2628, replacing the deleted
+        # `__dict__` dump), `django_json_encoded` (isinstance-checked against
+        # the four temporal types) and `slim_timedelta_encoded` (#2770,
+        # EXACT-type-checked against `timedelta` — the slim builder for the
+        # nested `utcoffset` / `dst` results).
+        assert core.count(producer) == 4
         assert producer in body
-        temporal = core.split("pub fn django_json_encoded", 1)[1].split(
-            "\nfn is_public_attr_name", 1
-        )[0]
+        handle_only = core.split("fn handle_only_encoded", 1)[1].split("\n}\n", 1)[0]
+        assert producer in handle_only
+        temporal = core.split("pub fn django_json_encoded", 1)[1].split("\n}\n", 1)[0]
         assert producer in temporal
         slim = core.split("pub fn slim_timedelta_encoded", 1)[1].split("\n}\n", 1)[0]
         assert producer in slim
@@ -2135,16 +1513,19 @@ class TestTheStrictHelpersAreTheSinksOwn2539:
         )
 
 
-class TestTheFlagReachesEveryRenderEntry2539:
-    """P2: the ONE function every render path calls pushes all THREE ambient
-    settings, and the four Python render entries call it."""
+class TestTheRenderEnvReachesEveryRenderEntry2539:
+    """P2: the ONE function every render path calls pushes BOTH ambient
+    settings (the ADR-027 flag was the third until #2628 deleted it), and the
+    four Python render entries call it."""
 
-    def test_apply_render_env_pushes_all_three(self) -> None:
+    def test_apply_render_env_pushes_both(self) -> None:
         from djust import render_env
 
         body = inspect.getsource(render_env.apply_render_env)
-        for applier in ("apply_active_timezone", "apply_number_format", "apply_resolve_lazy"):
+        for applier in ("apply_active_timezone", "apply_number_format"):
             assert f"{applier}()" in body, f"{applier} is not pushed by apply_render_env"
+        assert "resolve_lazy" not in body, "the deleted ADR-027 push is back (#2628)"
+        assert not hasattr(render_env, "apply_resolve_lazy")
 
     @pytest.mark.parametrize(
         "module_path",
@@ -2159,60 +1540,24 @@ class TestTheFlagReachesEveryRenderEntry2539:
         source = (PYTHON_DIR / module_path).read_text(encoding="utf-8")
         assert "apply_render_env" in source, (
             f"{module_path} is a render entry that never acquires the ambient settings — "
-            f"the timezone (#2209), the number format (#2221) and the ADR-027 flag (#2539) "
-            f"all default to whatever the thread last rendered with"
+            f"the timezone (#2209) and the number format (#2221) both default to whatever "
+            f"the thread last rendered with"
         )
 
-    def test_the_config_reader_is_the_only_one(self) -> None:
-        """The key is read in ONE place, like `template_auto_call` beside it."""
-        from djust import config as config_module
+    def test_the_flag_is_gone_from_the_package(self) -> None:
+        """#2628 deleted the kill-switch. No production module reads the key,
+        `config.py` has no default for it, and the Rust module exports neither
+        the setter nor the getter."""
+        from djust.config import LiveViewConfig
 
-        assert config_module.template_resolve_lazy_enabled() in (True, False)
+        assert "template_resolve_lazy" not in LiveViewConfig._defaults
+        assert not hasattr(_rust, "set_resolve_lazy")
+        assert not hasattr(_rust, "resolve_lazy_enabled")
         offenders = []
         for path in sorted((PYTHON_DIR / "djust").rglob("*.py")):
-            if path.name == "config.py":
-                continue
+            if "tests" in path.relative_to(PYTHON_DIR).parts:
+                continue  # the package sweep is `test_adr027_step5_deletion_2628.py`'s
             text = path.read_text(encoding="utf-8", errors="replace")
-            if '"template_resolve_lazy"' in text or "'template_resolve_lazy'" in text:
+            if "template_resolve_lazy" in text:
                 offenders.append(str(path.relative_to(PYTHON_DIR)))
-        assert offenders == [], (
-            f"these read the key inline instead of calling "
-            f"config.template_resolve_lazy_enabled(): {offenders}"
-        )
-
-    def test_the_default_is_on(self) -> None:
-        """Movement 3's contract in one assertion (#2539).
-
-        Was ``test_the_default_is_off`` through movement 2, whose docstring
-        said "movement 3 flips it, and this line is what it has to come here
-        and change". It came here and changed.
-        """
-        from djust.config import LiveViewConfig
-
-        assert LiveViewConfig._defaults["template_resolve_lazy"] is True
-
-    def test_the_rust_default_tracks_the_python_default(self) -> None:
-        """The two literals that must move together (#1646).
-
-        ``crates/djust_core/src/lib.rs``'s ``RESOLVE_LAZY`` thread-local is
-        what a thread answers when nothing pushed — a direct
-        ``_rust.render_template`` caller, or ``ComponentActor::render``. While
-        movement 2 shipped the Python default OFF the two agreed by accident;
-        after the flip a stale ``Cell::new(false)`` would mean a fresh thread
-        silently resolves by the OLD mechanism. Asserted on a thread that has
-        NEVER pushed, which is the only place the Rust literal is observable.
-        """
-        import threading
-
-        from djust import _rust
-        from djust.config import LiveViewConfig
-
-        seen: list[bool] = []
-        t = threading.Thread(target=lambda: seen.append(_rust.resolve_lazy_enabled()))
-        t.start()
-        t.join()
-        assert seen == [LiveViewConfig._defaults["template_resolve_lazy"]], (
-            f"a thread that never pushed reads {seen!r}, but the shipped default is "
-            f"{LiveViewConfig._defaults['template_resolve_lazy']!r} — the Rust `Cell` default "
-            f"in crates/djust_core/src/lib.rs has drifted from config.py's."
-        )
+        assert offenders == [], f"these still name the deleted ADR-027 flag: {offenders}"

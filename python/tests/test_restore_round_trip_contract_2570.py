@@ -1,6 +1,7 @@
 """The state-backend round-trip contract for ADR-027 lazy handles (#2570).
 
-With ``template_resolve_lazy`` ON, a plain object crosses into Rust as a
+Under ADR-027 (its kill-switch deleted in Step 5, #2628, so this is the only
+behaviour there is), a plain object crosses into Rust as a
 ``Value::Encoded`` carrying a LIVE handle and an EMPTY eager ``attrs`` map
 (movement-2 correction 2: the handle replaces the map, which is what stops
 the #2516 recursion). The state backends' ``get`` returns a msgpack
@@ -21,7 +22,7 @@ first render. This file pins that contract in three layers:
 1. **Framework contract** (load-bearing): a real ``WebsocketCommunicator``
    mount, then a second mount on the SAME session + URL (which is what makes
    ``_initialize_rust_view`` take the cache HIT and materialise a clone),
-   asserting the class attribute renders under the flag ON and OFF, and
+   asserting the class attribute renders, and
    asserting the clone WAS materialised (a spy on ``InMemoryStateBackend.get``)
    so the test cannot pass by never hitting the cache.
 2. **API-level contract** (the degraded bytes, pinned by name): a
@@ -35,9 +36,8 @@ first render. This file pins that contract in three layers:
 Gate-off (#1468 / #2129, verified while authoring): marking the view in the
 cache-HIT branch of ``_initialize_rust_view`` and making
 ``_sync_state_to_rust`` early-return for a marked view (= render the clone
-without a sync) turns the framework contract test RED under both flags
-(``[][]`` lazy-on, ``[][in-dict]`` lazy-off) while the API-level degraded
-tests stay GREEN. Two weaker mutations redden ONLY their structural pin:
+without a sync) turns the framework contract test RED (``[][]``) while the
+API-level degraded test stays GREEN. Two weaker mutations redden ONLY their structural pin:
 setting ``_sync_done_this_cycle`` in the HIT branch is a no-op for the mount
 path, which syncs explicitly (``dispatch_mount``), and skipping
 ``_force_full_html`` in ``dispatch_mount`` touches the session-snapshot
@@ -47,7 +47,6 @@ clone is the explicit mount sync on a view with no baseline.
 
 from __future__ import annotations
 
-import contextlib
 import inspect
 import pathlib
 import re
@@ -55,19 +54,19 @@ import re
 import djust
 import pytest
 from asgiref.sync import sync_to_async
-from djust import LiveView, _rust
+from djust import LiveView
 from djust._rust import RustLiveView
 
 pytestmark = pytest.mark.django_db
 
 
 # --------------------------------------------------------------------------- #
-# Fixture class + the flag axis (mirrors test_adr027_characterization_net_2539)
+# Fixture class (mirrors test_adr027_characterization_net_2539)
 # --------------------------------------------------------------------------- #
 class Cls:
     """A plain object whose lookup of interest is a CLASS attribute (not in
-    ``__dict__``, so the flag-OFF eager map never held it) plus an instance
-    attribute (which the eager map does hold)."""
+    ``__dict__``, so no eager attribute map could have held it) plus an
+    instance attribute."""
 
     cls_attr = "class-level"
 
@@ -77,29 +76,6 @@ class Cls:
     def __repr__(self) -> str:
         return "<Cls>"
 
-
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool):
-    """Flip ``LIVEVIEW_CONFIG['template_resolve_lazy']`` through the real
-    wiring and assert the Rust thread-local took it (#2017 — a setter with no
-    getter cannot be tested end to end)."""
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, (
-        "the ADR-027 flag did not reach Rust — apply_render_env() is not wiring it"
-    )
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
-
-
-FLAGS = [pytest.param(False, id="lazy-off"), pytest.param(True, id="lazy-on")]
 
 TEMPLATE = "<div>[{{ obj.cls_attr }}][{{ obj.inst_attr }}]</div>"
 SYNCED = "[class-level][in-dict]"
@@ -146,11 +122,8 @@ async def _mount_once(session_key: str, url: str) -> dict:
     return frame
 
 
-@pytest.mark.parametrize("lazy", FLAGS)
 @pytest.mark.asyncio
-async def test_second_mount_renders_the_class_attribute_from_a_backend_clone(
-    lazy: bool, monkeypatch
-) -> None:
+async def test_second_mount_renders_the_class_attribute_from_a_backend_clone(monkeypatch) -> None:
     """The load-bearing pin: the first render after a state-backend round
     trip is preceded by a full sync, so the class attribute renders."""
     pytest.importorskip("channels")
@@ -185,7 +158,7 @@ async def test_second_mount_renders_the_class_attribute_from_a_backend_clone(
     session_key = await sync_to_async(_create_session)()
     url = "/round-trip-2570/"
 
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]), resolve_lazy(lazy):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         first = await _mount_once(session_key, url)
         assert SYNCED in (first.get("html") or ""), (
             f"fresh mount must render the live object; got {first.get('html')!r}"
@@ -213,7 +186,7 @@ def _api_view() -> RustLiveView:
     return view
 
 
-def test_a_raw_clone_rendered_without_a_sync_answers_empty_under_the_lazy_flag() -> None:
+def test_a_raw_clone_rendered_without_a_sync_answers_empty() -> None:
     """API-LEVEL CONTRACT (#2570, deliberate): a ``RustLiveView`` clone that
     came back from ``serialize_msgpack`` / ``deserialize_msgpack`` and is
     rendered WITHOUT an ``update_state`` re-sync answers ``''`` for EVERY
@@ -227,30 +200,18 @@ def test_a_raw_clone_rendered_without_a_sync_answers_empty_under_the_lazy_flag()
     ``class-level`` or ``in-dict`` must be a deliberate act that rewrites
     this assertion by name.
     """
-    with resolve_lazy(True):
-        view = _api_view()
-        assert view.render() == f"<div>{SYNCED}</div>"
+    view = _api_view()
+    assert view.render() == f"<div>{SYNCED}</div>"
 
-        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-        assert clone.render() == "<div>[][]</div>", (
-            "the DEGRADED contract: a handle-only value restored from msgpack has "
-            "neither handle nor attrs; a render without a sync answers empty"
-        )
+    clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+    assert clone.render() == "<div>[][]</div>", (
+        "the DEGRADED contract: a handle-only value restored from msgpack has "
+        "neither handle nor attrs; a render without a sync answers empty"
+    )
 
-        # The re-attachment IS the sync: one update_state re-converts the value.
-        clone.update_state({"obj": Cls()})
-        assert clone.render() == f"<div>{SYNCED}</div>"
-
-
-def test_a_raw_clone_keeps_todays_eager_map_with_the_flag_off() -> None:
-    """Flag OFF is byte-identical to today: the eager ``attrs`` map (the
-    instance ``__dict__``) survives the round trip, and the class attribute
-    was never in it — at the raw API there is no sidecar to fall back to."""
-    with resolve_lazy(False):
-        view = _api_view()
-        assert view.render() == "<div>[][in-dict]</div>"
-        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-        assert clone.render() == "<div>[][in-dict]</div>"
+    # The re-attachment IS the sync: one update_state re-converts the value.
+    clone.update_state({"obj": Cls()})
+    assert clone.render() == f"<div>{SYNCED}</div>"
 
 
 # --------------------------------------------------------------------------- #

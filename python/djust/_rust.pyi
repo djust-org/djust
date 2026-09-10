@@ -396,36 +396,6 @@ def set_django_value_repr(enabled: bool) -> None:
 def django_value_repr_enabled() -> bool:
     """Current Django-parity value-rendering setting."""
 
-def set_resolve_lazy(enabled: bool) -> None:
-    """Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539).
-
-    `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **True** since #2539
-    movement 3 (`False` is the escape hatch). When on, a dotted template lookup
-    resolves against the LIVE Python object one segment at a time — Django's
-    `Variable._resolve_lookup` — instead of against an eager conversion of it.
-
-    Thread-local for the reason `set_active_timezone` below is, and NOT a
-    per-`Context` field: half the behaviour it gates lives inside the
-    PyO3 conversion (`impl FromPyObject for Value`), which has no `Context` to
-    thread config through. Applied per render by
-    `djust.render_env.apply_render_env`, beside the timezone and the number
-    format, so a render path cannot acquire one ambient setting and miss
-    another.
-
-    The thread-local is SET, not scoped: a thread keeps the last pushed value.
-    Every framework render entry pushes on each render, so this only matters
-    for a caller reaching `render_template` / `render_template_with_dirs`
-    directly — it inherits whatever the thread last rendered with, and on a
-    FRESH thread that is the Rust-side default, which tracks the Python one.
-    """
-
-def resolve_lazy_enabled() -> bool:
-    """The calling thread's ADR-027 lazy-resolution flag (#2539).
-
-    Exposed so the Python side can ASSERT the wiring took effect rather than
-    assume it — a setter with no getter cannot be tested end to end (#2017).
-    """
-
 def set_active_timezone(name: Optional[str] = None) -> bool:
     """Set the active render timezone for the CALLING THREAD (#2209).
 
@@ -898,8 +868,6 @@ class RenderEnv:
         """Snapshot the calling thread's render cells."""
         ...
 
-    @property
-    def resolve_lazy(self) -> bool: ...
     @property
     def timezone(self) -> Optional[str]: ...
     @property
@@ -1482,8 +1450,6 @@ __all__ = [
     "set_virtual_keyed_ops",
     "set_django_value_repr",
     "django_value_repr_enabled",
-    "set_resolve_lazy",
-    "resolve_lazy_enabled",
     "set_active_timezone",
     "active_timezone_name",
     "set_number_format",
