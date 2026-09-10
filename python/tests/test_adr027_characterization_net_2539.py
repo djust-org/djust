@@ -1561,3 +1561,102 @@ class TestTheRenderEnvReachesEveryRenderEntry2539:
             if "template_resolve_lazy" in text:
                 offenders.append(str(path.relative_to(PYTHON_DIR)))
         assert offenders == [], f"these still name the deleted ADR-027 flag: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# The two "stays"/fixes of ADR-027 Step 5 (#2628) that had no pytest pin —
+# the #2775 review's 🟡 (a) and 🟡 (b). Each is a parity cell against Django
+# on every djust entry, and each has a named gate-off that turns it red.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestTheAliasFallbackStays2628:
+    """The by-name sidecar's alias fallback (`Context::resolve_alias` in
+    `resolve_without_builtins`) is a Django-parity mechanism for a value that
+    carries NO live handle — a model crosses as a floored dict (ADR-027
+    (b)(1)) — and ADR-027 Step 5 kept it for that reason. Until this pin the
+    only thing that went red without it was an incidental benchmark cell.
+
+    Gate-off (verified): `match self.resolve_alias(key)` →
+    `match None::<String>` in `crates/djust_core/src/context.rs` turns the
+    unfiltered row red on every entry (`'' != '1'`).
+    """
+
+    @staticmethod
+    def _alice() -> User:
+        u = User.objects.create_user("alice", password="pw-secret")
+        u.groups.create(name="g1")
+        return u
+
+    @pytest.mark.parametrize("render", ALL_FOUR)
+    def test_a_model_rebound_by_with_reaches_its_reverse_relation(self, render) -> None:
+        source = "{% with q=user %}{{ q.groups.count }}{% endwith %}"
+        u = self._alice()
+        assert django_render(source, {"user": u}) == "1", "premise: Django renders it"
+        assert render(source, {"user": u}) == "1"
+
+    @pytest.mark.parametrize("render", ALL_FOUR)
+    def test_the_filtered_rebinding_is_a_recorded_gap_not_a_regression(self, render) -> None:
+        """A FILTERED operand registers no alias (`context.rs`, #2504 — the
+        guards are `Context::is_safe`'s XSS boundary), and a model has no
+        handle to fall back on, so this cell renders `''` where Django renders
+        `1`. Pre-existing on every entry; recorded so the row above cannot be
+        "fixed" by widening the alias guards without this going green — and
+        so a future change that closes it is noticed."""
+        source = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
+        u = self._alice()
+        assert django_render(source, {"user": u}) == "1"
+        assert render(source, {"user": u}) == ""
+
+
+class TestStringIfInvalidReachesTheLiveWalk2628:
+    """`walk_live`'s `CallOutcome::Empty` arm (an args-required method, an
+    `alters_data` refusal) substitutes the ENGINE's `string_if_invalid` and
+    keeps walking — Django's `_resolve_lookup`. Until #2628 it substituted a
+    literal `""`; nothing noticed because an attribute-bearing object took the
+    by-name sidecar walk, which answered `Missing` and let the renderer
+    substitute the option. Routing such objects through the handle turned
+    Django's `basic-syntax20` from OK to `''` — caught by the scoreboard
+    ratchet, not the unit suite. This is the unit-suite pin.
+
+    Gate-off (verified): `Context::string_if_invalid_object` body →
+    `PyString::new(py, "")` turns both rows red (`'' != 'INVALID'`).
+    """
+
+    class SomeClass:
+        def method2(self, o):  # args-required: Django's Empty
+            return o
+
+    @staticmethod
+    def _engines(marker: str):
+        from django.template.backends.django import DjangoTemplates
+
+        from djust.template_backend import DjustTemplateBackend
+
+        params = {
+            "NAME": "sii",
+            "DIRS": [],
+            "APP_DIRS": False,
+            "OPTIONS": {"string_if_invalid": marker},
+        }
+        return (
+            DjangoTemplates({**params, "NAME": "dj-sii"}),
+            DjustTemplateBackend({**params, "NAME": "du-sii"}),
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("{{ var.method2 }}", id="basic-syntax20"),
+            pytest.param("{{ var.method2.lower }}", id="keeps-walking-past-the-substitution"),
+        ],
+    )
+    def test_an_args_required_method_renders_the_engines_string_if_invalid(self, source) -> None:
+        django_engine, djust_engine = self._engines("INVALID")
+        ctx = {"var": self.SomeClass()}
+        expected = str(django_engine.from_string(source).render(dict(ctx)))
+        # `{{ var.method2 }}` is `INVALID`; `{{ var.method2.lower }}` is
+        # `invalid` — Django substitutes the option and KEEPS WALKING.
+        assert expected.lower() == "invalid", "premise: Django substitutes the option here"
+        assert str(djust_engine.from_string(source).render(dict(ctx))) == expected
