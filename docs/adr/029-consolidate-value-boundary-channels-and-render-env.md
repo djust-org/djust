@@ -10,7 +10,7 @@
 - [ADR-022](022-v1.1-code-quality-single-path-convergence.md) — single-path convergence
 - `docs/architecture/VALUE_BOUNDARY.md` — value boundary map and false-claim catalog
 - `docs/SECURE_DEFAULTS.md` — serialization floor authority (`_attr_is_serializable`, `protect_sidecar_strict`)
-- Issues/PRs: #1986, #2142, #2375, #2448, #2501, #2504, #2717, #2728, #2731, #2732, #2733, #2734, #2737, #2742, #2743, #2744
+- Issues/PRs: #1986, #2142, #2375, #2448, #2501, #2504, #2717, #2728, #2731, #2732, #2733, #2734, #2737, #2741, #2742, #2743, #2744, #2750
 
 ---
 
@@ -20,11 +20,11 @@
 1. The **ADR-027 live handle** (`Encoded::live`, `crates/djust_core/src/lib.rs:719`), carried inside the converted value.
 2. The **by-name raw-Python sidecar** (`Context.raw_py_objects`, `crates/djust_core/src/context.rs:292`), keyed by top-level name and tracked through `Context::aliases` (`#2375`).
 
-This duality creates a verified shadowing trap (`VALUE_BOUNDARY.md` §6.1): bare rebindings and top-level expressions resolve via the sidecar even when the live handle is gated off, making un-isolated tests vacuous. In addition, ambient render settings (`RESOLVE_LAZY`, timezone, decimal formats) rely on a thread-local `Cell<bool>` (`lib.rs:2821`), requiring a per-render synchronization chokepoint before dispatch across worker threads.
+This duality creates a verified shadowing trap (`VALUE_BOUNDARY.md` §6.1): bare rebindings and top-level expressions resolve via the sidecar even when the live handle is gated off, making un-isolated tests vacuous. In addition, ambient render settings (`RESOLVE_LAZY`, timezone, decimal formats) rely on a thread-local `Cell<bool>` (`lib.rs:2821`), requiring a per-render synchronization chokepoint before dispatch across worker threads, and silently failing to propagate to tokio actor tasks (#2741).
 
 This ADR drafts the consolidation of the value boundary onto:
 1. **A single live channel**: retiring the by-name sidecar and alias bookkeeping in favor of the by-value handle, while explicitly resolving the model proxy contract (`_SidecarModelProxy`).
-2. **An explicit `RenderEnv`**: replacing the ambient thread-local with an explicit environment struct passed into conversion and rendering.
+2. **An explicit `RenderEnv`**: replacing the ambient thread-local with an explicit environment struct passed into conversion and rendering, eliminating ambient state divergence on both thread-pool and actor paths.
 
 Every step in this ADR is subject to **four mandatory gating criteria** to prevent unmeasured claims and regression of closed security defects.
 
@@ -54,12 +54,14 @@ The value boundary is historically prone to false absolutes and unverified perfo
 * Introducing a separate Python dotted-lookup helper bypasses `_attr_is_serializable` and reopens the exact vulnerability class closed in FINDING-14, FINDING-15, and #2734.
 * **GIL "Ping-Pong" Refuted**: The claim that segment-by-segment `Python::attach` in `walk_live` causes severe GIL contention is unmeasured and largely false on the default path: `sync_to_async` holds the GIL across the render, making `Python::attach` an inexpensive reentrant check rather than a thread synchronization acquisition.
 
-### Gate 4: Thread-Local Characterization (Smell vs. Hazard)
-* The `RESOLVE_LAZY` thread-local is a **design smell**, verified **not an active bug**.
-* The 28 render dispatches in `python/djust/runtime.py` do not manage the thread-local individually. Instead, `_sync_state_to_rust` routes through a single per-render chokepoint:
-  `self._apply_render_env()` (`python/djust/mixins/rust_bridge.py:657`).
-* In the #2743 review verification, the config was set to `False` and the thread-local was deliberately poisoned to `True`: a real render across `sync_to_async(thread_sensitive=True)` properly returned the flag-off answer and left the thread-local `False`.
-* Replacing the thread-local with an explicit `RenderEnv` is justified on architectural cleanliness grounds (eliminating ambient state), not as an emergency bug fix.
+### Gate 4: Thread-Local Characterization and Scope (Smell on Default Path, Bug on Actor Path #2741)
+* On the default path, the `RESOLVE_LAZY` thread-local is a **design smell**, verified **not an active bug**:
+  - The 28 render dispatches in `python/djust/runtime.py` do not manage the thread-local individually. Instead, `_sync_state_to_rust` routes through a single per-render chokepoint: `self._apply_render_env()` (`python/djust/mixins/rust_bridge.py:657`).
+  - In the #2743 review verification, the config was set to `False` and the thread-local was deliberately poisoned to `True`: a real render across `sync_to_async(thread_sensitive=True)` properly returned the flag-off answer and left the thread-local `False`.
+* On the **actor path**, however, the smell manifests as an **observable behavioral bug** (#2741):
+  - In `crates/djust_live/src/actors/view.rs:560`, `tokio::spawn(actor.run())` drives rendering from a tokio worker thread.
+  - That worker thread never executes Python's `_apply_render_env()`, has no Python thread-local set, and silently reads the hardcoded Rust default (`true`), ignoring project configuration.
+* **Reshaped Verification**: Rather than testing against a poisoned thread-local (which is self-cancelling once the thread-local is deleted), Gate 4 requires asserting that **the configured value reaches the render with no ambient state involved**. A clean worker thread that has touched no ambient setup hooks must honor the configured `RenderEnv` passed to it.
 
 ---
 
@@ -97,6 +99,8 @@ static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) 
 ```
 This ambient variable is read at 8 functional sites across `djust_core` and `djust_templates` (`VALUE_BOUNDARY.md` §5.4). It was placed in a thread-local because PyO3's `FromPyObject::extract` trait does not accept contextual parameters.
 
+While the default path papers over this with the `_apply_render_env()` chokepoint, the actor path (#2741) demonstrates why ambient state is architecturally broken: tokio worker tasks bypass the Python chokepoint and execute renders with the hardcoded Rust default, causing real divergence in deployed environments.
+
 #### Target State
 1. Introduce an explicit `RenderEnv` in `djust_core`:
    ```rust
@@ -113,7 +117,7 @@ This ambient variable is read at 8 functional sites across `djust_core` and `dju
        pub fn from_py_with_env(ob: &Bound<'_, PyAny>, env: &RenderEnv) -> PyResult<Self> { ... }
    }
    ```
-3. Pass `&RenderEnv` through `Context::new`, `render_template`, and `render_nodes_partial`.
+3. Pass `&RenderEnv` through `Context::new`, `render_template`, `render_nodes_partial`, and the actor runtime.
 4. Deprecate `djust_core::set_resolve_lazy` and `djust_core::resolve_lazy()`.
 
 ---
@@ -133,7 +137,7 @@ flowchart TD
         P3["3. Retire RESOLVE_LAZY thread-local Cell"]
     end
 
-    P3 --> G4["Gate 4: Verify against poisoned thread-local test"]
+    P3 --> G4["Gate 4: Verify configured value reaches render with no ambient state"]
     G4 --> P4
 
     subgraph Phase 2: Channel Consolidation
@@ -147,15 +151,15 @@ flowchart TD
 
 ### Phase 1: Explicit `RenderEnv` Injection
 1. Add `RenderEnv` to `djust_core`.
-2. Update `Context` and `render_nodes_partial` to accept `&RenderEnv`.
+2. Update `Context`, `render_nodes_partial`, and `view.rs` actors to accept `&RenderEnv`.
 3. Eliminate `RESOLVE_LAZY` and the `_apply_render_env` push mechanism.
-4. Verify that the 28 render dispatches pass all existing tests without ambient synchronization.
+4. Verify Gate 4: assert that the configured value reaches the render with no ambient state involved, across both `sync_to_async` worker threads and tokio actor tasks (#2741).
 
 ### Phase 2: Channel Consolidation
 1. Resolve the `_SidecarModelProxy` contract: ensure model method lookups have a single, safe, verified path.
 2. Route all live lookups through `walk_from_handle`.
 3. Delete `Context::aliases` (#2375) and reduce `Context::resolve_without_builtins` from 5 arms to 3.
-4. Verify that `TestFilteredAndDictViewOperands2504` and `TestTheSerializationFloorHoldsOnTheNewHandle` stay green without requiring isolating bindings.
+4. Verify Gate 3: ensure `TestFilteredAndDictViewOperands2504` and `TestTheSerializationFloorHoldsOnTheNewHandle` stay green without requiring isolating bindings.
 
 ---
 
@@ -171,4 +175,5 @@ flowchart TD
 
 - **Security Pins**: Must maintain green status on `python/tests/test_sized_sequence_conversion_2695_2693.py:775` (`TestTheSerializationFloorHoldsOnTheNewHandle`) and `crates/djust_core/tests/test_django_lookup_sink_2539.rs`.
 - **Wire Safety**: Verify `TestTheHandleNeverReachesTheWire2539` continues to pass (handles remain strictly transient).
+- **Actor Parity**: Add an explicit test asserting that actor renders under tokio tasks honor non-default `RenderEnv` settings (#2741).
 - **Performance**: Benchmark `benchmarks/stress_templates.py` before and after each phase to ensure no regression in render throughput.
