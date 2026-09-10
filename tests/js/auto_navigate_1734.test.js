@@ -48,7 +48,11 @@ function createEnv({ routeMap = {}, ws = null, autoNav = true } = {}) {
 }
 
 function makeWS() {
-    return { ws: {}, viewMounted: true, sendMessage: vi.fn() };
+    // #2705: liveRedirectMount() is how the real socket sends a
+    // live_redirect_mount; it ends in sendMessage(), which the assertions read.
+    const ws = { ws: {}, viewMounted: true, sendMessage: vi.fn() };
+    ws.liveRedirectMount = function (m) { this.sendMessage(m); };
+    return ws;
 }
 
 // A mock click event whose target is a real <a> so `.closest` works.
