@@ -313,3 +313,25 @@ def test_every_scanned_test_root_actually_has_the_autouse_reset():
         "these roots are scanned by the guards above but have no autouse "
         f"reset_djust_globals fixture, so nothing protects them: {missing}"
     )
+
+
+def test_reset_djust_globals_strips_an_instance_level_render_shadow_2749():
+    """A spy that "restored" a bound method as an instance attribute.
+
+    ``h.render = h.render`` looks like a no-op and is not: it plants an
+    instance attribute that shadows the class-level ``render`` for the rest
+    of the process, so a later ``RegroupTagHandler.render = spy`` is never
+    called (#2749 — five ``test_tag_bridge_object_parity_2731`` cases, red on
+    serial ``main``). The reset must strip it and must leave genuine instance
+    state alone.
+    """
+    from djust.template_tags import _registered_handlers
+    from djust.test_isolation import reset_djust_globals
+
+    handler = _registered_handlers["regroup"]
+    before = set(vars(handler))
+    handler.render = handler.render  # the #2749 shape
+    assert "render" in vars(handler)
+    reset_djust_globals()
+    assert "render" not in vars(handler)
+    assert set(vars(handler)) == before, "only the shadow may be stripped"
