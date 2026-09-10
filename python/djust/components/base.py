@@ -601,6 +601,10 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
     # _set_parent_callback once the component is mounted under a view.
     _parent: Optional[Any] = None
     _parent_callback: Optional[Callable[..., Any]] = None
+    # The parent attribute this component is held under (``self.table``), as
+    # recorded by ``ComponentMixin._register_component`` — the key
+    # ``trigger_update`` hands to ``set_changed_keys`` (#2779).
+    _parent_attr: Optional[str] = None
 
     # ── Descriptor support ──
 
@@ -922,9 +926,32 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 
         This notifies the parent that the component state has changed
         and the view should be re-rendered.
+
+        Load-bearing since #2779: a ``LiveComponent`` held in view state is an
+        opaque object to change detection (``deep_fingerprint`` compares it by
+        ``id()``), so a handler that mutates the component in place — ``sort_by``,
+        ``toggle_row``, ``dismiss`` — left ``{{ table.render }}`` in the parent's
+        template STALE over the WebSocket: the Rust context was never re-synced
+        for that name. This now routes through the parent's sanctioned bypass,
+        ``set_changed_keys(<attr>)`` (the attr name recorded at registration by
+        ``ComponentMixin._register_component``), or the zero-arg force-render
+        when the name is unknown. A parent-defined ``_trigger_update`` hook is
+        still honoured first.
         """
-        if self._parent and hasattr(self._parent, "_trigger_update"):
-            self._parent._trigger_update()
+        parent = self._parent
+        if parent is None:
+            return
+        if hasattr(parent, "_trigger_update"):
+            parent._trigger_update()
+            return
+        mark = getattr(parent, "set_changed_keys", None)
+        if not callable(mark):
+            return
+        attr = getattr(self, "_parent_attr", None)
+        if attr:
+            mark(attr)
+        else:
+            mark()
 
     def _set_parent_callback(self, callback: Callable[..., Any]) -> None:
         """

@@ -203,6 +203,26 @@ self.table = TableComponent(
 )
 ```
 
+A `sortable` column header carries `aria-sort` (`none` / `ascending` /
+`descending`) and a visual mark in the framework's icon convention —
+Bootstrap Icons classes on `bootstrap5` (`bi-arrow-down-up`, `bi-caret-up-fill`,
+`bi-caret-down-fill`; load the Bootstrap Icons stylesheet), the vendored
+heroicons SVG on `tailwind`, and `⇅` / `▲` / `▼` on `plain`.
+
+`selectable=True` adds a checkbox per row and one in the header. A row is
+identified by its `row_key` value (default `"id"`), stored as a string in
+`selected_rows` — the same convention as `{% data_table %}`:
+
+```python
+self.table = TableComponent(columns=..., rows=..., selectable=True, row_key="id")
+# after the user ticks two rows:
+self.table.selected_rows  # ["3", "7"]
+```
+
+The row checkbox toggles that row (`toggle_row`); the header checkbox selects
+every row, or clears the selection when every row is already selected
+(`toggle_all`).
+
 ### `PaginationComponent`
 
 ```python

@@ -196,6 +196,7 @@ _RENDER_KWARGS: Dict[str, Dict[str, Any]] = {
     "TableComponent": {
         "columns": [{"key": "id", "label": "ID", "sortable": True}, {"key": "n", "label": "N"}],
         "rows": [{"id": 1, "n": "a"}],
+        "selectable": True,  # #2779: the row/header checkboxes are controls too
     },
     "PaginationComponent": {"current_page": 2, "total_pages": 5},
     "TabsComponent": {"tabs": [{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}]},
@@ -282,13 +283,49 @@ def _self_targeting_controls() -> List[Tuple[type, str, str, str, str]]:
     return rows
 
 
+def _ATTR_NAMES(tag: str) -> set:  # noqa: N802 — reads as the set it returns
+    return {name for name, _ in _ATTR.findall(tag)}
+
+
 def _row_id(v: Any) -> str:
     if isinstance(v, type):
         return v.__name__
     return v if len(v) < 24 else "tag"
 
 
+def _rendered_checkboxes() -> List[Tuple[type, str, str]]:
+    """``(cls, framework, tag_html)`` for every ``<input type="checkbox">`` a
+    component renders — INCLUDING ones with no event attribute at all, which
+    the control sweep above cannot see (#2779: the table's checkboxes were
+    bare ``<input type="checkbox">``, so no ``dj-*`` row existed to go red)."""
+    rows = []
+    for cls in _live_components():
+        for framework in _FRAMEWORKS:
+            comp = cls(component_id="cid", **_RENDER_KWARGS.get(cls.__name__, {}))
+            for m in _TAG.finditer(_render_under(comp, framework)):
+                attrs = dict(_ATTR.findall(m.group(0)))
+                if attrs.get("type") == "checkbox":
+                    rows.append((cls, framework, m.group(0)))
+    return rows
+
+
 class TestEveryComponentSelfTargetIsADecoratedRoutedHandler:
+    def test_checkbox_sweep_is_not_vacuous(self):
+        boxes = _rendered_checkboxes()
+        assert {cls.__name__ for cls, _, _ in boxes} >= {"TableComponent", "ManyToManySelect"}
+        assert {fw for _, fw, _ in boxes} == set(_FRAMEWORKS)
+
+    @pytest.mark.parametrize("cls,framework,tag", _rendered_checkboxes(), ids=_row_id)
+    def test_every_rendered_checkbox_has_an_event_target(self, cls, framework, tag):
+        """A component-rendered checkbox that carries NO ``dj-click`` /
+        ``dj-change`` / ``dj-input`` is decorative — it toggles in the browser
+        and reaches no handler (#2779). The control sweep then validates the
+        target it does carry."""
+        assert any(attr in _ATTR_NAMES(tag) for attr in _EVENT_ATTRS), (
+            f"{cls.__name__} [{framework}]: renders a checkbox with no event "
+            f"attribute, so ticking it does nothing server-side: {tag}"
+        )
+
     def test_sweep_discovers_the_package(self):
         classes = _live_components()
         assert len(classes) >= 3, classes
