@@ -2743,13 +2743,38 @@ pub fn extract_template_variables(
     // Walk the AST and extract variable paths
     extract_from_nodes(&nodes, &mut variables);
 
-    // Deduplicate and sort paths for each variable
+    // Normalize, deduplicate and sort paths for each variable.
+    //
+    // A numeric segment is an INDEX into a sequence, never a model field — an
+    // identifier cannot start with a digit — so `{{ rows.0.username }}` names
+    // the element field `username` of `rows`, and `{{ rows.0 }}` names a whole
+    // element (an empty path, the same as `{{ rows }}`). Left in, `0.username`
+    // reached the JIT serializer as an attribute path and serialized `[{}]`
+    // for every list and QuerySet, saved or not (#2736). This is the one
+    // chokepoint every producer above flows through, so the for-loop
+    // transfer and the tag-operand walk cannot drift from it (#1646).
     for paths in variables.values_mut() {
+        for path in paths.iter_mut() {
+            if path.split('.').any(is_index_segment) {
+                *path = path
+                    .split('.')
+                    .filter(|segment| !is_index_segment(segment))
+                    .collect::<Vec<_>>()
+                    .join(".");
+            }
+        }
+        paths.retain(|path| !path.is_empty());
         paths.sort();
         paths.dedup();
     }
 
     Ok(variables)
+}
+
+/// A dotted-path segment that is a sequence index (`0` in `rows.0.username`)
+/// rather than an attribute name.
+fn is_index_segment(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Collect the set of `dj-model="<field>"` attribute *values* that appear as

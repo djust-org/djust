@@ -311,6 +311,34 @@ class JITMixin:
             )
             return [normalize_django_value(obj) for obj in queryset]
 
+    def _jit_serialize_model_list(
+        self, items: Any, template_content: str, variable_name: str
+    ) -> List[Any]:
+        """Serialize a ``list[Model]`` under the QuerySet contract (#2736).
+
+        A plain list of model instances and a QuerySet of the same rows are
+        the same data to a template, so they must serialize the same way.
+        They did not: with no field path attributed to *variable_name* (a
+        whole-object use — ``{% regroup rows by username %}``, ``{{ rows.0 }}``,
+        a bridged tag walking the rows), the QuerySet path emitted the full
+        field dict (``normalize_django_value``) while the list path called
+        :meth:`_jit_serialize_model` per element, whose no-paths answer is the
+        least-exposure IDENTITY map — right for a single ``{{ user }}``, wrong
+        for a row every sink then reads a field off. Every consumer saw an
+        identity-only dict; an UNSAVED row's identity is ``pk: None``, which is
+        what made it look like a saved-vs-unsaved distinction.
+
+        This is the one producer for the no-paths list case (#1646). The
+        serialization floor (``_ALWAYS_EXCLUDED_FIELDS``) is applied inside
+        ``normalize_django_value`` exactly as it is for a QuerySet, so a list
+        is not a way past it.
+        """
+        variable_paths_map = _cached_extract_template_variables(template_content)
+        paths_for_var = (variable_paths_map or {}).get(variable_name, [])
+        if not paths_for_var:
+            return [normalize_django_value(item) for item in items]
+        return [self._jit_serialize_model(item, template_content, variable_name) for item in items]
+
     def _jit_serialize_model(
         self, obj: Any, template_content: str, variable_name: str
     ) -> Dict[str, Any]:
