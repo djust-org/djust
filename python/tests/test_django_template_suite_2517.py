@@ -15,8 +15,10 @@ to be trustworthy in the specific ways a scoreboard can lie:
   as ERROR, and the gate-off (Django against itself) as 100 %;
 * crash isolation (``TestCrashIsolation``): a segfaulting test is recorded
   as ERROR and the tests after it still run;
-* the ratchet (``TestRatchetCompare``): ``compare`` says 1 on a drop, even
-  though CI does not enforce it yet;
+* the ratchet (``TestRatchetCompare``): ``compare`` says 1 on a drop;
+* the per-cell ratchet (``TestPerCellRatchet``, #2722): a swap that fixes
+  five cells and breaks five keeps both percentages and MUST still be 1,
+  with the broken ids named; an upstream-removed id is not a regression;
 * the seam (``TestAdapterInSubprocess``): ``install()`` rebinds exactly the
   two names it claims to, leaves the ``TEMPLATES`` backend real, and
   produces ``DjustTemplate`` objects — not Django's;
@@ -54,6 +56,7 @@ from scripts.lib.django_template_suite.report import (
     format_per_test_line,
     format_summary,
     percent,
+    results_by_id,
     rewrite_doc_claim,
     rewrite_doc_claims,
     summarize,
@@ -274,6 +277,15 @@ class TestSummaryArithmetic:
         assert d["all"] == {"ok": 3, "fail": 1, "error": 1, "ran": 5, "skipped": 2, "percent": 60.0}
         assert d["untouched_failures"] == 0
         assert d["crashes"] == []
+        # #2722: every non-OK id, keyed to its status, sorted — derived from
+        # the records, so a baseline's set can never be hand-typed.
+        assert d["not_ok"] == {
+            test_id: rec["status"]
+            for test_id, rec in sorted(results_by_id(self.RECORDS).items())
+            if rec["status"] != "OK"
+        }
+        assert list(d["not_ok"]) == sorted(d["not_ok"])
+        assert "SKIP" in d["not_ok"].values() and "XFAIL" in d["not_ok"].values()
 
 
 # --------------------------------------------------------------------------- #
@@ -1082,6 +1094,167 @@ class TestRatchetCompare:
         assert "43.55" in proc.stdout and "40.00" in proc.stdout
 
 
+def _cells(statuses: dict[str, str]) -> list[dict]:
+    """Synthetic run-JSON ``tests`` records, one per id."""
+    return [
+        {"id": test_id, "status": status, "message": "", "touched": True, "ms": 0.1, "crash": False}
+        for test_id, status in sorted(statuses.items())
+    ]
+
+
+def _run_json(statuses: dict[str, str], *, tag: str = "5.2.16") -> dict:
+    """A run document whose aggregates are COMPUTED from ``statuses`` — the
+    same way ``cmd_run`` builds one — so a swap really does keep them equal."""
+    counted = {k: v for k, v in statuses.items() if v in ("OK", "FAIL", "ERROR")}
+    ok = sum(1 for v in counted.values() if v == "OK")
+    fail = sum(1 for v in counted.values() if v == "FAIL")
+    error = sum(1 for v in counted.values() if v == "ERROR")
+    ran = ok + fail + error
+    skipped = sum(1 for v in statuses.values() if v == "SKIP")
+    return {
+        "django": tag,
+        "tag": tag,
+        "ok": ok,
+        "fail": fail,
+        "error": error,
+        "ran": ran,
+        "percent": percent(ok, ran),
+        "all": {
+            "ok": ok,
+            "fail": fail,
+            "error": error,
+            "ran": ran,
+            "skipped": skipped,
+            "percent": percent(ok, ran),
+        },
+        "untouched_failures": 0,
+        "crashes": [],
+        "not_ok": {k: v for k, v in sorted(statuses.items()) if v != "OK"},
+        "tests": _cells(statuses),
+    }
+
+
+_TEN_OK = {f"t.T.test_{i:02d}": "OK" for i in range(10)}
+_BASE_CELLS = {**_TEN_OK, "t.T.bad_a": "ERROR", "t.T.bad_b": "FAIL", "t.T.skipped": "SKIP"}
+
+
+class TestPerCellRatchet:
+    """#2722: the aggregate ratchet cannot see a swap; the per-cell arm can.
+
+    Every case builds its run JSON from a status map so the percentages are
+    real arithmetic, not hand-set — the swap case asserts they are EQUAL
+    before asserting ``compare`` is still 1.
+    """
+
+    def test_a_swap_keeps_both_percentages_and_is_still_one_naming_the_ids(self) -> None:
+        base = _run_json(_BASE_CELLS)
+        swapped = dict(_BASE_CELLS)
+        swapped["t.T.bad_a"] = "OK"  # fixed
+        swapped["t.T.bad_b"] = "OK"  # fixed
+        swapped["t.T.test_03"] = "FAIL"  # broken
+        swapped["t.T.test_07"] = "ERROR"  # broken
+        current = _run_json(swapped)
+        assert current["percent"] == base["percent"]
+        assert current["all"]["percent"] == base["all"]["percent"]
+
+        code, lines = compare(base, current)
+        assert code == 1
+        joined = "\n".join(lines)
+        assert "FAIL: 2 cell(s) were OK in the baseline and are not now" in joined
+        assert "FAIL  t.T.test_03" in joined
+        assert "ERROR t.T.test_07" in joined
+        # the fixed cells are reported too, as a nudge to regenerate
+        assert "2 cell(s) not OK in the baseline are OK now" in joined
+        assert "ERROR -> OK    t.T.bad_a" in joined
+        # and no percentage line claims a drop
+        assert "dropped from" not in joined
+
+    def test_a_pure_gain_is_zero(self) -> None:
+        gained = {**_BASE_CELLS, "t.T.bad_a": "OK"}
+        code, lines = compare(_run_json(_BASE_CELLS), _run_json(gained))
+        assert code == 0
+        joined = "\n".join(lines)
+        assert "OK: no drop against the baseline" in joined
+        assert "1 cell(s) not OK in the baseline are OK now" in joined
+
+    def test_unchanged_is_zero(self) -> None:
+        code, lines = compare(_run_json(_BASE_CELLS), _run_json(_BASE_CELLS))
+        assert code == 0
+        assert "per-cell: no cell that was OK in the baseline regressed" in lines
+
+    def test_a_baseline_not_ok_id_absent_from_the_run_is_informational(self) -> None:
+        # Django removed/renamed `bad_a` upstream (or this was a --label subset):
+        # it is not in the run at all. Not a regression — listed, and 0.
+        removed = {k: v for k, v in _BASE_CELLS.items() if k != "t.T.bad_a"}
+        code, lines = compare(_run_json(_BASE_CELLS), _run_json(removed))
+        assert code == 0
+        joined = "\n".join(lines)
+        assert "1 baseline not-OK id(s) absent from this run" in joined
+        assert "(absent) t.T.bad_a" in joined
+        assert "not a regression" in joined
+
+    def test_a_skipped_cell_that_now_fails_is_not_a_regression_of_an_ok_cell(self) -> None:
+        # SKIP is in not_ok precisely so this cannot read as "was OK". The
+        # PERCENTAGE arm still catches it (the denominator grew, ok did not).
+        flipped = {**_BASE_CELLS, "t.T.skipped": "FAIL"}
+        code, lines = compare(_run_json(_BASE_CELLS), _run_json(flipped))
+        joined = "\n".join(lines)
+        assert "were OK in the baseline" not in joined
+        assert code == 1 and "engine subset dropped" in joined
+
+    def test_a_net_drop_is_still_one_from_the_percentage_arm(self) -> None:
+        dropped = {**_BASE_CELLS, "t.T.test_01": "FAIL"}
+        code, lines = compare(_run_json(_BASE_CELLS), _run_json(dropped))
+        assert code == 1
+        joined = "\n".join(lines)
+        assert "engine subset dropped" in joined
+        assert "FAIL  t.T.test_01" in joined
+
+    def test_tag_mismatch_short_circuits_the_per_cell_arm_too(self) -> None:
+        current = _run_json({**_BASE_CELLS, "t.T.test_01": "FAIL"}, tag="5.2.17")
+        code, lines = compare(_run_json(_BASE_CELLS), current)
+        assert code == 0
+        assert "were OK in the baseline" not in "\n".join(lines)
+
+    def test_a_baseline_without_the_set_warns_and_ratchets_percentages_only(self) -> None:
+        base = _run_json(_BASE_CELLS)
+        del base["not_ok"]
+        swapped = {**_BASE_CELLS, "t.T.bad_a": "OK", "t.T.test_03": "ERROR"}
+        code, lines = compare(base, _run_json(swapped))
+        assert code == 0
+        assert any("no per-cell `not_ok` set" in line for line in lines)
+
+    def test_a_run_without_tests_records_warns_and_ratchets_percentages_only(self) -> None:
+        current = _run_json(_BASE_CELLS)
+        del current["tests"]
+        code, lines = compare(_run_json(_BASE_CELLS), current)
+        assert code == 0
+        assert any("no per-test `tests` records" in line for line in lines)
+
+    def test_cli_swap_is_one_and_prints_the_ids(self, tmp_path: pathlib.Path) -> None:
+        base, current = tmp_path / "base.json", tmp_path / "run.json"
+        base.write_text(json.dumps(_run_json(_BASE_CELLS)), encoding="utf-8")
+        swapped = {**_BASE_CELLS, "t.T.bad_a": "OK", "t.T.test_05": "ERROR"}
+        current.write_text(json.dumps(_run_json(swapped)), encoding="utf-8")
+        proc = run_cli("compare", "--baseline", str(base), "--json", str(current))
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "ERROR t.T.test_05" in proc.stdout
+
+    def test_the_committed_baseline_set_agrees_with_its_own_aggregates(self) -> None:
+        """The set is derived, never hand-typed (#2727): its FAIL/ERROR
+        count must equal the aggregate's, and its statuses are never OK."""
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        not_ok = baseline["not_ok"]
+        assert isinstance(not_ok, dict) and not_ok
+        assert "OK" not in not_ok.values()
+        assert list(not_ok) == sorted(not_ok)
+        failing = [s for s in not_ok.values() if s in ("FAIL", "ERROR")]
+        assert len(failing) == baseline["all"]["fail"] + baseline["all"]["error"]
+        assert sum(1 for s in not_ok.values() if s == "FAIL") == baseline["all"]["fail"]
+        assert sum(1 for s in not_ok.values() if s == "ERROR") == baseline["all"]["error"]
+        assert sum(1 for s in not_ok.values() if s == "SKIP") == baseline["all"]["skipped"]
+
+
 # --------------------------------------------------------------------------- #
 # the adapter
 # --------------------------------------------------------------------------- #
@@ -1269,7 +1442,18 @@ class TestDocClaimMatchesBaseline:
 
     def test_baseline_schema(self) -> None:
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        for key in ("django", "tag", "ok", "fail", "error", "ran", "percent", "all", "crashes"):
+        for key in (
+            "django",
+            "tag",
+            "ok",
+            "fail",
+            "error",
+            "ran",
+            "percent",
+            "all",
+            "crashes",
+            "not_ok",  # #2722 — the per-cell arm is dead without it
+        ):
             assert key in baseline, key
         assert baseline["ran"] == baseline["ok"] + baseline["fail"] + baseline["error"]
         assert baseline["percent"] == percent(baseline["ok"], baseline["ran"])
