@@ -134,6 +134,12 @@ function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null, opts = {}) {
 
     if (liveViewWSMock !== null) {
         window.eval('var liveViewWS = ' + JSON.stringify(null) + ';');
+        // #2705: the real LiveViewWebSocket sends a live_redirect_mount through
+        // liveRedirectMount(), which ends in sendMessage(); give the fake the
+        // same shape so the frame still reaches the recorder.
+        if (liveViewWSMock && !liveViewWSMock.liveRedirectMount) {
+            liveViewWSMock.liveRedirectMount = function (m) { this.sendMessage(m); };
+        }
         window.liveViewWS_mock = liveViewWSMock;
         // Expose as a var so the IIFE can see it as a free variable
         window.eval('var liveViewWS = window.liveViewWS_mock;');

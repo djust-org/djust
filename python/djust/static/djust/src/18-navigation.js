@@ -264,7 +264,7 @@
             outgoing.state_snapshot = window.djust._pendingStateSnapshot;
             window.djust._pendingStateSnapshot = null;
         }
-        liveViewWS.sendMessage(outgoing);
+        liveViewWS.liveRedirectMount(outgoing); // #2705: the view-replacement boundary
     }
 
     /**
@@ -434,7 +434,7 @@
                 if (stateSnapshot) {
                     outgoing.state_snapshot = stateSnapshot;
                 }
-                liveViewWS.sendMessage(outgoing);
+                liveViewWS.liveRedirectMount(outgoing); // #2705: the view-replacement boundary
             } else {
                 // Fallback
                 window.location.reload();

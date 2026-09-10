@@ -737,3 +737,214 @@ it('#2721 a teardown flush does not burn the #1674 degraded-mount warning', asyn
     // `LiveViewWebSocket`), which says nothing about the socket's health.
     expect(warnings.filter(w => /LIVEVIEW_ALLOWED_MODULES/.test(w))).toHaveLength(0);
 });
+
+
+describe('#2705 — live_redirect is the view-replacement boundary', () => {
+    /**
+     * #2721 keyed the full reset on `data.view === primaryViewPath`, recorded
+     * at `autoMount`. A `live_redirect` navigates over the SAME socket by
+     * sending `live_redirect_mount` for the NEW view, whose mount reply
+     * echoes the NEW path — which cannot equal the path `autoMount`
+     * recorded. So the reply took the ADDITIVE branch: view A's handler
+     * config, cache rules and optimistic rules governed view B, and a timer
+     * armed on A before the navigation fired against B. Driven through the
+     * real `navigation` frame -> `handleLiveRedirect` -> `live_redirect_mount`
+     * route, not a synthesized primary mount.
+     */
+    const OPTIMISTIC_A = {search: {action: 'toggle_class', selector: '#btn', class: 'busy'}};
+
+    function redirectHarness() {
+        const h = createHarness(null);
+        // Resolve the instance AT CALL TIME. The bundle's init sequence
+        // re-creates `liveViewWS` / `liveViewInstance` (14-init.js:110) on a
+        // real timer after `createHarness` returns, so an instance captured
+        // here goes stale: driving its socket exercises a DIFFERENT object
+        // than the one 18-navigation.js sends through, and a per-instance
+        // field like `primaryViewPath` diverges between the two. (The #2721
+        // harness above survives this only because it asserts module-global
+        // state.)
+        const live = () => h.window.djust.liveViewInstance;
+        h.window.djust._routeMap = {'/': 'test.V', '/b/': 'test.B'};
+        h.frames = [];
+        // On the PROTOTYPE, like `sendEvent` in createHarness, so every
+        // socket instance records.
+        Object.getPrototypeOf(live().ws).send = raw => h.frames.push(JSON.parse(raw));
+        h.deliver = async data => {
+            live().ws.onmessage({data: JSON.stringify(data)});
+            await live()._inflight;
+        };
+        h.mountA = async () => {
+            // `djustInit()` is deferred to a MICROTASK when the document is
+            // not 'loading' (14-init.js #2185) and creates the instance that
+            // owns the socket from then on. Settle it BEFORE the connect
+            // frame, or the frame lands on the pre-init instance and the
+            // mount reply on its replacement, one await later.
+            await Promise.resolve();
+            await h.deliver({type: 'connect', session_id: 's2705'});
+            await h.deliver({type: 'mount', version: 1, view: 'test.V',
+                handler_config: {search: {debounce: {wait: 5}}},
+                cache_config: {search: {ttl: 60}},
+                optimistic_rules: OPTIMISTIC_A});
+        };
+        h.redirectToB = async () => {
+            await h.deliver({type: 'navigation', action: 'live_redirect', path: '/b/'});
+        };
+        h.live = live;
+        return h;
+    }
+
+    it('the mount reply to live_redirect_mount is a full reset of view A config', async () => {
+        const {window, sent, clock, http, live, mountA, redirectToB, deliver, frames} = redirectHarness();
+        await mountA();
+        expect(live().primaryViewPath).toBe('test.V');
+
+        await redirectToB();
+        const outgoing = frames.filter(f => f.type === 'live_redirect_mount');
+        expect(outgoing).toHaveLength(1);
+        expect(outgoing[0].view).toBe('test.B');
+
+        // The reply echoes the NEW view and carries no config of its own.
+        await deliver({type: 'mount', version: 2, view: 'test.B'});
+        expect(window.djust._optimisticRules).toEqual({});   // pre-fix: OPTIMISTIC_A
+
+        // View A's `@debounce`/`@cache` must not govern view B: dispatch is
+        // immediate (asserted BEFORE the clock moves, #2721 M5) and uncached.
+        await window.djust.handleEvent('search', {query: 'view-b'});
+        expect(sent).toHaveLength(1);   // pre-fix: 0 (still debounced by A)
+        expect(sent[0].params._cacheRequestId).toBeUndefined();
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(http).toHaveLength(0);
+    });
+
+    it('a timer armed on view A before the navigation does not fire against view B', async () => {
+        const {window, sent, clock, http, mountA, redirectToB, deliver} = redirectHarness();
+        await mountA();
+        await window.djust.handleEvent('search', {query: 'armed-on-a'});
+        expect(sent).toHaveLength(0);
+
+        await redirectToB();
+        await deliver({type: 'mount', version: 2, view: 'test.B'});
+        clock.advance(10_000);
+        expect(sent).toHaveLength(0);   // pre-fix: 1, {query: 'armed-on-a'} sent to B
+        expect(http).toHaveLength(0);
+    });
+
+    it('an element-level dj-debounce armed on view A is cancelled by the navigation too', async () => {
+        const {window, sent, clock, http, mountA, redirectToB, deliver} = redirectHarness();
+        await mountA();
+        const button = window.document.querySelector('#btn');
+        button.setAttribute('dj-debounce', '5000');
+        button.click();
+        expect(sent).toHaveLength(0);
+
+        await redirectToB();
+        await deliver({type: 'mount', version: 2, view: 'test.B'});
+        clock.advance(10_000);
+        expect(sent).toHaveLength(0);
+        expect(http).toHaveLength(0);
+    });
+
+    it('a lazy sibling that mounts AFTER the redirect is still additive', async () => {
+        const {window, sent, clock, mountA, redirectToB, deliver} = redirectHarness();
+        await mountA();
+        await redirectToB();
+        await deliver({type: 'mount', version: 2, view: 'test.B',
+            handler_config: {search: {debounce: {wait: 5}}}});
+        await deliver({type: 'mount', version: 1, view: 'test.Sidebar',
+            handler_config: {sidebar_toggle: {debounce: {wait: 5}}}});
+        for (const q of ['a', 'b', 'c']) {
+            await window.djust.handleEvent('search', {query: q});
+        }
+        expect(sent).toHaveLength(0);   // B's own debounce survived the sibling
+        clock.advance(10_000);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].params.query).toBe('c');
+    });
+});
+
+
+describe('#2705 — back/forward is the same boundary as live_redirect (#1646 twin)', () => {
+    it('a popstate remount cancels the timer armed on the view being left and resets its config', async () => {
+        const h = createHarness(null);
+        const live = () => h.window.djust.liveViewInstance;
+        const {window, sent, clock, http} = h;
+        window.djust._routeMap = {'/': 'test.V', '/b/': 'test.B'};
+        const frames = [];
+        Object.getPrototypeOf(live().ws).send = raw => frames.push(JSON.parse(raw));
+        const deliver = async data => {
+            live().ws.onmessage({data: JSON.stringify(data)});
+            await live()._inflight;
+        };
+        await Promise.resolve();   // settle the deferred djustInit() (see redirectHarness)
+        await deliver({type: 'connect', session_id: 's2705b'});
+        await deliver({type: 'mount', version: 1, view: 'test.V'});
+        // Forward to B, whose handler is debounced; arm a timer there.
+        await deliver({type: 'navigation', action: 'live_redirect', path: '/b/'});
+        await deliver({type: 'mount', version: 2, view: 'test.B',
+            handler_config: {search: {debounce: {wait: 5}}},
+            optimistic_rules: {search: {action: 'hide', selector: '#btn'}}});
+        await window.djust.handleEvent('search', {query: 'armed-on-b'});
+        expect(sent).toHaveLength(0);
+
+        // Browser back: the popstate handler resolves '/' and remounts A over
+        // the same socket via its OWN `live_redirect_mount` sender.
+        window.history.pushState({djust: true, redirect: true}, '', '/');
+        window.dispatchEvent(new window.PopStateEvent('popstate', {state: {djust: true, redirect: true}}));
+        // The handler is async (awaits guarded SW / snapshot lookups); let it run.
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+        const back = frames.filter(f => f.type === 'live_redirect_mount');
+        expect(back.map(f => f.view)).toEqual(['test.B', 'test.V']);
+
+        await deliver({type: 'mount', version: 3, view: 'test.V'});
+        expect(window.djust._optimisticRules).toEqual({});   // B's rules gone
+        clock.advance(10_000);
+        expect(sent).toHaveLength(0);   // pre-fix: {query: 'armed-on-b'} sent to A
+        await window.djust.handleEvent('search', {query: 'back-on-a'});
+        expect(sent).toHaveLength(1);   // pre-fix: 0 — still debounced by B's config
+        expect(http).toHaveLength(0);
+    });
+
+    it('every live_redirect_mount sender in the bundle source routes through liveRedirectMount', () => {
+        // Structural pin (#1646): the boundary lives in ONE method. A future
+        // sender that calls `sendMessage` with a `live_redirect_mount` frame
+        // directly would re-open the gap for that path only.
+        const nav = fs.readFileSync('./python/djust/static/djust/src/18-navigation.js', 'utf-8');
+        const senders = nav.match(/type: 'live_redirect_mount'/g) || [];
+        const routed = nav.match(/liveViewWS\.liveRedirectMount\(outgoing\)/g) || [];
+        expect(senders.length).toBe(2);   // handleLiveRedirect + popstate
+        expect(routed.length).toBe(senders.length);
+        expect(nav).not.toMatch(/liveViewWS\.sendMessage\(outgoing\)/);
+    });
+});
+
+
+it('#2705 a timer armed on view A cannot fire in the window between live_redirect_mount and its reply', async () => {
+    // The socket is ORDERED: anything sent after `live_redirect_mount` is
+    // processed by the server against the NEW view, even though the old DOM
+    // is still on screen until the reply lands. So the cancel has to happen
+    // at SEND time; the reply's own reset (`installMountEventConfig`) is too
+    // late for this window — and, for the cases above, shadows it (#2135).
+    const h = createHarness({search: {debounce: {wait: 5}}});
+    const live = () => h.window.djust.liveViewInstance;
+    const {window, sent, clock, http} = h;
+    window.djust._routeMap = {'/': 'test.V', '/b/': 'test.B'};
+    const frames = [];
+    Object.getPrototypeOf(live().ws).send = raw => frames.push(JSON.parse(raw));
+    await Promise.resolve();
+    live().ws.onmessage({data: JSON.stringify({type: 'connect', session_id: 's2705w'})});
+    await live()._inflight;
+    live().ws.onmessage({data: JSON.stringify({type: 'mount', version: 1, view: 'test.V',
+        handler_config: {search: {debounce: {wait: 5}}}})});
+    await live()._inflight;
+    await window.djust.handleEvent('search', {query: 'armed-on-a'});
+    expect(sent).toHaveLength(0);
+
+    live().ws.onmessage({data: JSON.stringify({type: 'navigation', action: 'live_redirect', path: '/b/'})});
+    await live()._inflight;
+    expect(frames.filter(f => f.type === 'live_redirect_mount')).toHaveLength(1);
+    // No reply yet: the clock runs out INSIDE the window.
+    clock.advance(10_000);
+    expect(sent).toHaveLength(0);   // pre-fix / reply-only reset: 1, routed to view B
+    expect(http).toHaveLength(0);
+});

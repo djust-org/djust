@@ -1922,6 +1922,40 @@ class LiveViewWebSocket {
      *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
      *   view whose mount reply must not reset the page view's client config.
      */
+    /**
+     * Send a ``live_redirect_mount`` — the client-initiated view REPLACEMENT
+     * that ``live_redirect`` and a back/forward ``popstate`` perform over the
+     * same socket (18-navigation.js, both senders route through here).
+     *
+     * #2705: this is the navigation boundary #2721 could not see. That fix
+     * keys the full config reset in ``case 'mount'`` on
+     * ``data.view === primaryViewPath``, recorded by ``autoMount``. A
+     * ``live_redirect`` never re-runs ``autoMount``: its mount reply echoes
+     * the NEW view's path, which cannot equal the recorded one, so the reply
+     * took the ADDITIVE (sibling) branch — view A's ``@debounce`` /
+     * ``@throttle`` / ``@cache`` config and optimistic rules kept governing
+     * view B, and a timer armed on A before the navigation fired against B.
+     *
+     * Two things happen here, once per navigation, never per event:
+     *   1. every pending handler-level and element-level timer is CANCELLED
+     *      (not flushed — the same choice ``disconnect()`` makes for an
+     *      intentional teardown, and what #2705 asks for: the edit belongs
+     *      to a view the user is leaving, and a flush would race the
+     *      redirect the server just issued);
+     *   2. the NEW view becomes the primary, so its mount reply takes the
+     *      full-reset branch. The reset itself stays in ``case 'mount'`` so
+     *      config is replaced exactly once, when the new view's config
+     *      arrives — events dispatched in the send->reply window still
+     *      belong to the old view and keep its gate.
+     * Sibling mounts (lazy hydration, ``mount_batch``) are untouched: they
+     * never come through here, so they stay additive (#2721).
+     */
+    liveRedirectMount(outgoing) {
+        cancelPendingRateLimits();
+        this.primaryViewPath = outgoing.view;
+        this.sendMessage(outgoing);
+    }
+
     mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
@@ -10990,7 +11024,7 @@ window.djust.getActiveStreams = getActiveStreams;
             outgoing.state_snapshot = window.djust._pendingStateSnapshot;
             window.djust._pendingStateSnapshot = null;
         }
-        liveViewWS.sendMessage(outgoing);
+        liveViewWS.liveRedirectMount(outgoing); // #2705: the view-replacement boundary
     }
 
     /**
@@ -11160,7 +11194,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 if (stateSnapshot) {
                     outgoing.state_snapshot = stateSnapshot;
                 }
-                liveViewWS.sendMessage(outgoing);
+                liveViewWS.liveRedirectMount(outgoing); // #2705: the view-replacement boundary
             } else {
                 // Fallback
                 window.location.reload();

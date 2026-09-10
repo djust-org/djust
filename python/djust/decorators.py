@@ -811,7 +811,11 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     and browser keepalive limits. The PAGE view's own mount cancels old-view
     timers and replaces handler, cache, and optimistic configuration; a
     lazily-hydrated sibling view mounting on the same socket adds its own
-    configuration without disturbing the page view's (#2721).
+    configuration without disturbing the page view's (#2721). A
+    ``live_redirect`` (or browser back/forward) navigates over the same
+    socket: the old view's pending timers are CANCELLED the moment the
+    navigation is sent — a send after that point would reach the new view —
+    and the new view's mount reply replaces the configuration (#2705).
 
     Intended for input events where you want to wait until the user stops
     typing.
