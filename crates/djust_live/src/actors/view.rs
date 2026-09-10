@@ -1354,4 +1354,126 @@ mod tests {
         assert_eq!(handle.render().await.unwrap(), "1|2");
         handle.shutdown().await;
     }
+
+    // ------------------------------------------------------------------
+    // #2741 / ADR-029 Gate 4 — does a render on a tokio WORKER thread see
+    // the `RESOLVE_LAZY` value the configuring thread set, or the
+    // thread-local's compiled default?
+    //
+    // `RESOLVE_LAZY` is `thread_local!` (`djust_core/src/lib.rs`), nothing
+    // in `actors/` sets it and no message carries it. The probe template
+    // renders `X` under `resolve_lazy=true` and `Y` under `false`
+    // (`renderer.rs`: a `Missing` operand under `ignore_failures` becomes
+    // `None` only when the flag is on, so `default_if_none` fires only
+    // then) — measured through `_rust.render_template`, not cited.
+    //
+    // The whole difficulty is the thread. A bare `#[tokio::test]` is the
+    // current_thread flavour: the actor is polled on the test thread,
+    // shares its thread-local, and would "refute" a bug that exists. So the
+    // harness builds a multi_thread runtime with exactly ONE worker, spawns
+    // the actor there, and PROVES the worker is a different OS thread by
+    // running a control task on the same (only) worker that reports its
+    // `ThreadId` and its own reading of `djust_core::resolve_lazy()`.
+    //
+    // Gate-off (#1468): the same harness with `on_thread_start` setting the
+    // flag to `false` ON THE WORKER must flip the output to `Y`. If it did
+    // not, the harness would not be observing the flag at all.
+    // ------------------------------------------------------------------
+
+    const RESOLVE_LAZY_PROBE: &str = r#"{% firstof nope|default_if_none:"X" "Y" %}"#;
+
+    /// What one single-worker runtime observed: the worker's thread id, the
+    /// worker's own reading of the flag, and the actor's rendered probe.
+    struct WorkerProbe {
+        worker_tid: std::thread::ThreadId,
+        worker_flag: bool,
+        html: String,
+    }
+
+    fn probe_on_single_worker(on_thread_start: Option<fn()>) -> WorkerProbe {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.worker_threads(1).enable_all();
+        if let Some(hook) = on_thread_start {
+            builder.on_thread_start(hook);
+        }
+        let rt = builder.build().unwrap();
+        assert_eq!(rt.metrics().num_workers(), 1, "harness premise: one worker");
+
+        // Control: the only worker reports where it is and what it sees.
+        let (worker_tid, worker_flag) = rt
+            .block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
+            .unwrap();
+
+        // Subject: the actor, spawned onto that same (only) worker.
+        let (actor, handle) =
+            ViewActor::with_template("t2741.V".to_string(), RESOLVE_LAZY_PROBE.to_string());
+        rt.spawn(actor.run());
+        let html = rt.block_on(async {
+            let html = handle.render().await.unwrap();
+            handle.shutdown().await;
+            html
+        });
+        rt.shutdown_timeout(std::time::Duration::from_secs(5));
+        WorkerProbe {
+            worker_tid,
+            worker_flag,
+            html,
+        }
+    }
+
+    /// PINS THE DEFECT, NOT THE DESIRED BEHAVIOUR (#2741). This test passes
+    /// while the bug exists: an actor render on a tokio worker ignores the
+    /// caller's `set_resolve_lazy(false)`. When ADR-029 Phase 1 lands an
+    /// explicit `RenderEnv`, this test MUST go red — at that point flip the
+    /// expectation to the configured (`false` -> `Y`) answer rather than
+    /// deleting the test, because the thread-distinctness harness is the
+    /// only thing that proves the fix reached the worker thread.
+    #[test]
+    fn actor_render_on_a_worker_thread_reads_resolve_lazy_default_not_config_2741() {
+        // The configuring thread says `false` — the non-default value.
+        djust_core::set_resolve_lazy(false);
+        assert!(
+            !djust_core::resolve_lazy(),
+            "setter took effect on this thread"
+        );
+        let setter_tid = std::thread::current().id();
+
+        // Distinctness is asserted, not assumed.
+        let observed = probe_on_single_worker(None);
+        assert_ne!(
+            observed.worker_tid, setter_tid,
+            "harness premise: the worker must be a different OS thread"
+        );
+        // (a) the worker's own reading of the thread-local, and (b) the
+        // actor's render through it — recorded in the failure message so a
+        // future flip reports the mechanism, not just a byte.
+        assert!(
+            observed.worker_flag,
+            "the worker thread read resolve_lazy()={} while the setter thread set false",
+            observed.worker_flag
+        );
+        assert_eq!(
+            observed.html, "X",
+            "actor render on the worker: {:?} (X = default true, Y = configured false)",
+            observed.html
+        );
+
+        // Gate-off: setting the flag ON THE WORKER is the only thing that
+        // may flip the render. If `Y` does not appear here the harness is
+        // not observing the flag and the assertions above prove nothing.
+        let flipped = probe_on_single_worker(Some(|| djust_core::set_resolve_lazy(false)));
+        assert_ne!(flipped.worker_tid, setter_tid);
+        assert!(
+            !flipped.worker_flag,
+            "on_thread_start set false on the worker"
+        );
+        assert_eq!(
+            flipped.html, "Y",
+            "gate-off: with false set on the worker the probe must render Y, got {:?}",
+            flipped.html
+        );
+
+        // Leave the test thread as we found it (other tests share it).
+        djust_core::set_resolve_lazy(true);
+    }
 }
