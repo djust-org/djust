@@ -252,8 +252,11 @@ _SETATTR_WHITELIST = {
     # +12 (1366/1368 → 1378/1380) by the #2682 re-review: the
     # ``_dirty_baseline`` rationale comment + ``_dirty_baseline_version``
     # bump in ``_capture_dirty_baseline``. Still the same two sites.
-    ("live_view.py", 1378),
-    ("live_view.py", 1380),
+    # -1 (1378/1380 → 1377/1379) by #2739: ``_template_deps`` removed from
+    # ``_FRAMEWORK_INTERNAL_ATTRS`` with the never-firing context filter
+    # that was its only writer. Still the same two sites.
+    ("live_view.py", 1377),
+    ("live_view.py", 1379),
 }
 
 

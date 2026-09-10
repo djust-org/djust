@@ -525,29 +525,6 @@ class RustBridgeMixin:
         cls._djust_template_hash_slot = slot
         return slot
 
-    def _get_template_deps(self) -> Optional[Dict[str, Any]]:
-        """Build template dependency map: which context keys does the template use?
-
-        Caches the result per template content hash so it's computed only once.
-        Returns None if extraction is unavailable (no Rust backend).
-        """
-        deps: Optional[Dict[str, Any]] = getattr(self, "_template_deps", None)
-        if deps is not None:
-            return deps
-
-        try:
-            from ..mixins.jit import _cached_extract_template_variables
-        except ImportError:
-            return None
-
-        template_content = getattr(self, "_template_content", None)
-        if not template_content:
-            return None
-
-        deps = _cached_extract_template_variables(template_content)
-        self._template_deps = deps
-        return deps
-
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
 
@@ -768,17 +745,17 @@ class RustBridgeMixin:
                     if _fmt_val is not None:
                         full_context[_fmt_key] = _fmt_val
 
-            # Dependency tracking: identify which components the template uses
-            template_deps = self._get_template_deps()
-            component_descriptors = getattr(type(self), "_component_descriptors", None)
-            if template_deps and component_descriptors:
-                # Filter out descriptor components not referenced in template
-                unreferenced = set()
-                for name in component_descriptors:
-                    if name not in template_deps:
-                        unreferenced.add(name)
-                if unreferenced:
-                    full_context = {k: v for k, v in full_context.items() if k not in unreferenced}
+            # No context narrowing here (#2739). A filter that dropped
+            # ``_component_descriptors`` names the template never referenced
+            # used to sit at this point; it read the template source from an
+            # attribute nothing ever assigned, so it never fired once. It was
+            # deleted rather than wired up: #2737 established that narrowing
+            # the context by a template read-set is unsound while
+            # ``build_py_context`` (crates/djust_templates/src/registry.rs)
+            # hands every bridged tag handler the WHOLE context, and the
+            # dependency analysis still has open holes (#2738). The JIT's
+            # ``variable_paths_map`` (mixins/jit.py) is the one sanctioned
+            # narrowing, and it falls back to "everything" on any doubt.
 
             changed_keys = getattr(self, "_changed_keys", None)
             prev_refs = getattr(self, "_prev_context_refs", {})
