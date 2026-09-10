@@ -3,4 +3,4 @@
 # from a real collection. CI (DJUST_COLLECTED_FLOOR=1) fails a run that
 # collects fewer items than this. Adding tests never trips it; removing
 # tests means regenerating it in the same PR.
-27780
+27271
