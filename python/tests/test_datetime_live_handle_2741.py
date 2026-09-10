@@ -42,7 +42,7 @@ from django.template import Template as DjangoTemplate  # noqa: E402
 
 from adr027_flag import resolve_lazy, shipped_default  # noqa: E402
 
-from djust import _rust  # noqa: E402
+from djust import LiveView, _rust  # noqa: E402
 
 # The isolating binding, one live-only name and one name-table control each.
 # `min` is deliberately covered too: `datetime.min.min is datetime.min` is the
@@ -100,3 +100,155 @@ def test_the_handle_walk_is_what_answers_it(value, live_only, control):
 
     with resolve_lazy(False):
         assert _djust(source, value) == f"|{control_expected}"
+
+
+# --------------------------------------------------------------------------- #
+# #2767: the handle does NOT survive a state-backend round trip — pinned as the
+# CURRENT behaviour, on both layers, so a change in either direction is
+# deliberate (ADR-027 documented limit; VALUE_BOUNDARY.md §3.4 / row I11).
+# --------------------------------------------------------------------------- #
+RESTORE_HEAD = '<div dj-root dj-id="0">'
+
+
+def _restore_source(live_only: str, control: str) -> str:
+    return f"[{{{{ q.{live_only} }}}}][{{{{ q.{control} }}}}]"
+
+
+@pytest.mark.parametrize("value, live_only, control", TEMPORAL)
+def test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip(
+    value, live_only, control
+):
+    """DOCUMENTED ADR-027 LIMIT (#2767), pinned as-is — NOT a bug fix.
+
+    The state backends' ``get`` returns a msgpack clone
+    (``python/djust/state_backends/memory.py`` ``serialize_msgpack`` /
+    ``deserialize_msgpack``). The wire carries the ``attrs`` map but not the
+    handle, and every ``visit_map`` arm in ``crates/djust_core/src/lib.rs``
+    restores ``live: None``; nothing re-acquires one on restore. So on a clone
+    rendered WITHOUT an ``update_state`` re-sync, a name only the handle can
+    answer (``resolution`` / ``max`` / ``min``) renders EMPTY, while a name in
+    ``ENCODED_ATTR_NAMES`` (the control) still renders from the persisted map
+    — and ``get_state()`` still hands back a real temporal object
+    (``temporal_object``), so the object a future re-attach would use exists.
+
+    Direction (a) of #2767 (re-attach on restore) would turn the clone
+    assertion red; a regression that drops the map would turn the control
+    red. Both are meant to be noticed, not worked around.
+    """
+    from djust._rust import RustLiveView
+
+    source = _restore_source(live_only, control)
+    django_out = DjangoTemplate(source).render(DjangoContext({"q": value}))
+    live_expected, control_expected = django_out.strip("[]").split("][")
+    assert live_expected, f"Django must render {live_only} for this fixture to isolate anything"
+    synced = f"{RESTORE_HEAD}[{live_expected}][{control_expected}]</div>"
+
+    with resolve_lazy(shipped_default()):
+        view = RustLiveView(RESTORE_HEAD + source + "</div>", [])
+        view.update_state({"q": value})
+        assert view.render() == synced, "fresh render answers both names (#2741's own pin)"
+
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == f"{RESTORE_HEAD}[][{control_expected}]</div>", (
+            f"CURRENT behaviour after a state-backend round trip (#2767): "
+            f"{type(value).__name__}.{live_only} is handle-only and the handle is "
+            f"transient, so it renders empty; {control} survives in the attr map. "
+            f"If this went red because the live-only name now renders, the ADR-027 "
+            f"limit was lifted — update VALUE_BOUNDARY.md §3.4 / I11 and this pin."
+        )
+        restored = clone.get_state()["q"]
+        assert isinstance(restored, type(value)) and restored == value, (
+            "the restored STATE is still a real temporal object — the blank is a "
+            "missing handle, not a lost value"
+        )
+
+        # The re-attachment IS the sync (#2570): one update_state re-converts it.
+        clone.update_state({"q": value})
+        assert clone.render() == synced
+
+
+class _DatetimeRestoreView(LiveView):
+    template = RESTORE_HEAD + _restore_source("resolution", "year") + "</div>"
+
+    def mount(self, request, **kwargs):
+        self.q = _dt.datetime(2026, 3, 4, 5, 6, 7)
+
+
+@pytest.mark.django_db
+async def test_the_framework_restore_path_re_attaches_the_handle_before_rendering(
+    monkeypatch,
+):
+    """The CONTROL for the pin above, on the real path: a second WebSocket
+    mount on the same session + URL takes the state-backend cache HIT
+    (``InMemoryStateBackend.get`` → a msgpack clone, spied so the test cannot
+    pass by never restoring) and the #2570 mount sync re-converts the value
+    with a fresh handle before the first render. So on the shipped reconnect
+    path ``{{ q.resolution }}`` does NOT go blank — the #2767 limit bites a
+    clone rendered without a sync, and only there.
+    """
+    pytest.importorskip("channels")
+    from asgiref.sync import sync_to_async
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import override_settings
+
+    from djust.state_backends import memory as memory_mod
+    from djust.state_backends.registry import get_backend
+    from djust.websocket import LiveViewConsumer
+
+    assert isinstance(get_backend(), memory_mod.InMemoryStateBackend)
+
+    hits: list[str] = []
+    real_get = memory_mod.InMemoryStateBackend.get
+
+    def spying_get(self, key):
+        result = real_get(self, key)
+        if result is not None:
+            hits.append(key)
+        return result
+
+    monkeypatch.setattr(memory_mod.InMemoryStateBackend, "get", spying_get)
+
+    class _ScopeSession:
+        def __init__(self, key):
+            self.session_key = key
+
+    async def _mount_once(session_key: str, url: str) -> dict:
+        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator.scope["session"] = _ScopeSession(session_key)
+        connected, _ = await communicator.connect()
+        assert connected
+        await communicator.receive_json_from(timeout=2)  # drain connect frame
+        await communicator.send_json_to(
+            {"type": "mount", "view": f"{__name__}._DatetimeRestoreView", "url": url}
+        )
+        frame = None
+        for _ in range(5):
+            frame = await communicator.receive_json_from(timeout=3)
+            if frame.get("type") == "mount":
+                break
+        await communicator.disconnect()
+        assert frame and frame.get("type") == "mount", frame
+        return frame
+
+    def _create_session():
+        s = SessionStore()
+        s.create()
+        return s.session_key
+
+    session_key = await sync_to_async(_create_session)()
+    url = "/datetime-restore-2767/"
+    expected = "[0:00:00.000001][2026]"
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]), resolve_lazy(shipped_default()):
+        first = await _mount_once(session_key, url)
+        assert expected in (first.get("html") or ""), first.get("html")
+        assert hits == [], "the first mount must be a cache MISS (no clone yet)"
+
+        second = await _mount_once(session_key, url)
+        assert len(hits) == 1, f"the second mount must take the cache HIT; hits={hits!r}"
+        assert expected in (second.get("html") or ""), (
+            "the first render after a state-backend round trip is preceded by a full "
+            "sync that re-attaches the handle (#2570), so the handle-only name renders "
+            f"on the real path; got {second.get('html')!r}"
+        )

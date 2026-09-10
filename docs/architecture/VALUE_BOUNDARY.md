@@ -293,11 +293,34 @@ They render anyway — through the live handle. See §6.2.
 ### 3.4 The live handle: who gets one
 
 Two functions build an `Encoded` **at the Python→Rust conversion**, and they
-attach the handle differently. (Seven further sites — `lib.rs:1655`, `:1718`,
-`:1773`, `:1825`, `:1881`, `:1939`, `:1988` — reconstruct one from an
+attach the handle differently. (Seven further sites — `lib.rs:1693`, `:1756`, `:1813`, `:1872`, `:1929`, `:1977`, `:2023` — reconstruct one from an
 `ENCODED_TAG` wire payload rather than from a live object, and every one of them
 sets `live: None`. That is the handle's transience, mechanically: nothing
 restored from state can carry one.)
+
+**Documented limit — a handle-only datetime name after a state-backend round
+trip (#2767).** For the temporal family the consequence is asymmetric. The
+msgpack wire carries the `attrs` map, so `{{ q.year }}` survives
+`InMemoryStateBackend.get`'s clone (`python/djust/state_backends/memory.py:118`–`119`,
+`serialize_msgpack` → `deserialize_msgpack`); a name in *neither* table —
+`resolution` / `max` / `min` (§3.3) — had only the handle, and every
+`visit_map` arm restores `live: None` (`crates/djust_core/src/lib.rs:1693` and
+its six siblings). Nothing re-acquires a handle on restore, even though the
+restored state is still a real `datetime` (`temporal_object`,
+`crates/djust_core/src/lib.rs:5129`, reached from the `IntoPyObject` arm at
+`:5206`). So a clone rendered **without** an `update_state` re-sync answers
+`''` for `{{ q.resolution }}` while `{{ q.year }}` still renders — pinned as
+the CURRENT behaviour by
+`test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip`
+(`python/tests/test_datetime_live_handle_2741.py`), so that lifting the limit
+(#2767 direction a) or losing the map both go red deliberately. On the shipped
+reconnect path it does not bite: the cache-HIT branch of
+`_initialize_rust_view` (`python/djust/mixins/rust_bridge.py:391`) is followed
+by the mount sync, which re-converts the value with a fresh handle before the
+first render (#2570) — the control
+`test_the_framework_restore_path_re_attaches_the_handle_before_rendering`
+in the same file drives a real second WebSocket mount through that clone and
+asserts `resolution` renders.
 
 **`opaque_value`** (`lib.rs:4881`) — the general carrier. It attaches a handle
 **iff** the thread-local flag is on (`lib.rs:4937`–`4916`):
@@ -528,7 +551,7 @@ Where there is no test, this table says so rather than implying coverage.
 | I8 | `deep_fingerprint` warns when the budget truncates | `python/tests/test_snapshot_truncation_warning.py:143` |
 | I9 | The `Encoded` wire layout and field positions are pinned | `crates/djust_core/tests/test_encoded_wire_positions_2471_2472.rs` |
 | I10 | Django's lookup rules at the sink | `crates/djust_core/tests/test_django_lookup_sink_2539.rs` |
-| I11 | The datetime family carries a live handle (`opaque_value`'s is flag-gated; the datetime one is not) | `test_a_temporal_value_carries_a_live_handle_under_the_default` + its in-suite gate-off `test_the_handle_walk_is_what_answers_it`, `python/tests/test_datetime_live_handle_2741.py` — renders a live-only name (`resolution` / `max` / `min`, in neither name table) for all four temporal types through the isolating `{% with q=xs\|first %}` binding, byte-for-byte with Django under the shipped default, and blank with the flag off while a name-table control still renders. The unconditional half (`live: Some(..)` with the flag OFF) is not Python-observable — the handle is never walked then — and is pinned by reading `lib.rs:2236` only. Was "no test" until #2741, which is how a comment in `context.rs` could contradict `django_json_encoded`'s own `live: Some(..)` (`lib.rs:2236`) for as long as it did. |
+| I11 | The datetime family carries a live handle (`opaque_value`'s is flag-gated; the datetime one is not) | `test_a_temporal_value_carries_a_live_handle_under_the_default` + its in-suite gate-off `test_the_handle_walk_is_what_answers_it`, `python/tests/test_datetime_live_handle_2741.py` — renders a live-only name (`resolution` / `max` / `min`, in neither name table) for all four temporal types through the isolating `{% with q=xs\|first %}` binding, byte-for-byte with Django under the shipped default, and blank with the flag off while a name-table control still renders. The unconditional half (`live: Some(..)` with the flag OFF) is not Python-observable — the handle is never walked then — and is pinned by reading `lib.rs:2236` only. Was "no test" until #2741, which is how a comment in `context.rs` could contradict `django_json_encoded`'s own `live: Some(..)` (`lib.rs:2236`) for as long as it did. **Limit (#2767):** the handle does not survive a state-backend round trip, and a handle-only name (`resolution`) renders `''` on a clone rendered without a re-sync while the name-table control (`year`) still renders — pinned as current behaviour by `test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip` (all four temporal types), with the real second-WebSocket-mount path shown to re-attach the handle by `test_the_framework_restore_path_re_attaches_the_handle_before_rendering`, same file. See §3.4. |
 | **I12** | **`OPAQUE_ITEM_CAP` does not gate the handle** | **no direct test.** `test_sized_sequence_conversion_2695_2693.py` and `test_declined_container_spelling_2717.py` exercise the cap's *item* behaviour; none asserts that a sub-cap or non-sequence object also carries a handle. |
 | I13 | `RESOLVE_LAZY` is per-thread, and a thread that never pushed reads the Rust default | `test_a_thread_that_never_pushed_reads_the_default`, `python/tests/test_adr027_wiring_security_2539.py:835` (spawns a `Thread` and asserts it does not see the flag pushed on the main thread) and `test_the_rust_default_tracks_the_python_default`, `python/tests/test_adr027_characterization_net_2539.py:2184`. §6.5 re-derives an invariant that is already pinned — this row said "no test found" until review grepped it. |
 
