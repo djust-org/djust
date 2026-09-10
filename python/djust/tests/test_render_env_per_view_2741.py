@@ -4,9 +4,10 @@ Every per-render Django setting Rust needs is a ``thread_local!`` cell that
 ``djust.render_env.apply_render_env`` pushes on the thread about to render.
 That is correct for a render on the pushing thread and silently wrong for a
 render on any other thread: the ``ViewActor`` under ``use_actors=True``
-renders on a tokio worker that never pushed, so ``template_resolve_lazy:
-False``, ``TIME_ZONE`` and the locale's number format were all ignored there
-(the #2751 probe observed it).
+renders on a tokio worker that never pushed, so ``TIME_ZONE`` and the
+locale's number format were ignored there (the #2751 probe observed it
+through ADR-027's kill-switch, which ADR-027 Step 5 (#2628) has since
+deleted — the cases below observe the NUMBER FORMAT instead).
 
 The fix carries the environment the way ``template_auto_call`` is carried —
 a FIELD on the backend (``capture_render_env`` / ``set_render_env``), applied
@@ -30,7 +31,6 @@ Gate-off per mechanism (#2135), measured with the Rust extension rebuilt:
 
 from __future__ import annotations
 
-import contextlib
 import re
 import threading
 from pathlib import Path
@@ -42,19 +42,21 @@ from django.utils import translation
 from djust import _rust
 from djust.render_env import apply_render_env
 
-# `X` under resolve_lazy=true, `Y` under false — measured through
-# `_rust.render_template` (the #2751 probe template).
-PROBE = '{% firstof nope|default_if_none:"X" "Y" %}'
+# `1234,5` under a `,`-decimal (French) number format, `1234.5` under the
+# thread default — the same probe the Rust side uses
+# (`actors/view.rs::a_child_component_inherits_the_views_render_env_2741`).
+PROBE = "{{ v }}"
+PROBE_STATE = {"v": 1234.5}
+FR = "1234,5"
+DEFAULT = "1234.5"
 
 
 @pytest.fixture(autouse=True)
 def _clean_cells():
     """Leave the pytest thread's cells at their defaults on both sides."""
-    _rust.set_resolve_lazy(True)
     _rust.set_active_timezone(None)
     _rust.set_number_format(None)
     yield
-    _rust.set_resolve_lazy(True)
     _rust.set_active_timezone(None)
     _rust.set_number_format(None)
 
@@ -82,6 +84,12 @@ def _fr_push():
         apply_render_env()
 
 
+def _probe_view() -> _rust.RustLiveView:
+    lv = _rust.RustLiveView(PROBE)
+    lv.update_state(dict(PROBE_STATE))
+    return lv
+
+
 # ---------------------------------------------------------------------------
 # The value: what `capture()` sees is what the push made this thread read.
 # ---------------------------------------------------------------------------
@@ -89,10 +97,8 @@ def _fr_push():
 
 @override_settings(USE_TZ=True, TIME_ZONE="Asia/Tokyo", USE_I18N=True)
 def test_capture_reflects_the_push():
-    _rust.set_resolve_lazy(False)
     _fr_push()
     env = _rust.RenderEnv.capture()
-    assert env.resolve_lazy is _rust.resolve_lazy_enabled()
     assert env.timezone == "Asia/Tokyo" == _rust.active_timezone_name()
     assert env.number_format == _rust.active_number_format()
     assert env.number_format[0] == ","
@@ -101,10 +107,7 @@ def test_capture_reflects_the_push():
 
 def test_a_fresh_thread_captures_the_shipped_defaults():
     """`RenderEnv::default()` and a never-pushed thread agree (#1646)."""
-    from djust.config import template_resolve_lazy_default
-
     env = _on_fresh_thread(_rust.RenderEnv.capture)
-    assert env.resolve_lazy is template_resolve_lazy_default()
     assert env.timezone is None
     assert env.number_format is None
 
@@ -117,7 +120,7 @@ ENTRIES = ["render", "render_with_diff", "render_binary_diff"]
 
 
 def _render_via(entry: str, lv) -> str:
-    """The probe's one output byte. The diff entries wrap the body in the
+    """The probe's output. The diff entries wrap the body in the
     `<html dj-id=...>` document `render` alone does not; strip that."""
     out = getattr(lv, entry)()
     html = out if isinstance(out, str) else out[0]
@@ -131,40 +134,40 @@ class TestACapturedEnvReachesARenderOnAFreshThread:
 
     @pytest.mark.parametrize("entry", ENTRIES)
     def test_the_configured_answer_on_a_fresh_thread(self, entry):
-        _rust.set_resolve_lazy(False)
-        lv = _rust.RustLiveView(PROBE)
+        _fr_push()
+        lv = _probe_view()
         lv.capture_render_env()
-        assert lv.render_env().resolve_lazy is False
+        assert lv.render_env().number_format[0] == ","
 
         def worker():
-            before = _rust.resolve_lazy_enabled()
+            before = _rust.active_number_format()
             html = _render_via(entry, lv)
-            after = _rust.resolve_lazy_enabled()
+            after = _rust.active_number_format()
             return before, html, after
 
         before, html, after = _on_fresh_thread(worker)
-        assert before is True, "premise: the fresh thread's own cell is the default"
-        assert html == "Y", f"{entry} on a fresh thread rendered the thread default, not the env"
-        assert after is True, f"{entry} must leave the thread's cell as it found it"
+        assert before is None, "premise: the fresh thread's own cell is the default"
+        assert html == FR, f"{entry} on a fresh thread rendered the thread default, not the env"
+        assert after is None, f"{entry} must leave the thread's cell as it found it"
 
     @pytest.mark.parametrize("entry", ENTRIES)
     def test_gate_off_an_uncaptured_view_reads_the_thread_default(self, entry):
         """The pre-ADR-029 shape, kept as the sibling that proves the field
-        (not the flag on this thread) decided the case above."""
-        _rust.set_resolve_lazy(False)
-        lv = _rust.RustLiveView(PROBE)
+        (not the format on this thread) decided the case above."""
+        _fr_push()
+        lv = _probe_view()
         assert lv.render_env() is None
-        assert _on_fresh_thread(lambda: _render_via(entry, lv)) == "X"
+        assert _on_fresh_thread(lambda: _render_via(entry, lv)) == DEFAULT
 
     def test_set_render_env_takes_a_value_and_none_clears_it(self):
-        _rust.set_resolve_lazy(False)
+        _fr_push()
         env = _rust.RenderEnv.capture()
-        _rust.set_resolve_lazy(True)
-        lv = _rust.RustLiveView(PROBE)
+        _rust.set_number_format(None)
+        lv = _probe_view()
         lv.set_render_env(env)
-        assert _on_fresh_thread(lv.render) == "Y"
+        assert _on_fresh_thread(lv.render) == FR
         lv.set_render_env(None)
-        assert _on_fresh_thread(lv.render) == "X"
+        assert _on_fresh_thread(lv.render) == DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -224,16 +227,6 @@ class TestThePlainEntryTakesAnExplicitEnv:
         assert _rust.render_template("{{ v }}", {"v": 12.3}, render_env=fr) == "12,3"
         assert _rust.active_number_format() is None, "restored on return"
         assert _rust.render_template("{{ v }}", {"v": 12.3}) == "12.3"
-
-    def test_the_env_covers_the_conversion_too(self):
-        """`resolve_lazy` is read at conversion time as well as render time;
-        the guard is installed before the context is converted."""
-        _rust.set_resolve_lazy(False)
-        off = _rust.RenderEnv.capture()
-        _rust.set_resolve_lazy(True)
-        assert _rust.render_template(PROBE, {}) == "X"
-        assert _rust.render_template(PROBE, {}, render_env=off) == "Y"
-        assert _rust.resolve_lazy_enabled() is True
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +295,8 @@ def test_every_backend_entry_that_applies_auto_call_applies_the_env():
 
 
 # ---------------------------------------------------------------------------
-# The production actor path, end to end: a `use_actors=True` WS mount with
-# `template_resolve_lazy: False` renders the configured answer.
+# The production actor path, end to end: a `use_actors=True` WS mount under a
+# `fr` number format renders the configured answer.
 # ---------------------------------------------------------------------------
 
 _ALLOWED = "djust.tests.test_render_env_per_view_2741"
@@ -312,12 +305,16 @@ _ALLOWED = "djust.tests.test_render_env_per_view_2741"
 def _actor_view(name: str):
     from djust import LiveView
 
+    def mount(self, request, **kwargs):
+        self.v = PROBE_STATE["v"]
+
     return type(
         name,
         (LiveView,),
         {
             "use_actors": True,
             "template": f'<div dj-root dj-view="{_ALLOWED}.{name}" dj-id="0">{PROBE}</div>',
+            "mount": mount,
             "__module__": __name__,
         },
     )
@@ -326,52 +323,38 @@ def _actor_view(name: str):
 ActorProbeView = _actor_view("ActorProbeView")
 
 
-@contextlib.contextmanager
-def _resolve_lazy_config(enabled: bool):
-    """Flip the flag at its ONE reader, `config.template_resolve_lazy_enabled`
-    — which `render_env.apply_resolve_lazy` imports at call time — rather
-    than by spelling the settings key (only `config.py` may; the #2539 pin
-    `test_the_config_reader_is_the_only_one` greps the package for it).
-    `override_settings` cannot reach it: `LIVEVIEW_CONFIG` is read into a
-    process-global at import."""
-    import djust.config as config_module
-
-    previous = config_module.template_resolve_lazy_enabled
-    config_module.template_resolve_lazy_enabled = lambda: enabled
-    try:
-        yield
-    finally:
-        config_module.template_resolve_lazy_enabled = previous
-
-
 @pytest.mark.django_db
 @pytest.mark.asyncio
 class TestTheActorMountAppliesTheConfiguredEnv:
     """The production actor path end to end (`runtime.py`'s
     `dispatch_actor_mount` -> `SessionActorHandle.mount` -> the tokio worker):
-    the configured flag decides the actor's render, not the worker's default.
-    Before ADR-029 the first case rendered `X` (#2751's finding, over the
-    wire)."""
+    the configured number format decides the actor's render, not the
+    worker's default. Before ADR-029 the first case rendered the default
+    (#2751's finding, over the wire).
 
-    async def _mount_html(self) -> str:
+    Configured through `LANGUAGE_CODE` rather than `translation.override`:
+    the mount path re-activates the settings language before
+    `dispatch_actor_mount` pushes with `apply_render_env()` (measured: a
+    thread-local `override("fr")` was read back as `en-us` at the push), so
+    only the setting reaches the push."""
+
+    async def _mount_html(self, lang: str) -> str:
         pytest.importorskip("channels")
         from djust._rust import create_session_actor  # noqa: F401
 
         from .test_ws_mount_flip_parity_1911 import _connect_and_mount
 
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
+        with override_settings(LANGUAGE_CODE=lang, LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
             comm, frame = await _connect_and_mount(f"{_ALLOWED}.ActorProbeView")
             try:
                 return frame["html"]
             finally:
                 await comm.disconnect()
 
-    async def test_resolve_lazy_false_reaches_the_actor_render(self):
-        with _resolve_lazy_config(False):
-            html = await self._mount_html()
-        assert "Y" in html and "X" not in html, html
+    async def test_a_configured_number_format_reaches_the_actor_render(self):
+        html = await self._mount_html("fr")
+        assert FR in html and DEFAULT not in html, html
 
-    async def test_gate_off_the_default_config_renders_the_lazy_answer(self):
-        with _resolve_lazy_config(True):
-            html = await self._mount_html()
-        assert "X" in html and "Y" not in html, html
+    async def test_gate_off_the_default_config_renders_the_unlocalized_answer(self):
+        html = await self._mount_html("en-us")
+        assert DEFAULT in html and FR not in html, html

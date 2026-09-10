@@ -79,24 +79,29 @@ flowchart TD
     F2 -->|no| F3{"isinstance(models.Model)?"}
     F3 -->|yes| MOD["normalize_django_value<br/>then recurse (the floor)"]
     F3 -->|no| F4{"opaque_value returns Some?<br/>lib.rs:4881 (gate at :4227)"}
-    F4 -->|yes| ENC2["Encoded via opaque_value<br/>items maybe,<br/>live handle iff resolve_lazy()"]
-    F4 -->|no| F5{"public __dict__ attrs?"}
-    F5 -->|yes| OBJ["Value::Object<br/>(the bulk dump)"]
-    F5 -->|no| STR2["Value::String(str(o))"]
+    F4 -->|yes| ENC2["Encoded via opaque_value<br/>items maybe,<br/>ALWAYS a live handle"]
+    F4 -->|no| HO["Encoded via handle_only_encoded<br/>best-effort display,<br/>ALWAYS a live handle (#2628)"]
 
     style ENC1 fill:#fde,stroke:#c39
     style ENC2 fill:#fde,stroke:#c39
 ```
 
-Under the shipped default (`resolve_lazy()` is `true`), `opaque_gate`'s last
-decline is lifted, so the `Value::Object` bulk-dump arm is reached only when
-`opaque_value` returns `None`. That happens when a probe on the object raises:
-`bool(o)`, `str(o)`, `repr(o)` or `type(o).__name__` — **or, and this is the
-one that is easy to miss, a failure while ENUMERATING the items** (`item.is_err()`
-at `lib.rs:4304`, and `item.ok()?` / `extract::<Value>().ok()?` in
+`opaque_value` returns `None` — and the terminal arm, `handle_only_encoded`,
+is reached — only when a probe on the object raises: `bool(o)`, `str(o)`,
+`repr(o)` or `type(o).__name__` — **or, and this is the one that is easy to
+miss, a failure while ENUMERATING the items** (`item.is_err()` in
+`opaque_gate`, and `item.ok()?` / `extract::<Value>().ok()?` in
 `opaque_value`). `iter(o)` *failing* is not on that list: `try_iter().ok()`
 just sets `iterable = false`, which is the ordinary non-iterable case — and a
-non-iterable object does get a handle. Both halves measured in §6.6.
+non-iterable object does get a handle. Both halves measured in §6.6, on the
+pre-#2628 build. The `Value::Object` `__dict__` bulk-dump arm that used to sit
+between `opaque_value` and a terminal `Value::String(str(o))` — and the
+`template_resolve_lazy` escape hatch — were deleted in ADR-027 Step 5 (#2628);
+because §6.6's probe-raised objects DID reach that arm on the default, its
+replacement is `handle_only_encoded`: the object still crosses with its live
+handle and best-effort measurements, so `{{ o.attr }}` / `{{ o.0 }}` / a refused
+mutator resolve against the real object exactly as the dump-then-sidecar path
+used to answer them.
 
 ### 1.3 How `{{ a.b.c }}` is answered
 
@@ -109,7 +114,7 @@ they sit between `get` and the sidecar guard.
 
 ```mermaid
 flowchart TD
-    Q["resolve('a.b.c')"] --> M1{"resolve_lazy() AND<br/>some prefix is an Encoded<br/>carrying a live handle?<br/>context.rs:1800"}
+    Q["resolve('a.b.c')"] --> M1{"some prefix is an Encoded<br/>carrying a live handle?<br/>context.rs:1800"}
     M1 -->|yes| W["walk_from_handle -> walk_live<br/>context.rs:2181 / :2300<br/>Django's _resolve_lookup over the REAL object"]
     M1 -->|no| M2{"the value stack answers it?<br/>Context::get, context.rs:1805"}
     M2 -->|yes| V["the Value / Encoded::attrs entry"]
@@ -145,7 +150,8 @@ a reader would have concluded `{{ m.items }}` is a sidecar answer:
 
 The third is the proof: a *filtered* binding, so the sidecar cannot reach it
 (§6.1), and the value stack cannot answer `.1` on a `String` — and it renders
-`b` with the handle flag both on and off, so it is not the handle either.
+`b` with the handle walk gated off (measured on the pre-#2628 build, where a flag
+could gate it), so it is not the handle either.
 
 ### 1.4 The partial-render dependency path
 
@@ -337,26 +343,26 @@ in the same file drives a real second WebSocket mount through that clone and
 asserts `resolution` renders.
 
 **`opaque_value`** (`lib.rs:4881`) — the general carrier. It attaches a handle
-**iff** the thread-local flag is on (`lib.rs:4937`–`4916`):
+unconditionally:
 
 ```rust
-let lazy = resolve_lazy();
-let live = if lazy { Some(std::sync::Arc::new(ob.clone().unbind())) } else { None };
+let live = Some(std::sync::Arc::new(ob.clone().unbind()));
 ```
 
 Attaching costs no Python call: `Bound::unbind` is a refcount bump plus an `Arc`
-allocation.
+allocation. (Until ADR-027 Step 5, #2628, this line was gated on the
+`template_resolve_lazy` thread-local — `let live = if lazy { Some(..) } else
+{ None }` — and so was the sink at `context.rs:1800`; both gates are gone.)
 
 **`django_json_encoded`** (`lib.rs:2100`) — the datetime family. It attaches a
-handle **unconditionally** (`lib.rs:2236`):
+handle unconditionally too (`lib.rs:2236`):
 
 ```rust
 live: Some(std::sync::Arc::new(ob.clone().unbind())),
 ```
 
-There is no `resolve_lazy()` guard on that line. The behaviour is still gated,
-because the *sink* is gated (`context.rs:1800`) — but the field is populated
-either way. See §6.3.
+This one was never gated, which is how §6.3's false claim arose while the other
+producer still was.
 
 **Who does not get one.** The arms *above* `opaque_value` in the fallback block
 claim their types first, so nothing they claim can reach the handle: a `dict`, a
@@ -422,10 +428,6 @@ past the cap produced byte-identical output to the same iterable under it
 (§6.4). That is one shape over one sink; treat the general claim as the design's
 goal, pinned by `test_declined_container_spelling_2717.py`, not as something
 this document measured.
-
-On the eager escape hatch (`resolve_lazy()` false) there is no handle to read
-later, so an unbounded object is *declined* by the gate instead and falls to
-`Value::String(str(o))`.
 
 ### 3.6 What is deliberately eager
 
@@ -539,8 +541,8 @@ handle in isolation, and using any other makes a gate-off silently vacuous
 (§6.1). The repo's own `TestFilteredAndDictViewOperands2504`
 (`python/tests/test_adr027_characterization_net_2539.py:1498`) is named for both.
 Measured: `{% for q in m.values %}{{ q.resolution }}{% endfor %}` over
-`{"k": <datetime>}` renders `0:00:00.000001` with the flag on and `''` with it
-off, exactly as the filtered-operand shape does.
+`{"k": <datetime>}` rendered `0:00:00.000001` with the (since-deleted) flag on
+and `''` with it off, exactly as the filtered-operand shape did.
 
 Note also `entry_sidecar`'s own caveat (`crates/djust_live/src/lib.rs:2105`–`2114`):
 `DjustTemplateBackend` runs `serialize_context()` *before* calling into Rust, so
@@ -565,9 +567,9 @@ Where there is no test, this table says so rather than implying coverage.
 | I8 | `deep_fingerprint` warns when the budget truncates | `python/tests/test_snapshot_truncation_warning.py:143` |
 | I9 | The `Encoded` wire layout and field positions are pinned | `crates/djust_core/tests/test_encoded_wire_positions_2471_2472.rs` |
 | I10 | Django's lookup rules at the sink | `crates/djust_core/tests/test_django_lookup_sink_2539.rs` |
-| I11 | The datetime family carries a live handle (`opaque_value`'s is flag-gated; the datetime one is not) | `test_a_temporal_value_carries_a_live_handle_under_the_default` + its in-suite gate-off `test_the_handle_walk_is_what_answers_it`, `python/tests/test_datetime_live_handle_2741.py` — renders a live-only name (`resolution` / `max` / `min`, in neither name table) for all four temporal types through the isolating `{% with q=xs\|first %}` binding, byte-for-byte with Django under the shipped default, and blank with the flag off while a name-table control still renders. The unconditional half (`live: Some(..)` with the flag OFF) is not Python-observable — the handle is never walked then — and is pinned by reading `lib.rs:2236` only. Was "no test" until #2741, which is how a comment in `context.rs` could contradict `django_json_encoded`'s own `live: Some(..)` (`lib.rs:2236`) for as long as it did. **Limit (#2767):** the handle does not survive a state-backend round trip, and a handle-only name (`resolution`) renders `''` on a clone rendered without a re-sync while the name-table control (`year`) still renders — pinned as current behaviour by `test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip` (all four temporal types), with the real second-WebSocket-mount path shown to re-attach the handle by `test_the_framework_restore_path_re_attaches_the_handle_before_rendering`, same file. See §3.4. |
+| I11 | The datetime family carries a live handle (as does every `opaque_value` carrier since #2628) | `test_a_temporal_value_carries_a_live_handle_under_the_default` + its in-suite gate-off `test_the_handle_walk_is_what_answers_it`, `python/tests/test_datetime_live_handle_2741.py` — renders a live-only name (`resolution` / `max` / `min`, in neither name table) for all four temporal types through the isolating `{% with q=xs\|first %}` binding, byte-for-byte with Django under the shipped default, and blank with the flag off while a name-table control still renders. The unconditional half (`live: Some(..)` with the flag OFF) is not Python-observable — the handle is never walked then — and is pinned by reading `lib.rs:2236` only. Was "no test" until #2741, which is how a comment in `context.rs` could contradict `django_json_encoded`'s own `live: Some(..)` (`lib.rs:2236`) for as long as it did. **Limit (#2767):** the handle does not survive a state-backend round trip, and a handle-only name (`resolution`) renders `''` on a clone rendered without a re-sync while the name-table control (`year`) still renders — pinned as current behaviour by `test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip` (all four temporal types), with the real second-WebSocket-mount path shown to re-attach the handle by `test_the_framework_restore_path_re_attaches_the_handle_before_rendering`, same file. See §3.4. |
 | **I12** | **`OPAQUE_ITEM_CAP` does not gate the handle** | **no direct test.** `test_sized_sequence_conversion_2695_2693.py` and `test_declined_container_spelling_2717.py` exercise the cap's *item* behaviour; none asserts that a sub-cap or non-sequence object also carries a handle. |
-| I13 | `RESOLVE_LAZY` is per-thread, and a thread that never pushed reads the Rust default | `test_a_thread_that_never_pushed_reads_the_default`, `python/tests/test_adr027_wiring_security_2539.py:835` (spawns a `Thread` and asserts it does not see the flag pushed on the main thread) and `test_the_rust_default_tracks_the_python_default`, `python/tests/test_adr027_characterization_net_2539.py:2184`. §6.5 re-derives an invariant that is already pinned — this row said "no test found" until review grepped it. |
+| I13 | ~~`RESOLVE_LAZY` is per-thread, and a thread that never pushed reads the Rust default~~ **Retired by ADR-027 Step 5 (#2628):** the cell, its Python readers and the PyO3 setter/getter are deleted; `test_no_production_source_names_the_switch` in `python/djust/tests/test_adr027_step5_deletion_2628.py` pins the deletion over a file set derived from `python/djust` + `crates/*/src`. The thread-local property still holds for the timezone and number-format cells (§5.4). |
 
 ---
 
@@ -625,7 +627,15 @@ behind an `Arc` precisely so `Context::clone` needs no GIL (`context.rs:288`–`
 
 ### 5.4 The consequence: ambient render settings are thread-local, and default
 
-`RESOLVE_LAZY` is a **thread-local** `Cell<bool>` initialised to `true`
+> **Retired mechanism (ADR-027 Step 5, #2628).** The table below records the
+> `RESOLVE_LAZY` cell as it stood when this document was written. The cell, its
+> eight readers and the PyO3 getter were deleted in #2628; every one of the eight
+> sites now takes the former flag-ON arm unconditionally. The thread-local
+> property this section derives still holds for the cells that remain — the
+> render timezone (#2209) and the number formats (#2221) — and the rule about
+> direct `_rust.render_template` callers is unchanged for them.
+
+`RESOLVE_LAZY` was a **thread-local** `Cell<bool>` initialised to `true`
 (`crates/djust_core/src/lib.rs:2821`), read at **eight** functional sites across
 two crates:
 
@@ -642,24 +652,27 @@ two crates:
 
 `djust_live/src/lib.rs:1901` is the PyO3 getter, not a routing read.
 
-That last row is in a different crate from every other, and it is behaviourally
-observable — `{% firstof nope|default_if_none:"X" "Y" %}` renders `X` with the
-flag on and `Y` with it off (§6.9).
+That last row is in a different crate from every other, and it was behaviourally
+observable — `{% firstof nope|default_if_none:"X" "Y" %}` rendered `X` with the
+flag on and `Y` with it off (§6.9). It renders `X` now.
 
 > An earlier version of this section said "read at exactly two sites", and
 > sourced it to `lib.rs:2886`'s own doc comment, which said the same thing. Both
 > were false. See §6.9 — this is the tenth false absolute on this boundary, and
 > the document acquired it in exactly the way it was written to prevent.
 
-It is pushed per render by
+It was pushed per render by
 `djust.render_env.apply_render_env`, alongside the timezone (#2209) and the
 number format (#2221) — that module exists so a render path cannot acquire one
 ambient setting and miss another.
 
-Because it is thread-local rather than global, **a thread that never called
-`apply_render_env` reads the shipped default, not the project's configured
-value.** Verified in §6.5, and pinned by I13. The same is true of the render
-timezone and number format, which is the reason they live in one module.
+Because those cells are thread-local rather than global, **a thread that never
+called `apply_render_env` reads the shipped default, not the project's
+configured value.** Verified for the flag in §6.5 (pre-#2628); the same is true
+of the render timezone and number format, which is the reason they live in one
+module — and since #2628 the actor-path tests (`crates/djust_live/src/actors/view.rs`,
+`session.rs`, `python/djust/tests/test_render_env_per_view_2741.py`) observe it
+through the number format.
 
 This is a property of the mechanism, **not a live bug**: `_sync_state_to_rust`
 calls `_apply_render_env()` per render (`python/djust/mixins/rust_bridge.py:657`)
@@ -678,6 +691,16 @@ seeded from one reader — the #1646 shape.
 ---
 
 ## 6. What was verified, and how
+
+> **Dated record.** Every measurement in this section that flips
+> `set_resolve_lazy(False)` was taken on the build this document was written
+> against, BEFORE ADR-027 Step 5 (#2628) deleted the flag. Those probes are no
+> longer runnable as written — there is no setting to flip — and are kept because
+> the false claims they corrected are the point of the section. Where a probe
+> gated the handle *off* to prove the handle was load-bearing, the surviving
+> equivalent is the structural pin in
+> `python/djust/tests/test_adr027_step5_deletion_2628.py` plus the isolating
+> bindings §6.1 describes.
 
 Everything below was run against a release build of this checkout. The harness
 is reproducible from the descriptions; each block states the template, the
@@ -797,7 +820,7 @@ bytes; §3.5 says why the general form of that claim is the design's goal rather
 than something measured here. No code change for #2737 — the issue body is not
 in the repo; the successors filed off it should carry the correction.
 
-### 6.5 VERIFIED: `RESOLVE_LAZY` is thread-local, and a fresh thread reads the default
+### 6.5 VERIFIED (pre-#2628): `RESOLVE_LAZY` was thread-local, and a fresh thread read the default
 
 With `set_resolve_lazy(False)` on the main thread:
 
@@ -810,7 +833,7 @@ ASGI/WebSocket spine renders on a `sync_to_async` worker thread — this is why
 `apply_render_env` is pushed *per render* rather than once at startup, and why
 that push is what keeps the configured value honoured on the real path (§5.4).
 
-### 6.6 The `Value::Object` bulk-dump arm — reachable under the default, and my first enumeration of how was wrong
+### 6.6 The `Value::Object` bulk-dump arm (deleted in #2628) — reachable under the default, and my first enumeration of how was wrong
 
 `opaque_gate`'s final decline (`lib.rs:4335`) is
 `!resolve_lazy() && truthy && !iterable && has_public_dict_attrs(ob)`. With the
@@ -888,7 +911,7 @@ There are **eight** functional reads, in two crates (§5.4). The one that makes
 it a behavioural error rather than a counting error lives in `djust_templates`
 and appears nowhere in the first version of this document:
 
-| template | flag on | flag off |
+| template | flag on (the only behaviour since #2628) | flag off (deleted) |
 |---|---|---|
 | `{% firstof nope\|default_if_none:"X" "Y" %}` | `X` | `Y` |
 | `{% if nope\|default_if_none:"X" %}T{% else %}F{% endif %}` | `T` | `F` |

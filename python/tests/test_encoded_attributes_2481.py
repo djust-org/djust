@@ -82,8 +82,6 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
-from adr027_flag import resolve_lazy  # noqa: E402
-
 from djust import _rust  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -600,16 +598,16 @@ class TestWhatThisDeliberatelyDoesNOTClose:
     def test_a_custom_tzinfo_with_attributes_still_diverges(self) -> None:
         """The one carried attribute whose VALUE can be an arbitrary object.
 
-        A `tzinfo` with a `__dict__` takes the `__dict__` bulk-dump arm of
-        `FromPyObject`, so it arrives as a mapping rather than as its `str()`.
+        A `tzinfo` with a `__dict__` once took the `__dict__` bulk-dump arm of
+        `FromPyObject`, so it arrived as a mapping rather than as its `str()`.
         That is the pre-existing behaviour of ANY such object placed in a
         context — reached here through one more door, not created by it — and
         it is the class #2478 is about.
 
-        The divergence is now the ESCAPE HATCH's, and the test asserts both
-        halves: #2539 movement 3 closed it under the shipped default, exactly
-        as the class this test files it under predicted it would be closed —
-        by retiring the arm rather than by special-casing `tzinfo`.
+        #2539 movement 3 closed the divergence exactly as the class this test
+        files it under predicted it would be closed — by retiring the arm
+        rather than by special-casing `tzinfo` — and ADR-027 Step 5 (#2628)
+        deleted the escape hatch that had kept it reachable.
         """
 
         class MyTz(datetime.tzinfo):
@@ -627,27 +625,9 @@ class TestWhatThisDeliberatelyDoesNOTClose:
 
         aware = datetime.datetime(2026, 3, 4, tzinfo=MyTz())
         assert "MyTz object at" in django_render("{{ p.tzinfo }}", {"p": aware})
-        with resolve_lazy(False):
-            # Since #2770 the `tzinfo` slot is carried as `str(tz)` on BOTH
-            # flag states — one string, every reader on it — so the cell that
-            # rendered `{'label': 'custom'}` here (the `__dict__` bulk-dump
-            # arm reached through the attribute) now renders Django's bytes.
-            # Compared against Django for the SAME object: the string carries
-            # the instance address.
-            assert djust_render("{{ p.tzinfo }}", {"p": aware}) == django_render(
-                "{{ p.tzinfo }}", {"p": aware}
-            )
-            # The same object placed DIRECTLY in the context still takes the
-            # bulk-dump arm under the escape hatch — which is what makes the
-            # divergence THAT arm's, and pre-existing rather than introduced.
-            assert (
-                djust_render("{{ p }}", {"p": MyTz()}) == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
-            )
-
-        # ...and under the shipped default the divergence is GONE (#2539
-        # movement 3). Compared against Django's own bytes for the SAME object,
-        # because the default's answer is `str(o)` and carries the instance
-        # address — no literal can stand in for it.
+        # The divergence is GONE (#2539 movement 3). Compared against Django's
+        # own bytes for the SAME object, because the answer is `str(o)` and
+        # carries the instance address — no literal can stand in for it.
         same = MyTz()
         assert djust_render("{{ p }}", {"p": same}) == django_render("{{ p }}", {"p": same})
         aware_same = datetime.datetime(2026, 3, 4, tzinfo=same)

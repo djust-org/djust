@@ -1378,18 +1378,18 @@ mod tests {
     // render environment the configuring thread captured, or the worker's
     // thread-local compiled default?
     //
-    // `RESOLVE_LAZY` is `thread_local!` (`djust_core/src/lib.rs`) and nothing
-    // in `actors/` ever pushed it, so before ADR-029 the actor rendered with
-    // the worker's default whatever Python had configured (PR #2751 observed
-    // it). The fix carries the environment as a FIELD on the backend
+    // The cells are `thread_local!` (`NUMBER_FORMAT` in `djust_core::locale`,
+    // the timezone in `djust_templates`) and nothing in `actors/` ever pushed
+    // them, so before ADR-029 the actor rendered with the worker's default
+    // whatever Python had configured (PR #2751 observed it, on the since-
+    // deleted ADR-027 kill-switch flag — ADR-027 Step 5, #2628). The fix
+    // carries the environment as a FIELD on the backend
     // (`ViewActor::set_render_env`, set by `SessionActor::handle_mount` from
     // the value the Python-facing `mount` captured on its own thread) and has
     // every render entry install it under a `RenderEnvGuard`.
     //
-    // The probe template renders `X` under `resolve_lazy=true` and `Y` under
-    // `false` (`renderer.rs`: a `Missing` operand under `ignore_failures`
-    // becomes `None` only when the flag is on, so `default_if_none` fires
-    // only then) — measured through `_rust.render_template`, not cited.
+    // The probe template renders `1234.5` under the default number format and
+    // `1234,5` under a `,`-decimal one (#2221) — measured, not cited.
     //
     // The whole difficulty is the thread. A bare `#[tokio::test]` is the
     // current_thread flavour: the actor is polled on the test thread, shares
@@ -1397,25 +1397,44 @@ mod tests {
     // harness builds a multi_thread runtime with exactly ONE worker, spawns
     // the actor there, and PROVES the worker is a different OS thread by
     // running a control task on the same (only) worker that reports its
-    // `ThreadId` and its own reading of `djust_core::resolve_lazy()` — before
-    // AND after the render, so the guard's restore is observed too.
+    // `ThreadId` and its own reading of the number-format cell — before AND
+    // after the render, so the guard's restore is observed too.
     // ------------------------------------------------------------------
 
-    const RESOLVE_LAZY_PROBE: &str = r#"{% firstof nope|default_if_none:"X" "Y" %}"#;
+    const RENDER_ENV_PROBE: &str = "{{ v }}";
+
+    fn comma_decimal() -> djust_core::locale::NumberFormat {
+        djust_core::locale::NumberFormat {
+            decimal_sep: ",".into(),
+            thousand_sep: "\u{a0}".into(),
+            grouping: vec![3, 0],
+            use_grouping: false,
+        }
+    }
 
     /// What one single-worker runtime observed: the worker's thread id, the
-    /// worker's own reading of the flag before and after the render, and
-    /// the actor's rendered probe.
+    /// worker's own reading of the number-format cell before and after the
+    /// render, and the actor's rendered probe.
     struct WorkerProbe {
         worker_tid: std::thread::ThreadId,
-        worker_flag_before: bool,
-        worker_flag_after: bool,
+        worker_format_before: Option<djust_core::locale::NumberFormat>,
+        worker_format_after: Option<djust_core::locale::NumberFormat>,
         html: String,
     }
 
-    fn worker_reading(rt: &tokio::runtime::Runtime) -> (std::thread::ThreadId, bool) {
-        rt.block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
-            .unwrap()
+    fn worker_reading(
+        rt: &tokio::runtime::Runtime,
+    ) -> (
+        std::thread::ThreadId,
+        Option<djust_core::locale::NumberFormat>,
+    ) {
+        rt.block_on(rt.spawn(async {
+            (
+                std::thread::current().id(),
+                djust_core::locale::number_format(),
+            )
+        }))
+        .unwrap()
     }
 
     fn probe_on_single_worker(
@@ -1431,49 +1450,59 @@ mod tests {
         assert_eq!(rt.metrics().num_workers(), 1, "harness premise: one worker");
 
         // Control: the only worker reports where it is and what it sees.
-        let (worker_tid, worker_flag_before) = worker_reading(&rt);
+        let (worker_tid, worker_format_before) = worker_reading(&rt);
 
         // Subject: the actor, spawned onto that same (only) worker, carrying
         // (or not) the environment the way `SessionActor::handle_mount` sets it.
         let (mut actor, handle) =
-            ViewActor::with_template("t2741.V".to_string(), RESOLVE_LAZY_PROBE.to_string());
+            ViewActor::with_template("t2741.V".to_string(), RENDER_ENV_PROBE.to_string());
         actor.set_render_env(env);
         rt.spawn(actor.run());
         let html = rt.block_on(async {
+            let mut state = HashMap::new();
+            state.insert("v".to_string(), Value::Float(1234.5));
+            handle.update_state(state).await.unwrap();
             let html = handle.render().await.unwrap();
             handle.shutdown().await;
             html
         });
         // Control again: the render must have left the worker's cell as it
         // found it (the guard's restore), whatever it installed meanwhile.
-        let (tid_after, worker_flag_after) = worker_reading(&rt);
+        let (tid_after, worker_format_after) = worker_reading(&rt);
         assert_eq!(tid_after, worker_tid, "harness premise: same single worker");
         rt.shutdown_timeout(std::time::Duration::from_secs(5));
         WorkerProbe {
             worker_tid,
-            worker_flag_before,
-            worker_flag_after,
+            worker_format_before,
+            worker_format_after,
             html,
         }
     }
 
     /// The #2751 probe, FLIPPED (ADR-029 §3 step 1): it used to pin the
-    /// defect (`X` on the worker); it now asserts the CONFIGURED answer on
-    /// the proven-distinct worker. The thread-distinctness harness is kept
-    /// verbatim because it is the only thing that proves the fix reached the
-    /// worker thread rather than the test thread.
+    /// defect (the worker default on the worker); it now asserts the
+    /// CONFIGURED answer on the proven-distinct worker. The
+    /// thread-distinctness harness is kept verbatim because it is the only
+    /// thing that proves the fix reached the worker thread rather than the
+    /// test thread.
     #[test]
     fn actor_render_on_a_worker_thread_applies_the_captured_render_env_2741() {
-        // The configuring thread says `false` — the non-default value — and
-        // captures it, exactly as the Python-facing `mount` does.
-        djust_core::set_resolve_lazy(false);
-        assert!(
-            !djust_core::resolve_lazy(),
+        // The configuring thread pushes a `,`-decimal format — the
+        // non-default value — and captures it, exactly as the Python-facing
+        // `mount` does.
+        djust_core::locale::set_number_format(Some(comma_decimal()));
+        assert_eq!(
+            djust_core::locale::number_format(),
+            Some(comma_decimal()),
             "setter took effect on this thread"
         );
         let setter_tid = std::thread::current().id();
         let env = djust_templates::render_env::capture();
-        assert!(!env.resolve_lazy, "the capture saw the configured value");
+        assert_eq!(
+            env.number_format,
+            Some(comma_decimal()),
+            "the capture saw the configured value"
+        );
 
         // Distinctness is asserted, not assumed.
         let observed = probe_on_single_worker(None, Some(env.clone()));
@@ -1483,46 +1512,51 @@ mod tests {
         );
         // (a) the worker's OWN cell is still the compiled default — nothing
         // pushed on that thread — which is what makes (b) the field's doing:
-        assert!(
-            observed.worker_flag_before,
+        assert_eq!(
+            observed.worker_format_before, None,
             "premise: the worker's ambient cell reads the default before the render"
         );
         // (b) the render answered with the CONFIGURED value.
         assert_eq!(
-            observed.html, "Y",
-            "actor render on the worker: {:?} (X = worker default true, Y = configured false)",
+            observed.html, "1234,5",
+            "actor render on the worker: {:?} (1234.5 = worker default, 1234,5 = configured)",
             observed.html
         );
         // (c) and the guard put the worker's cell back afterwards.
-        assert!(
-            observed.worker_flag_after,
+        assert_eq!(
+            observed.worker_format_after, None,
             "the render must leave the worker's cell as it found it (RenderEnvGuard)"
         );
 
         // Gate-off (#1468), the mechanism this test exists for: the SAME
         // harness with no environment on the actor is the pre-ADR-029 shape
-        // and must still render the worker's default. If this renders `Y`
-        // too, the field is not what decided (b).
+        // and must still render the worker's default. If this renders
+        // `1234,5` too, the field is not what decided (b).
         let unconfigured = probe_on_single_worker(None, None);
         assert_ne!(unconfigured.worker_tid, setter_tid);
         assert_eq!(
-            unconfigured.html, "X",
+            unconfigured.html, "1234.5",
             "gate-off: with no env on the actor the worker's default must decide, got {:?}",
             unconfigured.html
         );
 
-        // The #2751 gate-off, kept: setting the flag ON THE WORKER flips the
-        // probe as well, so the harness observes the flag and not a constant.
-        let flipped = probe_on_single_worker(Some(|| djust_core::set_resolve_lazy(false)), None);
-        assert_ne!(flipped.worker_tid, setter_tid);
-        assert!(
-            !flipped.worker_flag_before,
-            "on_thread_start set false on the worker"
+        // The #2751 gate-off, kept: pushing the format ON THE WORKER flips
+        // the probe as well, so the harness observes the cell and not a
+        // constant.
+        let flipped = probe_on_single_worker(
+            Some(|| djust_core::locale::set_number_format(Some(comma_decimal()))),
+            None,
         );
-        assert_eq!(flipped.html, "Y");
+        assert_ne!(flipped.worker_tid, setter_tid);
+        assert_eq!(
+            flipped.worker_format_before,
+            Some(comma_decimal()),
+            "on_thread_start pushed the format on the worker"
+        );
+        assert_eq!(flipped.html, "1234,5");
 
         // Leave the test thread as we found it (other tests share it).
-        djust_core::set_resolve_lazy(true);
+        djust_core::locale::set_number_format(None);
     }
 
     /// The hand-down (ADR-029): a child `ComponentActor` created through the

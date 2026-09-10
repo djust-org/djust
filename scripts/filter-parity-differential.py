@@ -2409,10 +2409,13 @@ def builtin_cells():
             yield lit, None, shape
 
 
-#: The shapes ADR-027's `template_resolve_lazy` can move (#2539), each one a
-#: dotted lookup the flag resolves by a different mechanism.
+#: The shapes ADR-027's live-handle sink resolves (#2539), each one a dotted
+#: lookup that the pre-ADR-027 eager conversion answered by a different
+#: mechanism. (The `template_resolve_lazy` flag that used to select between
+#: the two was deleted in Step 5, #2628; the cell ids keep their `@lazy` prefix
+#: so the stored baseline stays comparable.)
 #:
-#: Deliberately small and NOT a cross with the filter corpus: the flag changes
+#: Deliberately small and NOT a cross with the filter corpus: the sink changes
 #: how `p.…` reaches a value, not what a filter does to it, so multiplying it
 #: across 57 filters would add cells that all answer the same question. What it
 #: must carry is one cell per RESOLUTION SHAPE — a bare object, an attribute, a
@@ -2438,7 +2441,8 @@ RESOLUTION_MODE_SHAPES = {
 
 class _LazyPlain:
     """A plain object: truthy, non-iterable, with a public `__dict__`. The
-    shape `opaque_gate`'s decline is about, and the one the flag moves."""
+    shape the (deleted, #2628) `opaque_gate` decline was about, and the one
+    the live-handle sink most visibly moved."""
 
     cls_attr = "class-level"
 
@@ -2470,7 +2474,7 @@ RESOLUTION_MODE_INPUTS = {
 
 
 def resolution_mode_cells():
-    """Every ADR-027 resolution shape × the object kinds the flag moves."""
+    """Every ADR-027 resolution shape × the object kinds the sink moved."""
     for shape in RESOLUTION_MODE_SHAPES:
         for key in RESOLUTION_MODE_INPUTS:
             yield shape, key
@@ -3141,19 +3145,27 @@ _FALLBACK_ARM_PATTERN = re.compile(
     r"if let Some\(\w+\) = (?P<pred>\w+)\(&ob\.to_owned\(\)\)"
     r'|ob\.getattr\("(?P<dunder>__\w+__)"\)'
     r"|ob\.is_instance\(&(?P<model>model_cls)\)"
-    # The terminal arm: `str(o)`, crossed lossily since #2555.
-    r"|Ok\(Value::String\(py_str_lossy\("
+    # The terminal arm: a handle-only `Encoded` for an object one of
+    # `opaque_value`'s probes refused (ADR-027 Step 5, #2628; it was
+    # `Ok(Value::String(py_str_lossy(…)))` — `str(o)` — until then).
+    r"|Ok\(Value::Encoded\(Box::new\(handle_only_encoded\("
 )
 
 #: The two arms of that block that carry an object NO `Value` variant models.
 #:
 #: A TRANSCRIPTION, and named as one — nothing in the Rust source says which
 #: arms are the no-variant ones (`django_json_encoded` carries the datetime
-#: family, which `Value::Encoded` does model; `__dict__` produces a real
-#: mapping; the `__djust_serialize__` and `Model` arms both recurse through
-#: `extract::<Value>()` and so have no outcome of their own). The subset
-#: assertion in `_no_variant_outcomes` is what makes a rename loud, and the
-#: arm-count check in `_fallback_arms` is what makes a NEW arm loud.
+#: family, which `Value::Encoded` does model; the `__djust_serialize__` and
+#: `Model` arms both recurse through `extract::<Value>()` and so have no
+#: outcome of their own; the `__dict__` arm, which produced a real mapping,
+#: was deleted in ADR-027 Step 5, #2628). The subset assertion in
+#: `_no_variant_outcomes` is what makes a rename loud, and the arm-count
+#: check in `_fallback_arms` is what makes a NEW arm loud — it is what
+#: reported #2628's terminal-arm change.
+#:
+#: `str-fallback` is the LABEL of the terminal arm and is kept as a stable
+#: outcome/member key (`value:str-fallback:falsy` in stored manifests) even
+#: though the arm now builds `handle_only_encoded` rather than `str(o)`.
 _NO_VARIANT_ARMS = ("opaque_value", "str-fallback")
 
 
@@ -4145,16 +4157,16 @@ def measure(out_path: str) -> None:
         dj, du = render_both(source, {"p": INPUTS[key]}, CONTEXT_SAFE_KEYS.get(key))
         result[cid] = [dj, du]
 
-    # The ADR-027 RESOLUTION-MODE axis (#2539). The only axis that renders the
-    # same source TWICE, and that is the whole of it: `template_resolve_lazy`
-    # does not change a filter's answer, it changes how a dotted lookup reaches
-    # a value at all, so every other axis above renders it in exactly one mode
-    # and is blind to the other.
+    # The ADR-027 RESOLUTION-MODE axis (#2539): the dotted-lookup shapes whose
+    # answer comes from the live-handle sink rather than from a filter. Until
+    # Step 5 (#2628) deleted the `template_resolve_lazy` flag this was the one
+    # axis that pushed a setting around its render; it now renders like every
+    # other axis, and its cells keep their ids so the baseline stays comparable.
     #
     # It is a corpus MEMBER rather than an `ENTRY_POINTS_NOT_SWEPT` exemption,
     # unlike the localization and timezone channels beside it. Those are output
     # FORMATTING — a second corpus for one setting, with nothing to learn per
-    # cell. This flag is the resolution step itself, which is what this whole
+    # cell. This axis is the resolution step itself, which is what this whole
     # differential measures, so exempting it would declare the sweep blind on
     # the axis it exists for.
     for shape, key in resolution_mode_cells():
@@ -4162,17 +4174,10 @@ def measure(out_path: str) -> None:
         cid = f"@lazy {shape}\t{key}\tresolution-mode"
         if cid in result:
             continue
-        _rust.set_resolve_lazy(True)
-        try:
-            make = RESOLUTION_MODE_INPUTS[key]
-            # `ps` for the `{% for %}` shape, and a FRESH object per name so a
-            # cell that auto-calls cannot perturb its neighbour.
-            dj, du = render_both(source, {"p": make(), "ps": [make(), make()]})
-        finally:
-            # Restored unconditionally: the flag is a THREAD-LOCAL that is set
-            # rather than scoped, so leaking it on would silently re-render
-            # every cell of a later run in the other mode.
-            _rust.set_resolve_lazy(False)
+        make = RESOLUTION_MODE_INPUTS[key]
+        # `ps` for the `{% for %}` shape, and a FRESH object per name so a
+        # cell that auto-calls cannot perturb its neighbour.
+        dj, du = render_both(source, {"p": make(), "ps": [make(), make()]})
         result[cid] = [dj, du]
 
     exact, collapsed = agreement(result)

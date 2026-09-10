@@ -768,12 +768,23 @@ mod tests {
     /// its first render. Single-worker multi_thread runtime so the actor
     /// renders on a thread that is provably not the one that captured the
     /// env — the #2751 harness shape, one level up the chain.
+    ///
+    /// The observable is the number format (#2221): `{{ v }}` for `1234.5`
+    /// is `1234,5` only under a `,`-decimal format nobody pushed on the
+    /// worker. (Until ADR-027 Step 5, #2628, deleted the
+    /// ADR-027 kill-switch flag, that flag was the observable.)
     #[test]
     fn handle_mount_gives_the_view_actor_the_carried_render_env_2741() {
-        const PROBE: &str = r#"{% firstof nope|default_if_none:"X" "Y" %}"#;
-        djust_core::set_resolve_lazy(false);
+        const PROBE: &str = "{{ v }}";
+        let fr = djust_core::locale::NumberFormat {
+            decimal_sep: ",".into(),
+            thousand_sep: "\u{a0}".into(),
+            grouping: vec![3, 0],
+            use_grouping: false,
+        };
+        djust_core::locale::set_number_format(Some(fr.clone()));
         let env = djust_templates::render_env::capture();
-        assert!(!env.resolve_lazy);
+        assert_eq!(env.number_format.as_ref(), Some(&fr));
         let setter_tid = std::thread::current().id();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -781,19 +792,29 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let (worker_tid, worker_flag) = rt
-            .block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
+        let (worker_tid, worker_format) = rt
+            .block_on(rt.spawn(async {
+                (
+                    std::thread::current().id(),
+                    djust_core::locale::number_format(),
+                )
+            }))
             .unwrap();
         assert_ne!(worker_tid, setter_tid, "harness premise: a distinct worker");
-        assert!(worker_flag, "premise: the worker's own cell is the default");
+        assert_eq!(
+            worker_format, None,
+            "premise: the worker's own cell is the default"
+        );
 
+        let mut state = HashMap::new();
+        state.insert("v".to_string(), Value::Float(1234.5));
         let (html_with, html_without) = rt.block_on(async {
             let (actor, handle) = SessionActor::new("s2741".to_string());
             tokio::spawn(actor.run());
             let with = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    HashMap::new(),
+                    state.clone(),
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -806,7 +827,7 @@ mod tests {
             let without = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    HashMap::new(),
+                    state,
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -819,14 +840,14 @@ mod tests {
             (with, without)
         });
         rt.shutdown_timeout(std::time::Duration::from_secs(5));
-        djust_core::set_resolve_lazy(true);
+        djust_core::locale::set_number_format(None);
 
         assert!(
-            html_with.contains('Y') && !html_with.contains('X'),
+            html_with.contains("1234,5"),
             "the mounted actor rendered with the worker default, not the carried env: {html_with:?}"
         );
         assert!(
-            html_without.contains('X') && !html_without.contains('Y'),
+            html_without.contains("1234.5"),
             "gate-off: with no env the worker's default must decide: {html_without:?}"
         );
     }

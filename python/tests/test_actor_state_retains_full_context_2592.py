@@ -23,15 +23,16 @@ Python-level assertion on the HTML would be vacuous for any value.
 What THIS file pins is the Python half of the decision — the callers that hand
 the actor its context, the premise that lets the Rust retain run with no
 ``static_assigns`` exemption, and that both actor merge sites are decided — plus
-the real ``create_session_actor`` round trip under both ADR-027 flag states,
-which is where the new retain call executes inside ``Python::attach``.
+the real ``create_session_actor`` round trip, which is where the new retain
+call executes inside ``Python::attach``. (It once ran under both ADR-027 flag
+states; the ``template_resolve_lazy`` flag was deleted in ADR-027 Step 5,
+#2628, and the live-handle behaviour is the only one now.)
 
 Refs #2592, #2564, #2539 (ADR-027 movement 3 prerequisite), #1646, #1468.
 """
 
 from __future__ import annotations
 
-import contextlib
 import re
 import uuid
 from pathlib import Path
@@ -40,30 +41,11 @@ import pytest
 
 pytest.importorskip("django")
 
-from djust import _rust  # noqa: E402
 
 _PKG = Path(__file__).resolve().parents[1] / "djust"
 _ACTORS = Path(__file__).resolve().parents[2] / "crates" / "djust_live" / "src" / "actors"
 
 SECRET = "SECRET-A"
-FLAGS = [pytest.param(False, id="flag-off"), pytest.param(True, id="flag-on")]
-
-
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool):
-    """Flip the ADR-027 kill-switch through the REAL wiring (mirrors the 2564 net)."""
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, "the flag did not reach Rust"
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
 
 
 def _fn_body(source: str, name: str) -> str:
@@ -146,7 +128,7 @@ class TestActorMergeSitesAreDecided2592:
 
 
 # ---------------------------------------------------------------------------
-# The real Python → actor round trip, both flag states
+# The real Python → actor round trip
 # ---------------------------------------------------------------------------
 class Holder:
     def __init__(self) -> None:
@@ -170,11 +152,10 @@ class TestActorRoundTrip2592:
     """The new retain executes inside ``Python::attach`` on the real
     ``create_session_actor`` path. These are NOT the removal assertion (the
     actor's render is an empty document, see the module docstring) — they pin
-    that the path survives a delete for every value shape under both flags,
-    including the plain object the lazy flag adds to the class."""
+    that the path survives a delete for every value shape, including the
+    plain object that crosses as a live handle."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("flag", FLAGS)
     @pytest.mark.parametrize(
         "make_value",
         [
@@ -183,19 +164,18 @@ class TestActorRoundTrip2592:
             pytest.param(Holder, id="plain-object"),
         ],
     )
-    async def test_delete_then_event_round_trips_through_the_actor(self, flag, make_value) -> None:
+    async def test_delete_then_event_round_trips_through_the_actor(self, make_value) -> None:
         from djust._rust import create_session_actor
 
-        with resolve_lazy(flag):
-            # A fresh id per case: the supervisor keys sessions by id, and a
-            # reused id hands back the previous case's shut-down actor.
-            handle = await create_session_actor(f"t2592-{uuid.uuid4()}")
-            try:
-                view = _DeleteView(make_value())
-                mounted = await handle.mount("t2592.V", view.get_context_data(), view)
-                assert "html" in mounted
-                result = await handle.event("forget", {})
-                assert not hasattr(view, "k"), "premise: the handler ran"
-                assert result["version"] > 1, result
-            finally:
-                await handle.shutdown()
+        # A fresh id per case: the supervisor keys sessions by id, and a
+        # reused id hands back the previous case's shut-down actor.
+        handle = await create_session_actor(f"t2592-{uuid.uuid4()}")
+        try:
+            view = _DeleteView(make_value())
+            mounted = await handle.mount("t2592.V", view.get_context_data(), view)
+            assert "html" in mounted
+            result = await handle.event("forget", {})
+            assert not hasattr(view, "k"), "premise: the handler ran"
+            assert result["version"] > 1, result
+        finally:
+            await handle.shutdown()

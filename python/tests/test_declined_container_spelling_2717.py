@@ -47,7 +47,6 @@ import array
 import collections
 import datetime
 import functools
-import json
 import pathlib
 import re
 
@@ -549,59 +548,6 @@ class TestTheContainerSpellingCallSitesAreTheSetNamed:
         calls = re.findall(r"(?<!fn )spelling_is_the_items_list_repr\(", text)
         assert len(defs) == 1, f"expected exactly one definition, found {len(defs)}"
         assert len(calls) == 1, f"expected exactly one call site, found {len(calls)}"
-
-
-class TestTheEagerHatchIsUnchanged:
-    """`template_resolve_lazy: False` has no live handle to spell from, so the
-    decline never applies there and neither does any of this (#2695's own
-    rule, re-asserted because #2717 widened what the decline claims)."""
-
-    def test_the_hatch_still_enumerates_a_large_list(self) -> None:
-        import subprocess
-        import sys
-        import textwrap
-
-        child = textwrap.dedent(
-            """
-            import json, django
-            from django.conf import settings
-            settings.configure(
-                SECRET_KEY="x", DEBUG=False, USE_TZ=False,
-                TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend",
-                            "NAME": "e", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}],
-                LIVEVIEW_CONFIG={"template_resolve_lazy": False},
-            )
-            django.setup()
-            from djust import _rust
-            from djust.render_env import apply_render_env
-
-            # The engine's thread-local mirror of `LIVEVIEW_CONFIG`, pushed by
-            # the same helper every real render path uses. Without it the Rust
-            # side keeps its DEFAULT (lazy ON) and this child would measure the
-            # shipped mode while claiming to measure the hatch.
-            apply_render_env()
-            v = list(range(100_001))
-            # The RENDER first: `template_resolve_lazy` reaches Rust through a
-            # setter the backend calls, so `crosses_as_encoded` asked before
-            # any render reads the thread-local's DEFAULT (lazy on) and would
-            # answer about the wrong engine mode.
-            head = _rust.render_template("{{ v }}", {"v": v})[:12]
-            length = _rust.render_template("{{ v|length }}", {"v": v})
-            print(json.dumps({
-                "encoded": _rust.crosses_as_encoded(v),
-                "head": head,
-                "length": length,
-            }))
-            """
-        )
-        out = subprocess.run(
-            [sys.executable, "-c", child], capture_output=True, text=True, timeout=300
-        )
-        assert out.returncode == 0, out.stderr[-2000:]
-        answer = json.loads(out.stdout.strip().splitlines()[-1])
-        assert answer["encoded"] is False, "the hatch must never decline a sized sequence"
-        assert answer["head"] == "[0, 1, 2, 3,"
-        assert answer["length"] == "100001"
 
 
 @pytest.mark.django_db

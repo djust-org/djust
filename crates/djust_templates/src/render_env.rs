@@ -25,7 +25,7 @@
 use djust_core::locale::{
     number_format, set_number_format, set_unlocalized_number_format, unlocalized_number_format,
 };
-use djust_core::{resolve_lazy, set_resolve_lazy, RenderEnv};
+use djust_core::RenderEnv;
 
 use crate::renderer::replace_use_l10n_stack;
 use crate::timezone::{active_timezone_name, set_active_timezone};
@@ -40,7 +40,6 @@ pub fn capture() -> RenderEnv {
     let use_l10n = stack.first().copied();
     replace_use_l10n_stack(stack);
     RenderEnv {
-        resolve_lazy: resolve_lazy(),
         timezone: active_timezone_name(),
         number_format: number_format(),
         unlocalized_number_format: unlocalized_number_format(),
@@ -54,7 +53,6 @@ pub fn capture() -> RenderEnv {
 /// tz database does not know leaves the previous zone in place rather than
 /// failing the render, which is what the Python push does too.
 fn apply(env: &RenderEnv) {
-    set_resolve_lazy(env.resolve_lazy);
     set_active_timezone(env.timezone.as_deref());
     set_number_format(env.number_format.clone());
     set_unlocalized_number_format(env.unlocalized_number_format.clone());
@@ -119,7 +117,6 @@ mod tests {
     fn install_scopes_the_cells_and_drop_restores_the_poisoned_ones() {
         // Poison, the way a previous render on a pooled thread would leave
         // things (the #2728 shape: a `fr` push nobody restored).
-        set_resolve_lazy(false);
         set_active_timezone(Some("Asia/Tokyo"));
         set_number_format(Some(fr()));
         set_unlocalized_number_format(Some(fr()));
@@ -129,14 +126,12 @@ mod tests {
         assert_eq!(poisoned.use_l10n, Some(false));
 
         let clean = RenderEnv {
-            resolve_lazy: true,
             timezone: Some("Europe/Paris".to_string()),
             ..RenderEnv::default()
         };
         {
             let _guard = RenderEnvGuard::install(&clean);
             assert_eq!(capture(), clean, "inside the guard the cells ARE the env");
-            assert!(resolve_lazy());
             assert_eq!(number_format(), None);
         }
         // Everything back, including the stack above the base scope.
@@ -152,20 +147,25 @@ mod tests {
     fn drop_restores_on_the_panic_path_too() {
         apply(&RenderEnv::default());
         set_active_timezone(Some("America/New_York"));
+        set_number_format(Some(fr()));
         let env = RenderEnv {
             timezone: Some("UTC".to_string()),
-            resolve_lazy: false,
+            number_format: None,
             ..RenderEnv::default()
         };
         let panicked = std::panic::catch_unwind(|| {
             let _guard = RenderEnvGuard::install(&env);
             assert_eq!(active_timezone_name().as_deref(), Some("UTC"));
-            assert!(!resolve_lazy());
+            assert_eq!(number_format(), None);
             panic!("a child node blew up");
         });
         assert!(panicked.is_err());
         assert_eq!(active_timezone_name().as_deref(), Some("America/New_York"));
-        assert!(resolve_lazy(), "the flag came back with the zone");
+        assert_eq!(
+            number_format(),
+            Some(fr()),
+            "the number format came back with the zone"
+        );
         apply(&RenderEnv::default());
     }
 

@@ -1861,11 +1861,8 @@ impl Context {
     /// of the several `Ok(None)` returns below — a per-branch fallback is the
     /// shape that leaves one branch behind.
     fn resolve_without_builtins(&self, key: &str) -> crate::Result<Option<Value>> {
-        // ADR-027's ONE routing point (#2539). Behind
-        // `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **ON** since
-        // movement 3 — with the flag off (the escape hatch) this is a single
-        // thread-local `Cell<bool>` read and the engine's bytes are
-        // byte-identical to the pre-#2539 ones.
+        // ADR-027's ONE routing point (#2539). Unconditional since Step 5
+        // (#2628) deleted the ADR-027 kill-switch flag that gated it.
         //
         // FIRST, not after `get` — and that placement is the whole of the
         // difference between "some dotted lookups resolve" and Django's
@@ -1888,34 +1885,29 @@ impl Context {
         // carrying a handle. A `list`, a `dict`, a tuple, a `Model` and a
         // `__djust_serialize__` object never carry one — the `FromPyObject`
         // arms ABOVE `opaque_value` claim all five — so their resolution is
-        // untouched under either flag state.
+        // untouched by this arm.
         //
         // The DATETIME family is the exception, and this comment asserted the
         // opposite until `docs/architecture/VALUE_BOUNDARY.md` falsification-
         // tested it (#1867). `django_json_encoded` (`lib.rs`) sets
         // `live: Some(..)` for every `datetime` / `date` / `time` /
-        // `timedelta` UNCONDITIONALLY — there is no `resolve_lazy()` guard on
-        // that construction site, unlike `opaque_value`'s. So a temporal value
-        // DOES reach this arm, and its resolution IS flag-dependent: `.year` is
-        // answered by `Encoded::attrs` either way (`ENCODED_ATTR_NAMES`), while
-        // `.min` / `.max` / `.resolution` — deliberately in NEITHER name table,
-        // because their values are themselves `datetime`s and collecting them
-        // would not terminate — are answered ONLY here, and render empty with
-        // the flag off. Measured through a filtered-operand rebinding
-        // (`{% with q=xs|first %}`), which is the one binding shape the by-name
-        // sidecar cannot reach via `Context::aliases`; through any other
-        // spelling the sidecar answers and the difference is invisible.
-        // Pinned by `python/tests/test_datetime_live_handle_2741.py`, which
-        // renders `.resolution` / `.max` / `.min` for all four temporal types
-        // through that isolating binding against Django, under both flag
-        // states, so this paragraph cannot silently go false again (#2741).
-        // (Python rather than a djust_core pyo3 test because
-        // `django_json_encoded` imports Django, which the embedded
-        // interpreter in `rust-tests` cannot reach.)
-        if crate::resolve_lazy() {
-            if let Some(answer) = self.walk_from_handle(key)? {
-                return Ok(answer);
-            }
+        // `timedelta`, so a temporal value DOES reach this arm: `.year` is
+        // answered by `Encoded::attrs` (`ENCODED_ATTR_NAMES`), while `.min` /
+        // `.max` / `.resolution` — deliberately in NEITHER name table, because
+        // their values are themselves `datetime`s and collecting them would
+        // not terminate — are answered ONLY here. Measured through a
+        // filtered-operand rebinding (`{% with q=xs|first %}`), which is the
+        // one binding shape the by-name sidecar cannot reach via
+        // `Context::aliases`; through any other spelling the sidecar answers
+        // and the difference is invisible. Pinned by
+        // `python/tests/test_datetime_live_handle_2741.py`, which renders
+        // `.resolution` / `.max` / `.min` for all four temporal types through
+        // that isolating binding against Django (#2741). (Python rather than
+        // a djust_core pyo3 test because `django_json_encoded` imports
+        // Django, which the embedded interpreter in `rust-tests` cannot
+        // reach.)
+        if let Some(answer) = self.walk_from_handle(key)? {
+            return Ok(answer);
         }
         if let Some(v) = self.get(key) {
             return Ok(Some(v.clone()));
@@ -2013,8 +2005,15 @@ impl Context {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
                 // BOTH "invalid" variants answer `Missing` here, which is
                 // byte for byte what this walk answered before the split
-                // (#2539). Telling them apart is the ADR-027 sink's job; this
-                // walk is deleted in movement 4.
+                // (#2539). Telling them apart is the ADR-027 sink's job.
+                // ADR-027 Step 5 (#2628) planned to delete this walk with the
+                // flag; it STAYS, because it is the only route for a Django
+                // MODEL (which crosses as a floored dict with no live handle,
+                // ADR-027 (b)(1)) — `{{ user.groups.count }}`, and through
+                // the alias below `{% with q=user %}{{ q.groups.count }}` /
+                // `{% for q in users %}` — and for the request-scoped values
+                // (`request`, `user`, `perms`) that never enter
+                // `update_state` (#1786).
                 CallOutcome::Empty | CallOutcome::Silent => return Ok(Some(Value::Missing)),
             };
             current = self.protect_sidecar(py, current);
@@ -2331,8 +2330,8 @@ impl Context {
     /// `django.template.base.Variable._resolve_lookup` (django 5.2.16
     /// `base.py:876-953`) over a LIVE `root`, one segment of `parts` at a
     /// time — the ADR-027 sink. Routed from exactly one call site,
-    /// [`Context::walk_from_handle`], behind the `template_resolve_lazy`
-    /// kill-switch (#2539 movement 2).
+    /// [`Context::walk_from_handle`] (#2539 movement 2; unconditional since
+    /// Step 5, #2628, deleted the ADR-027 kill-switch).
     ///
     /// `path` is the full dotted expression, used only as the label of the
     /// debug-mode ORM auto-call warning. Takes `py` rather than opening its
@@ -2423,7 +2422,7 @@ impl Context {
         // (`{{ some_callable }}`), before any segment is walked.
         let mut current = match self.maybe_call(py, root, path)? {
             CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-            CallOutcome::Empty => string_if_invalid(py)?,
+            CallOutcome::Empty => self.string_if_invalid_object(py)?,
             CallOutcome::Silent => return Ok(Walked::Invalid),
         };
         current = match self.protect_sidecar_strict(py, current) {
@@ -2438,7 +2437,7 @@ impl Context {
             };
             current = match self.maybe_call(py, next, path)? {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                CallOutcome::Empty => string_if_invalid(py)?,
+                CallOutcome::Empty => self.string_if_invalid_object(py)?,
                 CallOutcome::Silent => return Ok(Walked::Invalid),
             };
             current = match self.protect_sidecar_strict(py, current) {
@@ -2671,11 +2670,25 @@ fn is_django_index_lookup_error_strict(py: Python<'_>, err: &pyo3::PyErr) -> boo
         || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
 }
 
-/// Django's `string_if_invalid`, as a Python object the walk can keep going
-/// from (#2539). `""` on every djust path — see [`Context::walk_live`]'s
-/// "Django has TWO invalids" section.
-fn string_if_invalid(py: Python<'_>) -> crate::Result<pyo3::Bound<'_, pyo3::PyAny>> {
-    Ok(pyo3::types::PyString::new(py, "").into_any())
+impl Context {
+    /// Django's `string_if_invalid`, as a Python object the walk can keep
+    /// going from (#2539) — `current = context.template.engine.string_if_invalid`
+    /// in `_resolve_lookup`, then the next bit is walked. See
+    /// [`Context::walk_live`]'s "Django has TWO invalids" section.
+    ///
+    /// The ENGINE's option, not a literal `""`: until ADR-027 Step 5 (#2628)
+    /// this was a free function returning `""`, and the gap never showed
+    /// because an args-required method on an attribute-bearing object took
+    /// the by-name sidecar walk (which answered `Missing`, substituted by the
+    /// renderer from the same option). Routing every such object through the
+    /// handle surfaced it: Django's `basic-syntax20` (`{{ var.method2 }}`
+    /// under `string_if_invalid='INVALID'`) rendered `''`.
+    fn string_if_invalid_object<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> crate::Result<pyo3::Bound<'py, pyo3::PyAny>> {
+        Ok(pyo3::types::PyString::new(py, self.string_if_invalid()).into_any())
+    }
 }
 
 /// Django's `bit in dir(current)` probe (#2506).

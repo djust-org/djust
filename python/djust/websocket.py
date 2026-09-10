@@ -543,8 +543,7 @@ def _find_sticky_slot_ids(html: str) -> set[str]:
 def _clear_live_handles(view_instance: Any) -> None:
     """Drop the ADR-027 live handles a torn-down view's Rust state holds (#2539).
 
-    A ``Value::Encoded`` produced under ``template_resolve_lazy`` carries the
-    Python object it was measured from, so ``RustLiveView.state`` — which
+    A ``Value::Encoded`` carries the Python object it was measured from, so ``RustLiveView.state`` — which
     outlives a render and is only replaced key-by-key as values change — keeps
     a strong reference to every such object for the life of the connection.
     That is the same retention the raw-Python sidecar has, and the sidecar is

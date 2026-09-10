@@ -129,6 +129,7 @@ fn sample() -> Encoded {
         // TRANSIENT, never on the wire (#2539).
         live: None,
         display_safe: false,
+        str_raised: false,
     }
 }
 

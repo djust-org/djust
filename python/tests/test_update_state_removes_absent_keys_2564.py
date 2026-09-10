@@ -5,8 +5,9 @@ the keys that CHANGED since the last render, and a key that is simply absent
 from the next context is not a change the detector can see. So the Rust state
 kept its last value, and ``{{ secret }}`` kept answering after
 ``del self.secret`` — content gating fail-open, for a string, a dict, and
-(with ADR-027's ``template_resolve_lazy`` ON, which widens the class to every
-plain object) an object with attributes.
+an object with attributes (every plain object crosses with a live handle
+since ADR-027; its kill-switch was deleted in Step 5, #2628, so the former
+flag axis of this file is gone).
 
 The fix is full-context truth, in two mechanisms that must redden separately
 (#2135):
@@ -28,7 +29,6 @@ Refs #2564, #2539 (ADR-027 movement 3 prerequisite A), #2300, #1646, #1468.
 
 from __future__ import annotations
 
-import contextlib
 import re
 from pathlib import Path
 from typing import Any
@@ -50,23 +50,6 @@ SECRET = "SECRET-A"
 HOSTILE = "<img src=x onerror=alert(1)>"
 
 
-@contextlib.contextmanager
-def resolve_lazy(enabled: bool):
-    """Flip the ADR-027 kill-switch through the REAL wiring (mirrors the 2539 net)."""
-    from djust.config import config
-    from djust.render_env import apply_render_env
-
-    previous = config.get("template_resolve_lazy", False)
-    config.update({"template_resolve_lazy": enabled})
-    apply_render_env()
-    assert _rust.resolve_lazy_enabled() is enabled, "the flag did not reach Rust"
-    try:
-        yield
-    finally:
-        config.update({"template_resolve_lazy": previous})
-        apply_render_env()
-
-
 def _root(html: str) -> str:
     match = re.search(r"<div dj-root[^>]*>(.*)</div>", html, re.S)
     assert match is not None, html
@@ -74,7 +57,7 @@ def _root(html: str) -> str:
 
 
 class Holder:
-    """A plain object — the shape the lazy flag adds to the class."""
+    """A plain object — the shape ADR-027's live handle adds to the class."""
 
     def __init__(self) -> None:
         self.secret = SECRET
@@ -85,7 +68,6 @@ SHAPES = [
     pytest.param(lambda: {"secret": SECRET}, "{{ k.secret }}", id="dict"),
     pytest.param(Holder, "{{ k.secret }}", id="plain-object"),
 ]
-FLAGS = [pytest.param(False, id="flag-off"), pytest.param(True, id="flag-on")]
 
 
 def _make_delete_view(make_value: Any, source: str) -> type:
@@ -108,23 +90,20 @@ def _make_delete_view(make_value: Any, source: str) -> type:
 
 
 # ---------------------------------------------------------------------------
-# The vulnerability, on the LiveView entry, under both flag states
+# The vulnerability, on the LiveView entry
 # ---------------------------------------------------------------------------
 class TestDeleteThenRenderOnTheLiveViewEntry2564:
-    @pytest.mark.parametrize("flag", FLAGS)
     @pytest.mark.parametrize(("make_value", "source"), SHAPES)
-    def test_a_deleted_key_renders_empty(self, flag: bool, make_value: Any, source: str) -> None:
-        with resolve_lazy(flag):
-            client = LiveViewTestClient(_make_delete_view(make_value, source))
-            client.mount()
-            assert SECRET in client.render(), "premise: the value renders while present"
-            assert client.send_event("forget")["success"]
-            out = _root(client.render())
-            assert SECRET not in out, f"a deleted key kept rendering its last value: {out!r}"
-            assert out == ""
+    def test_a_deleted_key_renders_empty(self, make_value: Any, source: str) -> None:
+        client = LiveViewTestClient(_make_delete_view(make_value, source))
+        client.mount()
+        assert SECRET in client.render(), "premise: the value renders while present"
+        assert client.send_event("forget")["success"]
+        out = _root(client.render())
+        assert SECRET not in out, f"a deleted key kept rendering its last value: {out!r}"
+        assert out == ""
 
-    @pytest.mark.parametrize("flag", FLAGS)
-    def test_a_key_that_comes_back_renders_again(self, flag: bool) -> None:
+    def test_a_key_that_comes_back_renders_again(self) -> None:
         """Removal is not a tombstone: re-adding the key re-renders it."""
 
         class _V(LiveView):
@@ -145,14 +124,13 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
                 self.k = "SECRET-B"
 
         _V.template = "<div dj-root>{{ k }}</div>"
-        with resolve_lazy(flag):
-            client = LiveViewTestClient(_V)
-            client.mount()
-            assert SECRET in client.render()
-            client.send_event("forget")
-            assert _root(client.render()) == ""
-            client.send_event("restore")
-            assert _root(client.render()) == "SECRET-B"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        assert SECRET in client.render()
+        client.send_event("forget")
+        assert _root(client.render()) == ""
+        client.send_event("restore")
+        assert _root(client.render()) == "SECRET-B"
 
 
 # ---------------------------------------------------------------------------
@@ -186,17 +164,15 @@ def _make_gated_view(source: str) -> type:
 
 
 class TestIfGatedShape2564:
-    @pytest.mark.parametrize("flag", FLAGS)
-    def test_the_region_is_empty_after_the_gate_flips(self, flag: bool) -> None:
+    def test_the_region_is_empty_after_the_gate_flips(self) -> None:
         view = _make_gated_view("{% if secret %}<span>{{ secret }}</span>{% endif %}")
-        with resolve_lazy(flag):
-            client = LiveViewTestClient(view)
-            client.mount()
-            assert SECRET in client.render(), "premise: gated content renders while open"
-            client.send_event("hide")
-            out = _root(client.render())
-            assert SECRET not in out, f"the gate flipped and the content survived: {out!r}"
-            assert "<span" not in out, out
+        client = LiveViewTestClient(view)
+        client.mount()
+        assert SECRET in client.render(), "premise: gated content renders while open"
+        client.send_event("hide")
+        out = _root(client.render())
+        assert SECRET not in out, f"the gate flipped and the content survived: {out!r}"
+        assert "<span" not in out, out
 
 
 class TestPartialRenderPatchesTheRemovedRegion2564:
@@ -204,22 +180,20 @@ class TestPartialRenderPatchesTheRemovedRegion2564:
     joining the removed set to ``set_changed_keys`` the partial render serves
     its region from the node cache — the old text, not a patch."""
 
-    @pytest.mark.parametrize("flag", FLAGS)
-    def test_the_removed_region_is_re_rendered_not_served_from_cache(self, flag: bool) -> None:
+    def test_the_removed_region_is_re_rendered_not_served_from_cache(self) -> None:
         view = _make_gated_view("<span>{{ n }}</span><p>{% if secret %}{{ secret }}{% endif %}</p>")
-        with resolve_lazy(flag):
-            client = LiveViewTestClient(view)
-            client.mount()
-            html, _, _ = client.render_with_patches()  # baseline + node cache
-            assert SECRET in html
-            client.send_event("hide_and_touch")
-            html, patches, _ = client.render_with_patches()
-            assert re.search(r"<span[^>]*>1</span>", html), "premise: the other change rendered"
-            assert SECRET not in html, (
-                f"partial render served the removed key's region from cache: {html!r}"
-            )
-            assert patches, "the removed region must produce a patch"
-            assert not any(SECRET in str(p) for p in patches)
+        client = LiveViewTestClient(view)
+        client.mount()
+        html, _, _ = client.render_with_patches()  # baseline + node cache
+        assert SECRET in html
+        client.send_event("hide_and_touch")
+        html, patches, _ = client.render_with_patches()
+        assert re.search(r"<span[^>]*>1</span>", html), "premise: the other change rendered"
+        assert SECRET not in html, (
+            f"partial render served the removed key's region from cache: {html!r}"
+        )
+        assert patches, "the removed region must produce a patch"
+        assert not any(SECRET in str(p) for p in patches)
 
 
 # ---------------------------------------------------------------------------
@@ -230,22 +204,20 @@ class TestRestoreThenDeleteThenRender2564:
     tombstone computed from the fingerprint would never see a key removed
     across it. Full-context truth does."""
 
-    @pytest.mark.parametrize("flag", FLAGS)
-    def test_a_key_removed_across_a_restore_is_gone(self, flag: bool) -> None:
-        with resolve_lazy(flag):
-            client = LiveViewTestClient(_make_delete_view(lambda: SECRET, "{{ k }}"))
-            client.mount()
-            assert SECRET in client.render()
-            view = client.view_instance
-            # The state backend's clone (memory.py / redis.py) — the view
-            # comes back from bytes, and the runtime forces a full sync.
-            clone = _rust.RustLiveView.deserialize_msgpack(view._rust_view.serialize_msgpack())
-            view._rust_view = clone
-            view._force_full_html = True
-            del view.k
-            out = _root(client.render())
-            assert SECRET not in out, f"the restored clone kept the deleted key: {out!r}"
-            assert out == ""
+    def test_a_key_removed_across_a_restore_is_gone(self) -> None:
+        client = LiveViewTestClient(_make_delete_view(lambda: SECRET, "{{ k }}"))
+        client.mount()
+        assert SECRET in client.render()
+        view = client.view_instance
+        # The state backend's clone (memory.py / redis.py) — the view
+        # comes back from bytes, and the runtime forces a full sync.
+        clone = _rust.RustLiveView.deserialize_msgpack(view._rust_view.serialize_msgpack())
+        view._rust_view = clone
+        view._force_full_html = True
+        del view.k
+        out = _root(client.render())
+        assert SECRET not in out, f"the restored clone kept the deleted key: {out!r}"
+        assert out == ""
 
     def test_the_rust_api_alone(self) -> None:
         """Same path with no Python view: the clone carries the key, the

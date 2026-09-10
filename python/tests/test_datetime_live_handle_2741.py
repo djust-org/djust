@@ -40,8 +40,6 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
-from adr027_flag import resolve_lazy, shipped_default  # noqa: E402
-
 from djust import LiveView, _rust  # noqa: E402
 
 # The isolating binding, one live-only name and one name-table control each.
@@ -69,37 +67,18 @@ def _djust(source: str, value) -> str:
     return _rust.render_template(source, {"xs": [value]})
 
 
-def test_the_shipped_default_is_lazy_on():
-    """The comment's claim is about the default; make sure the test's 'default'
-    IS the shipped one rather than a literal (#1200)."""
-    assert shipped_default() is True
-
-
 @pytest.mark.parametrize("value, live_only, control", TEMPORAL)
-def test_a_temporal_value_carries_a_live_handle_under_the_default(value, live_only, control):
+def test_a_temporal_value_carries_a_live_handle(value, live_only, control):
     source = _source(live_only, control)
     expected = _django(source, value)
     live_expected, control_expected = expected.split("|")
     assert live_expected, f"Django must render {live_only} for this fixture to isolate anything"
 
-    with resolve_lazy(shipped_default()):
-        assert _djust(source, value) == expected, (
-            f"{type(value).__name__}.{live_only} through the isolating binding is answerable "
-            f"ONLY by the live handle `django_json_encoded` attaches (#2741); a blank here "
-            f"means the datetime family no longer carries one"
-        )
-
-
-@pytest.mark.parametrize("value, live_only, control", TEMPORAL)
-def test_the_handle_walk_is_what_answers_it(value, live_only, control):
-    """Gate-off sibling, in-suite: with the flag OFF the handle is never walked,
-    so the live-only name goes blank while the name-table control still
-    renders. Proves the test above is reading the handle and not `attrs`."""
-    source = _source(live_only, control)
-    _, control_expected = _django(source, value).split("|")
-
-    with resolve_lazy(False):
-        assert _djust(source, value) == f"|{control_expected}"
+    assert _djust(source, value) == expected, (
+        f"{type(value).__name__}.{live_only} through the isolating binding is answerable "
+        f"ONLY by the live handle `django_json_encoded` attaches (#2741); a blank here "
+        f"means the datetime family no longer carries one"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -143,28 +122,27 @@ def test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip(
     assert live_expected, f"Django must render {live_only} for this fixture to isolate anything"
     synced = f"{RESTORE_HEAD}[{live_expected}][{control_expected}]</div>"
 
-    with resolve_lazy(shipped_default()):
-        view = RustLiveView(RESTORE_HEAD + source + "</div>", [])
-        view.update_state({"q": value})
-        assert view.render() == synced, "fresh render answers both names (#2741's own pin)"
+    view = RustLiveView(RESTORE_HEAD + source + "</div>", [])
+    view.update_state({"q": value})
+    assert view.render() == synced, "fresh render answers both names (#2741's own pin)"
 
-        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-        assert clone.render() == f"{RESTORE_HEAD}[][{control_expected}]</div>", (
-            f"CURRENT behaviour after a state-backend round trip (#2767): "
-            f"{type(value).__name__}.{live_only} is handle-only and the handle is "
-            f"transient, so it renders empty; {control} survives in the attr map. "
-            f"If this went red because the live-only name now renders, the ADR-027 "
-            f"limit was lifted — update VALUE_BOUNDARY.md §3.4 / I11 and this pin."
-        )
-        restored = clone.get_state()["q"]
-        assert isinstance(restored, type(value)) and restored == value, (
-            "the restored STATE is still a real temporal object — the blank is a "
-            "missing handle, not a lost value"
-        )
+    clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+    assert clone.render() == f"{RESTORE_HEAD}[][{control_expected}]</div>", (
+        f"CURRENT behaviour after a state-backend round trip (#2767): "
+        f"{type(value).__name__}.{live_only} is handle-only and the handle is "
+        f"transient, so it renders empty; {control} survives in the attr map. "
+        f"If this went red because the live-only name now renders, the ADR-027 "
+        f"limit was lifted — update VALUE_BOUNDARY.md §3.4 / I11 and this pin."
+    )
+    restored = clone.get_state()["q"]
+    assert isinstance(restored, type(value)) and restored == value, (
+        "the restored STATE is still a real temporal object — the blank is a "
+        "missing handle, not a lost value"
+    )
 
-        # The re-attachment IS the sync (#2570): one update_state re-converts it.
-        clone.update_state({"q": value})
-        assert clone.render() == synced
+    # The re-attachment IS the sync (#2570): one update_state re-converts it.
+    clone.update_state({"q": value})
+    assert clone.render() == synced
 
 
 class _DatetimeRestoreView(LiveView):
@@ -240,7 +218,7 @@ async def test_the_framework_restore_path_re_attaches_the_handle_before_renderin
     url = "/datetime-restore-2767/"
     expected = "[0:00:00.000001][2026]"
 
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]), resolve_lazy(shipped_default()):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         first = await _mount_once(session_key, url)
         assert expected in (first.get("html") or ""), first.get("html")
         assert hits == [], "the first mount must be a cache MISS (no clone yet)"

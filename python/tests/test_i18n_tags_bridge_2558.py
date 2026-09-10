@@ -115,7 +115,7 @@ def _restore_render_env():
     """Push the AMBIENT locale/zone back to Rust after each test.
 
     `render_env` sets the Rust thread-locals per render and never restores
-    them (documented in `apply_resolve_lazy`), so a test that renders under
+    them (documented in `apply_render_env`), so a test that renders under
     `translation.override("de")` leaves the thread formatting numbers as
     German. Every framework entry re-pushes on its next render, but a test
     calling `djust._rust.render_template` DIRECTLY inherits whatever the

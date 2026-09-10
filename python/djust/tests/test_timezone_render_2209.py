@@ -259,11 +259,12 @@ def test_both_render_paths_call_the_same_timezone_function():
       — never had an enclosing render to inherit from, so it was already
       rendering UTC timestamps and unseparated numbers. That was a latent
       gap, not a design.
-    * ADR-027's ``template_resolve_lazy`` is not a FORMATTING setting: an
-      unwired thread resolves dotted lookups by a different mechanism than
+    * ADR-027's ``template_resolve_lazy`` kill-switch (a thread-local at the
+      time; deleted in ADR-027 Step 5, #2628) was not a FORMATTING setting:
+      an unwired thread resolved dotted lookups by a different mechanism than
       every other path on the same page. A wrong timezone is a wrong cell; a
       wrong resolution mechanism is the parallel-path drift (#1646) the whole
-      movement exists to retire.
+      movement existed to retire.
 
     The ~12us is therefore paid deliberately — but ONCE PER THREAD, not once
     per component instance. ``components/base.py`` calls

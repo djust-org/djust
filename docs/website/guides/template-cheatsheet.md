@@ -611,25 +611,14 @@ and for values bound by `{% for %}` and `{% with %}`.
    in a template, or pass to `json_script`, actually says.
 
 Django **models** are unaffected by all of this: they stay on djust's
-eager, floored path on both settings, and the serialization floor keeps
-`{{ user.password }}` empty either way.
+eager, floored path, and the serialization floor keeps
+`{{ user.password }}` empty.
 
-**Kill-switch:** `LIVEVIEW_CONFIG["template_resolve_lazy"] = False`
-restores the pre-1.2.0 behaviour exactly. It is a rollback, not a
-supported mode — the machinery it keeps alive is removed in 1.3.0, so
-treat it as time to fix templates rather than a setting to leave in
-place.
-
-Two details worth knowing if you hit them:
-
-- **The setting is read per render, per thread, and applied by djust's
-  own render entries.** Code that calls `djust._rust.render_template`
-  directly does not push it and inherits whatever that thread last
-  rendered with; on a thread that never rendered, that is the shipped
-  default.
-- **A standalone component rendered outside any djust render caches the
-  setting for its thread**, so changing the flag at runtime does not
-  reach it. Restart to apply.
+**There is no kill-switch.** The release candidates carried
+`LIVEVIEW_CONFIG["template_resolve_lazy"] = False` as a rollback to the
+pre-1.2.0 behaviour; the setting and the machinery it kept alive were
+removed before 1.2.0 final (ADR-027 Step 5, #2628). Setting the key now
+does nothing — fix the template instead.
 
 ### Comparison operators inside `{% if %}`
 

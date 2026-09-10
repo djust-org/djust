@@ -55,8 +55,6 @@ from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 from django.utils.html import escape  # noqa: E402
 
-from adr027_flag import resolve_lazy  # noqa: E402
-
 from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 
@@ -196,20 +194,19 @@ DECLINED: dict[str, str] = {
     "unbounded-reiterable": "an unsized iterable past OPAQUE_ITEM_CAP",
     # The `__dict__` bulk-dump arm's cell. Retiring that arm was "a separate,
     # much larger decision" when this table was written; #2539 movement 3 is
-    # that decision, so this row is now declined only on the ESCAPE HATCH.
-    # See DECLINED_ONLY_ON_THE_HATCH.
+    # that decision, and ADR-027 Step 5 (#2628) deleted the arm and the escape
+    # hatch on which the row was still declined. See DECLINED_UNTIL_ADR027.
     "truthy-attrs": "a TRUTHY non-iterable object with public attributes",
 }
 
-#: The subset of ``DECLINED`` that ADR-027's flag moves (#2539 movement 3,
-#: widened by #2613).
+#: The subset of ``DECLINED`` that ADR-027 moved (#2539 movement 3, widened by
+#: #2613). Every row here is CARRIED now; the rows were declined only on the
+#: eager escape hatch, deleted in ADR-027 Step 5 (#2628).
 #:
 #: A one-shot iterator is still never enumerated at CONVERSION — that is what
 #: keeps a generator from being consumed before ``{% for %}`` sees it — but
-#: under the default it is now CARRIED with a live handle and ``items: None``,
-#: and the ``{% for %}`` sink consumes it once (Django's ``list(values)``,
-#: ADR-027 row V, #2613). On the eager escape hatch there is no handle to
-#: consume later, so the decline stands there.
+#: it is CARRIED with a live handle and ``items: None``, and the ``{% for %}``
+#: sink consumes it once (Django's ``list(values)``, ADR-027 row V, #2613).
 #:
 #: #2670/#2678 moved the unbounded-cap row here for exactly the same reason,
 #: and by the same mechanism: it is CARRIED with a live handle and no items,
@@ -222,7 +219,7 @@ DECLINED: dict[str, str] = {
 #: `list(v)` there) raise at the cap instead, which is the answer #2613
 #: already chose for a one-shot iterator: a decline-not-truncate rule, so a
 #: short collection is still impossible.
-DECLINED_ONLY_ON_THE_HATCH = frozenset(
+DECLINED_UNTIL_ADR027 = frozenset(
     {"truthy-attrs", "one-shot-generator", "one-shot-falsy", "unbounded-reiterable"}
 )
 
@@ -244,10 +241,10 @@ def declined_values() -> dict:
     def unbounded_iter(self):
         return itertools.count()
 
-    # A PUBLIC attribute, and it is load-bearing: `opaque_value` declines a
-    # truthy non-iterable object only when `public_dict_attrs` finds one, so a
-    # fixture with an empty `__dict__` is CLAIMED and would test the opposite
-    # of what its row says.
+    # A PUBLIC attribute, and it is load-bearing: the former escape hatch
+    # declined a truthy non-iterable object only when it had one, so a fixture
+    # with an empty `__dict__` would have tested the opposite of what its row
+    # says.
     truthy_attrs = instance("TruthyAttrs")
     truthy_attrs.name = "ok"
     return {
@@ -516,22 +513,12 @@ class TestTheClassIsEnumeratedWithADecisionEach:
             )
         assert set(_Members.build()) == CARRIED
 
-    def test_every_declined_shape_keeps_the_string_path(self) -> None:
-        """On the ESCAPE-HATCH axis, where the whole table still holds."""
-        with resolve_lazy(False):
-            for key, value in declined_values().items():
-                assert key in DECLINED
-                assert not _rust.crosses_as_encoded(value), (
-                    f"{key} ({DECLINED[key]}) is now CARRIED on the hatch. That may be "
-                    f"right, but it is a decision: move its row and record what changed"
-                )
-
-    def test_under_the_default_only_the_bulk_dump_row_moves(self) -> None:
+    def test_only_the_rows_adr027_moved_are_carried(self) -> None:
         """The flip's effect on this table, per row (#2539 movement 3).
 
         Both directions, so the split is a claim rather than a label: the
         ``__dict__`` bulk-dump row and (since #2613) the two one-shot rows
-        ARE carried under the shipped default — carried, not enumerated: the
+        ARE carried — carried, not enumerated: the
         conversion still reads nothing from a generator, and the sibling
         ``test_a_one_shot_iterator_is_not_consumed_by_the_conversion`` is
         where that shows up — and since #2670/#2678 the unbounded-cap row is
@@ -539,16 +526,15 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         """
         for key, value in declined_values().items():
             carried = _rust.crosses_as_encoded(value)
-            if key in DECLINED_ONLY_ON_THE_HATCH:
+            if key in DECLINED_UNTIL_ADR027:
                 assert carried, (
-                    f"{key} ({DECLINED[key]}) is still declined under the shipped default — "
+                    f"{key} ({DECLINED[key]}) is still declined — "
                     f"ADR-027 routes it to the sink, so the gate must admit it"
                 )
             else:
                 assert not carried, (
-                    f"{key} ({DECLINED[key]}) is now CARRIED under the default. This decline "
-                    f"is flag-INDEPENDENT: enumerating it at conversion is a new wrong "
-                    f"answer, not progress"
+                    f"{key} ({DECLINED[key]}) is now CARRIED. Enumerating it at "
+                    f"conversion is a new wrong answer, not progress"
                 )
 
     def test_every_earlier_arm_value_is_untouched_by_this_one(self) -> None:
@@ -631,31 +617,10 @@ class TestTheDeclinesAreRecordedInTheDivergingDirection:
         with pytest.raises(Exception, match="more than"):
             _rust.render_template("{% for x in p %}{{ x }}{% endfor %}", {"p": value})
 
-    def test_a_truthy_attribute_object_still_crosses_as_its_attribute_map(self) -> None:
-        """The `__dict__` bulk-dump arm, untouched.
-
-        `opaque_value` declines a TRUTHY, NON-iterable object with public
-        attributes, so this arm keeps it — and `{{ p }}` keeps rendering the
-        dict repr rather than `str(o)`. That cell diverges from Django and did
-        before; retiring the arm is a separate decision.
-
-        #2539 movement 3 is that decision, so this is now the HATCH's
-        behaviour. The default's is asserted below: `{{ p.name }}` still
-        answers (through the handle instead of the map) and `{{ p }}` becomes
-        Django's `str(o)`.
-        """
-        value = instance("Presenter")
-        value.name = "ok"
-        with resolve_lazy(False):
-            assert not _rust.crosses_as_encoded(value)
-            assert _rust.render_template("{{ p.name }}", {"p": value}) == "ok"
-            assert (
-                _rust.render_template("{{ p }}", {"p": value})
-                == "{&#x27;name&#x27;: &#x27;ok&#x27;}"
-            )
-
-    def test_under_the_default_the_same_object_crosses_as_encoded(self) -> None:
-        """The same cell under the shipped default (#2539 movement 3).
+    def test_a_truthy_attribute_object_crosses_as_encoded(self) -> None:
+        """The `__dict__` bulk-dump arm's cell, retired (#2539 movement 3; the
+        arm and the escape hatch it survived on were deleted in ADR-027 Step 5,
+        #2628).
 
         The attribute keeps answering — that is the part a downstream template
         depends on — and the BARE spelling stops being the attribute map. The
@@ -690,17 +655,12 @@ class TestTheNormalizerCarriesExactlyTheModelledClass:
                 f"and the raw path answer differently again"
             )
 
-    def test_a_declined_or_earlier_value_still_takes_its_old_route(self) -> None:
-        """The declined half on the HATCH — `normalize_django_value`'s
-        stringification is driven by `crosses_as_encoded`, so the row ADR-027
-        moves (`truthy-attrs`) takes the carried route under the shipped
-        default. The flag-independent rows are asserted on both axes by
-        `test_under_the_default_only_the_bulk_dump_row_moves`.
+    def test_an_earlier_value_still_takes_its_old_route(self) -> None:
+        """`normalize_django_value`'s stringification is driven by
+        `crosses_as_encoded`, so the rows ADR-027 moved take the carried route
+        (`test_only_the_rows_adr027_moved_are_carried`); the eager hatch on
+        which every declined row was still stringified is gone (#2628).
         """
-        with resolve_lazy(False):
-            for key, value in declined_values().items():
-                got = normalize_django_value(value)
-                assert isinstance(got, str), (key, got)
         # A `bytes` and a `deque` used to be stringified here — they had no
         # branch and were not `crosses_as_encoded`, so they reached the
         # `str()` fallback. #2704 carries them, and `{{ p }}` still renders
@@ -998,16 +958,10 @@ class TestThePredicateAgreesWithTheRealConversion:
 
         presenter = _Presenter()
         presenter.expensive = _Loud()
-        # Truthy, not iterable, has a public attribute -> the `__dict__` arm's
-        # cell, declined by the gate on the KEYS alone.
-        with resolve_lazy(False):
-            assert _rust.crosses_as_encoded(presenter) is False
-            assert touched == [], touched
-
-        # The gate ANSWERS differently under the shipped default (#2539
-        # movement 3 — the object is carried), but the claim this test makes is
-        # about COST, not about the answer, and it holds on both axes: the
-        # default admits the object without looking at its attributes at all.
+        # Truthy, not iterable, has a public attribute -> the former `__dict__`
+        # arm's cell. The object is carried (#2539 movement 3), and the claim
+        # this test makes is about COST, not about the answer: the gate admits
+        # the object without looking at its attributes at all.
         assert _rust.crosses_as_encoded(presenter) is True
         assert touched == [], touched
 

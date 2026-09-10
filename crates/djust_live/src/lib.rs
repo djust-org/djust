@@ -1977,31 +1977,6 @@ fn clear_live_handles_in(value: &mut Value) {
     }
 }
 
-/// Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539).
-///
-/// `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **ON** since movement 3
-/// — `False` is the escape hatch, and with it off the engine's bytes are
-/// byte-identical to the pre-#2539 ones. Pushed by
-/// `djust.render_env.apply_render_env` beside the timezone (#2209) and the
-/// number format (#2221), for the reason that module exists: a render path
-/// cannot acquire one ambient setting and miss the other (#1646).
-///
-/// Thread-local rather than a `Context` field because half the work it gates
-/// lives inside `impl FromPyObject for Value`, which has no `Context` — see
-/// `djust_core::set_resolve_lazy`.
-#[pyfunction]
-fn set_resolve_lazy(enabled: bool) {
-    djust_core::set_resolve_lazy(enabled);
-}
-
-/// The calling thread's ADR-027 flag. Exposed so the Python side can ASSERT
-/// the wiring took effect rather than assume it — a setter with no getter
-/// cannot be tested end to end (#2017).
-#[pyfunction]
-fn resolve_lazy_enabled() -> bool {
-    djust_core::resolve_lazy()
-}
-
 /// Set the active render timezone for the CALLING THREAD (#2209).
 ///
 /// `name` is an IANA zone (`"America/New_York"`); `None` disables conversion,
@@ -2130,7 +2105,8 @@ fn django_value_repr_enabled() -> bool {
 /// this bug class was found in — it holds a live `PyDict` iterator over the
 /// TOP-LEVEL context dict and calls `Value::extract()` on each value as it
 /// goes. Fixing every NESTED arm inside `impl FromPyObject for Value`
-/// (`public_dict_attrs`, the nested-`PyDict` arm) does not protect this
+/// (the nested-`PyDict` arm; the `__dict__` builder before ADR-027 Step 5
+/// deleted it) does not protect this
 /// outer layer: if converting one TOP-LEVEL value runs Python that adds a
 /// key to the TOP-LEVEL dict itself (not a dict nested inside one of its
 /// values), the blanket impl's iterator still panics — confirmed via
@@ -2248,7 +2224,7 @@ fn render_template(
         // `string_if_invalid` / `autoescape`. `None` (the default) reads the
         // calling thread's cells as this entry always has; `Some` installs
         // the given one for this render only, restored on return — including
-        // the conversion below, which reads `resolve_lazy()` too.
+        // the conversion below.
         let _render_env = render_env
             .as_ref()
             .map(|e| RenderEnvGuard::install(&e.inner));
@@ -2713,12 +2689,6 @@ impl RenderEnvPy {
         RenderEnvPy {
             inner: djust_templates::render_env::capture(),
         }
-    }
-
-    /// ADR-027's resolution flag as captured.
-    #[getter]
-    fn resolve_lazy(&self) -> bool {
-        self.inner.resolve_lazy
     }
 
     /// The captured IANA zone name, or `None`.
@@ -4813,8 +4783,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
-    m.add_function(wrap_pyfunction!(set_resolve_lazy, m)?)?;
-    m.add_function(wrap_pyfunction!(resolve_lazy_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(set_number_format, m)?)?;

@@ -17,6 +17,7 @@ fn changing_only_display_safety_invalidates_cached_html() {
                 type_name: "TextObject".into(),
                 display: "<b>&</b>".into(),
                 display_safe: safe,
+                str_raised: false,
                 json: "<b>&</b>".into(),
                 truthy: true,
                 len: None,

@@ -6,6 +6,7 @@ fn encoded_display_safety_is_runtime_only() {
         type_name: "TextObject".into(),
         display: "<b>&</b>".into(),
         display_safe: true,
+        str_raised: false,
         json: "<b>&</b>".into(),
         truthy: true,
         len: None,

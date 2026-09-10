@@ -329,9 +329,9 @@ class TestTheCallsFailSoft:
 
     def test_a_raising___str___is_a_DIFFERENT_pre_existing_path(self) -> None:
         """The measurement behind the fixture above, recorded rather than
-        reasoned about. When `utcoffset` raises, `str(o)` raises with it and
-        the value takes the terminal string arm, whose `?` propagates — so BOTH
-        engines refuse, on every cell, with or without this table."""
+        reasoned about. When `utcoffset` raises, `str(o)` raises with it, so
+        BOTH engines refuse `{{ p }}` — with or without this table. (Until
+        #2628 djust refused every cell at conversion; see below.)"""
 
         class WhollyHostile(datetime.tzinfo):
             def utcoffset(self, dt):  # noqa: ANN001, ANN201
@@ -346,17 +346,20 @@ class TestTheCallsFailSoft:
         value = datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=WhollyHostile())
         with pytest.raises(RuntimeError):
             str(value)
-        # djust refuses on EVERY cell, including `{{ p.year }}` — a #2481 DATA
-        # attribute this table does not touch. That is what shows the refusal
-        # belongs to the conversion (the terminal `Value::String(ob.str()?)`
-        # arm, whose `?` propagates) rather than to the auto-call.
-        for source in ("{{ p }}", "{{ p.year }}", "{{ p.tzname }}"):
+        # djust refuses where Django refuses — `{{ p }}` is `str(o)` and
+        # `{{ p.tzname }}` is the auto-call — and RENDERS `{{ p.year }}`, which
+        # never touches the tzinfo. Until ADR-027 Step 5 (#2628) djust refused
+        # on EVERY cell, `{{ p.year }}` included: the terminal
+        # `Value::String(ob.str()?)` arm's `?` propagated at CONVERSION, so
+        # the refusal belonged to the conversion rather than to the auto-call
+        # — a pre-existing djust-REFUSES-where-Django-RENDERS cell this test
+        # recorded. Step 5's `handle_only_encoded` keeps such an object's
+        # live handle and defers the raising `str()` to the `{{ p }}` sink,
+        # which closed that cell.
+        for source in ("{{ p }}", "{{ p.tzname }}"):
             assert djust_render(source, {"p": value}) == "<<REFUSED>>", source
-        # Django refuses only where IT calls the raising code: `{{ p }}` is
-        # `str(o)` and `{{ p.tzname }}` is the auto-call, but `{{ p.year }}`
-        # never touches the tzinfo. So this is a pre-existing
-        # djust-REFUSES-where-Django-RENDERS cell of the CONVERSION's, unmoved
-        # by #2485 and recorded here rather than left to be rediscovered.
+        assert django_render("{{ p.year }}", {"p": value}) == "2026"
+        assert djust_render("{{ p.year }}", {"p": value}) == "2026"
         assert django_render("{{ p }}", {"p": value}) == "<<REFUSED>>"
         assert django_render("{{ p.tzname }}", {"p": value}) == "<<REFUSED>>"
         assert django_render("{{ p.year }}", {"p": value}) == "2026"

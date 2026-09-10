@@ -64,14 +64,16 @@ carrier value-by-value is the non-converging shape #2129 took five rounds over;
 ``TestTheIssuesOwnRemedyWouldNotHaveReached`` measures the split rather than
 asserting it.
 
-The gate is #2466's, unchanged
--------------------------------
-``opaque_value`` still declines a falsy object with a NON-ZERO ``__len__`` and
-one that is ITERABLE with no ``__len__`` — Django renders their items, and this
-carrier cannot produce them without RUNNING the object. They keep their
-``Value::Object``, which is what ``TestTheGateIsUNCHANGED`` measures: only the
-objects the gate ADMITS moved, and every other shape answers byte-for-byte what
-it answered on the build before this change.
+The gate was #2466's, unchanged — until ADR-027
+-----------------------------------------------
+When this file was written ``opaque_value`` still declined a falsy object with
+a NON-ZERO ``__len__`` and one that is ITERABLE with no ``__len__``, and they
+kept their ``Value::Object``; ``TestTheGateIsUNCHANGED`` measured that only the
+objects the gate ADMITTED moved. ADR-027 Step 5 (#2628) deleted the ``__dict__``
+bulk-dump arm and the ``template_resolve_lazy`` escape hatch on which that
+measurement still ran, so that class is gone: every ordinary object now crosses
+as the carrier with a live handle. ``PRE_FIX`` stays as the recorded
+pre-#2478 reference that ``TestTheIssuesOwnRemedyWouldNotHaveReached`` reads.
 
 Both serialization floors stay above this arm
 ----------------------------------------------
@@ -97,8 +99,6 @@ pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
-
-from adr027_flag import resolve_lazy  # noqa: E402
 
 from djust import _rust  # noqa: E402
 
@@ -294,7 +294,9 @@ CLAIMED = [
     "LenTwoBoolFalseWithAttrs",
 ]
 
-#: The shapes no gate here admits. None may move.
+#: The shapes #2478's gate did not admit. Their `PRE_FIX` rows are kept for
+#: `test_every_shape_has_a_full_row`; the class that compared them against the
+#: escape hatch went with the hatch (ADR-027 Step 5, #2628).
 UNCHANGED = ["LenZeroNoAttrs", "TruthyWithAttrs", "LenZeroPrivateOnly"]
 
 #: Every cell, one per consumer of the six facts above. Kept in the order
@@ -999,25 +1001,9 @@ class TestTheAttributeStillResolves:
         ctx = _ctx("LenZeroWithAttrs")
         assert djust_render("{{ p.b }}", ctx) == django_render("{{ p.b }}", ctx) == "x"
 
-    def test_the_attribute_survives_a_state_round_trip(self) -> None:
+    def test_the_round_trip_is_the_2570_contract(self) -> None:
         """`SerializableViewState.state` round-trips through msgpack on every
-        read of the default backend, so an attribute that answered once and
-        went empty afterwards would be worse than not answering at all.
-
-        On the ESCAPE-HATCH axis since #2539 movement 3: with the eager
-        conversion the attribute map IS the serialized value, so it survives.
-        The default's answer is the #2570 contract, asserted by name below.
-        """
-        from djust._rust import RustLiveView
-
-        with resolve_lazy(False):
-            view = RustLiveView("{{ p.a }}|{% if p %}T{% else %}F{% endif %}|{{ p|length }}")
-            view.set_state("p", LenZeroWithAttrs())
-            clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-            assert clone.render() == "1|F|0"
-
-    def test_the_round_trip_under_the_default_is_the_2570_contract(self) -> None:
-        """The same clone under the shipped default, with its bytes NAMED.
+        read of the default backend; the clone, with its bytes NAMED.
 
         Under ADR-027 the value carries a live handle instead of an eager
         attribute map, and the handle is transient — `Deserialize` restores
@@ -1052,59 +1038,6 @@ class TestTheAttributeStillResolves:
         ctx = _ctx("LenZeroPrivateOnly")
         assert django_render("{{ p._a }}", ctx) == REFUSED
         assert djust_render("{{ p._a }}", ctx) == REFUSED
-
-
-class TestTheGateIsUNCHANGED:
-    """Only the objects `opaque_value`'s gate ADMITS moved.
-
-    Every cell of every other shape is compared against `PRE_FIX` — djust's own
-    answer on the build immediately BEFORE this change — rather than against
-    Django's, because several of these still diverge and are supposed to.
-    Recomputing "what Django says" here would make the test a second copy of
-    the divergence table; recording djust's own answer is what catches the fix
-    reaching past its gate.
-
-    On the ESCAPE-HATCH axis since #2539 movement 3. `PRE_FIX` records the
-    EAGER conversion's answers — the `__dict__` dump arm, `public_dict_attrs`,
-    the by-name sidecar — and the flip makes those dormant under the shipped
-    default, so an ambient comparison would be reading a table captured against
-    a mechanism that no longer runs. Pushed OFF, the table still measures what
-    it was built to measure, and it keeps measuring it for as long as the hatch
-    exists (movement 4 deletes the arms and the flag together, and this table
-    goes with them).
-    """
-
-    @pytest.mark.parametrize("shape", UNCHANGED)
-    @pytest.mark.parametrize("source", CELLS)
-    def test_an_unclaimed_shape_answers_the_pre_fix_way(self, shape: str, source: str) -> None:
-        if source in PRE_FIX_UNASSERTABLE:
-            pytest.skip("address-shredding cell — see PRE_FIX_UNASSERTABLE")
-        with resolve_lazy(False):
-            assert djust_render(source, _ctx(shape)) == PRE_FIX[(shape, source)]
-
-    def test_the_len_two_shape_that_used_to_iterate_its_ATTRIBUTES_now_agrees(
-        self,
-    ) -> None:
-        """This test recorded #2466's decline; #2477/#2489 closed it.
-
-        A falsy object with a NON-ZERO `__len__` arrived as a `Value::Object`,
-        so `{% for %}` over it iterated the ATTRIBUTES — `[a]` where Django
-        renders `[10][20]`. Kept, with its assertion INVERTED, rather than
-        deleted: the pin's value is that it names the exact cell the decline
-        cost, and a regression would put `[a]` back.
-        """
-        ctx = _ctx("LenTwoBoolFalseWithAttrs")
-        assert django_render("{% for x in p %}[{{ x }}]{% endfor %}", ctx) == "[10][20]"
-        assert djust_render("{% for x in p %}[{{ x }}]{% endfor %}", ctx) == "[10][20]"
-        assert djust_render("{{ p|length }}", ctx) == django_render("{{ p|length }}", ctx) == "2"
-
-    def test_the_2466_family_is_untouched(self) -> None:
-        """#2466's own objects took this arm before #2478 and must be
-        byte-identical: no `__dict__` at all and an empty one both mean no
-        attributes."""
-        for value in (set(), frozenset(), complex(0), {}.keys(), {}.values()):
-            assert djust_render("{% if p %}T{% else %}F{% endif %}", {"p": value}) == "F"
-            assert djust_render("{{ p|yesno }}", {"p": value}) == "no"
 
 
 class TestTheIssuesOwnRemedyWouldNotHaveReached:
@@ -1210,9 +1143,9 @@ class TestTheTwoItDoesNotClose:
 
 
 class TestThePreFixTableIsNOTVacuous:
-    """`PRE_FIX` is the reference `TestTheGateIsUNCHANGED` compares against, so
-    a table that quietly recorded the CURRENT build would make that whole class
-    a tautology. It was captured by running the corpus against the build
+    """`PRE_FIX` is the reference `TestTheIssuesOwnRemedyWouldNotHaveReached`
+    reads, so a table that quietly recorded the CURRENT build would make that
+    class a tautology. It was captured by running the corpus against the build
     immediately before this change; what proves it is that for the CLAIMED
     shapes the engine no longer produces those answers.
     """
@@ -1246,19 +1179,6 @@ class TestThePreFixTableIsNOTVacuous:
             "`scratch/sweep_2478.py` before editing this number"
         )
 
-    def test_the_unclaimed_shapes_moved_nothing(self) -> None:
-        """The other half of the same measurement, and the one that makes
-        "only the gate's admissions moved" a fact rather than a hope."""
-        with resolve_lazy(False):
-            for shape in UNCHANGED:
-                moved = [
-                    source
-                    for source in CELLS
-                    if source not in PRE_FIX_UNASSERTABLE
-                    and djust_render(source, _ctx(shape)) != PRE_FIX[(shape, source)]
-                ]
-                assert moved == [], (shape, moved)
-
     def test_every_shape_has_a_full_row(self) -> None:
         """A missing key makes the parametrized comparison raise `KeyError`
         rather than compare — a failure mode worth naming, since it looks like
@@ -1269,10 +1189,12 @@ class TestThePreFixTableIsNOTVacuous:
 
 
 class TestTheSerializationFloorsStayAbove:
-    """`opaque_value` now dumps a `__dict__`, so its ORDER relative to the two
-    denylist arms is a security boundary rather than a style choice: a Django
-    model reaching it would have its floor fields (`password`, …) collected
-    into the attribute map by the same bulk dump #1986 routed models around.
+    """`opaque_value` hands an object over with a live handle, so its ORDER
+    relative to the two denylist arms is a security boundary rather than a
+    style choice: a Django model reaching it would be walked raw, past the
+    floor fields (`password`, …) #1986 routed models around. (Until ADR-027
+    Step 5, #2628, the arm below it was the `__dict__` bulk dump, and the same
+    order kept a model's floor fields out of the attribute map.)
     """
 
     @staticmethod
@@ -1286,48 +1208,40 @@ class TestTheSerializationFloorsStayAbove:
         serialize_at = block.index('ob.getattr("__djust_serialize__")')
         model_at = block.index('models_mod.getattr("Model")')
         falsy_at = block.index("if let Some(encoded) = opaque_value(")
-        dict_at = block.index("if let Some(map) = public_dict_attrs(")
         assert serialize_at < falsy_at, (
             "the `__djust_serialize__` denylist arm moved BELOW `opaque_value` — "
-            "a proxied model's floor fields would be dumped into the attribute map"
+            "a proxied model would be carried raw, past its floor fields"
         )
         assert model_at < falsy_at, (
             "the raw-`Model` denylist arm moved BELOW `opaque_value` — #1986 vector 7"
-        )
-        assert falsy_at < dict_at, (
-            "`opaque_value` moved back below the `__dict__` bulk dump — that is "
-            "the pre-#2478 order and reopens the issue"
         )
 
     def test_the_order_check_can_go_red(self) -> None:
         """The canary. A source-order assertion that has never been watched
         fail is a pin with an unknown failure mode (#2129/#2135)."""
         block = self._conversion_block()
-        swapped = block.replace("if let Some(encoded) = opaque_value(", "@@FALSY@@", 1).replace(
-            "if let Some(map) = public_dict_attrs(", "if let Some(encoded) = opaque_value(", 1
-        )
-        swapped = swapped.replace("@@FALSY@@", "if let Some(map) = public_dict_attrs(", 1)
+        carrier = "if let Some(encoded) = opaque_value("
+        floor = 'ob.getattr("__djust_serialize__")'
+        assert block.index(floor) < block.index(carrier), "premise: the floor is above"
+        # Hoist the carrier arm's line above the first floor check.
+        swapped = block.replace(carrier, "", 1).replace(floor, carrier + floor, 1)
         assert swapped != block, "the ORDER mutation did not apply"
-        assert swapped.index("if let Some(map) = public_dict_attrs(") < swapped.index(
-            "if let Some(encoded) = opaque_value("
-        ), "the mutation did not actually reverse the order"
+        assert swapped.index(carrier) < swapped.index(floor), (
+            "the mutation did not actually reverse the order"
+        )
 
-    def test_the_underscore_filter_is_observable_on_the_dict_arm(self) -> None:
-        """Where the `_`-prefix filter can actually be SEEN, and why it is
-        asserted here rather than through `opaque_value`'s arm.
+    def test_a_private_attribute_never_reaches_the_page(self) -> None:
+        """Where a `_`-prefixed attribute could once be SEEN, and why it no
+        longer can.
 
-        On the `__dict__` arm the map becomes a `Value::Object`, and `{{ p }}`
-        prints it — so a private attribute leaking into the map puts its VALUE
-        on the page. That is reachable, so it is tested.
-
-        On `opaque_value`'s arm the map is `Encoded::attrs`, whose ONLY reader
-        is `context::lookup_segment`, and djust refuses a `_`-leading path
-        segment before the lookup happens (as Django does, at parse time). So
-        the filter there is defence-in-depth for a FUTURE reader of `attrs`
-        rather than a currently-observable rule — a gate-off that removes it
-        survives, and that is a semantic no-op for the reachable inputs, not a
-        missing test. Recorded rather than papered over (CLAUDE.md, v1.1.1-2
-        rule 3: a surviving mutation is a question).
+        On the `__dict__` bulk-dump arm the map became a `Value::Object`, and
+        `{{ p }}` printed it — so a private attribute leaking into the map put
+        its VALUE on the page, and the `_`-prefix filter was observable there.
+        ADR-027 Step 5 (#2628) deleted that arm: on the carrier the display is
+        `str(o)`, which carries no attribute at all, and djust refuses a
+        `_`-leading path segment before any lookup happens (as Django does, at
+        parse time). Both shapes are asserted, on both the display and the
+        refused segment.
         """
 
         class TruthyWithSecret:
@@ -1346,47 +1260,9 @@ class TestTheSerializationFloorsStayAbove:
         truthy, falsy = TruthyWithSecret(), FalsyWithSecret()
         assert bool(truthy) is True and bool(falsy) is False
 
-        # The `__dict__` arm: the map IS the rendered value.
-        out = djust_render("{{ p }}", {"p": truthy})
-        assert "hunter2" not in out, out
-        assert "a" in out, out
-        # ...and Django shows neither, so djust is not merely quieter.
-        assert "hunter2" not in django_render("{{ p }}", {"p": truthy})
-
-        # `opaque_value`'s arm: the display is `str(o)`, which carries no
-        # attribute at all, and the path segment is refused before the map is
-        # consulted.
-        assert "hunter2" not in djust_render("{{ p }}", {"p": falsy})
-        assert djust_render("{{ p._secret }}", {"p": falsy}) == REFUSED
-        assert django_render("{{ p._secret }}", {"p": falsy}) == REFUSED
-
-    def test_the_collection_is_stated_once(self) -> None:
-        """One `public_dict_attrs`, two callers — the `__dict__` arm and
-        `opaque_value`. Two copies of the `_`-prefix filter is the #1646 shape,
-        one arm growing a rule the other does not, and THIS arm's copy is the
-        one that would leak.
-
-        #2477/#2489 added a THIRD reader of the same question and did NOT add a
-        third copy of the rule: `has_public_dict_attrs` asks whether the map
-        would be empty, over the KEYS, because building it to answer that would
-        convert every attribute value for the arm below to convert again. The
-        `_`-prefix rule moved into `is_public_attr_name`, which both call — so
-        the count below is of the RULE, not of the map builder, and it is still
-        one.
-        """
-        src = CORE_RS.read_text(encoding="utf-8")
-        assert src.count("fn public_dict_attrs(") == 1
-        assert src.count("fn has_public_dict_attrs(") == 1
-        # The map BUILDER's callers: the `__dict__` arm and `opaque_value`.
-        # `has_public_dict_attrs` is matched out by name so the two questions
-        # stay countable apart.
-        calls = re.findall(r"(?<!fn )(?<!has_)public_dict_attrs\(", src)
-        assert len(calls) == 2, f"the caller set moved: {len(calls)}"
-        # The RULE, stated once and read by both.
-        assert src.count("fn is_public_attr_name(") == 1
-        assert src.count("name.starts_with('_')") == 1, (
-            "a second copy of the `_`-prefix filter appeared — state it once"
-        )
-        assert src.count("if k.starts_with('_') {") == 0, (
-            "the map builder grew its own copy of the rule back"
-        )
+        for shape in (truthy, falsy):
+            out = djust_render("{{ p }}", {"p": shape})
+            assert "hunter2" not in out, out
+            assert out == django_render("{{ p }}", {"p": shape}), out
+            assert djust_render("{{ p._secret }}", {"p": shape}) == REFUSED
+            assert django_render("{{ p._secret }}", {"p": shape}) == REFUSED

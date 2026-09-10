@@ -1,7 +1,7 @@
 # ADR-027: Template variable resolution follows Django's lookup rules at one sink
 
-**Status**: Proposed — implementation is the v1.2.0-2 row-2 issue (dormant-define → wire → flip → delete)
-**Target version**: v1.2.0
+**Status**: Accepted — implemented in v1.2.0 (dormant-define → wire → flip → delete; Step 5 delete shipped as #2628, soak waived by the maintainer 2026-09-10)
+**Shipped in**: v1.2.0
 **Date**: 2026-09-02
 **Citations**: `file:line` references pinned to `main` at 5835bf97 (2026-09-02)
 **Deciders**: Project maintainers
@@ -433,16 +433,75 @@ useful record.
    summary.
 
 One decision the steps left open is settled here: **Step 5 deletes the flag and the enumeration
-arms together, in the first minor after a full release has soaked (1.3.0), superseding "removal at
-2.0."** A hatch whose arms have been deleted is not a hatch, so they cannot be separated.
+arms together, in 1.2.0, superseding "removal at 2.0."** A hatch whose arms have been deleted is
+not a hatch, so they cannot be separated. (As first written this said "in the first minor after a
+full release has soaked (1.3.0)"; the soak gate was waived by the maintainer on 2026-09-10, once
+the prerequisite #2621 had closed via PR #2729, and Step 5 shipped in 1.2.0 as #2628.)
 
 **Step 5 — delete.** `public_dict_attrs`, `has_public_dict_attrs`, the `lib.rs:3228` decline, the
 alias fallback (`context.rs:938-988`; `Context::aliases`' XSS `is_safe` use stays — a different
 consumer), `build_render_sidecar`/`_protect_sidecar_tree`/`_SIDECAR_MAX_DEPTH`, the
 `_JSON_FRIENDLY` filter; the by-name sidecar narrows to the top-level models of
-`rust_bridge.py:717-719`. The flag stays one release as a kill-switch (ADR-024 §4), removal at 2.0.
-Symbol-removal grep across every test root (#1391). #2509 closes with a pointer;
-#2502/#2504/#2505/#2513/#2516 close by the red `xfail`s.
+`rust_bridge.py:717-719`. The flag is deleted in the same change (it was to stay one release as a
+kill-switch per ADR-024 §4, "removal at 2.0" — superseded above). Symbol-removal grep across every
+test root (#1391). #2509 closes with a pointer; #2502/#2504/#2505/#2513/#2516 close by the red
+`xfail`s.
+
+**Step 5 — what implementing it corrected (#2628, shipped in 1.2.0).** The flag, its three Python
+readers, the Rust cell, the PyO3 setter/getter, the `RenderEnv.resolve_lazy` field, the eight
+`resolve_lazy()` arms, `public_dict_attrs` / `has_public_dict_attrs` / `is_public_attr_name`, the
+`__dict__` bulk-dump `Value::Object` arm and the `opaque_gate` decline were deleted as written.
+**Four items in the list above were NOT deleted, because falsification-testing the premise behind
+them showed they are Django-parity mechanisms for values that carry no handle, not escape-hatch
+arms:**
+
+1. *The alias fallback stays.* A Django model crosses as a floored dict with NO live handle
+   (decision (b)(1) above), so `{% with q=user %}{{ q.groups.count }}` is answered only by the
+   by-name sidecar reached through `Context::aliases`. Measured on the shipped build before the
+   deletion: the unfiltered `{% with q=user %}` renders `1`; the filtered `{% with q=user|default:user %}`
+   (no alias registered) renders `''`. Deleting the fallback would regress the former to the latter.
+2. *`build_render_sidecar` / `_protect_sidecar_tree` / `_SIDECAR_MAX_DEPTH` stay.* The same
+   measurement over a LIST of models — `{% for q in users %}{{ q.groups.count }}` — renders `1` on
+   the plain path only because the builder descends into the container and the alias maps `q` to
+   `users.0`. The descent is also the serialization floor for the custom-tag sink
+   (`TestTheSerializationFloorStillHolds`, #2501/#2508): a model one level down reaches a
+   `{% tag %}` handler raw without it.
+3. *The `_JSON_FRIENDLY` filter and the LiveView sidecar's breadth stay.* Request-scoped values —
+   `request`, the auth `user`, `perms`, `messages` — are skipped from `update_state`
+   (`rust_bridge.py`, the `_request_scoped_keys` branch, #1786) and reach the engine ONLY through
+   the sidecar; a `MultiValueDict` rides it for `{% querystring %}` (#2556); a `Component`'s
+   attribute misses fall back to it (#2503). "Narrow to the top-level models" would blank
+   `{{ user.username }}` and `{{ request.path }}` on every LiveView render.
+4. *The `__dict__` arm was NOT dead under the default, and its deletion needed a replacement.*
+   `docs/architecture/VALUE_BOUNDARY.md` §6.6 had already recorded that `opaque_value` declines
+   an object whose probe raises (`bool`, `str`, `repr`, an item enumeration) and that such an
+   object then reached the bulk dump on the default. Deleting the arm alone turned a
+   `LiveComponent` with no template (`__str__` raises) into a render-time `ValueError` on
+   `{{ c.mount }}`, and silenced a `__getattr__`-raising object's `RuntimeError` on `{{ o.0 }}`
+   into a character of its repr — 21 cells of `test_sidecar_on_all_render_paths_2501.py`. The
+   replacement is `handle_only_encoded` (`crates/djust_core/src/lib.rs`): the object keeps its
+   live handle with best-effort measurements, so every handle-walked lookup is Django's answer.
+   A raising `__str__` is DEFERRED rather than swallowed — the transient `Encoded::str_raised`
+   bit makes the `{{ o }}` sink (`renderer::localize_if_number`) call `str()` on the handle and
+   propagate, which is what #2429 decided and what Django does; `{{ o.attr }}` never calls it.
+   That also closed a recorded djust-REFUSES-where-Django-RENDERS cell: `{{ p.year }}` on a
+   `datetime` whose tzinfo raises inside `__str__` (`test_nullary_autocall_2485.py`). Only
+   `{% if o %}` over a raising `__bool__` still renders a fallback where Django raises.
+5. *The live walk substituted `""` for `string_if_invalid`.* `walk_live`'s `CallOutcome::Empty`
+   arm (an args-required method, an `alters_data` refusal) called a free helper that returned
+   `""` where Django assigns `engine.string_if_invalid` and keeps walking. It never showed
+   because an attribute-bearing object took the by-name sidecar walk, which answered `Missing`
+   and let the renderer substitute the engine's option. Routing such objects through the handle
+   surfaced it as a scoreboard regression — Django's `basic-syntax20`, `{{ var.method2 }}` under
+   `string_if_invalid='INVALID'`, rendered `''`. Now `Context::string_if_invalid_object` reads the
+   engine's option; the scoreboard is back to baseline with no regressed cell.
+6. *No `xfail`s were left to close.* `TestDoNotCallRendersTheMarkerDict2502`,
+   `TestFilteredAndDictViewOperands2504` and `TestShadowingNeverResolvesAgainstTheOuterObject2505`
+   had already been un-`xfail`ed at the movement-3 flip; #2502/#2504/#2505/#2509/#2513/#2516 were
+   closed against movement 3, not this step.
+
+The narrowing of the sidecar to what only it can answer is a real simplification, but it is a
+separate change with its own before/after (CLAUDE.md #1079), not a side effect of deleting the flag.
 
 ## Consequences
 

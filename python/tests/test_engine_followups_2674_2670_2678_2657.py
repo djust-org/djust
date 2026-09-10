@@ -39,8 +39,6 @@ from pathlib import Path
 import pytest
 from django.template import Context, Engine
 
-from adr027_flag import resolve_lazy
-
 from djust import _rust
 
 #: A render that must TERMINATE, run where a hang is reportable.
@@ -417,30 +415,27 @@ PAST_CAP_SINKS = {
 NOT_SUBSCRIPTABLE = {"index", "first"}
 
 
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 @pytest.mark.parametrize("sink", sorted(PAST_CAP_SINKS))
 @pytest.mark.parametrize("shape", ["list", "queryset"])
 class TestATerminatingCollectionPastTheCapIsUntouched:
-    """Every sink, both shapes, both flag settings, for a collection just past
-    the cap.
+    """Every sink, both shapes, for a collection just past the cap.
 
-    Both settings, because the first version of the #2678 fix was wrong in
-    DIFFERENT ways on each: under the shipped default it raised
-    (`'list' object yielded more than 100000 items`), and on the eager hatch
-    it answered from the REPR — `{% for %}` rendered 688,898 dots for a
+    This ran on both settings of the ``template_resolve_lazy`` flag until
+    ADR-027 Step 5 (#2628) deleted it, because the first version of the #2678
+    fix was wrong in DIFFERENT ways on each: under the shipped default it
+    raised (`'list' object yielded more than 100000 items`), and on the eager
+    hatch it answered from the REPR — `{% for %}` rendered 688,898 dots for a
     100,001-item list, `{{ v.0 }}` rendered `[`, `{% if 5 in v %}` was False.
-    A test on one setting could not tell those two apart from correct.
     """
 
-    def test_agrees_with_django(self, template_dir, lazy, sink, shape):
+    def test_agrees_with_django(self, template_dir, sink, shape):
         if shape == "queryset" and sink in NOT_SUBSCRIPTABLE:
             pytest.skip("a QuerySet-shaped object has no __getitem__")
         src, expected_for = PAST_CAP_SINKS[sink]
         factory = list if shape == "list" else _FakeQuerySet
-        with resolve_lazy(lazy):
-            django, djust = render_both(template_dir, src, lambda: {"v": factory(range(CAP + 1))})
+        django, djust = render_both(template_dir, src, lambda: {"v": factory(range(CAP + 1))})
         assert djust == django, (
-            f"{sink} on {shape} (lazy={lazy}): django={django[:40]!r}... djust={djust[:40]!r}..."
+            f"{sink} on {shape}: django={django[:40]!r}... djust={djust[:40]!r}..."
         )
         assert django == expected_for(CAP + 1), "the Django reference itself moved"
 

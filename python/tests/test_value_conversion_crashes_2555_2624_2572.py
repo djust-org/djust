@@ -5,9 +5,9 @@ exception, so every case here renders the offending input in a SUBPROCESS
 with a timeout and asserts on its exit code. An in-process test cannot assert
 "does not segfault": the segfault takes the test runner with it.
 
-Every case runs on BOTH settings of ``template_resolve_lazy``: the two walks
-differ, but both end in the same conversion, and all three crashes lived
-there.
+Every case used to run on BOTH settings of ``template_resolve_lazy``; the
+flag was deleted in ADR-027 Step 5 (#2628), and the live-handle walk is the
+only one now. All three crashes lived in the conversion the walk ends in.
 
 Root causes, symptom-up (not the ones the issues cited):
 
@@ -35,9 +35,8 @@ import threading
 
 import pytest
 
-# The child configures Django itself; the flag is taken from argv so the REAL
-# config path (`LIVEVIEW_CONFIG["template_resolve_lazy"]`) is what the render
-# reads, exactly as the ADR-027 characterization net does it.
+# The child configures Django itself, exactly as the ADR-027 characterization
+# net does it.
 _CHILD = textwrap.dedent(
     """
     import sys, threading
@@ -51,7 +50,6 @@ _CHILD = textwrap.dedent(
             "BACKEND": "djust.template_backend.DjustTemplateBackend",
             "NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {},
         }],
-        LIVEVIEW_CONFIG={"template_resolve_lazy": sys.argv[1] == "lazy"},
     )
     django.setup()
     from djust.template_backend import DjustTemplateBackend
@@ -82,8 +80,8 @@ _CHILD = textwrap.dedent(
         "2572-index": ("{{ v.0 }}", {"v": NeverRaises()}),
         "2624-8mib": ("{{ v.0 }}", {"v": L}),
     }
-    src, ctx = CASES[sys.argv[2]]
-    if sys.argv[2] == "2624-8mib":
+    src, ctx = CASES[sys.argv[1]]
+    if sys.argv[1] == "2624-8mib":
         threading.stack_size(8 * 1024 * 1024)
 
     def render():
@@ -102,59 +100,51 @@ _CHILD = textwrap.dedent(
 )
 
 
-def _render_in_child(case: str, lazy: bool) -> subprocess.CompletedProcess[str]:
+def _render_in_child(case: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-c", _CHILD, "lazy" if lazy else "eager", case],
+        [sys.executable, "-c", _CHILD, case],
         capture_output=True,
         text=True,
         timeout=20,
     )
 
 
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 class TestValueConversionDoesNotTakeTheProcess:
-    def test_2555_a_lone_surrogate_renders_instead_of_segfaulting(self, lazy: bool) -> None:
+    def test_2555_a_lone_surrogate_renders_instead_of_segfaulting(self) -> None:
         """Django renders ``'\\udcc0x'`` and only its HTTP encoding raises
         (``UnicodeEncodeError: surrogates not allowed``). Rust cannot hold the
         code point, so it crosses as U+FFFD — ``errors="replace"`` — and the
         character next to it survives."""
-        result = _render_in_child("2555", lazy)
+        result = _render_in_child("2555")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout == repr("�x")
 
-    def test_2555_an_object_whose_str_holds_a_surrogate(self, lazy: bool) -> None:
+    def test_2555_an_object_whose_str_holds_a_surrogate(self) -> None:
         """The same crossing for a ``__str__`` that yields one: the object
         keeps its carrier and renders lossily rather than declining."""
-        result = _render_in_child("2555-object-str", lazy)
+        result = _render_in_child("2555-object-str")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout == repr("s�")
 
-    def test_2624_numeric_index_on_a_container_subclass_class(self, lazy: bool) -> None:
+    def test_2624_numeric_index_on_a_container_subclass_class(self) -> None:
         """Django renders ``str(L[0])`` — its step-3 ``current[int(bit)]``
         honours ``__class_getitem__`` — so djust does too, instead of
         recursing into the alias until the stack overflows.
 
-        The ADR-027 sink matches Django to the byte. The escape-hatch walk
-        reaches the alias one step earlier — its step 1 is the unguarded
-        string-key ``L["0"]`` (the documented pre-ADR deviation the flip
-        exists to retire), so its alias spells ``L['0']`` and autoescapes.
-        Both are ``str(alias)``; neither is a crash."""
-        result = _render_in_child("2624", lazy)
+        The ADR-027 sink matches Django to the byte."""
+        result = _render_in_child("2624")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
-        if lazy:
-            assert result.stdout == repr("__main__.L[0]")
-        else:
-            assert result.stdout == repr("__main__.L[&#x27;0&#x27;]")
+        assert result.stdout == repr("__main__.L[0]")
 
-    def test_2572_a_getitem_that_never_raises_renders_as_str(self, lazy: bool) -> None:
+    def test_2572_a_getitem_that_never_raises_renders_as_str(self) -> None:
         """Django never iterates such an object for ``{{ v }}``: it is
         ``str(v)``. The conversion used to walk the legacy sequence protocol
         forever."""
-        result = _render_in_child("2572", lazy)
+        result = _render_in_child("2572")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout == repr("never-raises")
 
-    def test_2572_index_lookup_terminates(self, lazy: bool) -> None:
+    def test_2572_index_lookup_terminates(self) -> None:
         """``{{ v.0 }}`` used to hang exactly as ``{{ v }}`` did — the hang
         was in converting the root, before any segment was walked.
 
@@ -164,7 +154,7 @@ class TestValueConversionDoesNotTakeTheProcess:
         the first character of ``str(v)``, because an unsized iterable past
         ``OPAQUE_ITEM_CAP`` was declined to the terminal string path (#2670,
         the follow-up this comment used to point forward to)."""
-        result = _render_in_child("2572-index", lazy)
+        result = _render_in_child("2572-index")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout, result.stderr[-2000:]
 
@@ -190,9 +180,8 @@ class TestSurrogateReplacementIsPerCodePoint:
     two. The first fix round-tripped through UTF-16, which joined them into
     one astral character (`'😀'`, `|length` 1); the #2673 review caught it."""
 
-    @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-    def test_a_high_low_pair_is_two_replacements_not_one_character(self, lazy: bool) -> None:
-        result = _render_in_child("2555-pair", lazy)
+    def test_a_high_low_pair_is_two_replacements_not_one_character(self) -> None:
+        result = _render_in_child("2555-pair")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout == repr("��|2")
 
@@ -201,28 +190,7 @@ class TestTheBoundedSequenceGate:
     """The #2572 gate is a rule about the operation, not a list of shapes:
     a sequence crosses as a list only when it states a bound and honours it."""
 
-    def test_every_builtin_sequence_still_crosses_as_a_list_on_the_hatch(self) -> None:
-        """The #2572 gate, measured where it is still the ONLY rule.
-
-        #2704 added a second, length-independent reason for a sequence to
-        decline: its `Value::List` display is a list repr, which is only
-        `str(o)` for a real `list`. That reason applies under
-        `template_resolve_lazy` (where the carrier can spell `str(o)` and
-        answer the sinks from the object) and NOT on the eager escape hatch,
-        which has no handle. So the hatch is where "does it state a bound and
-        honour it" is still the whole question, and it is unchanged there.
-        """
-        from collections import deque
-
-        from adr027_flag import resolve_lazy
-
-        from djust import _rust
-
-        with resolve_lazy(False):
-            for shape in ([1, 2], (1, 2), range(3), b"ab", bytearray(b"ab"), deque([1, 2])):
-                assert _rust.crosses_as_encoded(shape) is False, shape
-
-    def test_under_the_default_only_a_list_and_a_tuple_keep_the_list_arm(self) -> None:
+    def test_only_a_list_and_a_tuple_keep_the_list_arm(self) -> None:
         """The #2704 split, and the two gates agreeing about it.
 
         A `tuple` is claimed ABOVE the sequence arm and spells itself; a
@@ -240,9 +208,7 @@ class TestTheBoundedSequenceGate:
             assert _rust.crosses_as_encoded(shape) is True, shape
             assert _rust.crosses_as_encoded_by_conversion(shape) is True, shape
 
-    def test_a_legacy_sequence_with_a_len_crosses_as_a_list_on_the_hatch(self) -> None:
-        from adr027_flag import resolve_lazy
-
+    def test_a_legacy_sequence_with_a_len_is_carried(self) -> None:
         from djust import _rust
 
         class Bounded:
@@ -254,12 +220,10 @@ class TestTheBoundedSequenceGate:
                     raise IndexError(i)
                 return i
 
-        with resolve_lazy(False):
-            assert _rust.crosses_as_encoded(Bounded()) is False
-            assert _rust.crosses_as_encoded_by_conversion(Bounded()) is False
-        # Under the default it is a sized user class, whose Django spelling is
-        # `<Bounded object at 0x…>` and not `[0, 1]` — so #2704 carries it,
-        # and both gates say so.
+        # A sized user class whose Django spelling is `<Bounded object at
+        # 0x…>` and not `[0, 1]` — so #2704 carries it, and both gates say so.
+        # (The eager escape hatch, where this shape still crossed as a list,
+        # was deleted in ADR-027 Step 5, #2628.)
         assert _rust.crosses_as_encoded(Bounded()) is True
         assert _rust.crosses_as_encoded_by_conversion(Bounded()) is True
 
@@ -406,6 +370,6 @@ class TestTheDepthCeiling:
         full ceiling-deep chain on the SMALLEST real thread stack (glibc's
         8 MiB default; macOS gives 16 MiB). Rendered on such a thread in a
         child, because a stack overflow takes the process."""
-        result = _render_in_child("2624-8mib", lazy=True)
+        result = _render_in_child("2624-8mib")
         assert result.returncode == 0, f"exit {result.returncode}\n{result.stderr[-2000:]}"
         assert result.stdout == repr("__main__.L[0]")
