@@ -607,8 +607,18 @@ class RustBridgeMixin:
         with ``simple_live_view`` — that module renders through
         ``render_template_with_dirs`` and never touches this mixin, so a second
         copy here would have been the #1646 twin this fix exists to retire.
+
+        ADR-029 (#2741): the push above sets THIS thread's cells; the capture
+        below snapshots them onto the view as per-view config, so a render
+        entry running on a thread that never pushed — the ``ViewActor``'s
+        tokio worker — installs the configured values rather than reading the
+        worker's compiled defaults. The per-view twin of
+        :meth:`_wire_template_auto_call`.
         """
         apply_render_env()
+        rust_view = self._rust_view
+        if rust_view is not None and hasattr(rust_view, "capture_render_env"):
+            rust_view.capture_render_env()
 
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.

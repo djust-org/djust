@@ -4,7 +4,7 @@
 //! and their handles. Messages use oneshot channels for request-response patterns.
 
 use super::error::Result;
-use djust_core::Value;
+use djust_core::{RenderEnv, Value};
 use djust_vdom::Patch;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,12 @@ pub enum SessionMsg {
         template: Option<String>,
         /// Template directories for `{% include %}` / `{% extends %}` (#2599).
         template_dirs: Vec<String>,
+        /// The render environment captured on the mounting (Python) thread
+        /// (ADR-029, #2741), so the actor's renders on a tokio worker apply
+        /// the configured timezone / number format / ADR-027 flag rather
+        /// than the worker's compiled defaults. `None` is the pure-Rust
+        /// test shape: the worker's cells are read as they are.
+        render_env: Option<RenderEnv>,
         reply: oneshot::Sender<Result<MountResponse>>,
     },
 

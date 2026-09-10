@@ -275,7 +275,13 @@ def test_both_render_paths_call_the_same_timezone_function():
     the question this pin asks is which paths ACQUIRE the settings.
 
     Still deliberately absent: the other nested ``_rust.render_template``
-    callers, which are reachable only from inside one of the four entries.
+    callers, which are reachable only from inside one of the five entries.
+
+    ``runtime.py`` is the actor mount (ADR-029, #2741): ``dispatch_actor_mount``
+    never reaches ``_sync_state_to_rust``, so it pushes for itself on the
+    thread whose cells ``SessionActorHandle.mount`` then captures onto the
+    actor as per-view config. Grew 4 -> 5 exactly because a real path was
+    missing — the sink grep this pin exists for.
     """
     import ast
     import pathlib
@@ -302,6 +308,7 @@ def test_both_render_paths_call_the_same_timezone_function():
     assert callers == {
         "components/base.py",
         "mixins/rust_bridge.py",
+        "runtime.py",
         "simple_live_view.py",
         "template/rendering.py",
     }, (

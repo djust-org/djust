@@ -16,11 +16,13 @@ pub mod decimal;
 pub mod errors;
 pub mod locale;
 pub mod object_key;
+pub mod render_env;
 pub mod serialization;
 
 pub use context::{Context, SharedValues};
 pub use errors::{DjangoRustError, Result};
 pub use object_key::ObjectKey;
+pub use render_env::RenderEnv;
 
 /// A value that can be used in Django templates
 ///
@@ -2818,8 +2820,15 @@ thread_local! {
     /// `protect_sidecar`'s `Err(_) => obj` arm, the unguarded `get_item` that
     /// segfaults on a class object, and the `__dict__` dump; the sink has none
     /// of those. See `python/djust/render_env.py::apply_resolve_lazy`.
-    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(RESOLVE_LAZY_DEFAULT) };
 }
+
+/// The shipped ADR-027 default — the ONE literal `RESOLVE_LAZY` above and
+/// `RenderEnv::default()` both read, so a thread that never pushed and a
+/// captured environment on a fresh thread cannot disagree (#1646). Moves
+/// together with `djust.config.LiveViewConfig._defaults`, pinned by
+/// `test_the_rust_default_tracks_the_python_default`.
+pub const RESOLVE_LAZY_DEFAULT: bool = true;
 
 /// Set this thread's ADR-027 lazy-resolution flag (#2539).
 ///

@@ -8,7 +8,7 @@ use super::component::{ComponentActor, ComponentActorHandle};
 use super::error::ActorError;
 use super::messages::{RenderResult, ViewMsg};
 use crate::RustLiveViewBackend;
-use djust_core::Value;
+use djust_core::{RenderEnv, Value};
 use indexmap::IndexMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
@@ -111,6 +111,16 @@ impl ViewActor {
         };
 
         (actor, handle)
+    }
+
+    /// Set this view's render environment (ADR-029, #2741) — the timezone,
+    /// number formats and ADR-027 flag captured on the thread that pushed
+    /// them — so every render this actor does on its tokio worker installs
+    /// them instead of reading the worker's compiled defaults. Called by
+    /// `SessionActor::handle_mount` before the actor is spawned; a test that
+    /// builds the actor directly calls it the same way.
+    pub fn set_render_env(&mut self, env: Option<RenderEnv>) {
+        self.backend.set_render_env_rust(env);
     }
 
     /// Main actor loop - processes messages until shutdown
@@ -555,7 +565,15 @@ impl ViewActor {
         );
 
         let response = match result {
-            Ok((actor, handle)) => {
+            Ok((mut actor, handle)) => {
+                // ADR-029 (#2741): a component render applies the SAME
+                // per-view config as its parent — the ADR-024 auto-call
+                // flag and the render environment — instead of a bare
+                // `Context::from_dict` that reads every default.
+                actor.set_render_config(
+                    self.backend.template_auto_call_rust(),
+                    self.backend.render_env_rust().cloned(),
+                );
                 // Spawn the component actor
                 tokio::spawn(actor.run());
 
@@ -1356,41 +1374,54 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // #2741 / ADR-029 Gate 4 — does a render on a tokio WORKER thread see
-    // the `RESOLVE_LAZY` value the configuring thread set, or the
-    // thread-local's compiled default?
+    // #2741 / ADR-029 — does a render on a tokio WORKER thread apply the
+    // render environment the configuring thread captured, or the worker's
+    // thread-local compiled default?
     //
-    // `RESOLVE_LAZY` is `thread_local!` (`djust_core/src/lib.rs`), nothing
-    // in `actors/` sets it and no message carries it. The probe template
-    // renders `X` under `resolve_lazy=true` and `Y` under `false`
-    // (`renderer.rs`: a `Missing` operand under `ignore_failures` becomes
-    // `None` only when the flag is on, so `default_if_none` fires only
-    // then) — measured through `_rust.render_template`, not cited.
+    // `RESOLVE_LAZY` is `thread_local!` (`djust_core/src/lib.rs`) and nothing
+    // in `actors/` ever pushed it, so before ADR-029 the actor rendered with
+    // the worker's default whatever Python had configured (PR #2751 observed
+    // it). The fix carries the environment as a FIELD on the backend
+    // (`ViewActor::set_render_env`, set by `SessionActor::handle_mount` from
+    // the value the Python-facing `mount` captured on its own thread) and has
+    // every render entry install it under a `RenderEnvGuard`.
+    //
+    // The probe template renders `X` under `resolve_lazy=true` and `Y` under
+    // `false` (`renderer.rs`: a `Missing` operand under `ignore_failures`
+    // becomes `None` only when the flag is on, so `default_if_none` fires
+    // only then) — measured through `_rust.render_template`, not cited.
     //
     // The whole difficulty is the thread. A bare `#[tokio::test]` is the
-    // current_thread flavour: the actor is polled on the test thread,
-    // shares its thread-local, and would "refute" a bug that exists. So the
+    // current_thread flavour: the actor is polled on the test thread, shares
+    // its thread-local, and would "prove" a fix that reached nothing. So the
     // harness builds a multi_thread runtime with exactly ONE worker, spawns
     // the actor there, and PROVES the worker is a different OS thread by
     // running a control task on the same (only) worker that reports its
-    // `ThreadId` and its own reading of `djust_core::resolve_lazy()`.
-    //
-    // Gate-off (#1468): the same harness with `on_thread_start` setting the
-    // flag to `false` ON THE WORKER must flip the output to `Y`. If it did
-    // not, the harness would not be observing the flag at all.
+    // `ThreadId` and its own reading of `djust_core::resolve_lazy()` — before
+    // AND after the render, so the guard's restore is observed too.
     // ------------------------------------------------------------------
 
     const RESOLVE_LAZY_PROBE: &str = r#"{% firstof nope|default_if_none:"X" "Y" %}"#;
 
     /// What one single-worker runtime observed: the worker's thread id, the
-    /// worker's own reading of the flag, and the actor's rendered probe.
+    /// worker's own reading of the flag before and after the render, and
+    /// the actor's rendered probe.
     struct WorkerProbe {
         worker_tid: std::thread::ThreadId,
-        worker_flag: bool,
+        worker_flag_before: bool,
+        worker_flag_after: bool,
         html: String,
     }
 
-    fn probe_on_single_worker(on_thread_start: Option<fn()>) -> WorkerProbe {
+    fn worker_reading(rt: &tokio::runtime::Runtime) -> (std::thread::ThreadId, bool) {
+        rt.block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
+            .unwrap()
+    }
+
+    fn probe_on_single_worker(
+        on_thread_start: Option<fn()>,
+        env: Option<RenderEnv>,
+    ) -> WorkerProbe {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder.worker_threads(1).enable_all();
         if let Some(hook) = on_thread_start {
@@ -1400,80 +1431,152 @@ mod tests {
         assert_eq!(rt.metrics().num_workers(), 1, "harness premise: one worker");
 
         // Control: the only worker reports where it is and what it sees.
-        let (worker_tid, worker_flag) = rt
-            .block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
-            .unwrap();
+        let (worker_tid, worker_flag_before) = worker_reading(&rt);
 
-        // Subject: the actor, spawned onto that same (only) worker.
-        let (actor, handle) =
+        // Subject: the actor, spawned onto that same (only) worker, carrying
+        // (or not) the environment the way `SessionActor::handle_mount` sets it.
+        let (mut actor, handle) =
             ViewActor::with_template("t2741.V".to_string(), RESOLVE_LAZY_PROBE.to_string());
+        actor.set_render_env(env);
         rt.spawn(actor.run());
         let html = rt.block_on(async {
             let html = handle.render().await.unwrap();
             handle.shutdown().await;
             html
         });
+        // Control again: the render must have left the worker's cell as it
+        // found it (the guard's restore), whatever it installed meanwhile.
+        let (tid_after, worker_flag_after) = worker_reading(&rt);
+        assert_eq!(tid_after, worker_tid, "harness premise: same single worker");
         rt.shutdown_timeout(std::time::Duration::from_secs(5));
         WorkerProbe {
             worker_tid,
-            worker_flag,
+            worker_flag_before,
+            worker_flag_after,
             html,
         }
     }
 
-    /// PINS THE DEFECT, NOT THE DESIRED BEHAVIOUR (#2741). This test passes
-    /// while the bug exists: an actor render on a tokio worker ignores the
-    /// caller's `set_resolve_lazy(false)`. When ADR-029 Phase 1 lands an
-    /// explicit `RenderEnv`, this test MUST go red — at that point flip the
-    /// expectation to the configured (`false` -> `Y`) answer rather than
-    /// deleting the test, because the thread-distinctness harness is the
-    /// only thing that proves the fix reached the worker thread.
+    /// The #2751 probe, FLIPPED (ADR-029 §3 step 1): it used to pin the
+    /// defect (`X` on the worker); it now asserts the CONFIGURED answer on
+    /// the proven-distinct worker. The thread-distinctness harness is kept
+    /// verbatim because it is the only thing that proves the fix reached the
+    /// worker thread rather than the test thread.
     #[test]
-    fn actor_render_on_a_worker_thread_reads_resolve_lazy_default_not_config_2741() {
-        // The configuring thread says `false` — the non-default value.
+    fn actor_render_on_a_worker_thread_applies_the_captured_render_env_2741() {
+        // The configuring thread says `false` — the non-default value — and
+        // captures it, exactly as the Python-facing `mount` does.
         djust_core::set_resolve_lazy(false);
         assert!(
             !djust_core::resolve_lazy(),
             "setter took effect on this thread"
         );
         let setter_tid = std::thread::current().id();
+        let env = djust_templates::render_env::capture();
+        assert!(!env.resolve_lazy, "the capture saw the configured value");
 
         // Distinctness is asserted, not assumed.
-        let observed = probe_on_single_worker(None);
+        let observed = probe_on_single_worker(None, Some(env.clone()));
         assert_ne!(
             observed.worker_tid, setter_tid,
             "harness premise: the worker must be a different OS thread"
         );
-        // (a) the worker's own reading of the thread-local, and (b) the
-        // actor's render through it — recorded in the failure message so a
-        // future flip reports the mechanism, not just a byte.
+        // (a) the worker's OWN cell is still the compiled default — nothing
+        // pushed on that thread — which is what makes (b) the field's doing:
         assert!(
-            observed.worker_flag,
-            "the worker thread read resolve_lazy()={} while the setter thread set false",
-            observed.worker_flag
+            observed.worker_flag_before,
+            "premise: the worker's ambient cell reads the default before the render"
         );
+        // (b) the render answered with the CONFIGURED value.
         assert_eq!(
-            observed.html, "X",
-            "actor render on the worker: {:?} (X = default true, Y = configured false)",
+            observed.html, "Y",
+            "actor render on the worker: {:?} (X = worker default true, Y = configured false)",
             observed.html
         );
+        // (c) and the guard put the worker's cell back afterwards.
+        assert!(
+            observed.worker_flag_after,
+            "the render must leave the worker's cell as it found it (RenderEnvGuard)"
+        );
 
-        // Gate-off: setting the flag ON THE WORKER is the only thing that
-        // may flip the render. If `Y` does not appear here the harness is
-        // not observing the flag and the assertions above prove nothing.
-        let flipped = probe_on_single_worker(Some(|| djust_core::set_resolve_lazy(false)));
+        // Gate-off (#1468), the mechanism this test exists for: the SAME
+        // harness with no environment on the actor is the pre-ADR-029 shape
+        // and must still render the worker's default. If this renders `Y`
+        // too, the field is not what decided (b).
+        let unconfigured = probe_on_single_worker(None, None);
+        assert_ne!(unconfigured.worker_tid, setter_tid);
+        assert_eq!(
+            unconfigured.html, "X",
+            "gate-off: with no env on the actor the worker's default must decide, got {:?}",
+            unconfigured.html
+        );
+
+        // The #2751 gate-off, kept: setting the flag ON THE WORKER flips the
+        // probe as well, so the harness observes the flag and not a constant.
+        let flipped = probe_on_single_worker(Some(|| djust_core::set_resolve_lazy(false)), None);
         assert_ne!(flipped.worker_tid, setter_tid);
         assert!(
-            !flipped.worker_flag,
+            !flipped.worker_flag_before,
             "on_thread_start set false on the worker"
         );
-        assert_eq!(
-            flipped.html, "Y",
-            "gate-off: with false set on the worker the probe must render Y, got {:?}",
-            flipped.html
-        );
+        assert_eq!(flipped.html, "Y");
 
         // Leave the test thread as we found it (other tests share it).
         djust_core::set_resolve_lazy(true);
+    }
+
+    /// The hand-down (ADR-029): a child `ComponentActor` created through the
+    /// view renders with the PARENT's environment, on the same distinct
+    /// worker. `{{ v }}` for `1234.5` is `1234,5` only under a `,`-decimal
+    /// number format nobody ever pushed on the worker.
+    #[test]
+    fn a_child_component_inherits_the_views_render_env_2741() {
+        let env = RenderEnv {
+            number_format: Some(djust_core::locale::NumberFormat {
+                decimal_sep: ",".into(),
+                thousand_sep: "\u{a0}".into(),
+                grouping: vec![3, 0],
+                use_grouping: false,
+            }),
+            ..RenderEnv::default()
+        };
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let setter_tid = std::thread::current().id();
+        let worker_tid = rt
+            .block_on(rt.spawn(async { std::thread::current().id() }))
+            .unwrap();
+        assert_ne!(worker_tid, setter_tid, "harness premise: a distinct worker");
+
+        let render_child = |env: Option<RenderEnv>| {
+            let (mut actor, handle) =
+                ViewActor::with_template("t2741.V".to_string(), "parent".to_string());
+            actor.set_render_env(env);
+            rt.spawn(actor.run());
+            rt.block_on(async {
+                let mut props = HashMap::new();
+                props.insert("v".to_string(), Value::Float(1234.5));
+                let html = handle
+                    .create_component("c".to_string(), "{{ v }}".to_string(), props, None)
+                    .await
+                    .unwrap();
+                handle.shutdown().await;
+                html
+            })
+        };
+        assert_eq!(
+            render_child(None),
+            "1234.5",
+            "premise: no env, the worker default"
+        );
+        assert_eq!(
+            render_child(Some(env)),
+            "1234,5",
+            "the parent's env did not reach the child component's render"
+        );
+        rt.shutdown_timeout(std::time::Duration::from_secs(5));
     }
 }

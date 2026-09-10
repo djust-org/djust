@@ -7,7 +7,7 @@
 use super::error::ActorError;
 use super::messages::{MountResponse, PatchResponse, SessionMsg};
 use super::view::{ViewActor, ViewActorHandle};
-use djust_core::Value;
+use djust_core::{RenderEnv, Value};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -88,6 +88,7 @@ impl SessionActor {
                     python_view,
                     template,
                     template_dirs,
+                    render_env,
                     reply,
                 } => {
                     debug!(
@@ -96,7 +97,14 @@ impl SessionActor {
                         "Handling Mount"
                     );
                     let result = self
-                        .handle_mount(view_path, params, python_view, template, template_dirs)
+                        .handle_mount(
+                            view_path,
+                            params,
+                            python_view,
+                            template,
+                            template_dirs,
+                            render_env,
+                        )
                         .await;
                     let _ = reply.send(result);
                 }
@@ -236,6 +244,7 @@ impl SessionActor {
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
+        render_env: Option<RenderEnv>,
     ) -> Result<MountResponse, ActorError> {
         // Phase 6: Generate unique view ID
         let view_id = Uuid::new_v4().to_string();
@@ -250,12 +259,15 @@ impl SessionActor {
         // Create ViewActor on the view's OWN template (#2599). `ViewActor::new`
         // builds an empty-template backend, which is what made every
         // `use_actors=True` mount render `<html><head></head><body></body></html>`.
-        let (view_actor, view_handle) = match template {
+        let (mut view_actor, view_handle) = match template {
             Some(source) => {
                 ViewActor::with_template_and_dirs(view_path.clone(), source, template_dirs)
             }
             None => ViewActor::new(view_path.clone()),
         };
+        // ADR-029 (#2741): the environment captured on the mounting thread
+        // becomes the actor's per-view config BEFORE the first render.
+        view_actor.set_render_env(render_env);
         tokio::spawn(view_actor.run());
 
         // Phase 5: Set Python view instance if provided
@@ -453,7 +465,7 @@ impl SessionActorHandle {
         params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
-        self.mount_with_template(view_path, params, python_view, None, Vec::new())
+        self.mount_with_template(view_path, params, python_view, None, Vec::new(), None)
             .await
     }
 
@@ -469,6 +481,7 @@ impl SessionActorHandle {
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
+        render_env: Option<RenderEnv>,
     ) -> Result<MountResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -479,6 +492,7 @@ impl SessionActorHandle {
                 python_view,
                 template,
                 template_dirs,
+                render_env,
                 reply: tx,
             })
             .await
@@ -747,6 +761,75 @@ impl SessionActorHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-029 (#2741) on the PRODUCTION spawn: `handle_mount` (the
+    /// `tokio::spawn(view_actor.run())` at the top of this file) must hand
+    /// the environment `mount_with_template` carried to the actor BEFORE
+    /// its first render. Single-worker multi_thread runtime so the actor
+    /// renders on a thread that is provably not the one that captured the
+    /// env — the #2751 harness shape, one level up the chain.
+    #[test]
+    fn handle_mount_gives_the_view_actor_the_carried_render_env_2741() {
+        const PROBE: &str = r#"{% firstof nope|default_if_none:"X" "Y" %}"#;
+        djust_core::set_resolve_lazy(false);
+        let env = djust_templates::render_env::capture();
+        assert!(!env.resolve_lazy);
+        let setter_tid = std::thread::current().id();
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (worker_tid, worker_flag) = rt
+            .block_on(rt.spawn(async { (std::thread::current().id(), djust_core::resolve_lazy()) }))
+            .unwrap();
+        assert_ne!(worker_tid, setter_tid, "harness premise: a distinct worker");
+        assert!(worker_flag, "premise: the worker's own cell is the default");
+
+        let (html_with, html_without) = rt.block_on(async {
+            let (actor, handle) = SessionActor::new("s2741".to_string());
+            tokio::spawn(actor.run());
+            let with = handle
+                .mount_with_template(
+                    "t2741.V".to_string(),
+                    HashMap::new(),
+                    None,
+                    Some(PROBE.to_string()),
+                    Vec::new(),
+                    Some(env),
+                )
+                .await
+                .unwrap()
+                .html;
+            // Gate-off: the same mount with NO env is the pre-ADR-029 shape.
+            let without = handle
+                .mount_with_template(
+                    "t2741.V".to_string(),
+                    HashMap::new(),
+                    None,
+                    Some(PROBE.to_string()),
+                    Vec::new(),
+                    None,
+                )
+                .await
+                .unwrap()
+                .html;
+            handle.shutdown().await;
+            (with, without)
+        });
+        rt.shutdown_timeout(std::time::Duration::from_secs(5));
+        djust_core::set_resolve_lazy(true);
+
+        assert!(
+            html_with.contains('Y') && !html_with.contains('X'),
+            "the mounted actor rendered with the worker default, not the carried env: {html_with:?}"
+        );
+        assert!(
+            html_without.contains('X') && !html_without.contains('Y'),
+            "gate-off: with no env the worker's default must decide: {html_without:?}"
+        );
+    }
 
     #[tokio::test]
     async fn test_session_actor_creation() {
