@@ -1835,6 +1835,13 @@ impl Context {
         // (`{% with q=xs|first %}`), which is the one binding shape the by-name
         // sidecar cannot reach via `Context::aliases`; through any other
         // spelling the sidecar answers and the difference is invisible.
+        // Pinned by `python/tests/test_datetime_live_handle_2741.py`, which
+        // renders `.resolution` / `.max` / `.min` for all four temporal types
+        // through that isolating binding against Django, under both flag
+        // states, so this paragraph cannot silently go false again (#2741).
+        // (Python rather than a djust_core pyo3 test because
+        // `django_json_encoded` imports Django, which the embedded
+        // interpreter in `rust-tests` cannot reach.)
         if crate::resolve_lazy() {
             if let Some(answer) = self.walk_from_handle(key)? {
                 return Ok(answer);
