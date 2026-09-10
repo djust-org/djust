@@ -66,6 +66,7 @@ import subprocess
 import sys
 
 import pytest
+from differential_corpus_2723 import CorpusCache
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "filter-parity-differential.py"
@@ -433,17 +434,12 @@ class TestEveryExistingBaselineStaysComparable:
     script comparable under both definitions at once.
     """
 
-    def test_the_payload_gains_no_definition_marker(self, tmp_path: pathlib.Path) -> None:
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        meta = {k for k in json.loads(out.read_text()) if k.startswith("@@")}
+    def test_the_payload_gains_no_definition_marker(self, corpus: CorpusCache) -> None:
+        # The full sweep of the real script, shared with the readers in
+        # test_differential_reachability_manifest_2345.py (#2723): the
+        # artifact is a function of the script's text and the build, and this
+        # asserts on its metadata rows exactly as the private run did.
+        meta = {k for k in corpus.sweep() if k.startswith("@@")}
         assert meta == {"@@build", "@@cells_by_axis", "@@manifest"}, (
             "a new metadata row would make a file written by this copy of the "
             "script structurally different from every baseline already measured"

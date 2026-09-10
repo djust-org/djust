@@ -56,6 +56,9 @@ stronger check — it proves the tool works end to end, which an import does not
 
 How the expensive runs are shared (#2723)
 -----------------------------------------
+(The mechanism lives in ``differential_corpus_2723.py``, because
+``test_refusal_collapsed_agreement_2454.py`` reads the same sweep.)
+
 Two subprocess runs dominate this file: the full corpus SWEEP (``script
 out.json`` — ~415,000 cells rendered through both engines, ~130 s) and the
 MANIFEST (``--manifest --json``, ~25,000 renders, ~6 s). Before #2723 five
@@ -86,138 +89,19 @@ byte-identical inputs.
 from __future__ import annotations
 
 import ast
-import fcntl
-import functools
-import hashlib
 import json
-import os
 import pathlib
 import re
 import subprocess
 import sys
-from collections.abc import Callable
 
+import differential_corpus_2723 as corpus_runs
 import pytest
-
-REPO = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "filter-parity-differential.py"
-
-
-def _env() -> dict[str, str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(REPO / "python"), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
-    )
-    return env
-
-
-def run_manifest(script: pathlib.Path = SCRIPT, *args: str) -> dict:
-    """The manifest the tool emits, as data."""
-    proc = subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-        [sys.executable, str(script), "--manifest", "--json", *args],
-        capture_output=True,
-        text=True,
-        env=_env(),
-        cwd=str(REPO),
-        check=False,
-    )
-    assert proc.returncode == 0, f"the manifest run failed:\n{proc.stderr[-4000:]}"
-    return json.loads(proc.stdout)
-
-
-def run_sweep(script: pathlib.Path, out: pathlib.Path) -> None:
-    """The full corpus sweep, written to `out` — the results file `--compare` reads."""
-    subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-        [sys.executable, str(script), str(out)],
-        capture_output=True,
-        text=True,
-        env=_env(),
-        cwd=str(REPO),
-        check=True,
-    )
+from differential_corpus_2723 import REPO, SCRIPT, CorpusCache, _env
 
 
 def rows(data: dict) -> dict[str, dict]:
     return {row["axis"]: row for row in data["axes"]}
-
-
-@functools.lru_cache(maxsize=1)
-def _build_digest() -> str:
-    """The same digest the script records as `@@build`: the compiled `_rust`."""
-    from djust import _rust
-
-    return hashlib.sha256(pathlib.Path(_rust.__file__).read_bytes()).hexdigest()[:16]
-
-
-class CorpusCache:
-    """One subprocess run per DISTINCT input, shared across tests and xdist workers.
-
-    The key is the script's TEXT (not its path — a mutated copy at a fresh
-    `tmp_path` with the same edits is the same input), the `_rust` build the
-    subprocess would load, and the argv. An entry is written under `root`
-    with an atomic rename, behind a lock file so two workers that reach the
-    same key at once start one run rather than two, and the second reads the
-    first's result. A process that has read an entry keeps it in memory — the
-    sweep is ~76 MB of JSON and is read by five cases.
-
-    `runs` counts the subprocesses THIS process started, which is what the
-    cache's own tests assert on.
-    """
-
-    def __init__(self, root: pathlib.Path) -> None:
-        self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._memo: dict[str, dict] = {}
-        self.runs = 0
-
-    @staticmethod
-    def key(script: pathlib.Path, *args: str) -> str:
-        digest = hashlib.sha256(script.read_bytes())
-        digest.update(b"\0build=" + _build_digest().encode())
-        for arg in args:
-            digest.update(b"\0arg=" + arg.encode())
-        return digest.hexdigest()[:24]
-
-    def _entry(self, key: str, compute: Callable[[pathlib.Path], None]) -> dict:
-        if key in self._memo:
-            return self._memo[key]
-        entry = self.root / f"{key}.json"
-        if not entry.exists():
-            with open(self.root / f"{key}.lock", "w") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                if not entry.exists():
-                    # Written to a per-process name and renamed: a reader never
-                    # sees a half-written entry, whichever worker wrote it.
-                    partial = self.root / f"{key}.{os.getpid()}.partial"
-                    compute(partial)
-                    self.runs += 1
-                    os.replace(partial, entry)
-        data = json.loads(entry.read_text(encoding="utf-8"))
-        self._memo[key] = data
-        return data
-
-    def manifest(self, script: pathlib.Path = SCRIPT, *args: str) -> dict:
-        """`run_manifest(script, *args)`, once per distinct input."""
-
-        def compute(partial: pathlib.Path) -> None:
-            partial.write_text(json.dumps(run_manifest(script, *args)), encoding="utf-8")
-
-        return self._entry(self.key(script, "--manifest", "--json", *args), compute)
-
-    def sweep(self, script: pathlib.Path = SCRIPT) -> dict:
-        """The results file of a full sweep of `script`, once per distinct input."""
-        return self._entry(self.key(script, "<sweep>"), lambda partial: run_sweep(script, partial))
-
-
-@pytest.fixture(scope="session")
-def corpus(tmp_path_factory: pytest.TempPathFactory) -> CorpusCache:
-    base = tmp_path_factory.getbasetemp()
-    # An xdist worker's basetemp is `<controller basetemp>/popen-gwN`
-    # (xdist/workermanage.py). The parent is the one directory every worker
-    # of THIS session can see, and a later session gets a fresh numbered dir.
-    if base.name.startswith("popen-"):
-        base = base.parent
-    return CorpusCache(base / "corpus-2345")
 
 
 @pytest.fixture(scope="module")
@@ -1012,7 +896,7 @@ class TestTheCorpusCacheRunsEachInputOnce:
             calls.append(script)
             return {"axes": [{"axis": "stub", "missing": []}]}
 
-        monkeypatch.setattr(sys.modules[__name__], "run_manifest", fake)
+        monkeypatch.setattr(corpus_runs, "run_manifest", fake)
         cache = CorpusCache(tmp_path / "cache")
         a = self._script(tmp_path, "a.py", "print(1)\n")
         # The SAME text at a DIFFERENT path — what two canaries applying one
@@ -1030,7 +914,7 @@ class TestTheCorpusCacheRunsEachInputOnce:
         def fake(script: pathlib.Path, *args: str) -> dict:
             return {"axes": [{"axis": script.read_text(encoding="utf-8").strip()}]}
 
-        monkeypatch.setattr(sys.modules[__name__], "run_manifest", fake)
+        monkeypatch.setattr(corpus_runs, "run_manifest", fake)
         cache = CorpusCache(tmp_path / "cache")
         a = self._script(tmp_path, "a.py", "one\n")
         b = self._script(tmp_path, "b.py", "two\n")
@@ -1046,9 +930,7 @@ class TestTheCorpusCacheRunsEachInputOnce:
     ) -> None:
         """A second `CorpusCache` over the same root is what an xdist worker
         that drew a later case looks like: no memo, and no run."""
-        monkeypatch.setattr(
-            sys.modules[__name__], "run_manifest", lambda *a: {"axes": [{"axis": "x"}]}
-        )
+        monkeypatch.setattr(corpus_runs, "run_manifest", lambda *a: {"axes": [{"axis": "x"}]})
         root = tmp_path / "cache"
         a = self._script(tmp_path, "a.py", "print(1)\n")
         assert CorpusCache(root).manifest(a) == {"axes": [{"axis": "x"}]}
@@ -1056,7 +938,7 @@ class TestTheCorpusCacheRunsEachInputOnce:
         def refuse(*a: object) -> dict:
             raise AssertionError("the entry existed and a run was started anyway")
 
-        monkeypatch.setattr(sys.modules[__name__], "run_manifest", refuse)
+        monkeypatch.setattr(corpus_runs, "run_manifest", refuse)
         other = CorpusCache(root)
         assert other.manifest(a) == {"axes": [{"axis": "x"}]}
         assert other.runs == 0
@@ -1070,7 +952,7 @@ class TestTheCorpusCacheRunsEachInputOnce:
             written.append(out)
             out.write_text(json.dumps({"upper\ts-plain": ["A", "A"], "@@build": "aaa"}))
 
-        monkeypatch.setattr(sys.modules[__name__], "run_sweep", fake)
+        monkeypatch.setattr(corpus_runs, "run_sweep", fake)
         cache = CorpusCache(tmp_path / "cache")
         a = self._script(tmp_path, "a.py", "print(1)\n")
         payload = cache.sweep(a)
