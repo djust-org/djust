@@ -73,7 +73,14 @@ def test_temporal_render_obeys_context_flags(use_l10n, use_tz, scope):
 )
 def test_temporal_add_survives_state_roundtrip(value):
     from djust._rust import RustLiveView
+    from djust.render_env import apply_render_env
 
+    # `RustLiveView.render()` is a DIRECT Rust entry: it does not push the
+    # render env, so the `date:"c"` conversion to settings.TIME_ZONE below
+    # only happens if THIS thread already holds the zone. Before #2728 that
+    # was inherited from whichever earlier test rendered on the worker (the
+    # two aware cases fail alone, on a fresh thread); push it explicitly.
+    apply_render_env()
     source = '{{ value|add:delta }}|{{ value|add:delta|date:"c" }}|{{ value|add:delta|pprint }}'
     delta = timedelta(days=1)
     view = RustLiveView(source)
