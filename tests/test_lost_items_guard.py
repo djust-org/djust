@@ -355,3 +355,50 @@ def test_make_target_derives_over_the_ci_roots() -> None:
     assert "DJUST_COLLECTED_FLOOR_WRITE=.test_collected_floor" in body
     for root in ("tests/", "python/tests/", "python/djust/tests/"):
         assert root in body, f"make test-collected-floor omits {root}; the floor would under-count"
+
+
+def test_the_floor_env_var_is_consumed_so_a_child_pytest_is_not_floored(
+    guarded: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #2761's first CI run: every shard red.
+
+    The #2747 hygiene pin runs single cases in a fresh ``pytest`` subprocess;
+    under CI's ``DJUST_COLLECTED_FLOOR=1`` that child collected 1 item against
+    a 27,780 floor and was forced red. The guard must consume the variable in
+    the parent so no child inherits it — a floor is a property of the outer
+    invocation, not of every interpreter it spawns.
+    """
+    import os
+    import subprocess
+    import sys
+
+    guarded.makepyfile(test_child="def test_one():\n    pass\n")
+    guarded.makefile(".test_collected_floor", "27780")
+    monkeypatch.setenv(FLOOR_ENV, "1")
+    # The parent run consumes the variable (its own collection is below the
+    # floor too, so it must be red on its own account)…
+    parent = guarded.runpytest_inprocess("-p", "tests.lost_items_guard", "test_child.py", "-q")
+    assert FLOOR_ENV not in os.environ, (
+        "the guard must remove the floor variable from the environment"
+    )
+    # …and a child spawned from the SAME environment afterwards is not floored.
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.lost_items_guard",
+            "test_child.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=str(guarded.path),
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+    )
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "collected-count floor" not in child.stdout
+    assert parent.ret != 0

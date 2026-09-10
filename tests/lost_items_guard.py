@@ -84,6 +84,7 @@ def write_floor(path: Path, count: int) -> None:
 
 class LostItemsGuard:
     def __init__(self, config: pytest.Config) -> None:
+        self._floor_armed = self._consume_floor_env()
         self.config = config
         # xdist stamps `workerinput` on worker configs only.
         self.is_worker = hasattr(config, "workerinput")
@@ -144,7 +145,21 @@ class LostItemsGuard:
         return values.pop(), None
 
     def _floor_enabled(self) -> bool:
-        return os.environ.get(FLOOR_ENV, "") not in ("", "0")
+        return self._floor_armed
+
+    @staticmethod
+    def _consume_floor_env() -> bool:
+        """Read ``DJUST_COLLECTED_FLOOR`` once and REMOVE it from the environment.
+
+        The floor is a property of the outer CI invocation. A test that spawns
+        its own ``pytest`` subprocess (the #2747 hygiene pin runs single cases
+        in a fresh interpreter) would otherwise inherit the variable and be
+        floored on a one-item collection — which is exactly what turned every
+        shard red on PR #2761's first CI run. Consuming the variable here
+        means no child of this process can see it, whatever spawns it.
+        """
+        armed = os.environ.pop(FLOOR_ENV, "") not in ("", "0")
+        return armed
 
     def _evaluate(self, session: pytest.Session, exitstatus: int) -> list[str]:
         if self._problems is not None:
