@@ -299,6 +299,20 @@ def _reset_builtin_template_tags() -> None:
         reregister_builtins()
     except Exception:  # noqa: BLE001
         pass
+    # A test that spied on the LIVE handler instance — `h.render = spy` then
+    # `h.render = original` — "restored" a bound method as an INSTANCE attribute,
+    # which shadows the class-level `render` for the rest of the process and
+    # makes every later class-level patch invisible (#2749: five
+    # `test_tag_bridge_object_parity_2731` cases red on serial `main`). Strip
+    # the shadow so class lookup applies again; genuine instance state such as
+    # the `_bridge` marker is untouched.
+    try:
+        from djust.template_tags import _registered_handlers
+    except Exception:  # noqa: BLE001
+        return
+    for handler in _registered_handlers.values():
+        if "render" in vars(handler):
+            del handler.render
 
 
 def _reset_template_libraries() -> None:
