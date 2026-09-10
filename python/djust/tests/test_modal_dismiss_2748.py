@@ -12,22 +12,18 @@ wires its close controls to ``dismiss``, but the component only defined
 Reproduce-first: the WS test drives a real ``WebsocketCommunicator`` end-to-end
 (the ``component_id`` routing path, harness lifted from
 ``test_ws_event_flip_parity_1896.py``) and asserts the click closes the modal
-instead of producing an ``error`` frame. The render tests pin, per framework
-branch, that every ``dj-click`` the component emits names an
-``@event_handler``-decorated method on the component — so a future branch
-cannot drift back (#1646).
+instead of producing an ``error`` frame. The per-branch pin that every ``dj-click``
+names a decorated, routed handler lives in the package-wide sweep in
+``test_ui_dismiss_handlers_2756.py`` (#2756).
 """
 
 from __future__ import annotations
-
-import re
 
 import pytest
 from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.components.ui.modal import ModalComponent
-from djust.decorators import is_event_handler
 
 _MODULE = "djust.tests.test_modal_dismiss_2748"
 _FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
@@ -156,11 +152,9 @@ class TestModalDismissOverWebSocket:
 
 
 # ---------------------------------------------------------------------------
-# Per-framework pin: every emitted dj-click names a decorated handler (#1646)
+# Render helper (the per-branch handler pin moved to the package-wide sweep in
+# test_ui_dismiss_handlers_2756.py)
 # ---------------------------------------------------------------------------
-
-
-_DJ_CLICK = re.compile(r'dj-click="([^"]+)"')
 
 
 def _render_under(framework: str) -> str:
@@ -171,29 +165,6 @@ def _render_under(framework: str) -> str:
     modal = ModalComponent(component_id="m1", title="T", body="B", show=True)
     with patch.object(config_module.config, "get", lambda key, default=None: framework):
         return str(modal.render())
-
-
-class TestEveryFrameworkBranchWiresAnExistingHandler:
-    @pytest.mark.parametrize("framework", _FRAMEWORKS)
-    def test_close_controls_target_a_decorated_handler(self, framework):
-        html = _render_under(framework)
-        events = _DJ_CLICK.findall(html)
-        assert events, f"{framework}: the modal must render at least one dj-click control"
-        for event in events:
-            handler = getattr(ModalComponent, event, None)
-            assert callable(handler), (
-                f"{framework}: dj-click={event!r} names no method on ModalComponent"
-            )
-            assert is_event_handler(handler), (
-                f"{framework}: {event!r} must be @event_handler-decorated "
-                "(event_security defaults to strict)"
-            )
-
-    @pytest.mark.parametrize("framework", _FRAMEWORKS)
-    def test_close_controls_carry_component_id(self, framework):
-        """Routing depends on ``data-component-id`` next to each ``dj-click``."""
-        html = _render_under(framework)
-        assert html.count('dj-click="dismiss"') == html.count('data-component-id="m1"')
 
 
 class TestDismissDelegatesToHide:

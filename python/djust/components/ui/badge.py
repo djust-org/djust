@@ -6,6 +6,7 @@ Provides small labels/badges for counts, statuses, and categories.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from ...decorators import event_handler
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -67,10 +68,24 @@ class BadgeComponent(LiveComponent):
             "visible": self.visible,
         }
 
-    def dismiss(self) -> None:
-        """Dismiss the badge"""
+    @event_handler()
+    def dismiss(self, **kwargs: Any) -> None:
+        """Dismiss the badge (the default ``dj-click`` target of its close
+        button when no ``on_dismiss`` parent handler is given — #2756)."""
         self.visible = False
         self.trigger_update()
+
+    def _dismiss_attr(self) -> str:
+        """``dj-click`` for the close button, shared by every framework branch.
+
+        A parent-supplied ``on_dismiss`` routes to the parent view; the default
+        ``dismiss`` is the badge's own handler and must carry
+        ``data-component-id`` so the event is routed to this component (#2756;
+        mirrors ``alert.py``).
+        """
+        if self.on_dismiss:
+            return f'dj-click="{self.on_dismiss}"'
+        return f'dj-click="dismiss" data-component-id="{self.component_id}"'
 
     def set_text(self, text: str) -> None:
         """Update badge text"""
@@ -114,9 +129,7 @@ class BadgeComponent(LiveComponent):
         html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
 
         if self.dismissible:
-            dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
-            )
+            dismiss_attr = self._dismiss_attr()
             html += f' <button type="button" class="btn-close btn-close-white" {dismiss_attr} aria-label="Close" style="font-size: 0.65em; padding: 0.1em 0.25em;"></button>'
 
         html += "</span>"
@@ -144,9 +157,7 @@ class BadgeComponent(LiveComponent):
         html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
 
         if self.dismissible:
-            dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
-            )
+            dismiss_attr = self._dismiss_attr()
             html += f"""<button type="button" {dismiss_attr} class="ml-1 inline-flex flex-shrink-0 rounded-full p-0.5 hover:bg-opacity-20">
                 <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
@@ -165,9 +176,7 @@ class BadgeComponent(LiveComponent):
         html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
 
         if self.dismissible:
-            dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
-            )
+            dismiss_attr = self._dismiss_attr()
             html += f' <button type="button" {dismiss_attr}>×</button>'
 
         html += "</span>"

@@ -6,6 +6,7 @@ Provides dismissible alert/notification messages with framework-aware styling.
 
 from typing import Any, Dict, Optional
 from ..base import LiveComponent
+from ...decorators import event_handler
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -54,8 +55,11 @@ class AlertComponent(LiveComponent):
             "visible": self.visible,
         }
 
-    def dismiss(self) -> None:
-        """Dismiss the alert"""
+    @event_handler()
+    def dismiss(self, **kwargs: Any) -> None:
+        """Dismiss the alert (the handler every framework branch's close button
+        targets via ``dj-click="dismiss"``; decorated because ``event_security``
+        defaults to strict — #2756)."""
         self.visible = False
         self.trigger_update()
 
