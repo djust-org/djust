@@ -53,17 +53,49 @@ As a SUBPROCESS emitting JSON, never by importing the script: it calls
 import time, so importing it into a pytest process would mutate the global
 filter registry for every other test in the session. Running it is also the
 stronger check — it proves the tool works end to end, which an import does not.
+
+How the expensive runs are shared (#2723)
+-----------------------------------------
+Two subprocess runs dominate this file: the full corpus SWEEP (``script
+out.json`` — ~415,000 cells rendered through both engines, ~130 s) and the
+MANIFEST (``--manifest --json``, ~25,000 renders, ~6 s). Before #2723 five
+cases each re-ran the sweep on the UNMUTATED script and differed only in what
+they read out of the result — 36% of the whole suite's recorded time — and
+the module-scoped ``manifest`` fixture was recomputed by every xdist worker
+that drew one of its cases.
+
+:class:`CorpusCache` runs each DISTINCT input once. Its key is the script's
+text plus the ``_rust`` build digest plus the argv, so:
+
+* the five sweep readers share one run of the real script;
+* every live-manifest reader shares one run of the real script;
+* a mutated copy gets its OWN run — a different text is a different key — and
+  two canaries that apply the identical mutation (the #2469 pair, the #2477
+  pair) share one, because the artifact is a function of the text and nothing
+  else;
+* the entries live under the SESSION's pytest basetemp, so xdist workers in
+  one session share them and a later session starts clean. Nothing is keyed
+  across sessions: the Rust sources the manifest parses are constant within a
+  session and not across one.
+
+No assertion changed. Each reader asserts the same properties of the same
+artifact it used to produce for itself; the runs it no longer starts were
+byte-identical inputs.
 """
 
 from __future__ import annotations
 
 import ast
+import fcntl
+import functools
+import hashlib
 import json
 import os
 import pathlib
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -93,13 +125,104 @@ def run_manifest(script: pathlib.Path = SCRIPT, *args: str) -> dict:
     return json.loads(proc.stdout)
 
 
+def run_sweep(script: pathlib.Path, out: pathlib.Path) -> None:
+    """The full corpus sweep, written to `out` — the results file `--compare` reads."""
+    subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+        [sys.executable, str(script), str(out)],
+        capture_output=True,
+        text=True,
+        env=_env(),
+        cwd=str(REPO),
+        check=True,
+    )
+
+
 def rows(data: dict) -> dict[str, dict]:
     return {row["axis"]: row for row in data["axes"]}
 
 
+@functools.lru_cache(maxsize=1)
+def _build_digest() -> str:
+    """The same digest the script records as `@@build`: the compiled `_rust`."""
+    from djust import _rust
+
+    return hashlib.sha256(pathlib.Path(_rust.__file__).read_bytes()).hexdigest()[:16]
+
+
+class CorpusCache:
+    """One subprocess run per DISTINCT input, shared across tests and xdist workers.
+
+    The key is the script's TEXT (not its path — a mutated copy at a fresh
+    `tmp_path` with the same edits is the same input), the `_rust` build the
+    subprocess would load, and the argv. An entry is written under `root`
+    with an atomic rename, behind a lock file so two workers that reach the
+    same key at once start one run rather than two, and the second reads the
+    first's result. A process that has read an entry keeps it in memory — the
+    sweep is ~76 MB of JSON and is read by five cases.
+
+    `runs` counts the subprocesses THIS process started, which is what the
+    cache's own tests assert on.
+    """
+
+    def __init__(self, root: pathlib.Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._memo: dict[str, dict] = {}
+        self.runs = 0
+
+    @staticmethod
+    def key(script: pathlib.Path, *args: str) -> str:
+        digest = hashlib.sha256(script.read_bytes())
+        digest.update(b"\0build=" + _build_digest().encode())
+        for arg in args:
+            digest.update(b"\0arg=" + arg.encode())
+        return digest.hexdigest()[:24]
+
+    def _entry(self, key: str, compute: Callable[[pathlib.Path], None]) -> dict:
+        if key in self._memo:
+            return self._memo[key]
+        entry = self.root / f"{key}.json"
+        if not entry.exists():
+            with open(self.root / f"{key}.lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if not entry.exists():
+                    # Written to a per-process name and renamed: a reader never
+                    # sees a half-written entry, whichever worker wrote it.
+                    partial = self.root / f"{key}.{os.getpid()}.partial"
+                    compute(partial)
+                    self.runs += 1
+                    os.replace(partial, entry)
+        data = json.loads(entry.read_text(encoding="utf-8"))
+        self._memo[key] = data
+        return data
+
+    def manifest(self, script: pathlib.Path = SCRIPT, *args: str) -> dict:
+        """`run_manifest(script, *args)`, once per distinct input."""
+
+        def compute(partial: pathlib.Path) -> None:
+            partial.write_text(json.dumps(run_manifest(script, *args)), encoding="utf-8")
+
+        return self._entry(self.key(script, "--manifest", "--json", *args), compute)
+
+    def sweep(self, script: pathlib.Path = SCRIPT) -> dict:
+        """The results file of a full sweep of `script`, once per distinct input."""
+        return self._entry(self.key(script, "<sweep>"), lambda partial: run_sweep(script, partial))
+
+
+@pytest.fixture(scope="session")
+def corpus(tmp_path_factory: pytest.TempPathFactory) -> CorpusCache:
+    base = tmp_path_factory.getbasetemp()
+    # An xdist worker's basetemp is `<controller basetemp>/popen-gwN`
+    # (xdist/workermanage.py). The parent is the one directory every worker
+    # of THIS session can see, and a later session gets a fresh numbered dir.
+    if base.name.startswith("popen-"):
+        base = base.parent
+    return CorpusCache(base / "corpus-2345")
+
+
 @pytest.fixture(scope="module")
-def manifest() -> dict:
-    return run_manifest()
+def manifest(corpus: CorpusCache) -> dict:
+    return corpus.manifest()
 
 
 def mutated_script(tmp_path: pathlib.Path, *edits: tuple[str, str]) -> pathlib.Path:
@@ -246,7 +369,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     """
 
     def test_2296_a_safety_set_member_missing_from_the_hot_sets(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """``dictsort`` was granted item safety and never composed, and the
         two-build compare printed ``REGRESSIONS: 0 / INTRODUCED: 0`` over a
@@ -267,10 +390,12 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         (#2291, ``{{ p|linenumbers|safe }}``).
         """
         script = mutated_script(tmp_path, ('    "linenumbers",\n', ""))
-        missing = rows(run_manifest(script))["chain"]["missing"]
+        missing = rows(corpus.manifest(script))["chain"]["missing"]
         assert missing == ["linenumbers"], missing
 
-    def test_2325_no_tag_cell_existed_at_all(self, tmp_path: pathlib.Path) -> None:
+    def test_2325_no_tag_cell_existed_at_all(
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
+    ) -> None:
         """The corpus was entirely ``{{ p|… }}``; a filter on a TAG operand is a
         different resolution path and djust had open-coded it four times.
 
@@ -287,7 +412,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             ('TAG_SHAPES = {\n    "for":', 'TAG_SHAPES = {}\n_PRE_2325_TAG_SHAPES = {\n    "for":'),
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
         )
-        missing = rows(run_manifest(script))["tag"]["missing"]
+        missing = rows(corpus.manifest(script))["tag"]["missing"]
         assert sorted(missing) == [
             "cycle",
             "filter",
@@ -301,7 +426,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         ], missing
 
     def test_2355_six_tags_took_a_filter_operand_and_were_exempt(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The #2355 pre-fix state: the shapes absent AND the exemption rows
         present, which is how the manifest reported CLEAN over four
@@ -324,7 +449,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
             ("TAGS_NOT_SWEPT = {\n", "TAGS_NOT_SWEPT = {\n" + exemptions),
         )
-        row = rows(run_manifest(script))["tag"]
+        row = rows(corpus.manifest(script))["tag"]
         # The six are silent — exempt, so not missing — while the three #2325
         # added are still reported. That asymmetry IS the #2355 finding.
         assert sorted(row["missing"]) == ["for", "if", "with"], row["missing"]
@@ -332,7 +457,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             assert tag in row["exempt"], tag
 
     def test_2290_the_custom_filter_entry_point_was_never_called(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """``register_custom_filter`` had been on the module all along and no
         cell dispatched through it, so the whole of what a project's own filters
@@ -341,11 +466,11 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             tmp_path,
             ("    _rust.register_custom_filter(", "    _register_custom_filter_DISABLED = ("),
         )
-        missing = rows(run_manifest(script))["entrypoint"]["missing"]
+        missing = rows(corpus.manifest(script))["entrypoint"]["missing"]
         assert missing == ["register_custom_filter"], missing
 
     def test_2305_the_corpus_carried_a_marked_list_and_no_marked_tuple(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """A sixth, and the one that proves ``input-shape`` is not wholly blind.
 
@@ -367,11 +492,11 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             # reporting. A canary that crashes is not a canary (#2135).
             ('    "t-marked",\n', '    "t-marked-PRE_2305",\n'),
         )
-        missing = rows(run_manifest(script))["grant-shape"]["missing"]
+        missing = rows(corpus.manifest(script))["grant-shape"]["missing"]
         assert missing == ["Tuple"], missing
 
     def test_2345_the_argument_axis_had_one_valid_spelling_per_filter(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The issue this manifest ships with. ``FILTER_ARGS`` gives every
         filter ONE argument and it is always VALID, so a change entirely about
@@ -383,7 +508,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
                 "ARG_SPELLINGS: list[str] = []\n_PRE_2345_SPELLINGS = [\n",
             ),
         )
-        row = rows(run_manifest(script))["argument"]
+        row = rows(corpus.manifest(script))["argument"]
         # EVERY required error becomes unreachable, which is the claim — and it
         # is a set comparison rather than a count, so it survives the engine
         # growing a new argument error (as #2346 did, 4 -> 6).
@@ -392,7 +517,9 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
             assert kind in joined, kind
 
-    def test_2400_no_cell_could_have_the_wrong_argument_COUNT(self, tmp_path: pathlib.Path) -> None:
+    def test_2400_no_cell_could_have_the_wrong_argument_COUNT(
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
+    ) -> None:
         """The seventh, and the largest: 48 of Django's 57 built-ins.
 
         ``cells()`` gives every argument-taking filter exactly ONE argument out
@@ -415,7 +542,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
                 "    for name in []:\n        for provided in ARITY_COUNTS:\n",
             ),
         )
-        row = rows(run_manifest(script))["arity"]
+        row = rows(corpus.manifest(script))["arity"]
         assert sorted(row["missing"]) == sorted(row["required"]), row["missing"]
         # #2400's 48 is the count over the counts #2400 was about — 0 and 1.
         # #2409 added 2, which Django's LEXER refuses for every filter whatever
@@ -432,7 +559,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert "upper:2" in joined, "the LEXER half (#2409) is not reported"
 
     def test_removing_the_pad_cap_spelling_makes_the_cap_unreachable(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The manifest earning its keep against the corpus it ships beside.
 
@@ -468,7 +595,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             ("\n    '\"99999999999999999999\"',", ""),
             ('\n    "known_big",', ""),
         )
-        row = rows(run_manifest(script))["argument"]
+        row = rows(corpus.manifest(script))["argument"]
         assert len(row["missing"]) == 1 and "past djust's" in row["missing"][0], row["missing"]
         # And every OTHER required error is still reachable from the nineteen,
         # so the report names the one gap rather than blaming the whole axis.
@@ -522,7 +649,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
 """
 
     def test_2469_no_cell_could_have_a_FALSY_argument_and_no_timedelta_existed(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The eighth blind spot, and the first the design could have caught.
 
@@ -546,7 +673,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             (self.PRE_2469_ARG_CONTEXT, ""),
             (self.PRE_2469_ARG_SPELLINGS, ""),
         )
-        row = rows(run_manifest(script))["value-truthiness"]
+        row = rows(corpus.manifest(script))["value-truthiness"]
         missing = set(row["missing"])
         # The two the issue names first, and the reason it was filed at all.
         assert "arg:Encoded:falsy" in missing, missing
@@ -580,7 +707,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert set(row["missing"]) < set(row["required"])
 
     def test_2469_the_mutation_is_a_corpus_edit_and_not_an_axis_deletion(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """Non-vacuity for the canary above (#1468/#2135).
 
@@ -596,7 +723,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             (self.PRE_2469_ARG_CONTEXT, ""),
             (self.PRE_2469_ARG_SPELLINGS, ""),
         )
-        data = rows(run_manifest(script))
+        data = rows(corpus.manifest(script))
         assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
         broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
         assert set(broken) == {"value-truthiness"}, broken
@@ -660,7 +787,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         )
 
     def test_2477_the_variant_only_axis_reports_the_no_variant_class_COVERED(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The ninth blind spot, and the first the axis itself was the cause of.
 
@@ -677,7 +804,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         corpus the canary below uses, and it reports nothing missing.
         """
         script = self._without_the_2477_rows(tmp_path, (self.AXIS_2477, self.AXIS_PRE_2477))
-        row = rows(run_manifest(script))["value-truthiness"]
+        row = rows(corpus.manifest(script))["value-truthiness"]
         assert row["missing"] == [], row["missing"]
         # ...and it is the VARIANT enumeration that is doing it: none of the
         # four members the extended axis names is even in its required set.
@@ -686,7 +813,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         )
 
     def test_2477_the_outcome_axis_names_the_gap_the_variant_axis_could_not(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The same corpus, through the extended axis: four members MISSING.
 
@@ -695,7 +822,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         reports as covered, over an identical corpus.
         """
         script = self._without_the_2477_rows(tmp_path)
-        data = rows(run_manifest(script))
+        data = rows(corpus.manifest(script))
         row = data["value-truthiness"]
         assert set(row["missing"]) == self.GAP_2477, row["missing"]
         # The requirement is read out of the Rust source, so the report names
@@ -704,7 +831,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             assert "fallback block" in row["required"][member], row["required"][member]
 
     def test_2477_the_mutation_is_a_corpus_edit_and_not_a_broken_script(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """Non-vacuity for both halves above (#1468/#2135).
 
@@ -714,7 +841,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         four missing members are a strict subset of a required set that did
         not shrink.
         """
-        data = rows(run_manifest(self._without_the_2477_rows(tmp_path)))
+        data = rows(corpus.manifest(self._without_the_2477_rows(tmp_path)))
         assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
         broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
         assert set(broken) == {"value-truthiness"}, broken
@@ -742,7 +869,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     ROW_2482_TRUTHY_BIT = '"__bool__": lambda self: True,'
 
     def test_2482_the_falsy_row_MOVED_ARMS_and_str_fallback_is_exempt_again(
-        self, tmp_path: pathlib.Path
+        self, manifest: dict
     ) -> None:
         """What #2477/#2489 did to #2482's canary, recorded rather than deleted.
 
@@ -771,14 +898,14 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert diff._no_variant_outcome(diff.INPUTS["o-falsy-iter"]) == "opaque_value"
         assert not diff.INPUTS["o-falsy-iter"]
 
-        row = rows(run_manifest())["value-truthiness"]
+        row = rows(manifest)["value-truthiness"]
         assert not row["stale_exemptions"], row["stale_exemptions"]
         for member in ("value:str-fallback:falsy", "arg:str-fallback:falsy"):
             assert member in row["exempt"], sorted(row["exempt"])
             assert member not in row["missing"]
 
     def test_2482_the_row_is_no_longer_the_SOLE_inhabitant_of_its_member(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
     ) -> None:
         """The consequence, stated as a property rather than left implicit.
 
@@ -808,7 +935,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert {"known_set_empty", "known_falsy_iter"} <= set(inhabitants), inhabitants
 
         script = mutated_script(tmp_path, (self.ROW_2482_FALSY_BIT, self.ROW_2482_TRUTHY_BIT))
-        data = rows(run_manifest(script))
+        data = rows(corpus.manifest(script))
         assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
         broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
         assert not broken, broken
@@ -816,7 +943,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         shapes = set(data["input-shape"]["swept"])
         assert {"dv-keys-empty", "dv-keys-plain", "o-falsy-iter"} <= shapes, sorted(shapes)
 
-    def test_2482_the_unpicklable_row_is_swept_and_not_merely_present(self) -> None:
+    def test_2482_the_unpicklable_row_is_swept_and_not_merely_present(self, manifest: dict) -> None:
         """The dict-view half of #2466's class, which had no row at all.
 
         `measure`'s `@cmp` axis deep-copies its second operand, and all three
@@ -826,7 +953,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         been fine on. Asserted on the LIVE manifest rather than the mutated
         one, because the claim is about `main`.
         """
-        row = rows(run_manifest())["input-shape"]
+        row = rows(manifest)["input-shape"]
         assert {"dv-keys-empty", "dv-keys-plain", "o-falsy-iter"} <= set(row["swept"])
 
     def test_2477_the_arm_reader_refuses_a_pattern_that_stopped_matching(
@@ -861,6 +988,100 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert "_FALLBACK_ARM_PATTERN matched" in proc.stderr, proc.stderr[-2000:]
 
 
+class TestTheCorpusCacheRunsEachInputOnce:
+    """The sharing mechanism (#2723), exercised on a stub rather than trusted.
+
+    The claim the docstring makes is that the readers above assert the same
+    things about the same artifact — which holds only if a hit is genuinely
+    the first run's result and a miss is genuinely a different input. Both
+    halves are asserted here with a compute that counts itself.
+    """
+
+    @staticmethod
+    def _script(tmp_path: pathlib.Path, name: str, text: str) -> pathlib.Path:
+        path = tmp_path / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_second_reader_of_the_same_text_does_not_start_a_run(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[pathlib.Path] = []
+
+        def fake(script: pathlib.Path, *args: str) -> dict:
+            calls.append(script)
+            return {"axes": [{"axis": "stub", "missing": []}]}
+
+        monkeypatch.setattr(sys.modules[__name__], "run_manifest", fake)
+        cache = CorpusCache(tmp_path / "cache")
+        a = self._script(tmp_path, "a.py", "print(1)\n")
+        # The SAME text at a DIFFERENT path — what two canaries applying one
+        # mutation at two `tmp_path`s look like — is one input.
+        b = self._script(tmp_path, "b.py", "print(1)\n")
+        first = cache.manifest(a)
+        assert cache.manifest(a) is first
+        assert cache.manifest(b) == first
+        assert calls == [a], calls
+        assert cache.runs == 1
+
+    def test_a_different_text_is_a_different_run(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake(script: pathlib.Path, *args: str) -> dict:
+            return {"axes": [{"axis": script.read_text(encoding="utf-8").strip()}]}
+
+        monkeypatch.setattr(sys.modules[__name__], "run_manifest", fake)
+        cache = CorpusCache(tmp_path / "cache")
+        a = self._script(tmp_path, "a.py", "one\n")
+        b = self._script(tmp_path, "b.py", "two\n")
+        assert rows(cache.manifest(a)).keys() == {"one"}
+        assert rows(cache.manifest(b)).keys() == {"two"}
+        assert cache.runs == 2
+        # ...and the argv is part of the key too: the sweep and the manifest
+        # of one script are different artifacts.
+        assert CorpusCache.key(a, "<sweep>") != CorpusCache.key(a, "--manifest", "--json")
+
+    def test_another_process_reads_the_entry_rather_than_recomputing(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second `CorpusCache` over the same root is what an xdist worker
+        that drew a later case looks like: no memo, and no run."""
+        monkeypatch.setattr(
+            sys.modules[__name__], "run_manifest", lambda *a: {"axes": [{"axis": "x"}]}
+        )
+        root = tmp_path / "cache"
+        a = self._script(tmp_path, "a.py", "print(1)\n")
+        assert CorpusCache(root).manifest(a) == {"axes": [{"axis": "x"}]}
+
+        def refuse(*a: object) -> dict:
+            raise AssertionError("the entry existed and a run was started anyway")
+
+        monkeypatch.setattr(sys.modules[__name__], "run_manifest", refuse)
+        other = CorpusCache(root)
+        assert other.manifest(a) == {"axes": [{"axis": "x"}]}
+        assert other.runs == 0
+
+    def test_the_sweep_entry_is_the_results_file_the_script_wrote(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        written: list[pathlib.Path] = []
+
+        def fake(script: pathlib.Path, out: pathlib.Path) -> None:
+            written.append(out)
+            out.write_text(json.dumps({"upper\ts-plain": ["A", "A"], "@@build": "aaa"}))
+
+        monkeypatch.setattr(sys.modules[__name__], "run_sweep", fake)
+        cache = CorpusCache(tmp_path / "cache")
+        a = self._script(tmp_path, "a.py", "print(1)\n")
+        payload = cache.sweep(a)
+        assert payload["@@build"] == "aaa"
+        assert cache.sweep(a) is payload
+        assert len(written) == 1
+        # The partial file was renamed into place, not left beside the entry.
+        assert not written[0].exists()
+        assert sorted(p.suffix for p in (tmp_path / "cache").iterdir()) == [".json", ".lock"]
+
+
 class TestTheLimitTheManifestDoesNotClose:
     """#2334's two halves, and why neither is caught — pinned, not hoped for.
 
@@ -869,7 +1090,9 @@ class TestTheLimitTheManifestDoesNotClose:
     catches are: by running it.
     """
 
-    def test_a_dict_with_tame_keys_is_not_reported(self, tmp_path: pathlib.Path) -> None:
+    def test_a_dict_with_tame_keys_is_not_reported(
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
+    ) -> None:
         """The hostile-KEY half. Nothing in either engine's source says a dict's
         keys must be hostile — that is a VALUE choice inside an axis that
         already existed, and it was found by a person noticing.
@@ -878,7 +1101,7 @@ class TestTheLimitTheManifestDoesNotClose:
             tmp_path,
             ('    "d-hostile-key": {\n', '    "d-tame-key-PRE_2334": {\n'),
         )
-        data = run_manifest(script)
+        data = corpus.manifest(script)
         assert not any(row.get("missing") for row in data["axes"]), (
             "the manifest reported a missing member for a VALUE-shape change. If "
             "that is now derivable, `input-shape` should stop being UNVERIFIED "
@@ -886,7 +1109,9 @@ class TestTheLimitTheManifestDoesNotClose:
         )
         assert rows(data)["input-shape"]["unverified"]
 
-    def test_the_dict_view_path_shapes_are_not_reported(self, tmp_path: pathlib.Path) -> None:
+    def test_the_dict_view_path_shapes_are_not_reported(
+        self, corpus: CorpusCache, tmp_path: pathlib.Path
+    ) -> None:
         """The dotted-path half. ``{% for k, v in p.items %}`` is a third
         resolution shape, and the `tag` axis cannot see its absence: the tags
         those shapes use (`for`, `if`, `with`) are the same ones `TAG_SHAPES`
@@ -911,7 +1136,7 @@ class TestTheLimitTheManifestDoesNotClose:
             tmp_path,
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
         )
-        data = run_manifest(script)
+        data = corpus.manifest(script)
         noticed = {row["axis"] for row in data["axes"] if row.get("missing")}
         assert noticed == {"loop-variable", "for-operand-outcome"}, (
             f"axes reporting a missing member: {sorted(noticed)}. If an axis "
@@ -986,20 +1211,11 @@ class TestEveryCellFamilyHasAnAxis:
     been misfiled exactly that way; this is the check that would have said so.
     """
 
-    def test_every_at_prefix_in_measure_is_classified(self, tmp_path: pathlib.Path) -> None:
+    def test_every_at_prefix_in_measure_is_classified(self, corpus: CorpusCache) -> None:
         """MEASURED from a real run, not read off the source: every distinct
         `@`-family the corpus emits is claimed by a named axis, and none of
         them lands in the `{{ }}` fallback."""
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
+        payload = corpus.sweep()
         families = {
             k.split(" ", 1)[0].split("\t", 1)[0]
             for k in payload
@@ -1016,22 +1232,11 @@ class TestEveryCellFamilyHasAnAxis:
             "lies about them. Add a branch in the SAME commit as the family."
         )
 
-    def test_the_builtin_family_is_reported_under_its_own_name(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_the_builtin_family_is_reported_under_its_own_name(self, corpus: CorpusCache) -> None:
         """Non-vacuity for the branch #2347's family needed: the count under
         `builtin` must be exactly the number of `@builtin` cells, so a
         fallthrough would show up as zero here and a surplus elsewhere."""
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
+        payload = corpus.sweep()
         built = [k for k in payload if k.startswith("@builtin ")]
         assert built, "#2347's builtin-value axis built no cells"
         assert payload["@@cells_by_axis"].get("builtin") == len(built)
@@ -1364,10 +1569,12 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
         assert 'du.startswith("<<PANIC ")' in comp, "compare lost its panic accounting"
         assert "(panic_a - panic_b)" in comp, "compare no longer gates on new panics"
 
-    def test_the_argument_sweep_covers_every_filter_django_takes_one_for(self) -> None:
+    def test_the_argument_sweep_covers_every_filter_django_takes_one_for(
+        self, manifest: dict
+    ) -> None:
         """The gap the manifest found in merged code, asserted from the other
         side: 29, not the 25 `FILTER_ARGS` happens to list."""
-        row = rows(run_manifest())["argument-filter"]
+        row = rows(manifest)["argument-filter"]
         assert len(row["required"]) == 29
         assert row["missing"] == [], row["missing"]
 
@@ -1375,12 +1582,12 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
 class TestTheArgumentAxisCorpus:
     """#2354's corpus, and the one thing the manifest still says about it."""
 
-    def test_the_spellings_reach_every_error_the_chokepoint_can_raise(self) -> None:
+    def test_the_spellings_reach_every_error_the_chokepoint_can_raise(self, manifest: dict) -> None:
         """The requirement side is the engine's argument errors, parsed from
         `filters.rs`; the swept side is MEASURED by rendering. Both are
         recomputed, so this asserts the corpus reaches them rather than that a
         list has N entries."""
-        row = rows(run_manifest())["argument"]
+        row = rows(manifest)["argument"]
         assert row["missing"] == []
         # The requirement set is recomputed from the Rust source, so its SIZE
         # is not a fact about this test — it grew 4 -> 6 when #2346 added
@@ -1391,23 +1598,14 @@ class TestTheArgumentAxisCorpus:
         for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
             assert kind in joined, kind
 
-    def test_the_argument_cells_exist_and_disagree_somewhere(self, tmp_path: pathlib.Path) -> None:
+    def test_the_argument_cells_exist_and_disagree_somewhere(self, corpus: CorpusCache) -> None:
         """Non-vacuity for the whole axis (#1468 in corpus form).
 
         A corpus that built argument cells which all AGREED would be
         coverage-shaped and blind — worse than absent, because it would make
         the axis look measured. These are the divergences #2344 and #2346 name.
         """
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
+        payload = corpus.sweep()
         arg_cells = {
             k: v for k, v in payload.items() if not k.startswith("@@") and k.startswith("@arg ")
         }
@@ -1418,7 +1616,7 @@ class TestTheArgumentAxisCorpus:
         assert payload["@@cells_by_axis"]["argument"] == len(arg_cells)
 
     def test_a_clock_dependent_argument_cell_records_its_AGREEMENT(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache
     ) -> None:
         """The blindness the manifest could not report, closed rather than filed.
 
@@ -1443,16 +1641,7 @@ class TestTheArgumentAxisCorpus:
         found by using the tool on #2344, which is the same way every entry in
         this file's table was found.
         """
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
+        payload = corpus.sweep()
         clock = {
             k: v
             for k, v in payload.items()
@@ -1495,7 +1684,7 @@ class TestTheArgumentAxisCorpus:
         assert "newly AGREEING: 1" in proc.stdout, proc.stdout
 
     def test_the_random_filter_is_still_collapsed_rather_than_compared(
-        self, tmp_path: pathlib.Path
+        self, corpus: CorpusCache
     ) -> None:
         """The other side of the same rule, and the reason it is not applied to
         the `{{ }}` corpus: `random` picks a different element each run, so its
@@ -1505,16 +1694,7 @@ class TestTheArgumentAxisCorpus:
         `random` takes no argument, so it never reaches `nondet_agreement` —
         this asserts that rather than trusting it.
         """
-        out = tmp_path / "cells.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
+        payload = corpus.sweep()
         randoms = {
             k: v
             for k, v in payload.items()
@@ -1594,13 +1774,13 @@ class TestNamedTupleCorpusReachability:
         assert "NamedTuple" in axes["grant-shape"]["required"]
         assert "NamedTuple" not in axes["grant-shape"]["missing"]
 
-    def test_missing_named_tuple_rows_are_reported(self, tmp_path):
+    def test_missing_named_tuple_rows_are_reported(self, corpus: CorpusCache, tmp_path):
         script = mutated_script(
             tmp_path,
             ('"nt-empty": namedtuple("Empty", [])(),', ""),
             ('"known_empty_named_tuple": namedtuple("Empty", [])(),', ""),
         )
-        missing = rows(run_manifest(script))["value-truthiness"]["missing"]
+        missing = rows(corpus.manifest(script))["value-truthiness"]["missing"]
         assert set(missing) == {"value:NamedTuple:falsy", "arg:NamedTuple:falsy"}
 
 
@@ -1613,11 +1793,11 @@ class TestSafeStringCorpusReachability:
                 assert member in axis["required"]
                 assert member not in axis["missing"]
 
-    def test_missing_safe_string_rows_are_reported(self, tmp_path):
+    def test_missing_safe_string_rows_are_reported(self, corpus: CorpusCache, tmp_path):
         script = mutated_script(
             tmp_path,
             ('"s-marked-empty": mark_safe(""),', ""),
             ('"known_empty_safe_string": mark_safe(""),', ""),
         )
-        missing = rows(run_manifest(script))["value-truthiness"]["missing"]
+        missing = rows(corpus.manifest(script))["value-truthiness"]["missing"]
         assert set(missing) == {"value:SafeString:falsy", "arg:SafeString:falsy"}
