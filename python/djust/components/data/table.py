@@ -4,10 +4,14 @@ Table component for djust.
 Provides data tables with sorting, selection, and actions.
 """
 
-from typing import Dict, Any
-from ..base import LiveComponent
-from ...decorators import event_handler
+from typing import Any, Dict, List
+
+from django.utils.html import escape
 from django.utils.safestring import SafeString
+
+from ...decorators import event_handler
+from ..base import LiveComponent
+from ..icons import render_icon
 
 
 class TableComponent(LiveComponent):
@@ -54,7 +58,11 @@ class TableComponent(LiveComponent):
         self.sort_column = kwargs.get("sort_column", None)
         self.sort_direction = kwargs.get("sort_direction", "asc")  # asc, desc
         self.selectable = kwargs.get("selectable", False)
-        self.selected_rows = kwargs.get("selected_rows", [])
+        # Row identity mirrors ``{% data_table %}`` / ``DataTableMixin``: the
+        # row's ``row_key`` value (default ``"id"``), compared as a string
+        # (``rust_handlers.py`` builds ``{str(v) for v in selected_rows}``).
+        self.row_key = kwargs.get("row_key", "id")
+        self.selected_rows = [str(v) for v in kwargs.get("selected_rows", [])]
 
     def get_context(self) -> Dict[str, Any]:
         """Get table context"""
@@ -67,7 +75,107 @@ class TableComponent(LiveComponent):
             "compact": self.compact,
             "sort_column": self.sort_column,
             "sort_direction": self.sort_direction,
+            "selectable": self.selectable,
+            "selected_rows": self.selected_rows,
         }
+
+    # ------------------------------------------------------------------
+    # Row selection (#2779)
+    # ------------------------------------------------------------------
+
+    def _row_id(self, row: Dict[str, Any]) -> str:
+        """The identity a row's checkbox carries and ``selected_rows`` stores."""
+        return str(row.get(self.row_key, ""))
+
+    def _row_ids(self) -> List[str]:
+        return [self._row_id(row) for row in self.rows]
+
+    def _all_selected(self) -> bool:
+        ids = self._row_ids()
+        return bool(ids) and all(rid in self.selected_rows for rid in ids)
+
+    def _row_checkbox_attr(self, row: Dict[str, Any]) -> str:
+        """Routing half of a row checkbox: ``dj-change="toggle_row"`` paired with
+        ``data-component-id`` (so the change is dispatched to THIS component,
+        not the parent view — the #2776 lesson) and ``data-row-id`` carrying the
+        identity the handler takes as ``row_id``."""
+        row_id = self._row_id(row)
+        checked = " checked" if row_id in self.selected_rows else ""
+        return (
+            f'dj-change="toggle_row" data-component-id="{self.component_id}" '
+            f'data-row-id="{escape(row_id)}" aria-label="Select row"{checked}'
+        )
+
+    def _header_checkbox_attr(self) -> str:
+        checked = " checked" if self._all_selected() else ""
+        return (
+            f'dj-change="toggle_all" data-component-id="{self.component_id}" '
+            f'aria-label="Select all rows"{checked}'
+        )
+
+    @event_handler()
+    def toggle_row(self, row_id: str = "", **kwargs: Any) -> None:
+        """Toggle one row's membership in ``selected_rows`` (#2779).
+
+        ``row_id`` is what the checkbox's ``data-row-id`` carries — the row's
+        ``row_key`` value as a string. The checkbox's own ``value`` (its checked
+        state) arrives in ``kwargs`` and is ignored: the server state is the
+        truth, so a stale client cannot desynchronise it.
+        """
+        row_id = str(row_id)
+        if row_id in self.selected_rows:
+            self.selected_rows = [r for r in self.selected_rows if r != row_id]
+        else:
+            self.selected_rows = [*self.selected_rows, row_id]
+        self.trigger_update()
+
+    @event_handler()
+    def toggle_all(self, **kwargs: Any) -> None:
+        """Header checkbox: select every row, or clear the selection when every
+        row is already selected (#2779). Mirrors ``DataTableMixin.on_table_select``
+        for ``__all__``."""
+        if self._all_selected():
+            self.selected_rows = []
+        else:
+            self.selected_rows = self._row_ids()
+        self.trigger_update()
+
+    # ------------------------------------------------------------------
+    # Sorting
+    # ------------------------------------------------------------------
+
+    def _aria_sort(self, key: str) -> str:
+        """``aria-sort`` for a sortable ``<th>`` (#2778): ``ascending`` /
+        ``descending`` when the column is the active sort, else ``none``."""
+        if self.sort_column != key:
+            return "none"
+        return "ascending" if self.sort_direction == "asc" else "descending"
+
+    def _sort_icon(self, key: str, framework: str) -> str:
+        """The visual sort affordance (#2778) — a neutral "sortable" mark on an
+        unsorted column, an up/down mark on the active one — in each branch's
+        existing icon convention: Bootstrap Icons classes on ``bootstrap5``
+        (as ``BreadcrumbComponent`` / ``IconComponent`` already emit), the
+        vendored heroicons SVG on ``tailwind`` (``djust.components.icons``),
+        and unicode on ``plain``. Marked ``aria-hidden``: the accessible state
+        is the ``<th>``'s ``aria-sort``."""
+        state = self._aria_sort(key)
+        if framework == "bootstrap5":
+            name = {
+                "none": "arrow-down-up",
+                "ascending": "caret-up-fill",
+                "descending": "caret-down-fill",
+            }[state]
+            return f' <i class="bi bi-{name} dj-table-sort-icon" aria-hidden="true"></i>'
+        if framework == "tailwind":
+            name = {
+                "none": "arrows-up-down",
+                "ascending": "arrow-up",
+                "descending": "arrow-down",
+            }[state]
+            return " " + render_icon(name, size="xs", custom_class="inline dj-table-sort-icon")
+        glyph = {"none": "⇅", "ascending": "▲", "descending": "▼"}[state]
+        return f' <span class="dj-table-sort-icon" aria-hidden="true">{glyph}</span>'
 
     def _sort_attr(self, key: str) -> str:
         """The routing half of a sortable header: ``dj-click="sort_by"`` paired
@@ -133,7 +241,7 @@ class TableComponent(LiveComponent):
         html += "<thead><tr>"
 
         if self.selectable:
-            html += '<th><input type="checkbox" class="form-check-input"></th>'
+            html += f'<th><input type="checkbox" class="form-check-input" {self._header_checkbox_attr()}></th>'
 
         for col in self.columns:
             key = col["key"]
@@ -141,12 +249,10 @@ class TableComponent(LiveComponent):
             sortable = col.get("sortable", False)
 
             if sortable:
-                sort_icon = ""
-                if self.sort_column == key:
-                    sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
-
+                sort_icon = self._sort_icon(key, "bootstrap5")
                 html += (
-                    f'<th style="cursor: pointer" {self._sort_attr(key)}>{label}{sort_icon}</th>'
+                    f'<th style="cursor: pointer" aria-sort="{self._aria_sort(key)}" '
+                    f"{self._sort_attr(key)}>{label}{sort_icon}</th>"
                 )
             else:
                 html += f"<th>{label}</th>"
@@ -160,7 +266,7 @@ class TableComponent(LiveComponent):
             html += "<tr>"
 
             if self.selectable:
-                html += '<td><input type="checkbox" class="form-check-input"></td>'
+                html += f'<td><input type="checkbox" class="form-check-input" {self._row_checkbox_attr(row)}></td>'
 
             for col in self.columns:
                 key = col["key"]
@@ -189,7 +295,7 @@ class TableComponent(LiveComponent):
         html += "<tr>"
 
         if self.selectable:
-            html += '<th class="px-6 py-3 text-left"><input type="checkbox" class="rounded border-gray-300"></th>'
+            html += f'<th class="px-6 py-3 text-left"><input type="checkbox" class="rounded border-gray-300" {self._header_checkbox_attr()}></th>'
 
         for col in self.columns:
             key = col["key"]
@@ -201,11 +307,11 @@ class TableComponent(LiveComponent):
             )
 
             if sortable:
-                sort_icon = ""
-                if self.sort_column == key:
-                    sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
-
-                html += f'<th class="{th_class} cursor-pointer" {self._sort_attr(key)}>{label}{sort_icon}</th>'
+                sort_icon = self._sort_icon(key, "tailwind")
+                html += (
+                    f'<th class="{th_class} cursor-pointer" aria-sort="{self._aria_sort(key)}" '
+                    f"{self._sort_attr(key)}>{label}{sort_icon}</th>"
+                )
             else:
                 html += f'<th class="{th_class}">{label}</th>'
 
@@ -228,7 +334,7 @@ class TableComponent(LiveComponent):
             html += f'<tr class="{row_class}">'
 
             if self.selectable:
-                html += '<td class="px-6 py-4"><input type="checkbox" class="rounded border-gray-300"></td>'
+                html += f'<td class="px-6 py-4"><input type="checkbox" class="rounded border-gray-300" {self._row_checkbox_attr(row)}></td>'
 
             for col in self.columns:
                 key = col["key"]
@@ -269,7 +375,7 @@ class TableComponent(LiveComponent):
         html += "<thead><tr>"
 
         if self.selectable:
-            html += '<th><input type="checkbox"></th>'
+            html += f'<th><input type="checkbox" {self._header_checkbox_attr()}></th>'
 
         for col in self.columns:
             key = col["key"]
@@ -277,11 +383,8 @@ class TableComponent(LiveComponent):
             sortable = col.get("sortable", False)
 
             if sortable:
-                sort_icon = ""
-                if self.sort_column == key:
-                    sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
-
-                html += f"<th {self._sort_attr(key)}>{label}{sort_icon}</th>"
+                sort_icon = self._sort_icon(key, "plain")
+                html += f'<th aria-sort="{self._aria_sort(key)}" {self._sort_attr(key)}>{label}{sort_icon}</th>'
             else:
                 html += f"<th>{label}</th>"
 
@@ -294,7 +397,7 @@ class TableComponent(LiveComponent):
             html += "<tr>"
 
             if self.selectable:
-                html += '<td><input type="checkbox"></td>'
+                html += f'<td><input type="checkbox" {self._row_checkbox_attr(row)}></td>'
 
             for col in self.columns:
                 key = col["key"]

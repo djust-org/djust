@@ -131,7 +131,7 @@ class ContextMixin:
         # instantiated standalone). See streaming.py for the same pattern.
         _cached_context: Optional[Dict[str, Any]]
 
-        def _register_component(self, component: Any) -> None: ...
+        def _register_component(self, component: Any, attr_name: Optional[str] = None) -> None: ...
 
         def _get_template_content(self) -> Optional[str]: ...
 
@@ -247,7 +247,7 @@ class ContextMixin:
                 continue
             if isinstance(value, (Component, LiveComponent)):
                 if isinstance(value, LiveComponent):
-                    self._register_component(value)
+                    self._register_component(value, attr_name=key)
                 context[key] = value
             elif not isinstance(value, _SKIP_TYPES):
                 # For class-level attributes, skip values that are not

@@ -2,7 +2,7 @@
 ComponentMixin - Component lifecycle and management for LiveView.
 """
 
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..serialization import normalize_django_value
 
@@ -57,9 +57,15 @@ class ComponentMixin:
             # selective-prop logic. See #1947.
             component.update(**props)
 
-    def _register_component(self, component: Any) -> None:
+    def _register_component(self, component: Any, attr_name: Optional[str] = None) -> None:
         """
         Register a child component for event handling.
+
+        ``attr_name`` is the view attribute the component is held under
+        (``self.table`` → ``"table"``); it is recorded on the component so
+        ``LiveComponent.trigger_update`` can hand it to ``set_changed_keys``
+        (#2779 — without it a component's in-place mutation never re-synced
+        ``{{ table.render }}`` to the Rust context).
         """
         from ..components.base import LiveComponent
 
@@ -67,6 +73,10 @@ class ComponentMixin:
             # component_id is Optional[str] on the class but always set by the
             # time a component is registered (descriptor/auto-id assignment).
             self._components[component.component_id] = component  # type: ignore[index]
+            if component._parent is None:
+                component._parent = self
+            if attr_name:
+                component._parent_attr = attr_name
 
             def component_callback(event_data: Dict[str, Any]) -> None:
                 self.handle_component_event(
