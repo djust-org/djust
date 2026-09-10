@@ -290,6 +290,20 @@ collecting them would not terminate (`lib.rs:520`–`534`).
 
 They render anyway — through the live handle. See §6.2.
 
+Three entries of an AWARE value's map are built **slim** (#2770). Before it,
+`utcoffset()` / `dst()` each returned a `timedelta` that took the full
+`django_json_encoded` recursion and `tzinfo` took `opaque_value` on the
+`ZoneInfo` — ~11 µs of an aware datetime's 21 µs, of which the readers used one
+string and one bit. Now `collect_called_attrs` builds the two `timedelta`s with
+`slim_timedelta_encoded` (the same eleven-slot `Encoded`, byte for byte, from
+the three limbs — pinned against live CPython over a randomized sweep in
+`crates/djust_core/tests/test_slim_timedelta_2770.rs` and against the full
+path's payload in `python/tests/test_aware_datetime_slim_2770.py`), and
+`collect_named_attrs` carries `tzinfo` as `str(tz)` — the ONE msgpack-shape
+change, which the readers (`lookup_segment`, `temporal_object`) accept in both
+the old nested and the new string form, so a pre-#2770 state entry restores
+(`python/tests/fixtures/aware_datetime_state_pre_2770.msgpack`).
+
 ### 3.4 The live handle: who gets one
 
 Two functions build an `Encoded` **at the Python→Rust conversion**, and they
