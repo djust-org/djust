@@ -105,6 +105,36 @@ def test_reset_djust_globals_also_undoes_deactivate_all():
     assert translation.get_language() == settings.LANGUAGE_CODE
 
 
+def test_reset_djust_globals_clears_the_rust_render_env_2728():
+    """The Rust half of the #2234 state: the pushed number format and zone.
+
+    The exact shape of #2728 — ``translation.override("fr")`` around a render
+    that calls ``apply_render_env()``, then Django's language restored, then a
+    DIRECT ``_rust.render_template`` of a float on the same thread. Before the
+    reset cleared the Rust cell, the last line rendered ``12,3``.
+    """
+    from django.utils import translation
+
+    from djust import _rust
+    from djust.render_env import apply_render_env
+    from djust.test_isolation import reset_djust_globals
+
+    with translation.override("fr"):
+        apply_render_env()
+        _rust.set_active_timezone("Asia/Tokyo")
+    # The Python-side reset alone leaves the Rust cell at the French format.
+    translation.deactivate()
+    assert _rust.active_number_format()[0] == ","
+    assert _rust.render_template("{{ v }}", {"v": 12.3}) == "12,3"
+
+    reset_djust_globals()
+
+    assert _rust.active_number_format() is None
+    assert _rust.active_unlocalized_number_format() is None
+    assert _rust.active_timezone_name() is None
+    assert _rust.render_template("{{ v }}", {"v": 12.3}) == "12.3"
+
+
 # ---------------------------------------------------------------------------
 # Structural guards.
 # ---------------------------------------------------------------------------
@@ -283,3 +313,25 @@ def test_every_scanned_test_root_actually_has_the_autouse_reset():
         "these roots are scanned by the guards above but have no autouse "
         f"reset_djust_globals fixture, so nothing protects them: {missing}"
     )
+
+
+def test_reset_djust_globals_strips_an_instance_level_render_shadow_2749():
+    """A spy that "restored" a bound method as an instance attribute.
+
+    ``h.render = h.render`` looks like a no-op and is not: it plants an
+    instance attribute that shadows the class-level ``render`` for the rest
+    of the process, so a later ``RegroupTagHandler.render = spy`` is never
+    called (#2749 — five ``test_tag_bridge_object_parity_2731`` cases, red on
+    serial ``main``). The reset must strip it and must leave genuine instance
+    state alone.
+    """
+    from djust.template_tags import _registered_handlers
+    from djust.test_isolation import reset_djust_globals
+
+    handler = _registered_handlers["regroup"]
+    before = set(vars(handler))
+    handler.render = handler.render  # the #2749 shape
+    assert "render" in vars(handler)
+    reset_djust_globals()
+    assert "render" not in vars(handler)
+    assert set(vars(handler)) == before, "only the shadow may be stripped"

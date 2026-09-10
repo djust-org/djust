@@ -81,6 +81,15 @@ Globals reset (and why):
   making ``get_format`` fall back to ``global_settings``, where
   ``NUMBER_GROUPING`` is ``0``. ``deactivate()`` restores the settings default,
   which is what resetting should mean.
+- **Rust per-thread render environment** (``djust_core::locale`` number
+  formats + the active timezone cell) — the #2728 class, the Rust half of the
+  one above. ``apply_render_env()`` resolves the active locale into a number
+  format and pushes it into a Rust ``thread_local!``; ``translation.deactivate()``
+  restores Django's language but the pushed format stays until the next push
+  on that thread. A test rendering through ``djust._rust.render_template``
+  directly never pushes, so after a ``translation.override("fr")`` render on
+  the same worker ``{{ 12.3 }}`` came out ``12,3``. Cleared to the fresh-thread
+  state (no format, no zone); every framework render path re-pushes.
 - **Rust tag-handler registry** (theme + component ``ready()``-time handlers)
   — the #1928 class. The process-global Rust tag-handler registry
   (``crates/djust_templates/src/registry.rs``) is shared across an xdist
@@ -290,6 +299,20 @@ def _reset_builtin_template_tags() -> None:
         reregister_builtins()
     except Exception:  # noqa: BLE001
         pass
+    # A test that spied on the LIVE handler instance — `h.render = spy` then
+    # `h.render = original` — "restored" a bound method as an INSTANCE attribute,
+    # which shadows the class-level `render` for the rest of the process and
+    # makes every later class-level patch invisible (#2749: five
+    # `test_tag_bridge_object_parity_2731` cases red on serial `main`). Strip
+    # the shadow so class lookup applies again; genuine instance state such as
+    # the `_bridge` marker is untouched.
+    try:
+        from djust.template_tags import _registered_handlers
+    except Exception:  # noqa: BLE001
+        return
+    for handler in _registered_handlers.values():
+        if "render" in vars(handler):
+            del handler.render
 
 
 def _reset_template_libraries() -> None:
@@ -364,6 +387,43 @@ def _reset_django_thread_locals() -> None:
         pass
 
 
+def _reset_rust_render_env() -> None:
+    """Clear the Rust per-thread render environment (#2728).
+
+    ``apply_render_env()`` pushes the active locale's number format and the
+    active timezone into Rust ``thread_local!`` cells (``djust_core::locale``
+    and the timezone cell next to it). Those are the Rust HALF of the #2234
+    state above: ``translation.deactivate()`` restores Django's language, but
+    the format it was resolved into stays in the Rust cell until the next
+    ``apply_render_env()`` on that thread — and a test that calls
+    ``djust._rust.render_template`` directly never triggers one, so it inherits
+    whatever the previous render on the worker pushed. Under ``de``/``fr`` that
+    is a comma decimal separator: ``{{ some_float }}`` rendered ``12,3`` in
+    ``test_template_conditions.py`` after ``test_static_now_django_parity.py``
+    (``translation.override("fr")`` + a backend render) ran on the same worker.
+
+    ``set_number_format()`` with no arguments clears BOTH formats (localized
+    and ``use_l10n=False``); ``set_active_timezone(None)`` clears the zone.
+    That is the state a fresh worker thread starts in; every real render path
+    re-pushes via ``apply_render_env()``, so nothing that renders through the
+    framework can observe the reset.
+    """
+    # One guard PER action, matching `_reset_django_thread_locals`: a raising
+    # number-format reset must not skip the timezone reset.
+    try:
+        from djust._rust import set_number_format
+
+        set_number_format()
+    except Exception:  # noqa: BLE001 - a Rust build predating #2221 has no setter
+        pass
+    try:
+        from djust._rust import set_active_timezone
+
+        set_active_timezone(None)
+    except Exception:  # noqa: BLE001 - same, independently
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -381,6 +441,7 @@ def reset_djust_globals() -> None:
     _reset_template_libraries()
     _reset_builtin_template_tags()
     _reset_django_thread_locals()
+    _reset_rust_render_env()
 
 
 __all__ = ["reset_djust_globals"]
