@@ -6,6 +6,7 @@ Provides data tables with sorting, selection, and actions.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from ...decorators import event_handler
 from django.utils.safestring import SafeString
 
 
@@ -68,8 +69,23 @@ class TableComponent(LiveComponent):
             "sort_direction": self.sort_direction,
         }
 
-    def sort_by(self, column_key: str) -> None:
-        """Sort table by column"""
+    def _sort_attr(self, key: str) -> str:
+        """The routing half of a sortable header: ``dj-click="sort_by"`` paired
+        with ``data-component-id`` so the click is dispatched to THIS component
+        rather than the parent view (#2776 — the parent has no ``sort_by``, so
+        without it the click raised ``No handler found for event: sort_by``),
+        and ``data-column`` carrying the key the handler takes as ``column``."""
+        return f'dj-click="sort_by" data-component-id="{self.component_id}" data-column="{key}"'
+
+    @event_handler()
+    def sort_by(self, column: str = "", **kwargs: Any) -> None:
+        """Sort table by column.
+
+        The handler every framework branch's sortable header targets. Decorated
+        because ``event_security`` defaults to strict (#2776); the parameter is
+        named ``column`` because the header sends ``data-column``.
+        """
+        column_key = column
         if self.sort_column == column_key:
             # Toggle direction
             self.sort_direction = "desc" if self.sort_direction == "asc" else "asc"
@@ -129,7 +145,9 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th style="cursor: pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += (
+                    f'<th style="cursor: pointer" {self._sort_attr(key)}>{label}{sort_icon}</th>'
+                )
             else:
                 html += f"<th>{label}</th>"
 
@@ -187,7 +205,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th class="{th_class} cursor-pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th class="{th_class} cursor-pointer" {self._sort_attr(key)}>{label}{sort_icon}</th>'
             else:
                 html += f'<th class="{th_class}">{label}</th>'
 
@@ -263,7 +281,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f"<th {self._sort_attr(key)}>{label}{sort_icon}</th>"
             else:
                 html += f"<th>{label}</th>"
 

@@ -7,6 +7,7 @@ Provides pagination controls for navigating through data sets.
 from typing import Dict, Any, List
 from django.utils.safestring import SafeString
 from ..base import LiveComponent
+from ...decorators import event_handler
 
 
 class PaginationComponent(LiveComponent):
@@ -65,31 +66,45 @@ class PaginationComponent(LiveComponent):
             "max_visible_pages": self.max_visible_pages,
         }
 
-    def go_to_page(self, page: int) -> None:
+    def _click(self, event: str, **data: Any) -> str:
+        """``dj-click`` for one of this component's own page controls, paired
+        with ``data-component-id`` so the click routes to THIS component and not
+        the parent view (#2776 — same shape as ``TableComponent.sort_by``)."""
+        attrs = f' dj-click="{event}" data-component-id="{self.component_id}"'
+        for key, value in data.items():
+            attrs += f' data-{key}="{value}"'
+        return attrs
+
+    @event_handler()
+    def go_to_page(self, page: int, **kwargs: Any) -> None:
         """Navigate to a specific page"""
         if 1 <= page <= self.total_pages:
             self.current_page = page
             self.trigger_update()
 
-    def next_page(self) -> None:
+    @event_handler()
+    def next_page(self, **kwargs: Any) -> None:
         """Go to next page"""
         if self.current_page < self.total_pages:
             self.current_page += 1
             self.trigger_update()
 
-    def previous_page(self) -> None:
+    @event_handler()
+    def previous_page(self, **kwargs: Any) -> None:
         """Go to previous page"""
         if self.current_page > 1:
             self.current_page -= 1
             self.trigger_update()
 
-    def first_page(self) -> None:
+    @event_handler()
+    def first_page(self, **kwargs: Any) -> None:
         """Go to first page"""
         if self.current_page != 1:
             self.current_page = 1
             self.trigger_update()
 
-    def last_page(self) -> None:
+    @event_handler()
+    def last_page(self, **kwargs: Any) -> None:
         """Go to last page"""
         if self.current_page != self.total_pages:
             self.current_page = self.total_pages
@@ -157,13 +172,13 @@ class PaginationComponent(LiveComponent):
         # First page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
+            click_attr = self._click("first_page") if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;&laquo;</a></li>'
 
         # Previous page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
+            click_attr = self._click("previous_page") if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;</a></li>'
 
         # Page numbers
@@ -175,9 +190,7 @@ class PaginationComponent(LiveComponent):
 
         for page in visible_pages:
             active = " active" if page == self.current_page else ""
-            click_attr = (
-                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
-            )
+            click_attr = self._click("go_to_page", page=page) if page != self.current_page else ""
             html += f'<li class="page-item{active}"><a class="page-link" href="#"{click_attr}>{page}</a></li>'
 
         # Show ellipsis after if needed
@@ -187,13 +200,13 @@ class PaginationComponent(LiveComponent):
         # Next page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("next_page") if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;</a></li>'
 
         # Last page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("last_page") if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;&raquo;</a></li>'
 
         html += "</ul></nav></div>"
@@ -233,7 +246,7 @@ class PaginationComponent(LiveComponent):
             disabled_class = (
                 "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
             )
-            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
+            click_attr = self._click("first_page") if self.current_page != 1 else ""
             html += f"""<li>
                 <a href="#" class="{size_class} ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg {disabled_class}"{click_attr}>
                     &laquo;&laquo;
@@ -245,7 +258,7 @@ class PaginationComponent(LiveComponent):
             disabled_class = (
                 "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
             )
-            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
+            click_attr = self._click("previous_page") if self.current_page != 1 else ""
             first_class = "rounded-l-lg" if not self.show_first_last else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {first_class} {disabled_class}"{click_attr}>
@@ -268,9 +281,7 @@ class PaginationComponent(LiveComponent):
                     "bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                 )
 
-            click_attr = (
-                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
-            )
+            click_attr = self._click("go_to_page", page=page) if page != self.current_page else ""
             html += f'<li><a href="#" class="{size_class} leading-tight border {active_class}"{click_attr}>{page}</a></li>'
 
         # Show ellipsis after if needed
@@ -284,7 +295,7 @@ class PaginationComponent(LiveComponent):
                 if self.current_page == self.total_pages
                 else "hover:bg-gray-100"
             )
-            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("next_page") if self.current_page != self.total_pages else ""
             last_class = "rounded-r-lg" if not self.show_first_last else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {last_class} {disabled_class}"{click_attr}>
@@ -299,7 +310,7 @@ class PaginationComponent(LiveComponent):
                 if self.current_page == self.total_pages
                 else "hover:bg-gray-100"
             )
-            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("last_page") if self.current_page != self.total_pages else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg {disabled_class}"{click_attr}>
                     &raquo;&raquo;
@@ -323,13 +334,13 @@ class PaginationComponent(LiveComponent):
         # First page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
+            click_attr = self._click("first_page") if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;&laquo;</a>'
 
         # Previous page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
+            click_attr = self._click("previous_page") if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;</a>'
 
         # Page numbers
@@ -341,9 +352,7 @@ class PaginationComponent(LiveComponent):
 
         for page in visible_pages:
             active = " active" if page == self.current_page else ""
-            click_attr = (
-                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
-            )
+            click_attr = self._click("go_to_page", page=page) if page != self.current_page else ""
             html += f'<a href="#" class="pagination-link{active}"{click_attr}>{page}</a>'
 
         # Show ellipsis after if needed
@@ -353,13 +362,13 @@ class PaginationComponent(LiveComponent):
         # Next page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("next_page") if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;</a>'
 
         # Last page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = self._click("last_page") if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;&raquo;</a>'
 
         html += "</div></div>"

@@ -8,6 +8,7 @@ with support for autocomplete and large querysets.
 from typing import Any, Callable, Dict, List, Optional
 from django.db.models import QuerySet
 from ..base import LiveComponent
+from ...decorators import event_handler
 from django.utils.safestring import SafeString
 
 
@@ -146,11 +147,13 @@ class ForeignKeySelect(LiveComponent):
             "validation_message": self.validation_message,
         }
 
+    @event_handler()
     def search(self, query: str) -> None:
         """Handle search input (called from template)."""
         self.search_query = query
         self.trigger_update()
 
+    @event_handler()
     def select(self, value: Any) -> None:
         """Handle option selection."""
         # Convert value to appropriate type
@@ -168,6 +171,7 @@ class ForeignKeySelect(LiveComponent):
 
         self.trigger_update()
 
+    @event_handler()
     def clear(self) -> None:
         """Clear the selection."""
         self.value = None
@@ -216,7 +220,7 @@ class ForeignKeySelect(LiveComponent):
             f'class="{" ".join(select_classes)}"',
             f'id="{select_id}"',
             f'name="{self.name}"',
-            'dj-change="select(value)"',
+            f'dj-change="select(value)" data-component-id="{self.component_id}"',
         ]
         if self.required:
             attrs.append("required")
@@ -226,7 +230,7 @@ class ForeignKeySelect(LiveComponent):
         # Searchable wrapper
         if self.searchable:
             html += '<div class="position-relative">'
-            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)" data-component-id="{self.component_id}">'
 
         html += f"<select {' '.join(attrs)}>"
 
@@ -300,7 +304,7 @@ class ForeignKeySelect(LiveComponent):
             f'class="{" ".join(select_classes)}"',
             f'id="{select_id}"',
             f'name="{self.name}"',
-            'dj-change="select(value)"',
+            f'dj-change="select(value)" data-component-id="{self.component_id}"',
         ]
         if self.required:
             attrs.append("required")
@@ -310,7 +314,7 @@ class ForeignKeySelect(LiveComponent):
         # Searchable input
         if self.searchable:
             html += '<div class="relative">'
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)" data-component-id="{self.component_id}">'
 
         html += f"<select {' '.join(attrs)}>"
 
@@ -437,6 +441,7 @@ class ManyToManySelect(LiveComponent):
 
         return options
 
+    @event_handler()
     def toggle(self, value: Any) -> None:
         """Toggle selection of a value."""
         # Try to convert to int for consistency with model PKs.
@@ -473,11 +478,13 @@ class ManyToManySelect(LiveComponent):
             "validation_message": self.validation_message,
         }
 
+    @event_handler()
     def search(self, query: str) -> None:
         """Handle search input."""
         self.search_query = query
         self.trigger_update()
 
+    @event_handler()
     def clear(self) -> None:
         """Clear all selections."""
         self.values = []
@@ -485,6 +492,7 @@ class ManyToManySelect(LiveComponent):
             self.on_change([])
         self.trigger_update()
 
+    @event_handler()
     def select_all(self) -> None:
         """Select all options."""
         self.values = [opt["value"] for opt in self.get_options()]
@@ -522,7 +530,7 @@ class ManyToManySelect(LiveComponent):
 
         # Search input
         if self.searchable:
-            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)" data-component-id="{self.component_id}">'
 
         html += '<div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">'
 
@@ -532,7 +540,7 @@ class ManyToManySelect(LiveComponent):
             html += f"""
             <div class="form-check">
                 <input type="checkbox" class="form-check-input" id="{self.name}_{opt["value"]}"
-                       {checked} {disabled} dj-click="toggle({opt["value"]})">
+                       {checked} {disabled} dj-click="toggle({opt["value"]})" data-component-id="{self.component_id}">
                 <label class="form-check-label" for="{self.name}_{opt["value"]}">{opt["label"]}</label>
             </div>
             """
@@ -564,7 +572,7 @@ class ManyToManySelect(LiveComponent):
             html += f'<label class="block text-sm font-medium text-gray-700 mb-1">{self.label}{required_mark}</label>'
 
         if self.searchable:
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)" data-component-id="{self.component_id}">'
 
         html += '<div class="border border-gray-300 rounded-md p-2 max-h-48 overflow-y-auto">'
 
@@ -574,7 +582,7 @@ class ManyToManySelect(LiveComponent):
             html += f"""
             <div class="flex items-center mb-1">
                 <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                       id="{self.name}_{opt["value"]}" {checked} {disabled} dj-click="toggle({opt["value"]})">
+                       id="{self.name}_{opt["value"]}" {checked} {disabled} dj-click="toggle({opt["value"]})" data-component-id="{self.component_id}">
                 <label class="ml-2 text-sm text-gray-700" for="{self.name}_{opt["value"]}">{opt["label"]}</label>
             </div>
             """
@@ -618,7 +626,7 @@ class ManyToManySelect(LiveComponent):
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})">{opt["label"]}</option>'
+            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})" data-component-id="{self.component_id}">{opt["label"]}</option>'
 
         html += "</select>"
 
@@ -657,7 +665,7 @@ class ManyToManySelect(LiveComponent):
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})">{opt["label"]}</option>'
+            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})" data-component-id="{self.component_id}">{opt["label"]}</option>'
 
         html += "</select>"
 
