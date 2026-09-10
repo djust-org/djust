@@ -254,16 +254,45 @@ struct ScopeFrame {
     /// refcount bumps per clone, against the O(entire state) deep copy this
     /// removes.
     values: SharedValues,
-    assignments: indexmap::IndexSet<String>,
+    /// The six metadata fields below are COPY-ON-WRITE too, for the same
+    /// reason and by the same mechanism (#2735, the other half of #2732).
+    ///
+    /// `values` going behind an `Arc` left every `Context::clone` — still one
+    /// per `{% for %}` loop ENTRY — deep-copying these six instead, and
+    /// `safe_keys` is O(total state): `_collect_safe_keys` (`rust_bridge.py`)
+    /// emits one dotted path per `SafeString` anywhere in state, and every
+    /// `RustLiveView` render entry replays them all onto frame 0. Measured on
+    /// #2733's head with the SAME 2 000 strings in state either way, differing
+    /// only in whether they were registered safe: 0.0051 -> 0.0471 ms per
+    /// loop entry (release build, min of 7 batch-medians of 30) — ~9x, and
+    /// linear in the number of marks. After: 0.0047-0.0050 at 0 / 100 / 500 /
+    /// 2 000 marks — flat.
+    ///
+    /// Each field has exactly one mutable door, the `<field>_mut()` method
+    /// below, which is `Arc::make_mut` — the copy half. `Arc<T>` has no
+    /// `DerefMut`, so a direct `frame.safe_keys.insert(..)` does not compile;
+    /// the doors are the ONLY way to write, and
+    /// `context::tests::every_metadata_mutation_goes_through_a_make_mut_door`
+    /// derives that set from this file's source and pins it.
+    ///
+    /// The one place the copy could have stopped being rare is the sweep in
+    /// [`Context::revoke_safe_subtree_at`], which visits every frame from the
+    /// binding index upward. On the `{% for %}` path that range is the single,
+    /// freshly pushed, uniquely owned top frame — `revoke_safe_subtree` is
+    /// called on the scoped context AFTER the parent clone — so no copy. The
+    /// sweep additionally takes a door only when the frame holds something
+    /// the sweep would actually remove, so a shared frame it would leave
+    /// unchanged is never copied at all.
+    assignments: std::sync::Arc<indexmap::IndexSet<String>>,
     invalid_block_super: bool,
-    safe_keys: AHashSet<String>,
-    unsafe_keys: AHashSet<String>,
-    revoked_safe_subtrees: AHashSet<String>,
+    safe_keys: std::sync::Arc<AHashSet<String>>,
+    unsafe_keys: std::sync::Arc<AHashSet<String>>,
+    revoked_safe_subtrees: std::sync::Arc<AHashSet<String>>,
     // Canonical source paths preserve descendant safety and model lookup
     // provenance. None masks an inherited alias after its name is rebound.
     // Register aliases only when the new name still denotes that source value.
-    aliases: AHashMap<String, Option<String>>,
-    render_bindings: AHashSet<String>,
+    aliases: std::sync::Arc<AHashMap<String, Option<String>>>,
+    render_bindings: std::sync::Arc<AHashSet<String>>,
     loop_scope: Option<u64>,
     render_scope: Option<u64>,
     include_instance: Option<String>,
@@ -282,6 +311,31 @@ impl std::ops::DerefMut for ScopeFrame {
     /// behaves exactly as it did when the field was a plain `AHashMap`.
     fn deref_mut(&mut self) -> &mut Self::Target {
         std::sync::Arc::make_mut(&mut self.values)
+    }
+}
+
+/// The copy-on-write doors for the six metadata fields (#2735). Each is the
+/// same `Arc::make_mut` that `DerefMut` above is for `values`: a no-op
+/// refcount check when the frame is uniquely owned, a copy of THAT field only
+/// when it is shared with a live [`Context::clone`].
+impl ScopeFrame {
+    fn assignments_mut(&mut self) -> &mut indexmap::IndexSet<String> {
+        std::sync::Arc::make_mut(&mut self.assignments)
+    }
+    fn safe_keys_mut(&mut self) -> &mut AHashSet<String> {
+        std::sync::Arc::make_mut(&mut self.safe_keys)
+    }
+    fn unsafe_keys_mut(&mut self) -> &mut AHashSet<String> {
+        std::sync::Arc::make_mut(&mut self.unsafe_keys)
+    }
+    fn revoked_safe_subtrees_mut(&mut self) -> &mut AHashSet<String> {
+        std::sync::Arc::make_mut(&mut self.revoked_safe_subtrees)
+    }
+    fn aliases_mut(&mut self) -> &mut AHashMap<String, Option<String>> {
+        std::sync::Arc::make_mut(&mut self.aliases)
+    }
+    fn render_bindings_mut(&mut self) -> &mut AHashSet<String> {
+        std::sync::Arc::make_mut(&mut self.render_bindings)
     }
 }
 
@@ -959,7 +1013,8 @@ impl Context {
     pub fn set_raw_py_objects(&mut self, objects: HashMap<String, Py<PyAny>>) {
         self.stack
             .iter_mut()
-            .for_each(|frame| frame.render_bindings.clear());
+            .filter(|frame| !frame.render_bindings.is_empty())
+            .for_each(|frame| frame.render_bindings_mut().clear());
         if objects.is_empty() {
             self.raw_py_objects = None;
         } else {
@@ -1159,7 +1214,7 @@ impl Context {
 
     fn bind_at(&mut self, index: usize, name: String, value: Value, safe: bool) {
         if index == 0 {
-            self.stack[index].assignments.insert(name.clone());
+            self.stack[index].assignments_mut().insert(name.clone());
         }
         if name == "block" {
             self.stack[index].invalid_block_super = false;
@@ -1190,11 +1245,15 @@ impl Context {
     fn set_safety_at(&mut self, index: usize, name: &str, safe: bool) {
         let frame = &mut self.stack[index];
         if safe {
-            frame.unsafe_keys.remove(name);
-            frame.safe_keys.insert(name.to_string());
+            if frame.unsafe_keys.contains(name) {
+                frame.unsafe_keys_mut().remove(name);
+            }
+            frame.safe_keys_mut().insert(name.to_string());
         } else {
-            frame.safe_keys.remove(name);
-            frame.unsafe_keys.insert(name.to_string());
+            if frame.safe_keys.contains(name) {
+                frame.safe_keys_mut().remove(name);
+            }
+            frame.unsafe_keys_mut().insert(name.to_string());
         }
     }
 
@@ -1220,19 +1279,30 @@ impl Context {
             .collect();
         // Mask aliases inherited from lower scopes, without modifying them.
         let frame = &mut self.stack[index];
-        frame.aliases.insert(key.to_string(), None);
+        frame.aliases_mut().insert(key.to_string(), None);
         for name in aliases {
-            frame.aliases.insert(name, None);
+            frame.aliases_mut().insert(name, None);
         }
-        frame.revoked_safe_subtrees.insert(key.to_string());
+        frame.revoked_safe_subtrees_mut().insert(key.to_string());
         // An upward assignment also invalidates grants in scopes above its
         // binding. Those scopes cannot keep grants for the replaced value.
+        //
+        // Each `retain` goes through a copy-on-write door only when it would
+        // remove something (#2735): a frame shared with a live clone that the
+        // sweep would leave unchanged must not be copied just to be scanned.
+        let alias_refers = |target: &Option<String>| target.as_deref().is_some_and(refers_to_key);
         for frame in &mut self.stack[index..] {
-            frame.safe_keys.retain(|name| !refers_to_key(name));
-            frame.unsafe_keys.retain(|name| !refers_to_key(name));
-            frame
-                .aliases
-                .retain(|_, target| !target.as_deref().is_some_and(refers_to_key));
+            if frame.safe_keys.iter().any(|name| refers_to_key(name)) {
+                frame.safe_keys_mut().retain(|name| !refers_to_key(name));
+            }
+            if frame.unsafe_keys.iter().any(|name| refers_to_key(name)) {
+                frame.unsafe_keys_mut().retain(|name| !refers_to_key(name));
+            }
+            if frame.aliases.values().any(alias_refers) {
+                frame
+                    .aliases_mut()
+                    .retain(|_, target| !alias_refers(target));
+            }
         }
     }
 
@@ -1527,7 +1597,7 @@ impl Context {
             .as_ref()
             .is_some_and(|raw| raw.contains_key(&key))
         {
-            self.stack[index].render_bindings.insert(key.clone());
+            self.stack[index].render_bindings_mut().insert(key.clone());
         }
         self.stack[index].insert(key, value);
     }
@@ -1606,7 +1676,7 @@ impl Context {
         self.stack
             .last_mut()
             .unwrap()
-            .aliases
+            .aliases_mut()
             .insert(name, Some(target));
     }
 
@@ -1626,7 +1696,7 @@ impl Context {
         self.stack
             .last_mut()
             .unwrap()
-            .aliases
+            .aliases_mut()
             .insert(loop_var.to_string(), None);
     }
 
@@ -3448,6 +3518,354 @@ mod tests {
         let flat = ctx.to_hashmap();
         assert!(matches!(flat.get("title"), Some(Value::String(s)) if s == "shadowed"));
         assert!(flat.contains_key("rows"));
+    }
+
+    // ---------------------------------------------------------------------
+    // #2735 — the six metadata fields of `ScopeFrame` are copy-on-write.
+    //
+    // The same two mechanisms as the `values` block above, each with its own
+    // test so neither can shadow the other (gate-off: reinstating an eager
+    // per-field deep clone reddens SHARING; `Arc::get_mut(..).expect(..)` in
+    // place of `make_mut` in the doors reddens ISOLATION):
+    //
+    //   1. SHARING — `Context::clone` must not copy any of the six.
+    //   2. ISOLATION — a write through a SHARED frame must copy first.
+    //
+    // Plus the sweep guard in `revoke_safe_subtree_at` (a shared frame the
+    // sweep would leave unchanged is not copied), and a structural pin that
+    // derives every metadata mutation site from this file and asserts each
+    // one is a door.
+    // ---------------------------------------------------------------------
+
+    const METADATA_FIELDS: [&str; 6] = [
+        "assignments",
+        "safe_keys",
+        "unsafe_keys",
+        "revoked_safe_subtrees",
+        "aliases",
+        "render_bindings",
+    ];
+
+    /// Which of the six a frame shares with another, by name — so a failure
+    /// says WHICH field was deep-copied rather than "some field".
+    fn shared_metadata(a: &ScopeFrame, b: &ScopeFrame) -> Vec<&'static str> {
+        use std::sync::Arc;
+        let mut shared = Vec::new();
+        if Arc::ptr_eq(&a.assignments, &b.assignments) {
+            shared.push("assignments");
+        }
+        if Arc::ptr_eq(&a.safe_keys, &b.safe_keys) {
+            shared.push("safe_keys");
+        }
+        if Arc::ptr_eq(&a.unsafe_keys, &b.unsafe_keys) {
+            shared.push("unsafe_keys");
+        }
+        if Arc::ptr_eq(&a.revoked_safe_subtrees, &b.revoked_safe_subtrees) {
+            shared.push("revoked_safe_subtrees");
+        }
+        if Arc::ptr_eq(&a.aliases, &b.aliases) {
+            shared.push("aliases");
+        }
+        if Arc::ptr_eq(&a.render_bindings, &b.render_bindings) {
+            shared.push("render_bindings");
+        }
+        shared
+    }
+
+    /// Frame 0 the way `RustLiveView::render` builds it: state, plus one
+    /// `mark_safe` per `SafeString` path, plus an alias and a `{% with %}`
+    /// style bind so every one of the six sets is non-empty.
+    fn ctx_with_marks(n: usize) -> Context {
+        let mut ctx = ctx_with_rows(n);
+        for i in 0..n {
+            ctx.mark_safe(format!("rows.{i}"));
+        }
+        ctx.set_safety("title", false);
+        ctx.set_alias("r".to_string(), "rows".to_string());
+        ctx.bind("bound".to_string(), Value::Integer(1), false);
+        let frame = &ctx.stack[0];
+        let populated = [
+            ("assignments", !frame.assignments.is_empty()),
+            ("safe_keys", !frame.safe_keys.is_empty()),
+            ("unsafe_keys", !frame.unsafe_keys.is_empty()),
+            (
+                "revoked_safe_subtrees",
+                !frame.revoked_safe_subtrees.is_empty(),
+            ),
+            ("aliases", !frame.aliases.is_empty()),
+            // `render_bindings` needs a Python sidecar; it is covered by the
+            // structural pin below and by the sidecar tests elsewhere.
+        ];
+        for (field, ok) in populated {
+            assert!(
+                ok,
+                "fixture left `{field}` empty — the sharing test would be vacuous"
+            );
+        }
+        ctx
+    }
+
+    /// The performance contract, as a mechanical property (#1795): a clone
+    /// SHARES all six metadata sets. Reinstating an eager per-field deep copy
+    /// in `Clone` makes this fail and names the field.
+    #[test]
+    fn clone_shares_the_metadata_sets_rather_than_copying_them() {
+        let original = ctx_with_marks(1000);
+        let copy = original.clone();
+        let shared = shared_metadata(&original.stack[0], &copy.stack[0]);
+        assert_eq!(
+            shared, METADATA_FIELDS,
+            "Context::clone deep-copied a metadata field — the #2735 per-loop-entry \
+             O(total safe keys) copy is back for every field NOT in this list"
+        );
+    }
+
+    /// Every frame, not only the base one — a clone taken inside a `{% for %}`
+    /// or `{% with %}` has a deeper stack.
+    #[test]
+    fn clone_shares_every_frame_s_metadata_not_only_the_base() {
+        let mut original = ctx_with_marks(3);
+        original.push();
+        original.mark_safe("inner".to_string());
+        original.push();
+        original.set_alias("q".to_string(), "rows.1".to_string());
+        let copy = original.clone();
+        for (i, (a, b)) in original.stack.iter().zip(copy.stack.iter()).enumerate() {
+            assert_eq!(
+                shared_metadata(a, b),
+                METADATA_FIELDS,
+                "frame {i} was deep-copied"
+            );
+        }
+    }
+
+    /// The correctness contract: a `mark_safe` through a frame SHARED with a
+    /// live clone copies first, so the clone's safety answers do not move.
+    /// `Arc::get_mut(..).expect(..)` in place of `make_mut` panics here, which
+    /// is how this test is known to reach a genuinely shared frame.
+    #[test]
+    fn safety_write_through_a_shared_frame_does_not_leak_into_the_other_holder() {
+        let mut original = ctx_with_marks(4);
+        let before = original.clone();
+        assert_eq!(original.stack.len(), 1);
+
+        original.mark_safe("title".to_string()); // title: unsafe -> safe
+        original.set_safety("rows.0", false); // rows.0: safe -> unsafe
+        original.set_alias("z".to_string(), "rows.2".to_string());
+
+        assert!(
+            !before.is_safe("title"),
+            "a mark_safe leaked backwards into the clone"
+        );
+        assert!(
+            before.is_safe("rows.0"),
+            "an unsafe mark leaked backwards into the clone"
+        );
+        assert!(
+            !before.is_safe("z"),
+            "an alias leaked backwards into the clone"
+        );
+        assert!(original.is_safe("title"));
+        assert!(!original.is_safe("rows.0"));
+        assert!(original.is_safe("z"));
+        // ...and the copy really did happen, for the fields that were written...
+        let shared = shared_metadata(&original.stack[0], &before.stack[0]);
+        for touched in ["safe_keys", "unsafe_keys", "aliases"] {
+            assert!(
+                !shared.contains(&touched),
+                "`{touched}` was written without copying"
+            );
+        }
+        // ...and ONLY for those: a field the write did not touch stays shared.
+        for untouched in ["assignments", "revoked_safe_subtrees", "render_bindings"] {
+            assert!(
+                shared.contains(&untouched),
+                "`{untouched}` was copied without being written"
+            );
+        }
+    }
+
+    /// The other direction, because `Arc` sharing is symmetric.
+    #[test]
+    fn safety_write_through_the_clone_does_not_leak_into_the_original() {
+        let original = ctx_with_marks(4);
+        let mut copy = original.clone();
+        copy.set_safety("rows.1", false);
+        // A bind revokes the whole `rows` subtree — on the clone only.
+        copy.bind("rows".to_string(), Value::Integer(0), false);
+        assert!(
+            original.is_safe("rows.1"),
+            "the clone's write leaked into the original"
+        );
+        assert!(
+            original.is_safe("rows.3"),
+            "the clone's revoke leaked into the original"
+        );
+    }
+
+    /// The render-shaped case, which is the one that runs: the `{% for %}` arm
+    /// clones the parent, pushes a scope, revokes the loop variable's subtree
+    /// ONCE, then `set_safety`s it per item. The parent snapshot — which the
+    /// arm still reads `is_safe` from (see the test above on why the clone
+    /// stayed) — must not see any of it, AND frame 0 must not have been
+    /// copied to achieve that.
+    #[test]
+    fn loop_shaped_safety_writes_on_a_pushed_frame_leave_the_parent_snapshot_alone() {
+        let mut ctx = ctx_with_marks(3);
+        ctx.mark_safe("row".to_string()); // a marked OUTER `row` the loop shadows
+        let parent = ctx.clone();
+
+        ctx.with_scope(|inner| {
+            inner.revoke_safe_subtree("row");
+            inner.revoke_safe_subtree("forloop");
+            for i in 0..3 {
+                inner.set("row".to_string(), Value::Integer(i));
+                inner.set_safety("row", i % 2 == 0);
+            }
+            assert!(inner.is_safe("row"));
+        });
+
+        assert!(
+            parent.is_safe("row"),
+            "the loop's revoke reached the parent snapshot"
+        );
+        assert!(
+            parent.is_safe("rows.2"),
+            "the parent snapshot lost an unrelated grant"
+        );
+        assert_eq!(
+            shared_metadata(&ctx.stack[0], &parent.stack[0]),
+            METADATA_FIELDS,
+            "frame 0 was copied by a loop-scope write — the copy is supposed to be \
+             skipped because the loop writes only to its own pushed frame"
+        );
+    }
+
+    /// The one place the issue flagged: `revoke_safe_subtree_at`'s sweep
+    /// visits every frame from the binding index UP. The binding frame itself
+    /// is written (assignments, alias mask, revoked subtree, grant) and so
+    /// copies when shared — that is a write, and the copy is the contract.
+    /// The frames ABOVE it are only scanned, and a shared one the sweep would
+    /// leave UNCHANGED must stay shared: the door is taken only when a
+    /// `retain` would actually remove something.
+    #[test]
+    fn the_revoke_sweep_does_not_copy_a_shared_frame_it_leaves_unchanged() {
+        let mut ctx = ctx_with_marks(3);
+        ctx.push();
+        ctx.mark_safe("inner".to_string()); // frame 1 has a grant of its own
+        let snapshot = ctx.clone(); // both frames shared from here on
+
+        // An UPWARD bind of `title`, which frame 0 holds: the sweep range is
+        // [0..], so frame 1 is scanned. Nothing there refers to `title`.
+        ctx.bind_upward("title".to_string(), Value::Integer(1), false);
+        assert_eq!(
+            shared_metadata(&ctx.stack[1], &snapshot.stack[1]),
+            METADATA_FIELDS,
+            "the sweep copied frame 1 without changing it"
+        );
+        // Frame 0 took the write. Its `safe_keys` held nothing under `title`,
+        // so THAT set specifically stays shared — the guard is per field.
+        let frame0 = shared_metadata(&ctx.stack[0], &snapshot.stack[0]);
+        assert!(
+            frame0.contains(&"safe_keys"),
+            "frame 0's safe_keys were copied by a retain that removed nothing: {frame0:?}"
+        );
+        assert!(
+            !frame0.contains(&"revoked_safe_subtrees"),
+            "frame 0 was written without copying"
+        );
+
+        // And when the sweep DOES change a shared set, the clone is untouched.
+        ctx.bind_upward("rows".to_string(), Value::Integer(0), false);
+        assert!(
+            snapshot.is_safe("rows.0"),
+            "the sweep's retain leaked into the clone"
+        );
+        assert!(!ctx.is_safe("rows.0"));
+        assert!(
+            snapshot.is_safe("inner"),
+            "frame 1's own grant leaked away through the sweep"
+        );
+    }
+
+    /// STRUCTURAL PIN — derived from this file's source, not restated (#2727):
+    /// every mutation of one of the six metadata fields goes through that
+    /// field's `_mut()` door, and each door is `Arc::make_mut`. Comment lines
+    /// are skipped so prose can name the anti-pattern.
+    #[test]
+    fn every_metadata_mutation_goes_through_a_make_mut_door() {
+        let source = include_str!("context.rs");
+        let code: Vec<(usize, &str)> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with("//"))
+            .collect();
+        let mutators = [
+            "insert(",
+            "remove(",
+            "retain(",
+            "clear(",
+            "extend(",
+            "drain(",
+            "entry(",
+            "get_mut(",
+            "swap_remove(",
+            "shift_remove(",
+            "truncate(",
+            "pop(",
+        ];
+        let mut door_sites = Vec::new();
+        for field in METADATA_FIELDS {
+            // (a) declared behind an Arc
+            let decl = format!("    {field}: std::sync::Arc<");
+            assert!(
+                code.iter().any(|(_, l)| l.starts_with(&decl)),
+                "`{field}` is no longer declared as `std::sync::Arc<..>` in ScopeFrame"
+            );
+            // (b) exactly one door, and it is make_mut on this field
+            let door_body = format!("std::sync::Arc::make_mut(&mut self.{field})");
+            let doors = code.iter().filter(|(_, l)| l.contains(&door_body)).count();
+            assert_eq!(doors, 1, "`{field}` must have exactly ONE make_mut door");
+            let door_sig = format!("fn {field}_mut(&mut self)");
+            assert!(
+                code.iter().any(|(_, l)| l.contains(&door_sig)),
+                "no `{door_sig}`"
+            );
+            // (c) no direct mutation: `.field.<mutator>(` or `&mut x.field`
+            let direct = format!(".{field}.");
+            let borrow = format!("&mut self.{field}");
+            let offenders: Vec<String> = code
+                .iter()
+                .filter(|(_, l)| {
+                    let mutated = l
+                        .split(&direct)
+                        .skip(1)
+                        .any(|rest| mutators.iter().any(|m| rest.starts_with(m)));
+                    mutated || (l.contains(&borrow) && !l.contains(&door_body))
+                })
+                .map(|(n, l)| format!("{}: {}", n + 1, l.trim()))
+                .collect();
+            assert!(
+                offenders.is_empty(),
+                "`{field}` is mutated without its door:\n{offenders:#?}"
+            );
+            // (d) the door is reached — a derived count, so a dead door is noticed
+            let call = format!(".{field}_mut()");
+            let sites: Vec<usize> = code
+                .iter()
+                .filter(|(_, l)| l.contains(&call))
+                .map(|(n, _)| n + 1)
+                .collect();
+            assert!(
+                !sites.is_empty(),
+                "`{field}_mut()` is defined but never called"
+            );
+            door_sites.push((field, sites));
+        }
+        // Printed so a `--nocapture` run yields the door list for a PR body.
+        for (field, sites) in &door_sites {
+            println!("door {field}_mut() called at lines {sites:?}");
+        }
     }
 
     #[test]
