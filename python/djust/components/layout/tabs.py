@@ -8,6 +8,7 @@ from typing import Dict, Any
 from dataclasses import dataclass
 from django.utils.safestring import SafeString
 from ..base import LiveComponent
+from ...decorators import event_handler
 
 
 @dataclass
@@ -102,9 +103,24 @@ class TabsComponent(LiveComponent):
             "vertical": self.vertical,
         }
 
-    def activate_tab(self, tab_id: str) -> None:
-        """Switch to a different tab"""
-        self.active = tab_id
+    def _tab_attr(self, tab_id: str) -> str:
+        """``dj-click`` for a tab button. The default ``activate_tab`` is THIS
+        component's handler and carries ``data-component-id`` so the click
+        routes here (#2776); a parent-supplied ``action`` stays routed to the
+        parent view (mirrors ``BadgeComponent._dismiss_attr``, #2756)."""
+        attrs = f'dj-click="{self.action}"'
+        if self.action == "activate_tab":
+            attrs += f' data-component-id="{self.component_id}"'
+        return f'{attrs} data-tab="{tab_id}"'
+
+    @event_handler()
+    def activate_tab(self, tab: str = "", **kwargs: Any) -> None:
+        """Switch to a different tab.
+
+        Decorated because ``event_security`` defaults to strict (#2776); the
+        parameter is ``tab`` because the button sends ``data-tab``.
+        """
+        self.active = tab
         self.trigger_update()
 
     def render(self) -> SafeString:
@@ -143,7 +159,7 @@ class TabsComponent(LiveComponent):
             badge_html = f' <span class="badge bg-secondary">{badge}</span>' if badge else ""
 
             html += f"""<li class="nav-item" role="presentation">
-                <button class="nav-link{active_class}{disabled_class}" dj-click="{self.action}" data-tab="{tab_id}"
+                <button class="nav-link{active_class}{disabled_class}" {self._tab_attr(tab_id)}
                         type="button" role="tab">{label}{badge_html}</button>
             </li>"""
 
@@ -208,7 +224,7 @@ class TabsComponent(LiveComponent):
                 else ""
             )
 
-            click_attr = f' dj-click="{self.action}" data-tab="{tab_id}"' if not disabled else ""
+            click_attr = f" {self._tab_attr(tab_id)}" if not disabled else ""
 
             html += (
                 f'<button class="{base_classes} {classes}"{click_attr}>{label}{badge_html}</button>'
@@ -247,7 +263,7 @@ class TabsComponent(LiveComponent):
 
             badge_html = f' <span class="badge">{badge}</span>' if badge else ""
 
-            html += f'<button class="tab{active_class}{disabled_class}" dj-click="{self.action}" data-tab="{tab_id}">{label}{badge_html}</button>'
+            html += f'<button class="tab{active_class}{disabled_class}" {self._tab_attr(tab_id)}>{label}{badge_html}</button>'
 
         html += "</div>"
 
