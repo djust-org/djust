@@ -230,7 +230,9 @@ struct ScopeFrame {
     /// **The copy path is LIVE — do not simplify it away.** Writes usually land
     /// on the freshly pushed top frame, which is uniquely owned, so the copy is
     /// usually skipped. But the tags that write into the ENCLOSING context so
-    /// their siblings can read it — `{% regroup %}` and `{% assign %}`, which
+    /// their siblings can read it — `{% regroup %}` and the context-mutating
+    /// custom tags bridged by `register_assign_tag_handler` (there is no
+    /// `{% assign %}` tag; the handler is the category), which
     /// reach `set_at` through `render_nodes_with_loader`'s `&mut
     /// context.clone()` — write through a frame that is shared at that moment,
     /// and take the copy on every render that uses them. Proven by mutation,
@@ -3235,8 +3237,9 @@ mod tests {
     ///
     /// This is the property that makes `from_shared` semantically identical to
     /// the `from_dict(state.clone())` it replaces, where the deep copy provided
-    /// the isolation instead. `{% regroup %}` and `{% assign %}` are the live
-    /// callers that write into an enclosing frame this way.
+    /// the isolation instead. `{% regroup %}` and the context-mutating custom
+    /// tags bridged by `register_assign_tag_handler` are the live callers that
+    /// write into an enclosing frame this way.
     #[test]
     fn a_write_through_a_shared_context_does_not_reach_the_callers_map() {
         let mut map = AHashMap::new();

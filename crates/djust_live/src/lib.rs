@@ -5407,14 +5407,32 @@ mod state_is_shared_not_copied_2737 {
         assert!(matches!(view.state.get("n"), Some(Value::Integer(1))));
     }
 
-    /// Every mutating entry goes through the same copy-on-write door, not just
-    /// the one the fix was written against (#1104: N similar sites, N tests).
+    /// Every copy-on-write door — every `Arc::make_mut(&mut self.state)` in
+    /// this file — preserves isolation from a held render, not just the one
+    /// the fix was written against (#1104: N similar sites, N tests).
+    ///
+    /// "Every" is derived, not asserted: `python/tests/test_state_shared_2737.py`
+    /// (`test_the_isolation_table_names_every_copy_on_write_door`) reads this
+    /// file, collects the fn enclosing each `make_mut(&mut self.state)`, and
+    /// requires the labels below to be exactly that set. The other two writers
+    /// of `state` — `new` and `deserialize_msgpack` — build a FRESH `Arc`
+    /// rather than mutating one, so no render can be holding it; the
+    /// round-trip test below pins the second of those.
+    ///
+    /// Two assertions per door, because one of them is blind for one door:
+    /// `clear_live_handles` only changes a value carrying an ADR-027 handle,
+    /// which needs a `Py<PyAny>` this interpreter-less test cannot build, so
+    /// "the held map still reads the same" would pass for it whether or not
+    /// the write aliased. The identity check is not blind: `before` is a
+    /// second holder, so `make_mut` MUST leave `view.state` at a different
+    /// pointer — and an in-place write would not.
     #[test]
-    fn every_mutating_entry_preserves_isolation_from_a_held_render() {
-        /// One mutating entry, by name, so the cases read as a table.
-        type MutatingEntry = (&'static str, Box<dyn Fn(&mut RustLiveViewBackend)>);
+    fn every_copy_on_write_door_preserves_isolation_from_a_held_render() {
+        /// One door, labelled by the fn that holds the `make_mut`, so the
+        /// Python derivation can match labels to sites by name.
+        type Door = (&'static str, Box<dyn Fn(&mut RustLiveViewBackend)>);
 
-        let cases: Vec<MutatingEntry> = vec![
+        let doors: Vec<Door> = vec![
             (
                 "set_state",
                 Box::new(|v: &mut RustLiveViewBackend| {
@@ -5422,25 +5440,34 @@ mod state_is_shared_not_copied_2737 {
                 }),
             ),
             (
-                "update_state_rust",
+                "apply_state_update",
                 Box::new(|v: &mut RustLiveViewBackend| {
                     v.update_state_rust(HashMap::from([("k".to_string(), Value::Integer(9))]))
                 }),
             ),
             (
-                "retain_state_keys_rust",
+                "retain_state_keys",
                 Box::new(|v: &mut RustLiveViewBackend| {
                     v.retain_state_keys_rust(vec![]);
                 }),
             ),
+            (
+                "clear_live_handles",
+                Box::new(|v: &mut RustLiveViewBackend| v.clear_live_handles()),
+            ),
         ];
-        for (label, mutate) in cases {
+        for (label, mutate) in doors {
             let mut view = view_with_rows(4);
+            let before = view.state.clone();
             let held = djust_core::Context::from_shared(view.state.clone());
             mutate(&mut view);
             assert!(
                 matches!(held.get("rows"), Some(Value::List(_))),
                 "{label} mutated a map a render was already holding"
+            );
+            assert!(
+                !std::sync::Arc::ptr_eq(&before, &view.state),
+                "{label} wrote in place while another holder had the map"
             );
         }
     }
