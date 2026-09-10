@@ -355,6 +355,20 @@ test-durations-from-ci: ## Rebuild .test_durations from a CI run's shard artifac
 		"$$TMP"/test-durations-shard-*/.test_durations || exit 1; \
 	echo "$(GREEN)Wrote .test_durations from run $$RUN_ID — commit it.$(NC)"
 
+# Regenerate .test_collected_floor from a real collection (#2746).
+#
+# CI runs pytest with DJUST_COLLECTED_FLOOR=1, and tests/lost_items_guard.py
+# then fails any run that collects fewer items than this file says. The number
+# is written by the guard itself from what it counted — derived, never
+# hand-typed (#2727) — over the same three roots CI uses. Adding tests never
+# trips the floor; a PR that removes tests re-runs this and commits the result.
+.PHONY: test-collected-floor
+test-collected-floor: ## Regenerate .test_collected_floor from a real collection (#2746)
+	@PYTHONPATH=. DJUST_COLLECTED_FLOOR_WRITE=.test_collected_floor $(PYTHON) -m pytest \
+		tests/ python/tests/ python/djust/tests/ --collect-only -q -p no:cacheprovider \
+		| tail -2
+	@echo "$(GREEN)Wrote .test_collected_floor — commit it.$(NC)"
+
 # Run one CI shard exactly as the workflow does (default: shard 1 of 4).
 # `make test-shard GROUP=3` for another shard.
 GROUP ?= 1

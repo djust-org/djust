@@ -310,7 +310,14 @@ jobs:
       # against 280/278/328/193s recorded — per-shard factors of 2.6x to 7.1x
       # and a 3.21x runner imbalance behind a 1.70x recorded one. No local
       # recording can balance this runner; only this runner can.
+      # DJUST_COLLECTED_FLOOR=1 arms the collected-count floor in
+      # tests/lost_items_guard.py (#2746): every shard collects the full suite
+      # before pytest-split deselects, so a run that collects fewer items than
+      # .test_collected_floor says exits TESTS_FAILED — and this step has no
+      # continue-on-error, so that fails the job and the test-summary gate.
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
+        env:
+          DJUST_COLLECTED_FLOOR: "1"
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 

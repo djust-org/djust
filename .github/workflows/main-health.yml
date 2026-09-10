@@ -67,6 +67,10 @@ jobs:
 
       - name: Run the suite
         id: run
+        env:
+          # Arms the collected-count floor (#2746); a shortfall exits non-zero
+          # and is reported below as a RED main, with the delta in the log.
+          DJUST_COLLECTED_FLOOR: "1"
         run: |
           set +e
           # DELIBERATELY SERIAL — do not add `-n auto` here.
