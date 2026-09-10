@@ -293,8 +293,7 @@ They render anyway — through the live handle. See §6.2.
 ### 3.4 The live handle: who gets one
 
 Two functions build an `Encoded` **at the Python→Rust conversion**, and they
-attach the handle differently. (Seven further sites — `lib.rs:1655`, `:1718`,
-`:1773`, `:1825`, `:1881`, `:1939`, `:1988` — reconstruct one from an
+attach the handle differently. (Seven further sites — `lib.rs:1693`, `:1756`, `:1813`, `:1872`, `:1929`, `:1977`, `:2023` — reconstruct one from an
 `ENCODED_TAG` wire payload rather than from a live object, and every one of them
 sets `live: None`. That is the handle's transience, mechanically: nothing
 restored from state can carry one.)
