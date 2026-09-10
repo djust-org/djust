@@ -1421,6 +1421,13 @@ mod tests {
         }
     }
 
+    /// PINS THE DEFECT, NOT THE DESIRED BEHAVIOUR (#2741). This test passes
+    /// while the bug exists: an actor render on a tokio worker ignores the
+    /// caller's `set_resolve_lazy(false)`. When ADR-029 Phase 1 lands an
+    /// explicit `RenderEnv`, this test MUST go red — at that point flip the
+    /// expectation to the configured (`false` -> `Y`) answer rather than
+    /// deleting the test, because the thread-distinctness harness is the
+    /// only thing that proves the fix reached the worker thread.
     #[test]
     fn actor_render_on_a_worker_thread_reads_resolve_lazy_default_not_config_2741() {
         // The configuring thread says `false` — the non-default value.
