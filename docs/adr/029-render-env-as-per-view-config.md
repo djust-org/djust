@@ -71,6 +71,18 @@ ADR-027 `:435` settles that Step 5 deletes `template_resolve_lazy` **and** its e
 - The #2728 hygiene test (a `fr` push followed by a direct render) stays green, and the entry guard makes it structurally green rather than reset-green.
 - `test_timezone_render_2209.py` keeps pinning the set of framework entries that push.
 
-## 6. Record of what the previous draft got wrong
+## 6. What implementing it corrected (PR #2772)
+
+Section 2 was written before the code; PR #2772 is the code. Five points where the text was wrong or under-specified, recorded so the ADR describes what shipped:
+
+1. **"Captured where `_apply_render_env()` pushes today" does not reach the actor path.** An actor mount never passes through `_sync_state_to_rust`, so a capture there snapshots a loop thread nothing pushed — the end-to-end WS actor test still rendered the default answer. The fix: `dispatch_actor_mount` (`python/djust/runtime.py`) calls `apply_render_env()` on the calling thread, then captures, then hands the value to the `SessionActor` mount message (`crates/djust_live/src/actors/session.rs`, `render_env` on `SessionMsg::Mount`). `test_timezone_render_2209.py`'s caller-set pin grew 4 → 5 accordingly.
+2. **`ComponentActor::render` was not missing `auto_call` or the markers as features** — `Context::from_dict` defaults both on. It was missing the *configured* `auto_call` and the environment. `ComponentActor::set_render_config(auto_call, render_env)` (`crates/djust_live/src/actors/component.rs`) is handed down from `ViewActor::handle_create_component`; the dj-if id namespace is not handed down (out of scope).
+3. **"The l10n stack" is not part of the Python push.** `RenderEnv::use_l10n` captures the base of `USE_L10N_STACK` (always `None` from Python today) and exists so the guard resets a stack a mid-render `{% localize %}` left behind — a reset, not configuration.
+4. **"The ViewActor gets it for free" only once someone sets the field.** The actor's backend is built in Rust and Python never configures it, so the `template_auto_call` precedent did not reach the actor either; both now arrive through the mount message. The field-on-the-backend shape holds; the *source* of the value on the actor path is the mount message, not the Python setter.
+5. **Limit, not a correction:** per-event re-conversion on the worker (`get_context_data` → `extract::<Value>` in `crates/djust_live/src/actors/view.rs`) still reads the worker's `resolve_lazy` cell. Only the mount-time conversion runs on the pushing thread. This narrows with ADR-027 Step 5, when conversion stops reading the flag at all.
+
+The entry table (four Rust entries under `RenderEnvGuard::install`, `render_template`'s `render_env=` parameter, `ComponentActor`) is pinned by a test that derives the entry set from the source, and each mechanism has a named gate-off in the PR body.
+
+## 7. Record of what the previous draft got wrong
 
 Kept so the corrections are findable. Phase 2 re-decided ADR-027 Step 5 and added the `Context::aliases` deletion (a security-parity regression) and an un-argued Option A. Phase 1 threaded an immutable `&RenderEnv` through conversion — a field scheduled for deletion, and a shape that cannot represent `{% timezone %}` changing the environment mid-render. "28 render dispatches" was 6 `sync_to_async` sites and 15 awaited render calls in `runtime.py`. `view.rs:560` is the child `ComponentActor` spawn, `supervisor.rs:111` the `SessionActor`; the `ViewActor` spawn is `session.rs:259`. Two of four gates defended claims the document did not make. The "observable bug" was, at the time, inferred; #2751 then observed it.
