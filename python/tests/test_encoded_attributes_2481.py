@@ -628,13 +628,18 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         aware = datetime.datetime(2026, 3, 4, tzinfo=MyTz())
         assert "MyTz object at" in django_render("{{ p.tzinfo }}", {"p": aware})
         with resolve_lazy(False):
-            assert (
-                djust_render("{{ p.tzinfo }}", {"p": aware})
-                == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
+            # Since #2770 the `tzinfo` slot is carried as `str(tz)` on BOTH
+            # flag states — one string, every reader on it — so the cell that
+            # rendered `{'label': 'custom'}` here (the `__dict__` bulk-dump
+            # arm reached through the attribute) now renders Django's bytes.
+            # Compared against Django for the SAME object: the string carries
+            # the instance address.
+            assert djust_render("{{ p.tzinfo }}", {"p": aware}) == django_render(
+                "{{ p.tzinfo }}", {"p": aware}
             )
-            # The same object placed DIRECTLY in the context answers
-            # identically, which is what makes this pre-existing rather than
-            # introduced.
+            # The same object placed DIRECTLY in the context still takes the
+            # bulk-dump arm under the escape hatch — which is what makes the
+            # divergence THAT arm's, and pre-existing rather than introduced.
             assert (
                 djust_render("{{ p }}", {"p": MyTz()}) == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
             )

@@ -840,6 +840,12 @@ pub const ENCODED_ATTR_NAMES: &[(&str, &[&str])] = &[
 /// `datetime` and every `time` to build the [`CmpKey`], so the tzinfo code
 /// path was already being run at the conversion before this table existed.
 ///
+/// What was NOT free was the RESULT: `utcoffset()` and `dst()` each return a
+/// `timedelta`, and converting one through [`django_json_encoded`] again cost
+/// ~3.7 µs — most of an aware datetime's 21 µs (#2740). Since #2770
+/// [`collect_called_attrs`] builds those two nested values with
+/// [`slim_timedelta_encoded`], the same `Encoded` from the limbs alone.
+///
 /// # Not `min` / `max` / `resolution`
 ///
 /// Those are DATA attributes and belong to the other table's question, where
@@ -2211,7 +2217,7 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         ENCODED_CALL_NAMES
             .iter()
             .find(|(name, _)| *name == tp_name)
-            .map(|(_, names)| collect_called_attrs(ob, names))
+            .map(|(_, names)| collect_called_attrs(ob, names, types.timedelta.bind(py)))
             .unwrap_or_default(),
     );
 
@@ -2373,12 +2379,59 @@ fn collect_named_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<Object
         let Ok(attr) = ob.getattr(*name) else {
             continue;
         };
-        let Ok(value) = attr.extract::<Value>() else {
+        let value = if *name == "tzinfo" {
+            slim_tzinfo(&attr)
+        } else {
+            attr.extract::<Value>().ok()
+        };
+        let Some(value) = value else {
             continue;
         };
         map.insert(ObjectKey::Str((*name).to_string()), value);
     }
     map
+}
+
+/// The `tzinfo` slot of a `datetime` / `time`, carried as `str(tz)` (#2770).
+///
+/// `None` for a naive value stays a [`Value::None`] — the `"None"` Django
+/// renders for `{{ p.tzinfo }}`, pinned across the state round trip since
+/// #2484. An aware value's zone is carried as ONE string, `str(tz)`, which is
+/// every reader's whole need:
+///
+/// - `context::lookup_segment` renders `{{ p.tzinfo }}` — Django renders
+///   `str(tz)` there (`Europe/Berlin`, `UTC`, `UTC+09:00`, a custom class's
+///   `<MyTz object at 0x…>`), so the carried string IS the cell.
+/// - `{% if p.tzinfo %}` — a `tzinfo` object is truthy and a non-empty
+///   `str()` is too. An empty `str(tz)` would answer False where Python says
+///   True; no stdlib zone spells itself empty, and a custom one that does is
+///   the same cell it was under the old carrier (an `Encoded` whose `truthy`
+///   was measured — the one answer this slims away, recorded here).
+/// - [`Encoded::temporal_object`] restores the zone from the string:
+///   `ZoneInfo(name)` where the name is a key, else the `tzname` slot.
+///
+/// Before #2770 this slot was the FULL conversion of the `tzinfo` object —
+/// an [`opaque_value`] `Encoded` of a `ZoneInfo`, some 3 µs of `str` / `repr`
+/// / `isinstance` / equality-class probing per aware datetime — of which the
+/// three readers above consumed exactly `display`. Under the flag-off escape
+/// hatch a `tzinfo` with a `__dict__` even took the bulk-dump arm and rendered
+/// as a dict where Django renders `str(tz)`; the string carrier closes that
+/// cell as a side effect (`test_encoded_attributes_2481.py`).
+///
+/// This is the one msgpack-SHAPE change of #2770: the nested `ENCODED_TAG`
+/// map at `attrs["tzinfo"]` becomes a plain string. The reader side accepts
+/// BOTH — `temporal_object` reads an old-shape `Encoded` through its
+/// `Display`, which is the same `str(tz)` — so a state entry written by a
+/// pre-#2770 process restores under this one
+/// (`test_aware_datetime_slim_2770.py`).
+///
+/// Fails SOFT like every other name here: a `__str__` that raises skips the
+/// slot rather than storing a guess.
+fn slim_tzinfo(attr: &Bound<'_, PyAny>) -> Option<Value> {
+    if attr.is_none() {
+        return Some(Value::None);
+    }
+    Some(Value::String(attr.str().ok()?.extract::<String>().ok()?))
 }
 
 /// `o.name()` for each `name`, into the same map (#2485).
@@ -2403,7 +2456,25 @@ fn collect_named_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<Object
 /// tables ask for names that return back to it. `utcoffset` and `dst` return a
 /// `timedelta`, whose only entry is `total_seconds` (a `float`); everything
 /// else returns a `str`, an `int`, a `float` or `None`.
-fn collect_called_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<ObjectKey, Value> {
+///
+/// # The `timedelta` results are built SLIM (#2770)
+///
+/// `utcoffset()` and `dst()` return a `timedelta`, and before #2770 each went
+/// through the full [`django_json_encoded`] recursion — `str()`, `repr()`,
+/// `DjangoJSONEncoder().default()`, `bool()`, three limb reads, a
+/// `total_seconds()` call and an `isinstance` sweep, ~3.7 µs apiece and the
+/// biggest single line in an aware datetime's 21 µs conversion (#2740's
+/// measurement). [`slim_timedelta_encoded`] builds the SAME `Encoded` — every
+/// slot, byte for byte on the wire — from the three limbs in Rust, so the
+/// msgpack shape of this map does not change for those two names; only the
+/// interpreter round-trips do. An exact `timedelta` is what the C
+/// implementation returns from both methods; a subclass, or a limb outside
+/// the exact-`f64` range, declines the slim path and takes the full one.
+fn collect_called_attrs(
+    ob: &Bound<'_, PyAny>,
+    names: &[&str],
+    timedelta_cls: &Bound<'_, PyAny>,
+) -> IndexMap<ObjectKey, Value> {
     let mut map = IndexMap::with_capacity(names.len());
     for name in names {
         let Ok(method) = ob.getattr(*name) else {
@@ -2412,12 +2483,155 @@ fn collect_called_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<Objec
         let Ok(result) = method.call0() else {
             continue;
         };
-        let Ok(value) = result.extract::<Value>() else {
-            continue;
+        let value = match slim_timedelta_encoded(&result, timedelta_cls) {
+            Some(slim) => Value::Encoded(Box::new(slim)),
+            None => match result.extract::<Value>() {
+                Ok(value) => value,
+                Err(_) => continue,
+            },
         };
         map.insert(ObjectKey::Str((*name).to_string()), value);
     }
     map
+}
+
+/// The largest magnitude, in microseconds, at which `n as f64 / 1e6` is
+/// CPython's own `total_seconds()` bit for bit: below `2**53` the integer is
+/// exact as a float and `long_true_divide` takes the same one-rounding path.
+/// A `utcoffset()` / `dst()` is bounded to a day (`8.64e10` µs), so the slim
+/// path never declines in practice; the bound is what makes the transcription
+/// PROVABLY equal rather than usually equal.
+const SLIM_TIMEDELTA_EXACT_MICROS: i64 = 1 << 53;
+
+/// The [`Encoded`] that [`django_json_encoded`] would build for an EXACT
+/// `datetime.timedelta`, built from its three limbs without asking the
+/// interpreter for any of the four strings (#2770).
+///
+/// `None` — "take the full path" — for anything that is not exactly the C
+/// `timedelta` (a subclass may override `__str__` / `__bool__` / `__repr__`,
+/// which the full path measures and this one cannot), or whose magnitude is
+/// past [`SLIM_TIMEDELTA_EXACT_MICROS`].
+///
+/// Every slot is the one the full path measures, and the equality is PINNED
+/// two ways rather than reasoned about: `test_slim_timedelta_2770.rs` sweeps
+/// random limbs against live `str()` / `repr()` / `bool()` /
+/// `total_seconds()`, and `test_aware_datetime_slim_2770.py` asserts the
+/// nested `attrs["utcoffset"]` payload of an aware datetime is byte-equal to
+/// the payload of the same `timedelta` converted at top level — which is the
+/// full path, `DjangoJSONEncoder` spelling included.
+///
+/// The live handle IS attached: the value being slimmed is a real
+/// `timedelta` the caller already holds, so `{{ p.utcoffset.resolution }}`
+/// keeps answering off the handle exactly as before (#2741). The handle is a
+/// refcount, not a conversion.
+pub fn slim_timedelta_encoded(
+    ob: &Bound<'_, PyAny>,
+    timedelta_cls: &Bound<'_, PyAny>,
+) -> Option<Encoded> {
+    if !ob.get_type().is(timedelta_cls) {
+        return None;
+    }
+    let (days, micros_of_day) = timedelta_limbs(ob)?;
+    let seconds = micros_of_day / 1_000_000;
+    let microseconds = micros_of_day % 1_000_000;
+    let total_micros = days
+        .checked_mul(86_400_000_000)?
+        .checked_add(micros_of_day)?;
+    if total_micros.abs() >= SLIM_TIMEDELTA_EXACT_MICROS {
+        return None;
+    }
+    let mut attrs = IndexMap::with_capacity(4);
+    attrs.insert(ObjectKey::Str("days".to_string()), Value::Integer(days));
+    attrs.insert(
+        ObjectKey::Str("seconds".to_string()),
+        Value::Integer(seconds),
+    );
+    attrs.insert(
+        ObjectKey::Str("microseconds".to_string()),
+        Value::Integer(microseconds),
+    );
+    attrs.insert(
+        ObjectKey::Str("total_seconds".to_string()),
+        Value::Float(total_micros as f64 / 1e6),
+    );
+    Some(Encoded {
+        type_name: "datetime.timedelta".to_string(),
+        display: timedelta_str(days, seconds, microseconds),
+        json: timedelta_iso_string(total_micros),
+        truthy: total_micros != 0,
+        len: None,
+        iterable: false,
+        repr: timedelta_repr(days, seconds, microseconds),
+        cmp_key: Some(CmpKey {
+            domain: CMP_DOMAIN_TIMEDELTA,
+            hi: days,
+            lo: micros_of_day,
+        }),
+        attrs,
+        items: None,
+        eq_class: None,
+        live: Some(std::sync::Arc::new(ob.clone().unbind())),
+        display_safe: false,
+    })
+}
+
+/// CPython's `timedelta.__str__`, on the normalised limbs:
+/// `[-]D day[s], ]H:MM:SS[.ffffff]`.
+fn timedelta_str(days: i64, seconds: i64, microseconds: i64) -> String {
+    let (hh, rem) = (seconds / 3600, seconds % 3600);
+    let (mm, ss) = (rem / 60, rem % 60);
+    let mut s = String::with_capacity(32);
+    if days != 0 {
+        s.push_str(&days.to_string());
+        s.push_str(if days.abs() == 1 { " day, " } else { " days, " });
+    }
+    s.push_str(&format!("{hh}:{mm:02}:{ss:02}"));
+    if microseconds != 0 {
+        s.push_str(&format!(".{microseconds:06}"));
+    }
+    s
+}
+
+/// CPython's `timedelta.__repr__` (3.7+ keyword form):
+/// `datetime.timedelta(days=…, seconds=…, microseconds=…)`, naming only the
+/// non-zero limbs and `datetime.timedelta(0)` for none.
+fn timedelta_repr(days: i64, seconds: i64, microseconds: i64) -> String {
+    let mut args = Vec::with_capacity(3);
+    if days != 0 {
+        args.push(format!("days={days}"));
+    }
+    if seconds != 0 {
+        args.push(format!("seconds={seconds}"));
+    }
+    if microseconds != 0 {
+        args.push(format!("microseconds={microseconds}"));
+    }
+    if args.is_empty() {
+        args.push("0".to_string());
+    }
+    format!("datetime.timedelta({})", args.join(", "))
+}
+
+/// Django's `duration_iso_string`: `[-]P{D}DT{HH}H{MM}M{SS}[.ffffff]S`, with
+/// a NEGATIVE delta negated first and the sign carried as a prefix — the
+/// normalisation the `DjangoJSONEncoder` docs above call out as one of the
+/// three transcriptions worth not doing by hand. It is done here on the
+/// TOTAL, so the sign question is one `abs()` rather than a per-limb branch.
+fn timedelta_iso_string(total_micros: i64) -> String {
+    let sign = if total_micros < 0 { "-" } else { "" };
+    let total = total_micros.abs();
+    let days = total / 86_400_000_000;
+    let rem = total % 86_400_000_000;
+    let seconds = rem / 1_000_000;
+    let microseconds = rem % 1_000_000;
+    let (hh, rem_s) = (seconds / 3600, seconds % 3600);
+    let (mm, ss) = (rem_s / 60, rem_s % 60);
+    let ms = if microseconds != 0 {
+        format!(".{microseconds:06}")
+    } else {
+        String::new()
+    };
+    format!("{sign}P{days}DT{hh:02}H{mm:02}M{ss:02}{ms}S")
 }
 
 /// `(days, microseconds-within-the-day)` for a `datetime.timedelta`.
@@ -5153,7 +5367,13 @@ impl Encoded {
                 kwargs.set_item("fold", fold.clone().into_pyobject(py)?)?;
             }
             if let Some(zone) = self.attrs.get("tzinfo") {
-                let name = zone.to_string();
+                // `str(tz)` since #2770; a pre-#2770 state entry carries the
+                // zone's full `Encoded`, whose `Display` is the same string —
+                // so both shapes restore (rolling deploy, #2770 (d)).
+                let name = match zone {
+                    Value::String(name) => name.clone(),
+                    other => other.to_string(),
+                };
                 // Named zones retain transition rules across state persistence.
                 let tz = py.import("zoneinfo")?.getattr("ZoneInfo")?.call1((&name,));
                 if let Ok(tz) = tz {

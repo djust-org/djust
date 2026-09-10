@@ -2054,12 +2054,22 @@ class TestTheHandleNeverReachesTheWire2539:
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
         assert "resolve_lazy()" in body
         producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
-        assert core.count(producer) == 2
+        # THREE producers since #2770: `opaque_value` (flag-gated),
+        # `django_json_encoded` (isinstance-checked against the four temporal
+        # types) and `slim_timedelta_encoded` (EXACT-type-checked against
+        # `timedelta` — the slim builder for the nested `utcoffset` / `dst`
+        # results, which attaches the handle the full path would have).
+        assert core.count(producer) == 3
         assert producer in body
         temporal = core.split("pub fn django_json_encoded", 1)[1].split(
             "\nfn is_public_attr_name", 1
         )[0]
         assert producer in temporal
+        slim = core.split("pub fn slim_timedelta_encoded", 1)[1].split("\n}\n", 1)[0]
+        assert producer in slim
+        assert "if !ob.get_type().is(timedelta_cls) {" in slim, (
+            "the slim producer must attach a handle only to an exact `timedelta`"
+        )
         crossing = core.split("pub fn temporal_object", 1)[1].split("impl<'py> IntoPyObject", 1)[0]
         assert "is_instance(&module.getattr(kind)?)" in crossing
 
