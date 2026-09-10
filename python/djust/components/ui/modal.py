@@ -6,6 +6,7 @@ Provides modal dialogs with customizable content and sizes.
 
 from typing import Any, Dict, Optional
 from ..base import LiveComponent
+from ...decorators import event_handler
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -25,6 +26,7 @@ class ModalComponent(LiveComponent):
             self.confirm_modal = ModalComponent(
                 title="Confirm Action",
                 body="Are you sure you want to proceed?",
+                footer='<button dj-click="confirm">Yes</button>',  # optional
                 show=False,
                 size="md"
             )
@@ -46,6 +48,9 @@ class ModalComponent(LiveComponent):
         """Initialize modal state"""
         self.title = kwargs.get("title", "")
         self.body = kwargs.get("body", "")
+        # Optional footer HTML; when empty, each framework branch renders its
+        # default "Close" button (#2748).
+        self.footer = kwargs.get("footer", "")
         self.show_modal = kwargs.get("show", False)
         self.size = kwargs.get("size", "md")  # sm, md, lg, xl
 
@@ -54,6 +59,7 @@ class ModalComponent(LiveComponent):
         return {
             "title": self.title,
             "body": self.body,
+            "footer": self.footer,
             "show": self.show_modal,
             "size": self.size,
         }
@@ -72,6 +78,17 @@ class ModalComponent(LiveComponent):
         self.show_modal = False
         self.trigger_update()
 
+    @event_handler()
+    def dismiss(self, **kwargs: Any) -> None:
+        """Close the modal from its close controls.
+
+        Every framework branch wires the cross and the footer "Close" button
+        (and the Tailwind backdrop) to ``dj-click="dismiss"``; this is the
+        handler that click resolves to (#2748). Mirrors
+        ``AlertComponent.dismiss`` (``alert.py``).
+        """
+        self.hide()
+
     def set_title(self, title: str) -> None:
         """Update modal title"""
         self.title = title
@@ -81,6 +98,15 @@ class ModalComponent(LiveComponent):
         """Update modal body"""
         self.body = body
         self.trigger_update()
+
+    def set_footer(self, footer: str) -> None:
+        """Update modal footer (HTML). Empty restores the default Close button."""
+        self.footer = footer
+        self.trigger_update()
+
+    def _footer_html(self, default: str) -> str:
+        """The configured footer, or the framework branch's default control."""
+        return self.footer if self.footer else default
 
     def render(self) -> SafeString:
         """Render modal with inline HTML"""
@@ -115,7 +141,7 @@ class ModalComponent(LiveComponent):
                         {self.body}
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>
+                        {self._footer_html(f'<button type="button" class="btn btn-secondary" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>')}
                     </div>
                 </div>
             </div>
@@ -151,9 +177,7 @@ class ModalComponent(LiveComponent):
                         </div>
                     </div>
                     <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-                        <button type="button" dj-click="dismiss" data-component-id="{self.component_id}" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:mt-0 sm:w-auto sm:text-sm">
-                            Close
-                        </button>
+                        {self._footer_html(f'<button type="button" dj-click="dismiss" data-component-id="{self.component_id}" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:mt-0 sm:w-auto sm:text-sm">Close</button>')}
                     </div>
                 </div>
             </div>
@@ -175,7 +199,7 @@ class ModalComponent(LiveComponent):
                         {self.body}
                     </div>
                     <div class="modal-footer">
-                        <button type="button" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>
+                        {self._footer_html(f'<button type="button" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>')}
                     </div>
                 </div>
             </div>
