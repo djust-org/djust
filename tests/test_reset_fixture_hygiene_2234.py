@@ -105,6 +105,36 @@ def test_reset_djust_globals_also_undoes_deactivate_all():
     assert translation.get_language() == settings.LANGUAGE_CODE
 
 
+def test_reset_djust_globals_clears_the_rust_render_env_2728():
+    """The Rust half of the #2234 state: the pushed number format and zone.
+
+    The exact shape of #2728 — ``translation.override("fr")`` around a render
+    that calls ``apply_render_env()``, then Django's language restored, then a
+    DIRECT ``_rust.render_template`` of a float on the same thread. Before the
+    reset cleared the Rust cell, the last line rendered ``12,3``.
+    """
+    from django.utils import translation
+
+    from djust import _rust
+    from djust.render_env import apply_render_env
+    from djust.test_isolation import reset_djust_globals
+
+    with translation.override("fr"):
+        apply_render_env()
+        _rust.set_active_timezone("Asia/Tokyo")
+    # The Python-side reset alone leaves the Rust cell at the French format.
+    translation.deactivate()
+    assert _rust.active_number_format()[0] == ","
+    assert _rust.render_template("{{ v }}", {"v": 12.3}) == "12,3"
+
+    reset_djust_globals()
+
+    assert _rust.active_number_format() is None
+    assert _rust.active_unlocalized_number_format() is None
+    assert _rust.active_timezone_name() is None
+    assert _rust.render_template("{{ v }}", {"v": 12.3}) == "12.3"
+
+
 # ---------------------------------------------------------------------------
 # Structural guards.
 # ---------------------------------------------------------------------------
