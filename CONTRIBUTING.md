@@ -253,6 +253,23 @@ unevenly that time is distributed.
   split. Optimising broadly across 27,000 tests averaging 114 ms would buy
   little; the top of this list is the lever. Tracked in #2723.
 
+### Collected-count floor — `.test_collected_floor`
+
+CI runs pytest with `DJUST_COLLECTED_FLOOR=1`, which arms the second check in
+`tests/lost_items_guard.py` (#2746): the run must **collect** at least the
+number in the committed `.test_collected_floor`, or it exits red with the
+delta named. This catches the run that silently loses a slice of the suite —
+fewer tests reported, still green — which nothing else distinguishes from a
+clean run. The first check (every selected item produced a report, with the
+missing node ids listed) is always on, serial or `-n auto`.
+
+- **Adding tests never trips it.** It is a floor, not an equality.
+- **Removing tests does.** Run `make test-collected-floor` in the same PR and
+  commit the regenerated file — it is derived from a real collection by the
+  guard itself, never hand-typed.
+- **Local runs are unaffected** unless you export `DJUST_COLLECTED_FLOOR=1`;
+  a `-k` or single-file run has no floor to meet.
+
 ### CI shards — `.test_durations`
 
 CI runs the Python suite as **four `pytest-split` shards** (`--splits 4

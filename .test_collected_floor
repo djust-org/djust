@@ -1,0 +1,6 @@
+# Collected-count floor for the CI python-tests roots (#2746).
+# DERIVED, never hand-typed: `make test-collected-floor` regenerates it
+# from a real collection. CI (DJUST_COLLECTED_FLOOR=1) fails a run that
+# collects fewer items than this. Adding tests never trips it; removing
+# tests means regenerating it in the same PR.
+27780
