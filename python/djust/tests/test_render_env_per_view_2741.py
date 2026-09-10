@@ -101,10 +101,10 @@ def test_capture_reflects_the_push():
 
 def test_a_fresh_thread_captures_the_shipped_defaults():
     """`RenderEnv::default()` and a never-pushed thread agree (#1646)."""
-    from djust.config import LiveViewConfig
+    from djust.config import template_resolve_lazy_default
 
     env = _on_fresh_thread(_rust.RenderEnv.capture)
-    assert env.resolve_lazy is LiveViewConfig._defaults["template_resolve_lazy"]
+    assert env.resolve_lazy is template_resolve_lazy_default()
     assert env.timezone is None
     assert env.number_format is None
 
@@ -328,17 +328,20 @@ ActorProbeView = _actor_view("ActorProbeView")
 
 @contextlib.contextmanager
 def _resolve_lazy_config(enabled: bool):
-    """Flip the flag through the REAL config object — `LIVEVIEW_CONFIG` is
-    read into a process-global at import, so `override_settings` cannot
-    reach it (the #2539 wiring tests flip it the same way)."""
-    from djust.config import config
+    """Flip the flag at its ONE reader, `config.template_resolve_lazy_enabled`
+    — which `render_env.apply_resolve_lazy` imports at call time — rather
+    than by spelling the settings key (only `config.py` may; the #2539 pin
+    `test_the_config_reader_is_the_only_one` greps the package for it).
+    `override_settings` cannot reach it: `LIVEVIEW_CONFIG` is read into a
+    process-global at import."""
+    import djust.config as config_module
 
-    previous = config.get("template_resolve_lazy", True)
-    config.update({"template_resolve_lazy": enabled})
+    previous = config_module.template_resolve_lazy_enabled
+    config_module.template_resolve_lazy_enabled = lambda: enabled
     try:
         yield
     finally:
-        config.update({"template_resolve_lazy": previous})
+        config_module.template_resolve_lazy_enabled = previous
 
 
 @pytest.mark.django_db

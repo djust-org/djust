@@ -21,9 +21,15 @@ def render_template(
     string_if_invalid: Optional[str] = None,
     *,
     autoescape: bool = True,
+    render_env: Optional["RenderEnv"] = None,
 ) -> str:
     """
     Render a template string with the given context.
+
+    ``render_env`` (ADR-029, #2741) installs an explicit render environment
+    — timezone, number formats, ADR-027 flag — for this render only, restored
+    on return. ``None`` (the default) reads the calling thread's cells, which
+    is what this entry has always done.
 
     Fast Rust-based template rendering using the djust template engine.
 
@@ -878,6 +884,29 @@ def get_registered_custom_filters() -> List[str]:
 # Actor System
 # ============================================================================
 
+class RenderEnv:
+    """
+    The render environment as a value (ADR-029, #2741): what
+    ``djust.render_env.apply_render_env`` pushed into the thread-local cells.
+    ``capture()`` snapshots the calling thread's; the getters exist so a test
+    can assert what was captured rather than assume it. Passed to
+    ``RustLiveView.set_render_env`` and ``render_template(render_env=...)``.
+    """
+
+    @staticmethod
+    def capture() -> "RenderEnv":
+        """Snapshot the calling thread's render cells."""
+        ...
+
+    @property
+    def resolve_lazy(self) -> bool: ...
+    @property
+    def timezone(self) -> Optional[str]: ...
+    @property
+    def number_format(self) -> Optional[Tuple[str, str, List[int], bool]]: ...
+    @property
+    def unlocalized_number_format(self) -> Optional[Tuple[str, str, List[int], bool]]: ...
+
 class SessionActorHandle:
     """
     Handle to a session actor for async state management.
@@ -1007,6 +1036,25 @@ class RustLiveView:
         Args:
             dirs: List of template directory paths
         """
+        ...
+
+    def capture_render_env(self) -> None:
+        """
+        Snapshot the CALLING thread's render environment onto this view
+        (ADR-029, #2741) — the timezone, number formats and ADR-027 flag
+        ``djust.render_env.apply_render_env`` just pushed. Every render entry
+        then installs it, on whatever thread the render runs, under a guard
+        that restores the previous cell values afterwards. The per-view twin
+        of ``set_template_auto_call``.
+        """
+        ...
+
+    def set_render_env(self, env: Optional["RenderEnv"]) -> None:
+        """Set (or clear, with ``None``) this view's render environment."""
+        ...
+
+    def render_env(self) -> Optional["RenderEnv"]:
+        """This view's captured render environment, or ``None``."""
         ...
 
     def set_dj_if_id_namespace(self, namespace: str) -> None:
@@ -1408,6 +1456,8 @@ __all__ = [
     "get_registered_custom_filters",
     # Actor system
     "SessionActorHandle",
+    # Render environment (ADR-029)
+    "RenderEnv",
     "SupervisorStatsPy",
     "create_session_actor",
     "get_actor_stats",

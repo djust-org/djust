@@ -1384,7 +1384,6 @@ class WSConsumerTransport:
 
         get_template = getattr(view, "get_template", None)
         template = await sync_to_async(get_template)() if get_template is not None else None
-        context_data = await sync_to_async(view.get_context_data)()
         # ADR-029 (#2741): the actor path never runs `_sync_state_to_rust`,
         # so nothing pushed the render environment for THIS mount. Push it on
         # the calling thread — `SessionActorHandle.mount` captures the calling
@@ -1394,6 +1393,7 @@ class WSConsumerTransport:
         from .render_env import apply_render_env
 
         apply_render_env()
+        context_data = await sync_to_async(view.get_context_data)()
         result = await consumer.actor_handle.mount(
             view_path,
             context_data,
