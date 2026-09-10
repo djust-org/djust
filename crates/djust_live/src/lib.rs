@@ -19,9 +19,10 @@ pub mod model_serializer;
 
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
-use djust_core::{Context, Value};
+use djust_core::{Context, RenderEnv, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
+use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
@@ -287,6 +288,16 @@ pub struct RustLiveViewBackend {
     /// The `{% for %}` axis of the same problem is `Context::dj_if_loop_path`
     /// (#1832). Transient, like `template_auto_call`.
     dj_if_id_namespace: String,
+    /// The render environment as per-view config (ADR-029, #2741): the
+    /// timezone, number formats and ADR-027 flag Python pushed for this
+    /// view, captured on the pushing thread (`capture_render_env`) and
+    /// installed into the thread-local cells by EVERY render entry under a
+    /// `RenderEnvGuard` — so a render on a thread that never pushed (the
+    /// `ViewActor`'s tokio worker) reads the configured values, not the
+    /// compiled defaults. `None` (never captured) leaves the cells alone,
+    /// which is the pre-ADR-029 behaviour. Transient, like
+    /// `template_auto_call`.
+    render_env: Option<RenderEnv>,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +348,9 @@ impl RustLiveViewBackend {
             // Empty = no namespace segment in marker ids (#2686). Only the
             // LiveComponent template_name entry sets one.
             dj_if_id_namespace: String::new(),
+            // None until Python captures one (ADR-029); a pure-Rust or
+            // direct-API backend reads the thread's cells as before.
+            render_env: None,
         }
     }
 
@@ -386,6 +400,34 @@ impl RustLiveViewBackend {
     /// Whether template auto-call is currently enabled (introspection).
     fn template_auto_call_enabled(&self) -> bool {
         self.template_auto_call
+    }
+
+    /// Snapshot the CALLING thread's render environment onto this view
+    /// (ADR-029, #2741).
+    ///
+    /// Called by `RustBridgeMixin._apply_render_env` right after
+    /// `djust.render_env.apply_render_env` has pushed the cells, so the
+    /// snapshot is what that push made THIS thread read. Every render entry
+    /// then installs it — on whatever thread the render runs — under a guard
+    /// that restores the previous values afterwards. The per-view twin of
+    /// `set_template_auto_call`, for the same reason: a field on the backend
+    /// reaches every entry on every thread; a thread-local reaches only the
+    /// thread that pushed it.
+    fn capture_render_env(&mut self) {
+        self.render_env = Some(djust_templates::render_env::capture());
+    }
+
+    /// Set (or clear, with `None`) this view's render environment from a
+    /// `RenderEnv` value — `RenderEnv.capture()` or one a test built.
+    #[pyo3(signature = (env))]
+    fn set_render_env(&mut self, env: Option<PyRef<'_, RenderEnvPy>>) {
+        self.render_env = env.map(|e| e.inner.clone());
+    }
+
+    /// This view's captured render environment, or `None` (introspection —
+    /// a setter with no getter cannot be tested end to end, #2017).
+    fn render_env(&self) -> Option<RenderEnvPy> {
+        self.render_env.clone().map(|inner| RenderEnvPy { inner })
     }
 
     /// Namespace this view's `<!--dj-if id=...-->` marker ids (#2686).
@@ -687,6 +729,12 @@ impl RustLiveViewBackend {
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
 
+            // ADR-029: install this view's render environment into the
+            // thread-local cells for the duration of this render, restoring
+            // the previous values on drop — applied beside `set_auto_call`
+            // at ALL THREE render entries so the paths cannot drift (#1646).
+            let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
+
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
@@ -727,6 +775,12 @@ impl RustLiveViewBackend {
             // Get template from cache or parse and cache it (#2669: the ONE
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
+
+            // ADR-029: install this view's render environment into the
+            // thread-local cells for the duration of this render, restoring
+            // the previous values on drop — applied beside `set_auto_call`
+            // at ALL THREE render entries so the paths cannot drift (#1646).
+            let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
@@ -1153,6 +1207,12 @@ impl RustLiveViewBackend {
             // generation-gated entry into `TEMPLATE_CACHE`).
             let template_arc = cached_template(&self.template_source)?;
 
+            // ADR-029: install this view's render environment into the
+            // thread-local cells for the duration of this render, restoring
+            // the previous values on drop — applied beside `set_auto_call`
+            // at ALL THREE render entries so the paths cannot drift (#1646).
+            let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
+
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
@@ -1489,6 +1549,9 @@ impl RustLiveViewBackend {
             // entry re-sets it on every render, and a restored view that is
             // not a component namespaces nothing — same as before this field.
             dj_if_id_namespace: String::new(),
+            // Transient (ADR-029): `_apply_render_env` re-captures it on the
+            // next framework render post-restore, like `template_auto_call`.
+            render_env: None,
         })
     }
 
@@ -1533,6 +1596,24 @@ impl RustLiveViewBackend {
     /// Update state (Rust API)
     pub fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
         self.apply_state_update(updates)
+    }
+
+    /// Set this view's render environment (Rust API, ADR-029). The actor
+    /// path calls this with the environment captured on the Python thread
+    /// that mounted the view, so the worker's renders install it.
+    pub fn set_render_env_rust(&mut self, env: Option<RenderEnv>) {
+        self.render_env = env;
+    }
+
+    /// This view's render environment (Rust API), handed down to child
+    /// `ComponentActor`s so a component render applies the same config.
+    pub fn render_env_rust(&self) -> Option<&RenderEnv> {
+        self.render_env.as_ref()
+    }
+
+    /// The ADR-024 auto-call flag (Rust API), for the same hand-down.
+    pub fn template_auto_call_rust(&self) -> bool {
+        self.template_auto_call
     }
 
     /// Full-context truth for pure-Rust callers (#2592, the actor twin of
@@ -2153,15 +2234,24 @@ fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None, *, autoescape=true))]
+#[pyo3(signature = (template_source, context, auto_call=None, string_if_invalid=None, *, autoescape=true, render_env=None))]
 fn render_template(
     template_source: String,
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
     string_if_invalid: Option<String>,
     autoescape: bool,
+    render_env: Option<PyRef<'_, RenderEnvPy>>,
 ) -> PyResult<String> {
     guard_panic("render_template", move || {
+        // ADR-029: an explicit environment beside `auto_call` /
+        // `string_if_invalid` / `autoescape`. `None` (the default) reads the
+        // calling thread's cells as this entry always has; `Some` installs
+        // the given one for this render only, restored on return — including
+        // the conversion below, which reads `resolve_lazy()` too.
+        let _render_env = render_env
+            .as_ref()
+            .map(|e| RenderEnvGuard::install(&e.inner));
         // Inside the closure, not before it (PR #2514 review, finding 4):
         // the conversion runs arbitrary Python through every value's
         // dunders, and a panic in it must surface as a `RuntimeError`, not
@@ -2590,6 +2680,73 @@ fn resolve_template_inheritance(
 
 use pyo3_async_runtimes::tokio::future_into_py;
 
+/// The render environment as a Python-visible value (ADR-029, #2741).
+///
+/// `RenderEnv.capture()` snapshots the calling thread's cells (what
+/// `djust.render_env.apply_render_env` just pushed); the getters exist so a
+/// test can assert what was captured rather than assume it (#2017). Passed to
+/// `RustLiveView.set_render_env` and `render_template(render_env=...)`.
+#[pyclass(frozen, name = "RenderEnv", skip_from_py_object)]
+#[derive(Clone)]
+pub struct RenderEnvPy {
+    inner: RenderEnv,
+}
+
+/// `(decimal_sep, thousand_sep, grouping, use_grouping)` — the
+/// `active_number_format` shape, so tests compare like with like.
+type NumberFormatTuple = (String, String, Vec<usize>, bool);
+
+fn number_format_tuple(f: &djust_core::locale::NumberFormat) -> NumberFormatTuple {
+    (
+        f.decimal_sep.clone(),
+        f.thousand_sep.clone(),
+        f.grouping.clone(),
+        f.use_grouping,
+    )
+}
+
+#[pymethods]
+impl RenderEnvPy {
+    /// Snapshot the calling thread's render cells.
+    #[staticmethod]
+    fn capture() -> Self {
+        RenderEnvPy {
+            inner: djust_templates::render_env::capture(),
+        }
+    }
+
+    /// ADR-027's resolution flag as captured.
+    #[getter]
+    fn resolve_lazy(&self) -> bool {
+        self.inner.resolve_lazy
+    }
+
+    /// The captured IANA zone name, or `None`.
+    #[getter]
+    fn timezone(&self) -> Option<String> {
+        self.inner.timezone.clone()
+    }
+
+    /// The captured localized number format, or `None`.
+    #[getter]
+    fn number_format(&self) -> Option<NumberFormatTuple> {
+        self.inner.number_format.as_ref().map(number_format_tuple)
+    }
+
+    /// The captured `use_l10n=False` format (#2266), or `None`.
+    #[getter]
+    fn unlocalized_number_format(&self) -> Option<NumberFormatTuple> {
+        self.inner
+            .unlocalized_number_format
+            .as_ref()
+            .map(number_format_tuple)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
 /// Python wrapper for SessionActorHandle
 ///
 /// This class provides async methods that can be called from Python's asyncio.
@@ -2628,6 +2785,10 @@ impl SessionActorHandlePy {
 
         // Convert Python dict to Rust HashMap<String, Value>
         let params_rust = python_dict_to_hashmap(params)?;
+        // ADR-029 (#2741): snapshot the render environment HERE, on the
+        // Python thread that pushed it, before the mount crosses to the
+        // tokio worker that will do every render for this view.
+        let render_env = djust_templates::render_env::capture();
 
         future_into_py(py, async move {
             let result = handle
@@ -2637,6 +2798,7 @@ impl SessionActorHandlePy {
                     python_view,
                     template,
                     template_dirs.unwrap_or_default(),
+                    Some(render_env),
                 )
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -4663,6 +4825,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;
+    m.add_class::<RenderEnvPy>()?;
     m.add_class::<SupervisorStatsPy>()?;
     m.add_function(wrap_pyfunction!(create_session_actor, m)?)?;
     m.add_function(wrap_pyfunction!(get_actor_stats, m)?)?;

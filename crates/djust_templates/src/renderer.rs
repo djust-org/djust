@@ -1962,6 +1962,16 @@ impl Drop for ActiveTimezoneGuard {
     }
 }
 
+/// Swap the whole `{% localize %}` scope stack, returning the previous one.
+///
+/// Used ONLY by `crate::render_env::RenderEnvGuard` (ADR-029): a render entry
+/// installs the environment's base scope (`RenderEnv::use_l10n`) on the way
+/// in and puts the previous stack back on the way out — the panic-leak
+/// class `UseL10nGuard` closes for one block, closed for the whole render.
+pub(crate) fn replace_use_l10n_stack(stack: Vec<bool>) -> Vec<bool> {
+    USE_L10N_STACK.with(|s| std::mem::replace(&mut *s.borrow_mut(), stack))
+}
+
 /// Is the innermost `{% localize %}` scope (if any) forcing l10n OFF?
 fn use_l10n_forced_off() -> bool {
     USE_L10N_STACK.with(|s| s.borrow().last().copied() == Some(false))

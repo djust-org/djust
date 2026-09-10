@@ -153,6 +153,10 @@ def _render_template_name_with_markers(
     rust_view = RustLiveView(source, get_template_dirs())
     if hasattr(rust_view, "set_template_auto_call"):
         rust_view.set_template_auto_call(template_auto_call_enabled())
+    # ADR-029 (#2741): snapshot the pushed environment onto this view, beside
+    # the auto-call flag, so every render entry applies it on any thread.
+    if hasattr(rust_view, "capture_render_env"):
+        rust_view.capture_render_env()
     # #2686: give this instance its own dj-if id namespace, so two instances of
     # one component class in a parent do not both emit `if-<hash>-0`.
     namespace = _dj_if_id_namespace(context.get("component_id"))
