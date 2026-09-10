@@ -823,8 +823,10 @@ jobs:
   # runner across consecutive main merges AND caught a real regression on
   # PR #2668 (1032 -> 1031) while still non-gating. The `compare` step exits
   # 1 when the engine-subset or whole-label percentage drops below
-  # scripts/django-template-suite-baseline.json, or when nothing reached the
-  # djust engine (adapter failed to install), and that failure reaches the
+  # scripts/django-template-suite-baseline.json, when any cell that was OK
+  # in the baseline is FAIL/ERROR now (#2722 — the baseline's `not_ok` set;
+  # a fix-5-break-5 swap keeps both percentages and still fails), or when
+  # nothing reached the djust engine (adapter failed to install), and that failure reaches the
   # test-summary &&-chain (#1713). No continue-on-error on the job, any
   # step, or the aggregate. A PR that raises the number regenerates the
   # baseline with `--write-baseline` and commits it; never lower it by hand.
