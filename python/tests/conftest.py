@@ -15,6 +15,7 @@ them by location. The duplication is pytest's, not a choice.
 """
 
 import pytest
+from differential_corpus_2723 import CorpusCache
 
 
 @pytest.fixture(autouse=True)
@@ -29,3 +30,14 @@ def _reset_djust_globals():
 
     reset_djust_globals()
     yield
+
+
+@pytest.fixture(scope="session")
+def corpus(tmp_path_factory: pytest.TempPathFactory) -> CorpusCache:
+    base = tmp_path_factory.getbasetemp()
+    # An xdist worker's basetemp is `<controller basetemp>/popen-gwN`
+    # (xdist/workermanage.py). The parent is the one directory every worker
+    # of THIS session can see, and a later session gets a fresh numbered dir.
+    if base.name.startswith("popen-"):
+        base = base.parent
+    return CorpusCache(base / "corpus-2345")
