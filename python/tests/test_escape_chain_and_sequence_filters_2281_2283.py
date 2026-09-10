@@ -59,7 +59,7 @@ from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 
 from test_differential_reachability_manifest_2345 import rows as reachability_rows  # noqa: E402
-from test_differential_reachability_manifest_2345 import (  # noqa: E402
+from differential_corpus_2723 import (  # noqa: E402
     run_manifest as run_reachability_manifest,
 )
 from test_safe_survives_is_safe_filter_2274 import capabilities  # noqa: E402
