@@ -78,6 +78,44 @@ def test_a_deleted_test_file_is_not_selected():
     assert sel.tests == ["tests/unit/test_forms.py"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/playwright/test_table_select.py",
+        "tests/playwright/test_browser_smoke.py",
+    ],
+)
+def test_a_manual_only_test_dirs_are_not_test_files(path):
+    # #2781: pytest's own addopts (`--ignore=tests/playwright`,
+    # `--ignore=tests/js`) only apply to pytest's directory-walk collection —
+    # NOT to a node id passed explicitly. Before this fix, `is_test_file`
+    # classified a file under `tests/playwright/` as a test file just like any
+    # other `test_*.py`; `_all_test_files()` (which walks TEST_ROOTS through
+    # this same predicate) then put it in the "existing tests" set, and rule
+    # (a) selected it as a "changed test file" — handing it to pytest as an
+    # explicit path, where it WAS collected and run despite the ignore.
+    # `tests/playwright/test_table_select.py`'s top-level
+    # `async def test_table_select()` (a standalone Playwright script, not a
+    # pytest case) failed the pre-push run outright.
+    assert not st.is_test_file(path), (
+        f"{path} must not be classified as a test file — it lives under a "
+        "manual-only dir pytest's own addopts already ignore"
+    )
+
+
+def test_a_manual_only_test_dirs_are_never_selected():
+    # With `is_test_file` fixed, `_all_test_files()` never puts a
+    # `tests/playwright/` file in the "existing tests" set — the realistic
+    # shape (unlike a test that force-injects the path into `tests=`, which
+    # would make rule (b) select it via its own basename trivially matching
+    # its own stem). Changing ONLY such a file, with no other test file
+    # depending on it, safely falls back to the full suite (the existing
+    # "empty selection" invariant) rather than ever naming the manual file.
+    path = "tests/playwright/test_table_select.py"
+    sel = _select([path])
+    assert path not in sel.tests
+
+
 # --------------------------------------------------------------------------
 # (b) modules: stem in the test name, or an import in its text
 # --------------------------------------------------------------------------

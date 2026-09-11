@@ -56,6 +56,17 @@ from pathlib import Path, PurePosixPath
 
 TEST_ROOTS = ("tests/", "python/tests/", "python/djust/tests/")
 
+# Manual-only test dirs pytest itself never collects (pyproject.toml
+# ``addopts``: ``--ignore=tests/playwright``, ``--ignore=tests/js``). That
+# ignore only takes effect for pytest's own directory-walk collection — it
+# does NOT apply to a node id passed explicitly, so a file under one of these
+# dirs, if selected here and handed to pytest as an explicit path, DOES get
+# collected and run despite the ignore (#2781). Files here are standalone
+# scripts (playwright's own async-run pattern; `npm test` for JS) and must
+# never be selected as a "changed test file" — they belong to their own CI
+# jobs, not the pytest pre-push/CI run.
+MANUAL_ONLY_TEST_DIRS = ("tests/playwright/", "tests/js/")
+
 # Any change here means the harness itself changed: nothing narrower is safe.
 FULL_SUITE_FILES = frozenset(
     {
@@ -93,6 +104,8 @@ class Selection:
 def is_test_file(path: str) -> bool:
     p = PurePosixPath(path)
     if p.suffix != ".py" or not path.startswith(TEST_ROOTS):
+        return False
+    if path.startswith(MANUAL_ONLY_TEST_DIRS):
         return False
     return p.name.startswith("test_") or p.name.endswith("_test.py")
 
