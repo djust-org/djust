@@ -50,20 +50,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install uv
-          # Mirrors .github/workflows/test.yml:138-139 exactly, rather than
+          # Mirrors the test.yml Python job installation, rather than
           # inventing a second install recipe. The hand-rolled version failed
           # on its first scheduled run: `uv venv` does not create a `pip`, so
           # `.venv/bin/pip install maturin` had no interpreter to run — and
           # maturin is already a dev dependency, so the line was redundant as
           # well as broken. See #2155.
-          uv sync --extra dev
+          uv sync --frozen --extra dev --no-install-project
           # Deliberately NOT `|| true`. A failed Rust build yields hundreds of
           # import errors, which would otherwise be reported as "main is RED"
           # and send people hunting for a test regression that does not exist.
           # Failing here makes it a job failure, which the report job renders
           # as "could not run" — which is exactly what happened, correctly, on
           # the run that surfaced this bug.
-          uv run maturin develop --release
+          uv run --no-sync maturin develop --release
 
       - name: Run the suite
         id: run
@@ -91,7 +91,7 @@ jobs:
           # of `main`, not of whatever branch someone is pushing, so a daily
           # scheduled run reports it to the person who can act on it instead of
           # blocking an unrelated push.
-          uv run python -m pytest tests/ python/tests/ python/djust/tests/ -q \
+          uv run --no-sync python -m pytest tests/ python/tests/ python/djust/tests/ -q \
             > /tmp/suite.txt 2>&1
           STATUS=$?
           set -e

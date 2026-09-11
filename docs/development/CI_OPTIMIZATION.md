@@ -1,318 +1,141 @@
-# CI Optimization Guide
+# Test performance
 
-This document explains the CI test parallelization strategy and performance improvements.
+Optimize repeated work before reducing coverage. CI remains the full gate; local
+pre-push selection is already available through `scripts/select-tests.py`, with
+`DJUST_PREPUSH_FULL=1` to request the full suite.
 
-## Overview
+## Measured baseline
 
-The test suite has been optimized to run tests in parallel, significantly reducing CI execution time.
+[Main run 34554928145](https://github.com/djust-org/djust/actions/runs/34554928145)
+completed successfully on 2026-09-11 UTC at `acf38531`. It took 11m55s from creation
+to completion, including runner scheduling. Its Python jobs spent 165–197 seconds
+installing dependencies/building the extension and 224–367 seconds in pytest.
+These are observations from one run, not a fixed CI duration or a promise about
+future speedups.
 
-## Parallelization Strategy
+The current architecture already runs language-specific jobs concurrently, uses
+four duration-balanced Python shards, runs xdist inside each shard, and caches
+identical differential corpus inputs within a pytest session. PRs use Python 3.12;
+main also exercises 3.13 and 3.14. A separate job exercises free-threaded Python.
 
-### Before: Sequential Execution
-```
-┌─────────────────────────────────────┐
-│ Setup (1 min)                       │
-├─────────────────────────────────────┤
-│ Rust tests (2 min)                  │
-├─────────────────────────────────────┤
-│ Python tests (3 min)                │
-├─────────────────────────────────────┤
-│ JavaScript tests (1 min)            │
-├─────────────────────────────────────┤
-│ Linting (1 min)                     │
-└─────────────────────────────────────┘
-Total: ~8 minutes
-```
+The downloaded Python 3.12 duration artifacts contained 27,453 node IDs and about
+2,975 aggregate test-seconds. The largest file totals were:
 
-### After: Parallel Execution
-```
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Rust tests   │  │ Python tests │  │ JS tests     │  │ Playwright   │
-│ + linting    │  │ + linting    │  │ + linting    │  │ (browser)    │
-│ (2.5 min)    │  │ (2 min)      │  │ (1 min)      │  │ (2 min)      │
-└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
-         ↓               ↓               ↓               ↓
-         └───────────────┴───────────────┴───────────────┘
-                              ↓
-                     ┌──────────────────┐
-                     │ Summary (5 sec)  │
-                     └──────────────────┘
-Total: ~2.5 minutes (70% faster!)
-```
+| Area | Recorded aggregate seconds |
+| --- | ---: |
+| Differential reachability manifest | 793 |
+| Exhaustive Unicode title test and related filter tests | 178 |
+| `make doctor` checks | 174 |
+| Refusal-comparison tests | 160 |
+| System checks | 160 |
+| Tag bridge object parity | 144 |
+| CI shard self-tests | 70 |
 
-## Optimizations Implemented
+Aggregate seconds include time waiting on shared fixture results; they are not
+CPU measurements. In particular, a cached corpus sweep is shared across workers
+in **one pytest session**, not across four independent CI shard jobs. Adding up
+its readers' durations can exaggerate the amount of distinct computation.
 
-### 1. Job-Level Parallelization
+## Changes in this iteration
 
-**Four parallel test jobs:**
-- `rust-tests` - Rust tests + clippy + fmt
-- `python-tests` - Python tests + ruff
-- `javascript-tests` - JS tests + linter (if configured)
-- `playwright-tests` - Browser automation tests (@loading, @cache, DraftMode)
+### Build the extension once per native Python job
 
-**Benefits:**
-- Tests run simultaneously on separate runners
-- Failures in one job don't block others
-- Clearer separation of concerns
-
-### 2. Python Test Parallelization (pytest-xdist)
-
-**Within Python tests:**
-```bash
-pytest tests/ python/tests/ -n auto
-```
-
-The `-n auto` flag:
-- Detects available CPU cores
-- Distributes tests across workers
-- Runs ~4x faster on 4-core runner
-
-**Test Distribution:**
-```
-Worker 1: tests/unit/test_forms.py
-Worker 2: tests/unit/test_live_view.py
-Worker 3: tests/e2e/test_phase5_decorators.py
-Worker 4: python/tests/test_actor_integration.py
-... (parallel execution)
-```
-
-### 3. Dependency Caching
-
-**Cached artifacts:**
-- Rust dependencies (`~/.cargo/`)
-- Python dependencies (`.venv/`)
-- Node modules (`node_modules/`)
-
-**Cache keys based on:**
-- `Cargo.lock` hash
-- `pyproject.toml` hash
-- `package-lock.json` hash
-
-**Benefits:**
-- Faster setup (30 sec → 10 sec)
-- Reduced network usage
-- More reliable builds
-
-### 4. Optimized Build Steps
-
-**Rust optimizations:**
-- `--release` flag for faster test execution
-- Skip `djust_live` (tested via Python)
-- Parallel compilation (default)
-
-**Python optimizations:**
-- `uv sync` with minimal dependencies
-- Separate dev/prod dependency sets
-- Maturin release builds
-
-## Performance Metrics
-
-### Expected CI Times
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| **Total time** | ~8 min | ~2.5 min | **70% faster** |
-| **Python tests** | 3 min | 45 sec | **75% faster** |
-| **Setup time** | 1 min | 10 sec | **83% faster** |
-| **Feedback time** | 8 min | 2.5 min | **69% faster** |
-
-### Test Count
-
-- **172 Python tests** - Distributed across 4+ workers (pytest-xdist)
-- **218 JavaScript tests** - Vitest parallel by default
-- **3 Playwright tests** - Browser automation (Phase 5 features)
-- **Rust tests** - Cargo parallel by default
-
-## Local Development
-
-### Run Tests Locally (Parallel)
+The Python 3.12 shard 1 log showed `uv sync` building the project for about 121
+seconds, followed by a separate 73-second `maturin develop` build. Install only
+dependencies first, then explicitly build the release extension:
 
 ```bash
-# Python tests in parallel
-make test-python-parallel
-
-# All tests (still sequential between suites)
-make test
-
-# Individual test suites
-make test-rust
-make test-js
-make test-python
+uv sync --frozen --extra dev --no-install-project
+uv run --no-sync maturin develop --release
 ```
 
-### Install pytest-xdist
+`--no-sync` matters: an ordinary `uv run` can synchronize the project again before
+executing maturin. The Python matrix, serial benchmark job, Django scoreboard, and scheduled
+main-health job use this install sequence; their later uv commands also use `--no-sync` so they
+cannot undo it. The isolated worktree was installed and tested with this exact
+sequence. Avoid interpreting the eliminated 121-second step as a guaranteed
+end-to-end saving: cache state and scheduling still affect the workflow.
 
-```bash
-uv pip install pytest-xdist
-# or
-pip install pytest-xdist
-```
+### Batch the exhaustive Unicode inputs
 
-### Run Specific Test in Parallel
+The title differential still tests every Unicode scalar in four contexts: alone,
+preceded by `a`, followed by `a`, and surrounded by `a`. That is exactly 4,448,256
+comparisons. It now sends bounded batches through both template engines, with the
+same title filter and autoescape behavior. Cell delimiters and exact result
+counts prevent missing outputs from disappearing into concatenated strings.
 
-```bash
-# Run unit tests in parallel
-pytest tests/unit/ -n auto
+A separate test compares batching with individual template renders. Replacing the
+batch's title filter with a lower filter makes that test fail. The original skew
+allowance and global skew bound remain intact.
 
-# Run with specific worker count
-pytest tests/ -n 8
+On the same local Python 3.12 release build, the exhaustive test's call time went
+from 39.74s to 26.46s (33% less time). This is a local before/after measurement;
+runner results should be recorded separately.
 
-# Disable parallelization (for debugging)
-pytest tests/ -n 0
-```
+### Keep local coverage complete
 
-## CI Configuration Files
+`make test` now includes `python/djust/tests/` alongside `tests/` and
+`python/tests/`, matching the CI and dedicated Python targets. Explicit pytest
+paths override configured discovery, so omitting a root is lost coverage, not an
+optimization. A dry-run test checks the command that make actually expands.
 
-### GitHub Actions
+## Local hooks and CI responsibilities
 
-Two workflow files:
+Tests are separated by language and execution stage, but the Python CI gate still
+runs the complete collection rather than excluding slow tests.
 
-1. **`.github/workflows/test.yml`** (Current)
-   - Sequential execution
-   - Simple, reliable
-   - Use for stable releases
+| Stage | Responsibility |
+| --- | --- |
+| Commit | Formatting, linting, secret detection, generated assets, and quick consistency checks on relevant files. |
+| Push | Affected Python tests, Rust crate tests, full JavaScript tests for JS changes, compile-heavy Clippy, and applicable audits. Shared-engine/harness changes fall back to the full local suite. |
+| PR CI | Full Python 3.12 shards, Rust/JS suites, integration/security gates, serial benchmarks, Django compatibility scoreboard, and free-threaded smoke checks. |
+| Main / scheduled CI | Additional Python versions on main and the daily serial Python run that exposes execution-order dependencies. |
 
-2. **`.github/workflows/test-parallel.yml`** (New)
-   - Parallel execution
-   - Faster feedback
-   - Use for active development
+Full JavaScript tests and Clippy now explicitly use the `pre-push` stage, matching
+the existing Python and Rust test hooks. They previously inherited all stages and
+therefore ran on both commit and push. Their commands, arguments, and file filters
+are unchanged. A real pre-commit dispatch probe confirmed that they do not execute
+at commit, still execute at push, and still reject a push when a check fails.
 
-### Switching to Parallel CI
+Cheap checks can run again on push because the pushed range may contain multiple
+commits. Expensive suites should not repeat at both local stages. CI remains
+necessary because it checks the complete branch in a clean runner environment.
+Local hooks do not replace it, and green targeted tests do not prove the full
+suite passes. Clippy currently has stricter local flags than the CI invocation;
+keep its push gate until any proposed CI-only policy establishes equivalent
+coverage.
 
-**Option 1: Rename files**
-```bash
-mv .github/workflows/test.yml .github/workflows/test-sequential.yml
-mv .github/workflows/test-parallel.yml .github/workflows/test.yml
-```
+## Alternatives worth investigating next
 
-**Option 2: Keep both (recommended for testing)**
-- Both workflows run on PR
-- Compare performance
-- Verify reliability
+| Alternative | Expected benefit | Tradeoff / verification needed |
+| --- | --- | --- |
+| Keep expensive corpus readers in the same CI shard | Avoid one full identical sweep per independent shard | Schedule by shared fixture cost, not inflated per-reader waits; prove shard union and disjointness and benchmark the longest shard. |
+| Build one wheel per Python version, then distribute it to shards | Reduce repeated native builds and runner minutes | Adds a prerequisite job and artifact transfers; may improve cost more than wall time. Verify ABI, commit identity, installed package path, and Python source under test. |
+| Collect once for the shard self-tests | Avoid five repeated full collections | Exercise the actual pytest-split plugin and actual collected IDs, preserving staleness, coverage, and balance checks; do not replace it with a handwritten approximation. |
+| Separate one real doctor smoke run from scenario tests | Avoid repeatedly timing out on a cold Cargo smoke build | Scenario tests can control unrelated tools, but retain a real integration run and tests for actual timeout/error behavior. |
+| Partition the Unicode sweep into balanced chunks | Distribute its remaining serial tail | Preserve every scalar/context and the global skew limit; account for extra collection and fixture overhead. |
+| Tune local worker budgets by workload | Reduce CPU/RAM contention when Python, Rust, and JS run together | Compare fixed worker counts with `auto`; more workers can make subprocess-heavy tests slower. |
+| Persistent content-addressed corpus artifacts | Reuse expensive sweeps across runs | Invalidation must cover native build, Python source, interpreter, settings, script input, and environment; session-only caching is currently easier to trust. |
+| Move exhaustive tests to nightly only | Faster PR checks | Loses pre-merge evidence. Do not make this the default while template compatibility is an active release concern. |
 
-## Troubleshooting
+The first follow-up to measure is corpus affinity. A build-once wheel job is the
+next infrastructure experiment. Neither should be claimed faster without a
+current-head CI comparison.
 
-### Tests Fail Only in Parallel
+## Measurement workflow
 
-**Symptom:** Tests pass with `pytest` but fail with `pytest -n auto`
+1. Download step timings and all four `test-durations-shard-*` artifacts from a
+   successful run. Separate job setup, execution, queue time, and aggregate test
+   duration.
+2. Reproduce the largest avoidable cost in an isolated worktree with its own uv
+   environment and a release native build.
+3. Run the same correctness checks before and after. For a changed harness, keep
+   a control or mutation that proves it still detects the original failure.
+4. Run normal commit/push hooks and inspect the new commit's complete CI rollup.
+5. After a representative successful CI run, refresh runner-specific timings with
+   `make test-durations-from-ci RUN=<run-id>`. Do not replace them with local
+   machine durations to claim runner balance.
 
-**Common causes:**
-1. **Shared state** - Tests modifying global state
-2. **Database conflicts** - Multiple workers writing to same DB
-3. **File system** - Tests creating/deleting same files
-
-**Solution:**
-```python
-# Use pytest-django's transactional tests
-@pytest.mark.django_db(transaction=True)
-def test_concurrent_safe():
-    # Each worker gets isolated transaction
-    pass
-```
-
-### Slow Test Detection
-
-**Find slow tests:**
-```bash
-pytest --durations=10 tests/
-```
-
-**Optimize slow tests:**
-- Use fixtures for common setup
-- Mock external services
-- Skip integration tests in unit suites
-
-### Cache Issues
-
-**Clear cache if builds fail:**
-```bash
-# Locally
-rm -rf ~/.cache/uv .venv node_modules target/
-
-# GitHub Actions
-# Go to repo → Actions → Caches → Delete specific cache
-```
-
-## Future Improvements
-
-### Potential Optimizations
-
-1. **Test Sharding** - Split tests across multiple CI jobs
-   ```yaml
-   strategy:
-     matrix:
-       shard: [1, 2, 3, 4]
-   ```
-
-2. **Matrix Testing** - Test multiple Python/Node versions
-   ```yaml
-   strategy:
-     matrix:
-       python: ['3.10', '3.11', '3.12']
-   ```
-
-3. **Test Result Caching** - Skip unchanged tests
-   - Use `pytest --lf` (last failed)
-   - Use `pytest --cache-show`
-
-## Best Practices
-
-### Writing Parallel-Safe Tests
-
-**DO:**
-- ✅ Use fixtures for test data
-- ✅ Use unique identifiers
-- ✅ Clean up resources in teardown
-- ✅ Use transactional tests
-
-**DON'T:**
-- ❌ Modify global state
-- ❌ Hard-code file paths
-- ❌ Assume test execution order
-- ❌ Share mutable objects
-
-### Example: Parallel-Safe Test
-
-```python
-import pytest
-from django.test import RequestFactory
-
-@pytest.mark.django_db(transaction=True)
-def test_parallel_safe():
-    # Each worker gets unique factory
-    factory = RequestFactory()
-
-    # Each worker gets unique user
-    user = User.objects.create(
-        username=f"user_{uuid.uuid4()}"
-    )
-
-    # Test logic...
-
-    # Cleanup (optional with transaction=True)
-    user.delete()
-```
-
-## Monitoring
-
-### CI Performance Dashboard
-
-Track these metrics:
-- Total CI time (target: <3 min)
-- Test pass rate (target: >99%)
-- Cache hit rate (target: >80%)
-- Flaky test count (target: 0)
-
-### Alerts
-
-Set up alerts for:
-- CI time > 5 minutes (regression)
-- Test failures > 5% (instability)
-- Cache misses > 50% (configuration issue)
-
-## Resources
-
-- [pytest-xdist documentation](https://pytest-xdist.readthedocs.io/)
-- [GitHub Actions optimization](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs)
-- [Cargo parallel compilation](https://doc.rust-lang.org/cargo/reference/build-scripts.html)
-- [Vitest performance](https://vitest.dev/guide/improving-performance.html)
+Keep full logs in `context/terminal/` and temporary measurement scripts in
+`scratch/`. Record negative results too: an optimization that merely moves time
+into another job or lets tests disappear is not a faster test suite.

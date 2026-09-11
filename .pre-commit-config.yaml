@@ -27,7 +27,7 @@ repos:
         pass_filenames: false
         args: [--all, --check]
 
-      # Rust linting (clippy)
+      # Compile-heavy lint runs once before push; commits keep cargo fmt.
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy
@@ -35,6 +35,7 @@ repos:
         types: [rust]
         pass_filenames: false
         args: [--all-targets, --all-features, --, -D, warnings]
+        stages: [pre-push]
 
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -103,12 +104,14 @@ repos:
         types: [javascript]
         pass_filenames: false
 
+      # Full JS suite runs before push and in CI, not on every local commit.
       - id: npm-test
         name: npm test
         entry: npm test
         language: system
         types: [javascript]
         pass_filenames: false
+        stages: [pre-push]
 
       - id: eslint
         name: eslint

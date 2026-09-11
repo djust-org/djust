@@ -22,6 +22,7 @@ bug.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,17 @@ def test_the_gating_invocation_runs_in_parallel() -> None:
     assert re.search(r"-n\s+(auto|\d+)", cmd), (
         f"the gating pytest invocation lost its `-n auto`: {cmd}"
     )
+
+
+def test_make_test_runs_every_python_root() -> None:
+    result = subprocess.run(
+        ["make", "--dry-run", "test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    commands = [line for line in result.stdout.splitlines() if "-m pytest" in line]
+    assert len(commands) == 1, commands
+    for root in REQUIRED_ROOTS:
+        assert root in commands[0].split(), (root, commands[0])

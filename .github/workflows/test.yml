@@ -221,8 +221,10 @@ jobs:
 
       - name: Install Python dependencies and build extension
         run: |
-          uv sync --extra dev
-          uv run maturin develop --release
+          # Install dependencies without building the project through uv's
+          # PEP 517 backend, then build the native extension exactly once.
+          uv sync --frozen --extra dev --no-install-project
+          uv run --no-sync maturin develop --release
 
       # pytest-split is also in the [dev] extra; installing it here as well
       # mirrors the existing pytest-xdist belt-and-braces so a stale uv.lock
@@ -347,7 +349,7 @@ jobs:
 
       - name: Run Python linter
         if: matrix.group == 1
-        run: uv run ruff check python/
+        run: uv run --no-sync ruff check python/
 
       # mypy type-check — incremental enforcement gate (ADR-023).
       # The pyproject [tool.mypy] config is lenient globally (legacy baseline
@@ -811,14 +813,14 @@ jobs:
 
       - name: Install
         run: |
-          uv sync --extra dev
-          uv run maturin develop --release
+          uv sync --frozen --extra dev --no-install-project
+          uv run --no-sync maturin develop --release
 
       - name: Run benchmarks serially with thresholds enforced
         run: |
           # No -n auto: xdist disables stats collection, which is exactly how
           # these thresholds came to be unenforced everywhere.
-          uv run python -m pytest tests/benchmarks/ --benchmark-only -q
+          uv run --no-sync python -m pytest tests/benchmarks/ --benchmark-only -q
 
   # Django's own template_tests against DjustTemplateBackend — the v1.2.0
   # conformance scoreboard (#2517). Clones django/django at the installed
@@ -858,12 +860,12 @@ jobs:
 
       - name: Install
         run: |
-          uv sync --extra dev
-          uv run maturin develop --release
+          uv sync --frozen --extra dev --no-install-project
+          uv run --no-sync maturin develop --release
 
       - name: Run Django's template_tests through djust
         run: |
-          uv run python scripts/run-django-template-suite.py \
+          uv run --no-sync python scripts/run-django-template-suite.py \
             --parsed-output .django-src/last-run.txt \
             --json .django-src/last-run.json
           {
@@ -875,13 +877,13 @@ jobs:
 
       - name: Compare against the stored baseline (blocking ratchet)
         run: |
-          uv run python scripts/run-django-template-suite.py compare \
+          uv run --no-sync python scripts/run-django-template-suite.py compare \
             --json .django-src/last-run.json \
             --baseline scripts/django-template-suite-baseline.json
 
       - name: Runner self-tests against the real checkout
         run: |
-          uv run python -m pytest python/tests/test_django_template_suite_2517.py -q
+          uv run --no-sync python -m pytest python/tests/test_django_template_suite_2517.py -q
 
       - uses: actions/upload-artifact@v7
         if: always()
