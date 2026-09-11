@@ -260,7 +260,7 @@ gen-vdom-fixtures: ## Regenerate client-faithful VDOM diff fixtures (CI gates fr
 test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
-	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
+	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
 	PYO3_PYTHON=$(EMBEDDABLE_PYTHON) sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
 	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
 	wait $$PY_PID || PY_EXIT=$$?; \

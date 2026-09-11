@@ -221,8 +221,10 @@ jobs:
 
       - name: Install Python dependencies and build extension
         run: |
-          uv sync --extra dev
-          uv run maturin develop --release
+          # Install dependencies without building the project through uv's
+          # PEP 517 backend, then build the native extension exactly once.
+          uv sync --frozen --extra dev --no-install-project
+          uv run --no-sync maturin develop --release
 
       # pytest-split is also in the [dev] extra; installing it here as well
       # mirrors the existing pytest-xdist belt-and-braces so a stale uv.lock

@@ -276,7 +276,12 @@ _SUITES = [
         [1, 2, 5, 8, 20],
         _gen_html,
     ),
-    ("truncatewords_html", "{{ p|%struncatewords_html:%s }}", [1, 2, 3, 5, 10], _gen_html),
+    (
+        "truncatewords_html",
+        "{{ p|%struncatewords_html:%s }}",
+        [1, 2, 3, 5, 10],
+        _gen_html,
+    ),
 ]
 
 #: Chains worth exercising. `escape|`, `striptags|` and `safe|` are absent, and
@@ -381,29 +386,77 @@ class TestTitleExhaustive:
     def _cpython_knows_no_case(char: str) -> bool:
         return char.upper() == char and char.lower() == char and char.title() == char
 
+    # None of the one-codepoint probes (at most three characters) can contain
+    # this delimiter. Split and count both outputs so an omitted/extra result
+    # cannot be hidden by concatenating adjacent cells.
+    _separator = "\x00DJUST_CASE\x00"
+    _batch_template = "{% for p in probes %}{{ p|title }}" + _separator + "{% endfor %}"
+
+    @classmethod
+    def _render_batch(cls, probes: list[str], compiled: DjangoTemplate) -> list[tuple[str, str]]:
+        context = {"probes": probes}
+        django_out = compiled.render(DjangoContext(context))
+        djust_out = _rust.render_template(cls._batch_template, normalize_django_value(context))
+        outputs = []
+        for result in (django_out, djust_out):
+            cells = result.split(cls._separator)
+            assert cells[-1] == "" and len(cells) == len(probes) + 1, (
+                "batched rendering lost cell boundaries",
+                len(probes),
+                len(cells),
+            )
+            outputs.append(cells[:-1])
+        return list(zip(*outputs, strict=True))
+
+    def test_batch_matches_individual_template_renders(self) -> None:
+        probes = [
+            "",
+            "a",
+            "ß",
+            "aßa",
+            "Σ",
+            "aΣ",
+            "²A",
+            "1A",
+            "<",
+            "&",
+            "\x00",
+            "\U0001f600",
+        ]
+        batched = self._render_batch(probes, DjangoTemplate(self._batch_template))
+        individual = [render_both("{{ p|title }}", probe) for probe in probes]
+        assert batched == individual
+
     def test_every_codepoint(self) -> None:
-        template = "{{ p|title }}"
-        compiled = DjangoTemplate(template)
+        compiled = DjangoTemplate(self._batch_template)
         unexpected = []
         skew = 0
         checked = 0
-        for cp in range(0x110000):
-            if 0xD800 <= cp <= 0xDFFF:
+        # Render the same four probes for EVERY Unicode scalar, in bounded
+        # batches. Both engines still execute their template title filter and
+        # autoescape for each probe; only per-render setup is shared.
+        for start in range(0, 0x110000, 1024):
+            cases = []
+            for cp in range(start, min(start + 1024, 0x110000)):
+                if 0xD800 <= cp <= 0xDFFF:
+                    continue
+                char = chr(cp)
+                for probe in (char, "a" + char, char + "a", "a" + char + "a"):
+                    cases.append((cp, probe))
+            if not cases:
                 continue
-            char = chr(cp)
-            for probe in (char, "a" + char, char + "a", "a" + char + "a"):
-                django_out = compiled.render(DjangoContext({"p": probe}))
-                djust_out = _rust.render_template(template, normalize_django_value({"p": probe}))
+            results = self._render_batch([probe for _, probe in cases], compiled)
+            for (cp, probe), (django_out, djust_out) in zip(cases, results, strict=True):
                 checked += 1
                 if django_out == djust_out:
                     continue
-                if self._cpython_knows_no_case(char):
+                if self._cpython_knows_no_case(chr(cp)):
                     skew += 1
                     continue
                 unexpected.append(
                     f"  U+{cp:04X} {probe!r}: django={django_out!r} djust={djust_out!r}"
                 )
-        assert checked > 4_000_000, checked
+        assert checked == 4 * (0x110000 - 0x800), checked
         assert not unexpected, (
             f"{len(unexpected)} codepoints diverge for a reason other than "
             f"Unicode-version skew:\n" + "\n".join(unexpected[:20])
