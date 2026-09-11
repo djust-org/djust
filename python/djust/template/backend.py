@@ -45,6 +45,17 @@ class DjustTemplateBackend(BaseEngine):
 
     app_dirname = "templates"
 
+    #: Duck-typing marker so ``template_libraries._template_backend()`` can
+    #: identify a configured djust engine among ``django.template.engines``
+    #: WITHOUT importing this class (#2847). Both modules already import each
+    #: other lazily, inside a method, specifically so the cycle never bites at
+    #: module-load time — but CodeQL's ``py/cyclic-import`` flags a cycle in
+    #: the static import graph regardless of where the ``import`` sits. An
+    #: ``isinstance`` check is the only reason ``template_libraries.py`` named
+    #: this class at all; a marker attribute does the same job with no import
+    #: in either direction, which removes the cycle rather than deferring it.
+    _is_djust_template_backend = True
+
     def __init__(self, params: Dict[str, Any]):
         """Initialize the Djust template backend."""
         params = params.copy()
