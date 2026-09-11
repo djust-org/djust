@@ -38,7 +38,7 @@ its readers' durations can exaggerate the amount of distinct computation.
 
 ## Changes in this iteration
 
-### Build the extension once per Python job
+### Build the extension once per native Python job
 
 The Python 3.12 shard 1 log showed `uv sync` building the project for about 121
 seconds, followed by a separate 73-second `maturin develop` build. Install only
@@ -50,7 +50,9 @@ uv run --no-sync maturin develop --release
 ```
 
 `--no-sync` matters: an ordinary `uv run` can synchronize the project again before
-executing maturin. The isolated worktree was installed and tested with this exact
+executing maturin. The Python matrix, serial benchmark job, and Django scoreboard
+use this install sequence; their later uv commands also use `--no-sync` so they
+cannot undo it. The isolated worktree was installed and tested with this exact
 sequence. Avoid interpreting the eliminated 121-second step as a guaranteed
 end-to-end saving: cache state and scheduling still affect the workflow.
 
