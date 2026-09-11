@@ -105,14 +105,41 @@ suite passes. Clippy currently has stricter local flags than the CI invocation;
 keep its push gate until any proposed CI-only policy establishes equivalent
 coverage.
 
+## Doctor scenarios and shard validation
+
+`make test-harness` runs the doctor and shard-collection checks with timings.
+The doctor suite retains one real tool integration smoke test. Its verdict
+scenarios execute the same shell script with controlled Cargo/Node commands on
+PATH, so an unrelated cold Cargo build no longer repeats for each scenario.
+Additional cases cover successful Cargo execution, bootstrap/link/probe failures,
+a generic failure, and a real timeout with a shortened deadline. They continue
+to assert that later checks run and the expected verdict/remedy appears.
+
+The shard guard now uses `scripts/collect-test-shards.py` to collect the configured
+suite once and call the installed pytest-split selection hook for each group.
+It checks collection success, duration staleness, shard balance, exact coverage,
+and absence of duplicate assignments. The former helper cleared pytest's
+configured exclusions and accepted partial node IDs even when collection failed;
+the new probe preserves those exclusions and refuses a partial snapshot.
+Small-corpus tests compare both supported splitting algorithms against ordinary
+CLI invocations, and verify that the probe collects only once and never runs test
+bodies. The helper depends on pytest-split's plugin API; these comparisons must
+continue to pass when upgrading that dependency.
+
+On a local Python 3.12 release build, the previous two full-collection checks took
+42.74 seconds combined; the new combined guard took 5.64 seconds. The expanded
+focused suite passed 34 tests in 13.77 seconds. The old suite passed 22 tests in
+64.07 seconds, but its first doctor run also warmed the Cargo cache, so that total
+comparison is not an isolated measure of the code change. In the preceding
+successful CI run, six doctor calls each took about 30 seconds. Verify savings
+on the next successful CI run; these local timings do not predict its wall time.
+
 ## Alternatives worth investigating next
 
 | Alternative | Expected benefit | Tradeoff / verification needed |
 | --- | --- | --- |
 | Keep expensive corpus readers in the same CI shard | Avoid one full identical sweep per independent shard | Schedule by shared fixture cost, not inflated per-reader waits; prove shard union and disjointness and benchmark the longest shard. |
 | Build one wheel per Python version, then distribute it to shards | Reduce repeated native builds and runner minutes | Adds a prerequisite job and artifact transfers; may improve cost more than wall time. Verify ABI, commit identity, installed package path, and Python source under test. |
-| Collect once for the shard self-tests | Avoid five repeated full collections | Exercise the actual pytest-split plugin and actual collected IDs, preserving staleness, coverage, and balance checks; do not replace it with a handwritten approximation. |
-| Separate one real doctor smoke run from scenario tests | Avoid repeatedly timing out on a cold Cargo smoke build | Scenario tests can control unrelated tools, but retain a real integration run and tests for actual timeout/error behavior. |
 | Partition the Unicode sweep into balanced chunks | Distribute its remaining serial tail | Preserve every scalar/context and the global skew limit; account for extra collection and fixture overhead. |
 | Tune local worker budgets by workload | Reduce CPU/RAM contention when Python, Rust, and JS run together | Compare fixed worker counts with `auto`; more workers can make subprocess-heavy tests slower. |
 | Persistent content-addressed corpus artifacts | Reuse expensive sweeps across runs | Invalidation must cover native build, Python source, interpreter, settings, script input, and environment; session-only caching is currently easier to trust. |

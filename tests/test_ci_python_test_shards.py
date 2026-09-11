@@ -268,93 +268,67 @@ STALE_FRACTION_MAX = 0.10  # CONTRIBUTING: regenerate past ~10% shift
 IMBALANCE_RATIO_MAX = 2.0  # largest shard vs smallest, by recorded time
 
 
-def _collected_nodeids(group: int | None = None, splits: int | None = None) -> list[str]:
-    """The exact ids CI shards, collected the way CI collects them.
+def _validate_snapshot(snapshot: dict, data: dict[str, float], n: int) -> None:
+    collected = snapshot["collected"]
+    per_group = snapshot["groups"]
+    assert collected, "collection produced no ids — the harness is broken, not the file"
+    assert len(collected) == len(set(collected)), "full collection contains duplicate ids"
+    assert len(per_group) == n, "snapshot does not contain every configured shard"
+    flattened = [nodeid for group in per_group for nodeid in group]
+    assert len(flattened) == len(set(flattened)), "shards assign a test more than once"
+    assert set(flattened) == set(collected), "shards omit or invent collected tests"
+    missing = [t for t in collected if t not in data]
+    fraction = len(missing) / len(collected)
+    assert fraction <= STALE_FRACTION_MAX, (
+        f"{len(missing)} of {len(collected)} collected tests ({fraction:.0%}) have no "
+        f"recorded duration, over the {STALE_FRACTION_MAX:.0%} threshold. "
+        f"Run make test-durations-from-ci RUN=<run-id>. First missing: {missing[:3]}"
+    )
+    counts = [len(g) for g in per_group]
+    assert all(counts), f"a shard would collect nothing: {counts}"
+    default = (sum(data.values()) / len(data)) if data else 0.0
+    times = [sum(data.get(t, default) for t in g) for g in per_group]
+    lo, hi = min(times), max(times)
+    assert lo > 0 and hi / lo <= IMBALANCE_RATIO_MAX, (
+        f"pytest-split would deal these shards {counts} tests / "
+        f"{[round(t) for t in times]}s — exceeds {IMBALANCE_RATIO_MAX}x balance limit. "
+        "Run make test-durations-from-ci RUN=<run-id>."
+    )
 
-    With `group`/`splits`, returns just that shard's share — pytest-split's
-    own answer, not a reimplementation of it, and under the SAME
-    `--splitting-algorithm` the workflow passes. Measuring the default
-    algorithm's deal while CI runs another one is a pin on a different
-    program: `duration_based_chunks` and `least_duration` disagreed
-    1.70x vs 1.00x on the very file this asserts about (#2584).
+
+@pytest.mark.slow
+def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path) -> None:
+    """One full collection verifies staleness, coverage, and real plugin balance.
+
+    The helper calls pytest-split's installed collection hook for every group;
+    it does not copy the algorithm. Its small-corpus tests compare this probe
+    against normal --splits/--group CLI invocations.
     """
-    shard = (
+    output = tmp_path / "shards.json"
+    n = len(_matrix_groups())
+    proc = subprocess.run(
         [
+            sys.executable,
+            str(ROOT / "scripts/collect-test-shards.py"),
+            "--output",
+            str(output),
             "--splits",
-            str(splits),
-            "--group",
-            str(group),
+            str(n),
             "--splitting-algorithm",
             _splitting_algorithm(),
             "--durations-path",
             str(DURATIONS),
-        ]
-        if group is not None
-        else []
-    )
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
             "tests/",
             "python/tests/",
             "python/djust/tests/",
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:randomly",
-            "-o",
-            "addopts=",
-            *shard,
         ],
         cwd=ROOT,
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": "."},
+        timeout=180,
     )
-    return [ln.strip() for ln in proc.stdout.splitlines() if "::" in ln]
-
-
-@pytest.mark.slow
-def test_durations_file_is_not_stale() -> None:
-    collected = _collected_nodeids()
-    assert collected, "collection produced no ids — the harness is broken, not the file"
-    data = json.loads(DURATIONS.read_text())
-    missing = [t for t in collected if t not in data]
-    fraction = len(missing) / len(collected)
-    assert fraction <= STALE_FRACTION_MAX, (
-        f"{len(missing)} of {len(collected)} collected tests ({fraction:.0%}) have no "
-        f"recorded duration, over the {STALE_FRACTION_MAX:.0%} threshold. pytest-split "
-        f"count-balances those, which unbalances the shards until one is killed by the "
-        f"runner. Run `make test-durations` and commit .test_durations (#2703).\n"
-        f"first missing: {missing[:3]}"
+    assert proc.returncode == 0, (
+        f"shard collection failed ({proc.returncode}):\n{proc.stdout[-8000:]}\n{proc.stderr[-8000:]}"
     )
-
-
-@pytest.mark.slow
-def test_shards_are_balanced_by_recorded_time() -> None:
-    """Staleness is the usual cause of imbalance, but not the only one — a
-    single very slow new module skews the split with every duration present.
-    Assert the OUTCOME directly.
-
-    Asks pytest-split itself what each group contains rather than
-    reimplementing its algorithm. The first version of this test did
-    reimplement it, got a different answer, and passed green while the real
-    split was dealing shard 3 5.2x shard 2 — a pin that cannot see the
-    condition it exists for (#1859).
-    """
-    n = len(_matrix_groups())
-    per_group = [_collected_nodeids(group=g, splits=n) for g in range(1, n + 1)]
-    counts = [len(g) for g in per_group]
-    assert all(counts), f"a shard would collect nothing: {counts}"
-    data = json.loads(DURATIONS.read_text())
-    default = (sum(data.values()) / len(data)) if data else 0.0
-    times = [sum(data.get(t, default) for t in g) for g in per_group]
-    lo, hi = min(times), max(times)
-    assert hi / lo <= IMBALANCE_RATIO_MAX, (
-        f"pytest-split would deal these shards {counts} tests / "
-        f"{[round(t) for t in times]}s — the largest is {hi / lo:.1f}x the "
-        f"smallest, over {IMBALANCE_RATIO_MAX}x. One overloaded shard is what "
-        f"gets killed by the runner. Run `make test-durations` (#2703)."
-    )
+    _validate_snapshot(json.loads(output.read_text()), json.loads(DURATIONS.read_text()), n)

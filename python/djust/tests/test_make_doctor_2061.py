@@ -10,7 +10,9 @@ is a dev-environment self-diagnosis script that runs every check regardless
 of earlier failures and reports ``[OK]``/``[WARN]``/``[FAIL] <name>: <finding>``
 plus a one-line remedy, exiting non-zero iff any check FAILs.
 
-These tests run the REAL script via subprocess against the repo checkout.
+All tests run the REAL script via subprocess against the repo checkout. One
+integration smoke keeps real external tools; verdict scenarios replace only
+Cargo/Node on PATH so unrelated cold builds do not repeat for every scenario.
 Per the task brief, asserting exit 0 in a "healthy" environment is
 explicitly NOT required — a CI/dev box may legitimately WARN (no
 ``node_modules/`` yet, a venv shared with a different checkout, etc.), and a
@@ -35,6 +37,8 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -64,6 +68,8 @@ SUBPROCESS_TIMEOUT = 150
 
 def _run_doctor(extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    for name in ("DOCTOR_FAKE_STALE_SO", "DOCTOR_FAKE_PTH_BAD", "DOCTOR_FAKE_UV_BASE"):
+        env.pop(name, None)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -75,6 +81,34 @@ def _run_doctor(extra_env: dict[str, str] | None = None) -> subprocess.Completed
         env=env,
         timeout=SUBPROCESS_TIMEOUT,
     )
+
+
+@pytest.fixture
+def doctor_tools(tmp_path: Path) -> dict[str, str]:
+    """Control expensive external tools while executing the real doctor script.
+
+    The integration smoke below keeps the real PATH. Scenario tests replace
+    Cargo/Node only; interpreter, extension, hook and verdict logic stay real.
+    """
+    cargo = tmp_path / "cargo"
+    cargo.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$DJUST_TEST_CARGO_CALLS"\n'
+        'if [ -n "${DJUST_TEST_CARGO_SLEEP:-}" ]; then sleep "$DJUST_TEST_CARGO_SLEEP"; fi\n'
+        'printf "%s\\n" "${DJUST_TEST_CARGO_OUTPUT:-}"\n'
+        'exit "${DJUST_TEST_CARGO_STATUS:-0}"\n'
+    )
+    cargo.chmod(0o755)
+    npx = tmp_path / "npx"
+    npx.write_text('#!/bin/sh\nprintf "vitest/doctor-test\\n"\n')
+    npx.chmod(0o755)
+    return {
+        "PATH": str(tmp_path) + os.pathsep + os.environ.get("PATH", ""),
+        "DJUST_TEST_CARGO_CALLS": str(tmp_path / "cargo-calls.txt"),
+        "DJUST_TEST_CARGO_STATUS": "0",
+        "DJUST_TEST_CARGO_OUTPUT": "",
+        "DJUST_TEST_CARGO_SLEEP": "",
+    }
 
 
 def _status_line_pattern(check_name: str) -> re.Pattern[str]:
@@ -116,6 +150,7 @@ def test_makefile_has_doctor_target() -> None:
     assert "scripts/doctor.sh" in makefile
 
 
+@pytest.mark.integration
 def test_doctor_runs_to_completion_and_reports_every_check() -> None:
     """The load-bearing structural test: the script runs to completion (no
     crash/hang/traceback) and every one of the seven checks reports a
@@ -152,12 +187,12 @@ def test_doctor_runs_to_completion_and_reports_every_check() -> None:
         assert result.returncode == 0
 
 
-def test_stale_so_gate_off_no_forced_marker_by_default() -> None:
+def test_stale_so_gate_off_no_forced_marker_by_default(doctor_tools: dict[str, str]) -> None:
     """Gate-off half of the non-tautology proof (#1468/#1200): WITHOUT the
     test-hook env var, the stale-extension line must never contain the
     test-hook marker. This is what makes the forced-FAIL assertion below
     meaningful rather than a check that always reports the same thing."""
-    result = _run_doctor()
+    result = _run_doctor(doctor_tools)
     stale_line = next(
         (
             line
@@ -173,10 +208,10 @@ def test_stale_so_gate_off_no_forced_marker_by_default() -> None:
     )
 
 
-def test_stale_so_force_fail_is_detected() -> None:
+def test_stale_so_force_fail_is_detected(doctor_tools: dict[str, str]) -> None:
     """Forced-failure half: with DOCTOR_FAKE_STALE_SO=1, the stale-extension
     check FAILs with its remedy line, and the overall script exits non-zero."""
-    result = _run_doctor({"DOCTOR_FAKE_STALE_SO": "1"})
+    result = _run_doctor({**doctor_tools, "DOCTOR_FAKE_STALE_SO": "1"})
 
     assert result.returncode != 0, (
         f"doctor.sh should exit non-zero with a forced FAIL. stdout={result.stdout!r}"
@@ -196,9 +231,9 @@ def test_stale_so_force_fail_is_detected() -> None:
         )
 
 
-def test_pth_gate_off_no_forced_marker_by_default() -> None:
+def test_pth_gate_off_no_forced_marker_by_default(doctor_tools: dict[str, str]) -> None:
     """Gate-off half for the djust.pth check (#1468/#1200)."""
-    result = _run_doctor()
+    result = _run_doctor(doctor_tools)
     pth_line = next(
         (
             line
@@ -214,10 +249,10 @@ def test_pth_gate_off_no_forced_marker_by_default() -> None:
     )
 
 
-def test_pth_force_fail_is_detected() -> None:
+def test_pth_force_fail_is_detected(doctor_tools: dict[str, str]) -> None:
     """Forced-failure half: with DOCTOR_FAKE_PTH_BAD=1, the djust.pth check
     FAILs with its remedy line, and the overall script exits non-zero."""
-    result = _run_doctor({"DOCTOR_FAKE_PTH_BAD": "1"})
+    result = _run_doctor({**doctor_tools, "DOCTOR_FAKE_PTH_BAD": "1"})
 
     assert result.returncode != 0, (
         f"doctor.sh should exit non-zero with a forced FAIL. stdout={result.stdout!r}"
@@ -235,7 +270,7 @@ def test_pth_force_fail_is_detected() -> None:
         )
 
 
-def test_uv_base_gate_off_no_forced_marker_by_default() -> None:
+def test_uv_base_gate_off_no_forced_marker_by_default(doctor_tools: dict[str, str]) -> None:
     """Gate-off half for the #2072 uv-standalone-base detection hook
     (``DOCTOR_FAKE_UV_BASE``, #1468/#1200): WITHOUT the env override, the
     embedded-pyo3 line must never contain the test-hook's own marker text.
@@ -243,7 +278,7 @@ def test_uv_base_gate_off_no_forced_marker_by_default() -> None:
     genuine uv-standalone venv on this machine — that's a different message
     that doesn't name the env var — so this only excludes the forced-hook
     marker string, not "uv-standalone"/"#2072" generally.)"""
-    result = _run_doctor()
+    result = _run_doctor(doctor_tools)
     embedded_line = next(
         (
             line
@@ -259,12 +294,12 @@ def test_uv_base_gate_off_no_forced_marker_by_default() -> None:
     )
 
 
-def test_uv_base_force_warn_is_detected() -> None:
+def test_uv_base_force_warn_is_detected(doctor_tools: dict[str, str]) -> None:
     """Forced-WARN half: with DOCTOR_FAKE_UV_BASE=1, the embedded-pyo3 check
     WARNs (not FAILs — detection is informational, not itself an error) with
     the #2072 explanation + remedy, and every other check still runs to
     completion."""
-    result = _run_doctor({"DOCTOR_FAKE_UV_BASE": "1"})
+    result = _run_doctor({**doctor_tools, "DOCTOR_FAKE_UV_BASE": "1"})
 
     assert re.search(
         r"^\[WARN\] embedded-pyo3: .*DOCTOR_FAKE_UV_BASE", result.stdout, re.MULTILINE
@@ -295,6 +330,65 @@ def test_uv_base_force_warn_is_detected() -> None:
         "checks — DOCTOR_FAKE_UV_BASE must short-circuit with a SINGLE verdict "
         "call, not add an extra one on top of the real cargo-test verdict"
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "output", "verdict", "diagnosis"),
+    [
+        (0, "", r"OK|WARN", "passed"),
+        (1, "init_fs_encoding: '/install'", "FAIL", "embedded CPython bootstrap failed"),
+        (1, "undefined symbol: _Py_Dealloc", "FAIL", "link failure referencing _Py_Dealloc"),
+        (1, "rustc probe SIGABRT", "FAIL", "rustc build probe crashed"),
+        (1, "unclassified failure", "FAIL", "unclassified failure"),
+    ],
+)
+def test_cargo_result_is_diagnosed(
+    doctor_tools: dict[str, str], status: int, output: str, verdict: str, diagnosis: str
+) -> None:
+    result = _run_doctor(
+        {
+            **doctor_tools,
+            "DJUST_TEST_CARGO_STATUS": str(status),
+            "DJUST_TEST_CARGO_OUTPUT": output,
+        }
+    )
+    calls = Path(doctor_tools["DJUST_TEST_CARGO_CALLS"]).read_text().splitlines()
+    assert len(calls) == 1 and calls[0].startswith("test -p djust_templates --test ")
+    assert re.search(
+        rf"^\[({verdict})\] embedded-pyo3: .*{re.escape(diagnosis)}", result.stdout, re.MULTILINE
+    ), result.stdout
+    if status:
+        assert result.returncode == 1
+    for name in CHECK_NAMES:
+        assert _status_line_pattern(name).search(result.stdout), result.stdout
+
+
+def test_cargo_timeout_is_reported_without_stopping_other_checks(
+    doctor_tools: dict[str, str], tmp_path: Path
+) -> None:
+    timeout = shutil.which("timeout") or shutil.which("gtimeout")
+    if timeout is None:
+        pytest.skip("real timeout utility unavailable on this platform")
+    # Exercise a real deadline and return code, without waiting 30 seconds.
+    # Check the production deadline before shortening only the Cargo probe.
+    wrapper = tmp_path / "timeout"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = cargo ]; then\n'
+        '  [ "$1" = 30 ] || exit 98\n'
+        "  shift\n"
+        f'  exec {shlex.quote(timeout)} 0.1 "$@"\n'
+        "fi\n"
+        f'exec {shlex.quote(timeout)} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    result = _run_doctor({**doctor_tools, "DJUST_TEST_CARGO_SLEEP": "10"})
+    assert re.search(
+        r"^\[WARN\] embedded-pyo3: .*timed out after 30s", result.stdout, re.MULTILINE
+    ), result.stdout
+    assert "cargo build -p djust_templates --tests" in result.stdout
+    for name in CHECK_NAMES:
+        assert _status_line_pattern(name).search(result.stdout), result.stdout
 
 
 def test_every_check_name_has_a_dedicated_check_function() -> None:
