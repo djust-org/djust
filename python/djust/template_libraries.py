@@ -978,10 +978,15 @@ def _template_backend() -> Any:
     try:
         from django.template import engines
 
-        from .template.backend import DjustTemplateBackend
-
+        # Duck-typed rather than `isinstance(engine, DjustTemplateBackend)`
+        # (#2847): that import and this module's own deferred import back
+        # from `template/backend.py` formed a cycle in the static import
+        # graph — harmless at runtime (both are function-local, so neither
+        # module is ever mid-import when the other is loaded), but flagged
+        # by CodeQL's `py/cyclic-import`. The marker attribute identifies the
+        # same class with no import in either direction.
         for engine in engines.all():
-            if isinstance(engine, DjustTemplateBackend):
+            if getattr(engine, "_is_djust_template_backend", False):
                 return engine
     except Exception:  # noqa: BLE001 — no configured engines; fall through
         logger.debug("No djust template backend configured; using Django's loader")
