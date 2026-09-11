@@ -46,8 +46,10 @@ def small_corpus(tmp_path: Path) -> Path:
         "def indirect(corpus_payload): return corpus_payload",
     ]
     durations = {}
-    for i in range(20):
-        if i % 4 == 0:
+    # Leave enough ordinary work to balance the indivisible reader group
+    # under both algorithms, including the less-flexible contiguous chunks.
+    for i in range(105):
+        if i < 20 and i % 4 == 0:
             lines.append(f"def test_{i}(indirect): assert indirect['value'] == 42")
             durations[f"test_sample.py::test_{i}"] = 60
         else:
@@ -117,15 +119,19 @@ def test_without_grouping_the_same_readers_repeat_the_sweep(small_corpus: Path) 
     assert len((small_corpus / "sweeps.txt").read_text().splitlines()) == 4
 
 
-def test_group_weight_counts_shared_wait_once_and_preserves_order() -> None:
+def test_group_weight_accounts_for_occupied_workers_and_preserves_order() -> None:
     readers = [
         SimpleNamespace(nodeid=f"reader{i}", fixturenames=["corpus_payload"]) for i in range(4)
     ]
     ordinary = [SimpleNamespace(nodeid=f"plain{i}", fixturenames=[]) for i in range(12)]
     items = readers + ordinary
-    durations = {item.nodeid: 100.0 for item in readers} | {item.nodeid: 10.0 for item in ordinary}
+    durations = {
+        item.nodeid: duration for item, duration in zip(readers, [100, 80, 0, 0], strict=True)
+    } | {item.nodeid: 10.0 for item in ordinary}
     groups = split_groups(items, durations, 4, "least_duration")
-    assert sum(group.duration for group in groups) == 220  # 100 shared, not 400; 120 ordinary
+    # One worker computes for 100s; another waits for 80s. Both are occupied,
+    # so reserve 180 worker-seconds for the group, plus 120 for ordinary tests.
+    assert sum(group.duration for group in groups) == 300
     owners = [g for g in groups if any(item in readers for item in g.selected)]
     assert len(owners) == 1
     for g in groups:
@@ -194,7 +200,7 @@ raise SystemExit(pytest.main(['test_sample.py', '-q']))
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "20 passed" in result.stdout
+    assert "105 passed" in result.stdout
 
 
 def test_repository_sweep_readers_cannot_bypass_the_shared_fixture() -> None:

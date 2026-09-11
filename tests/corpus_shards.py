@@ -1,8 +1,8 @@
 """Keep full-corpus readers in one CI shard without changing test identities.
 
 pytest-split still balances the work. Its algorithm sees the shared fixture as
-one indivisible unit, charged at the slowest recorded reader's duration rather
-than the sum of several readers waiting for the same computation. Only real
+one indivisible unit, charged at the recorded worker time of its readers.
+Waiting readers occupy workers too, so their durations must be budgeted. Only real
 pytest Items reach pytest's selection/deselection hooks.
 """
 
@@ -47,7 +47,7 @@ def split_groups(items: list, durations: dict[str, float], splits: int, algorith
             units.append(item)
         elif item is readers[0]:
             units.append(unit)
-    weights[unit.nodeid] = max(weights.pop(nodeid) for nodeid in reader_ids)
+    weights[unit.nodeid] = sum(weights.pop(nodeid) for nodeid in reader_ids)
     groups = []
     for group in algo(splits, units, weights):
         selected_ids = {item.nodeid for item in group.selected if item is not unit}

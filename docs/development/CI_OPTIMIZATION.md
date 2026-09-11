@@ -147,13 +147,15 @@ continue to request `corpus` directly and retain their separate content-keyed
 computations. Ordinary unsharded runs are unaffected; pytest-split is not needed
 in environments that do not request splitting.
 
-A shared unit is charged at the **maximum** recorded reader duration, rather
-than the sum of readers waiting for the same sweep. This is a planning estimate,
-not a measurement of pure CPU time or a wall-time guarantee. Ordinary tests
-retain their own recorded durations. Missing durations use the mean of known
-collected tests, matching pytest-split's fallback. The committed timing file was
-refreshed from successful run **34559799610** using
-`make test-durations-from-ci RUN=34559799610`; its entries were not hand-adjusted.
+A shared unit is charged at the **sum** of its readers' recorded durations,
+just as ordinary pytest-split charges individual tests. Those timings now come
+from a run where all readers shared one sweep. Waiting readers occupy worker
+slots, so reserving only the slowest reader's duration would leave too much
+ordinary work on the owning shard. The committed file was refreshed from
+successful grouped run **34562620564** using
+`make test-durations-from-ci RUN=34562620564`; its entries were not hand-adjusted.
+Missing durations use the mean of known collected tests, matching pytest-split's
+fallback. Recorded worker time is a scheduling estimate, not a wall-time guarantee.
 
 Small-corpus subprocess controls execute every shard: the original splitter
 starts four independent sweeps, while the adapter starts one and still runs
@@ -165,9 +167,10 @@ coverage. The original cache still coordinates workers inside the owning shard.
 A local instrumented run of all six real readers with two workers passed and
 recorded exactly one full-sweep subprocess; the corpus generator was unchanged.
 
-Compare the next successful CI run with the 7m23s parent run before claiming an
-elapsed-time improvement. Removing duplicate work can still leave the corpus
-shard as the longest job; use its measured duration to guide further balancing.
+The first grouped run passed but took 7m22s versus the 7m23s parent run. Its
+max-only cost estimate ignored a second reader waiting 137 seconds for the sweep;
+the final allocator includes that occupied worker time. Compare the next
+successful CI run before claiming an elapsed-time improvement.
 
 ## Alternatives worth investigating next
 

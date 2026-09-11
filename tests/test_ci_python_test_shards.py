@@ -292,11 +292,7 @@ def _validate_snapshot(snapshot: dict, data: dict[str, float], n: int) -> None:
     counts = [len(g) for g in per_group]
     assert all(counts), f"a shard would collect nothing: {counts}"
     default = (sum(data.values()) / len(data)) if data else 0.0
-    times = [
-        sum(data.get(t, default) for t in g if t not in shared)
-        + max((data.get(t, default) for t in g if t in shared), default=0.0)
-        for g in per_group
-    ]
+    times = [sum(data.get(t, default) for t in g) for g in per_group]
     lo, hi = min(times), max(times)
     assert lo > 0 and hi / lo <= IMBALANCE_RATIO_MAX, (
         f"pytest-split would deal these shards {counts} tests / "
