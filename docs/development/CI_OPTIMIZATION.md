@@ -116,7 +116,8 @@ a generic failure, and a real timeout with a shortened deadline. They continue
 to assert that later checks run and the expected verdict/remedy appears.
 
 The shard guard now uses `scripts/collect-test-shards.py` to collect the configured
-suite once and call the installed pytest-split selection hook for each group.
+suite once and call the same configured splitter used by the CI invocation for
+each group (including the shared-corpus adapter below).
 It checks collection success, duration staleness, shard balance, exact coverage,
 and absence of duplicate assignments. The former helper cleared pytest's
 configured exclusions and accepted partial node IDs even when collection failed;
@@ -134,20 +135,56 @@ comparison is not an isolated measure of the code change. In the preceding
 successful CI run, six doctor calls each took about 30 seconds. Verify savings
 on the next successful CI run; these local timings do not predict its wall time.
 
+## Share the full differential sweep within a shard
+
+The six full-sweep readers request the session-scoped `corpus_payload` fixture.
+The root plugin `tests/corpus_shards.py` recognizes this fixture through pytest's
+fixture dependency closure and presents its readers to pytest-split's installed
+algorithm as one indivisible scheduling unit. It then expands the assignment
+back to the original test Items in collection order. Test names, individual
+assertions, reports, and duration artifact IDs remain unchanged. Mutated scripts
+continue to request `corpus` directly and retain their separate content-keyed
+computations. Ordinary unsharded runs are unaffected; pytest-split is not needed
+in environments that do not request splitting.
+
+A shared unit is charged at the **sum** of its readers' recorded durations,
+just as ordinary pytest-split charges individual tests. Those timings now come
+from a run where all readers shared one sweep. Waiting readers occupy worker
+slots, so reserving only the slowest reader's duration would leave too much
+ordinary work on the owning shard. The committed file was refreshed from
+successful grouped run **34562620564** using
+`make test-durations-from-ci RUN=34562620564`; its entries were not hand-adjusted.
+Missing durations use the mean of known collected tests, matching pytest-split's
+fallback. Recorded worker time is a scheduling estimate, not a wall-time guarantee.
+
+Small-corpus subprocess controls execute every shard: the original splitter
+starts four independent sweeps, while the adapter starts one and still runs
+all tests exactly once. Both splitting algorithms are checked against the
+collection probe. Controls also cover missing durations, indirect fixture
+consumers, and environments without pytest-split. The full-suite guard requires
+all shared readers to land in a single shard as well as complete, non-overlapping
+coverage. The original cache still coordinates workers inside the owning shard.
+A local instrumented run of all six real readers with two workers passed and
+recorded exactly one full-sweep subprocess; the corpus generator was unchanged.
+
+The first grouped run passed but took 7m22s versus the 7m23s parent run. Its
+max-only cost estimate ignored a second reader waiting 137 seconds for the sweep;
+the final allocator includes that occupied worker time. Compare the next
+successful CI run before claiming an elapsed-time improvement.
+
 ## Alternatives worth investigating next
 
 | Alternative | Expected benefit | Tradeoff / verification needed |
 | --- | --- | --- |
-| Keep expensive corpus readers in the same CI shard | Avoid one full identical sweep per independent shard | Schedule by shared fixture cost, not inflated per-reader waits; prove shard union and disjointness and benchmark the longest shard. |
 | Build one wheel per Python version, then distribute it to shards | Reduce repeated native builds and runner minutes | Adds a prerequisite job and artifact transfers; may improve cost more than wall time. Verify ABI, commit identity, installed package path, and Python source under test. |
 | Partition the Unicode sweep into balanced chunks | Distribute its remaining serial tail | Preserve every scalar/context and the global skew limit; account for extra collection and fixture overhead. |
 | Tune local worker budgets by workload | Reduce CPU/RAM contention when Python, Rust, and JS run together | Compare fixed worker counts with `auto`; more workers can make subprocess-heavy tests slower. |
 | Persistent content-addressed corpus artifacts | Reuse expensive sweeps across runs | Invalidation must cover native build, Python source, interpreter, settings, script input, and environment; session-only caching is currently easier to trust. |
 | Move exhaustive tests to nightly only | Faster PR checks | Loses pre-merge evidence. Do not make this the default while template compatibility is an active release concern. |
 
-The first follow-up to measure is corpus affinity. A build-once wheel job is the
-next infrastructure experiment. Neither should be claimed faster without a
-current-head CI comparison.
+After measuring corpus sharing, a build-once wheel job is the next infrastructure
+experiment. Template-compilation reuse inside the differential is another
+profiling candidate, provided stateful tags and exception outcomes stay equivalent.
 
 ## Measurement workflow
 

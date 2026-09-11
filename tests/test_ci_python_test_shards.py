@@ -277,6 +277,11 @@ def _validate_snapshot(snapshot: dict, data: dict[str, float], n: int) -> None:
     flattened = [nodeid for group in per_group for nodeid in group]
     assert len(flattened) == len(set(flattened)), "shards assign a test more than once"
     assert set(flattened) == set(collected), "shards omit or invent collected tests"
+    shared = set(snapshot.get("shared_corpus", []))
+    assert shared <= set(collected), "shared corpus names uncollected tests"
+    if shared:
+        owners = [group for group in per_group if shared.intersection(group)]
+        assert len(owners) == 1, "full corpus readers would repeat the sweep across shards"
     missing = [t for t in collected if t not in data]
     fraction = len(missing) / len(collected)
     assert fraction <= STALE_FRACTION_MAX, (
@@ -331,4 +336,6 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     assert proc.returncode == 0, (
         f"shard collection failed ({proc.returncode}):\n{proc.stdout[-8000:]}\n{proc.stderr[-8000:]}"
     )
-    _validate_snapshot(json.loads(output.read_text()), json.loads(DURATIONS.read_text()), n)
+    snapshot = json.loads(output.read_text())
+    assert snapshot.get("shared_corpus"), "full sweep fixture was not recognized during collection"
+    _validate_snapshot(snapshot, json.loads(DURATIONS.read_text()), n)

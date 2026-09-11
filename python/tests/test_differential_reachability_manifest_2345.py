@@ -1093,11 +1093,11 @@ class TestEveryCellFamilyHasAnAxis:
     been misfiled exactly that way; this is the check that would have said so.
     """
 
-    def test_every_at_prefix_in_measure_is_classified(self, corpus: CorpusCache) -> None:
+    def test_every_at_prefix_in_measure_is_classified(self, corpus_payload: dict) -> None:
         """MEASURED from a real run, not read off the source: every distinct
         `@`-family the corpus emits is claimed by a named axis, and none of
         them lands in the `{{ }}` fallback."""
-        payload = corpus.sweep()
+        payload = corpus_payload
         families = {
             k.split(" ", 1)[0].split("\t", 1)[0]
             for k in payload
@@ -1114,11 +1114,11 @@ class TestEveryCellFamilyHasAnAxis:
             "lies about them. Add a branch in the SAME commit as the family."
         )
 
-    def test_the_builtin_family_is_reported_under_its_own_name(self, corpus: CorpusCache) -> None:
+    def test_the_builtin_family_is_reported_under_its_own_name(self, corpus_payload: dict) -> None:
         """Non-vacuity for the branch #2347's family needed: the count under
         `builtin` must be exactly the number of `@builtin` cells, so a
         fallthrough would show up as zero here and a surplus elsewhere."""
-        payload = corpus.sweep()
+        payload = corpus_payload
         built = [k for k in payload if k.startswith("@builtin ")]
         assert built, "#2347's builtin-value axis built no cells"
         assert payload["@@cells_by_axis"].get("builtin") == len(built)
@@ -1480,14 +1480,14 @@ class TestTheArgumentAxisCorpus:
         for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
             assert kind in joined, kind
 
-    def test_the_argument_cells_exist_and_disagree_somewhere(self, corpus: CorpusCache) -> None:
+    def test_the_argument_cells_exist_and_disagree_somewhere(self, corpus_payload: dict) -> None:
         """Non-vacuity for the whole axis (#1468 in corpus form).
 
         A corpus that built argument cells which all AGREED would be
         coverage-shaped and blind — worse than absent, because it would make
         the axis look measured. These are the divergences #2344 and #2346 name.
         """
-        payload = corpus.sweep()
+        payload = corpus_payload
         arg_cells = {
             k: v for k, v in payload.items() if not k.startswith("@@") and k.startswith("@arg ")
         }
@@ -1498,7 +1498,7 @@ class TestTheArgumentAxisCorpus:
         assert payload["@@cells_by_axis"]["argument"] == len(arg_cells)
 
     def test_a_clock_dependent_argument_cell_records_its_AGREEMENT(
-        self, corpus: CorpusCache
+        self, corpus_payload: dict
     ) -> None:
         """The blindness the manifest could not report, closed rather than filed.
 
@@ -1523,7 +1523,7 @@ class TestTheArgumentAxisCorpus:
         found by using the tool on #2344, which is the same way every entry in
         this file's table was found.
         """
-        payload = corpus.sweep()
+        payload = corpus_payload
         clock = {
             k: v
             for k, v in payload.items()
@@ -1566,7 +1566,7 @@ class TestTheArgumentAxisCorpus:
         assert "newly AGREEING: 1" in proc.stdout, proc.stdout
 
     def test_the_random_filter_is_still_collapsed_rather_than_compared(
-        self, corpus: CorpusCache
+        self, corpus_payload: dict
     ) -> None:
         """The other side of the same rule, and the reason it is not applied to
         the `{{ }}` corpus: `random` picks a different element each run, so its
@@ -1576,7 +1576,7 @@ class TestTheArgumentAxisCorpus:
         `random` takes no argument, so it never reaches `nondet_agreement` —
         this asserts that rather than trusting it.
         """
-        payload = corpus.sweep()
+        payload = corpus_payload
         randoms = {
             k: v
             for k, v in payload.items()

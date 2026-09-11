@@ -41,3 +41,14 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> CorpusCache:
     if base.name.startswith("popen-"):
         base = base.parent
     return CorpusCache(base / "corpus-2345")
+
+
+@pytest.fixture(scope="session")
+def corpus_payload(corpus: CorpusCache) -> dict:
+    """The unchanged full sweep, shared by all readers in one CI shard.
+
+    tests.corpus_shards recognizes this fixture in the collected dependency
+    closure. Mutated scripts still use CorpusCache directly and get their own
+    content-keyed runs; this fixture represents only the unmodified sweep.
+    """
+    return corpus.sweep()

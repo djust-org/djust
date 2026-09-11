@@ -1,0 +1,1 @@
+- **Share exhaustive corpus work across CI readers:** Keep full-sweep consumers in one duration-balanced shard, preserve every test and comparison, and verify exact shard coverage. Refresh balancing data from a successful CI run while retaining independent mutation checks and worker-safe session caching.
