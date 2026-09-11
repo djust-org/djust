@@ -194,9 +194,13 @@ _RENDER_KWARGS: Dict[str, Dict[str, Any]] = {
     "AlertComponent": {"message": "M", "dismissible": True},
     "BadgeComponent": {"text": "B", "dismissible": True},
     "TableComponent": {
-        "columns": [{"key": "id", "label": "ID", "sortable": True}, {"key": "n", "label": "N"}],
+        "columns": [
+            {"key": "id", "label": "ID", "sortable": True},
+            {"key": "n", "label": "N", "filterable": True},  # #2782: a column filter input
+        ],
         "rows": [{"id": 1, "n": "a"}],
         "selectable": True,  # #2779: the row/header checkboxes are controls too
+        "filterable": True,  # #2782: the global filter input
     },
     "PaginationComponent": {"current_page": 2, "total_pages": 5},
     "TabsComponent": {"tabs": [{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}]},
