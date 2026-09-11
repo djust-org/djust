@@ -1,1 +1,0 @@
-- **Reduce test harness overhead:** Collect the Python suite once for shard validation, preserve configured exclusions, and reject partial collections. Keep one real doctor smoke run while testing verdict scenarios with controlled external tools and explicit failure/timeout checks.
