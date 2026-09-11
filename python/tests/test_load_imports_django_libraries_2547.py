@@ -501,12 +501,34 @@ def test_options_builtins_need_no_load():
     assert ours == theirs == "builtin_only - Expected result"
 
 
-@pytest.mark.django_db
-def test_both_paths_share_one_registry():
-    """Load on the plain path, render (a different source, no `{% load %}`)
-    on the LiveView path: the registration is process-global (#1051)."""
+def test_a_backends_registration_persists_without_reloading():
+    """Load once, render a DIFFERENT source with no `{% load %}` on the SAME
+    backend: the registration survives the render that created it.
+
+    Was `test_both_paths_share_one_registry` (#1051), asserting the
+    registration is process-global — visible on the LiveView path's OWN
+    `DjustTemplateBackend`, a DIFFERENT instance from `DJUST` (the plain
+    path's, constructed by this file), after loading only on the plain
+    path. PR #2716 ("isolate engine bindings and compile caches")
+    deliberately scoped tag/filter registries to the OWNING backend so two
+    backends mapping the same name to different implementations cannot
+    interfere with each other — `test_backend_registry_isolation_2709.py`'s
+    `test_unloaded_engine_does_not_gain_tags` pins exactly that, correctly.
+    The old assertion here should have gone red the day #2716 landed; it
+    didn't, because `test_liveview_entry_matches_django[shape]`, several
+    parametrized cases earlier in THIS SAME FILE, already renders
+    `{% load lib2547_tags %}{% one_param2547 ... %}` through the LiveView
+    path, priming that backend's own namespace as a side effect — so the
+    old test passed for a reason unrelated to what it claimed to test (a
+    file-order-coupled tautology, #1200/#1468; #2785).
+
+    This is the part of the original #1051 claim that is still true and
+    still worth pinning: within ONE backend, djust's registry does not
+    forget a mapping between renders the way Django's own `{% load %}`
+    (a per-template directive) might suggest it should.
+    """
     assert plain_render(L + "shared-2547-a", {}) == "shared-2547-a"
-    assert liveview_render("{% one_param2547 7 %}shared-2547-b", {}) == (
+    assert plain_render("{% one_param2547 7 %}shared-2547-b", {}) == (
         "one_param - Expected result: 7shared-2547-b"
     )
 
