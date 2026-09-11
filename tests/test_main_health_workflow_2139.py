@@ -236,16 +236,19 @@ def test_the_install_mirrors_the_proven_ci_recipe():
     src = "\n".join(
         ln for ln in WORKFLOW.read_text().splitlines() if not ln.lstrip().startswith("#")
     )
-    assert "uv sync --extra dev" in src, "must use the same install as test.yml"
-    assert "uv run maturin develop --release" in src
+    assert "uv sync --frozen --extra dev --no-install-project" in src, (
+        "must use the same install as test.yml"
+    )
+    assert "uv run --no-sync maturin develop --release" in src
     assert ".venv/bin/pip" not in src, (
         "`uv venv` creates no pip; invoking .venv/bin/pip fails the job and "
         "reports 'could not run' every single day"
     )
     test_yml = (ROOT / ".github/workflows/test.yml").read_text()
-    assert "uv sync --extra dev" in test_yml and "uv run maturin develop --release" in test_yml, (
-        "this pin is only meaningful while test.yml still uses that recipe"
-    )
+    assert (
+        "uv sync --frozen --extra dev --no-install-project" in test_yml
+        and "uv run --no-sync maturin develop --release" in test_yml
+    ), "this pin is only meaningful while test.yml still uses that recipe"
 
 
 def test_a_failed_rust_build_fails_the_job_rather_than_reporting_a_red_main():

@@ -50,8 +50,8 @@ uv run --no-sync maturin develop --release
 ```
 
 `--no-sync` matters: an ordinary `uv run` can synchronize the project again before
-executing maturin. The Python matrix, serial benchmark job, and Django scoreboard
-use this install sequence; their later uv commands also use `--no-sync` so they
+executing maturin. The Python matrix, serial benchmark job, Django scoreboard, and scheduled
+main-health job use this install sequence; their later uv commands also use `--no-sync` so they
 cannot undo it. The isolated worktree was installed and tested with this exact
 sequence. Avoid interpreting the eliminated 121-second step as a guaranteed
 end-to-end saving: cache state and scheduling still affect the workflow.
