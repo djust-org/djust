@@ -5,6 +5,7 @@ Demo views for djust_demos app
 from .counter_demo import CounterView
 from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
+from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
     ChatView,
@@ -47,6 +48,7 @@ __all__ = [
     "NavDemoPageAView",
     "NavDemoPageBView",
     "BrowserSmokeView",
+    "TableSelectView",
     "TodoView",
     "ChatView",
     "ReactDemoView",

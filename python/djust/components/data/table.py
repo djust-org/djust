@@ -195,13 +195,24 @@ class TableComponent(LiveComponent):
     def _row_checkbox_attr(self, row: Dict[str, Any]) -> str:
         """Routing half of a row checkbox: ``dj-change="toggle_row"`` paired with
         ``data-component-id`` (so the change is dispatched to THIS component,
-        not the parent view — the #2776 lesson) and ``data-row-id`` carrying the
-        identity the handler takes as ``row_id``."""
+        not the parent view — the #2776 lesson) and ``dj-value-row-id`` carrying
+        the identity the handler takes as ``row_id``.
+
+        ``dj-value-*``, NOT ``data-*`` (#2781): the client's form-event path
+        (``buildFormEventParams``, 09-event-binding.js) sends ``value``,
+        ``field``, ``component_id`` and the element's ``dj-value-*`` — it never
+        reads ``data-*``; only ``dj-click`` does (``extractTypedParams``). The
+        first cut carried ``data-row-id``, so every row click reached
+        ``toggle_row`` as ``row_id=""`` and toggled the empty string: one row
+        could never stay selected, and the header never derived a full set.
+        Same convention as the package's other form-event controls
+        (``templatetags/_forms.py``: ``dj-change=… dj-value-column=…``).
+        """
         row_id = self._row_id(row)
         checked = " checked" if row_id in self.selected_rows else ""
         return (
             f'dj-change="toggle_row" data-component-id="{self.component_id}" '
-            f'data-row-id="{escape(row_id)}" aria-label="Select row"{checked}'
+            f'dj-value-row-id="{escape(row_id)}" aria-label="Select row"{checked}'
         )
 
     def _header_checkbox_attr(self) -> str:
@@ -215,7 +226,7 @@ class TableComponent(LiveComponent):
     def toggle_row(self, row_id: str = "", **kwargs: Any) -> None:
         """Toggle one row's membership in ``selected_rows`` (#2779).
 
-        ``row_id`` is what the checkbox's ``data-row-id`` carries — the row's
+        ``row_id`` is what the checkbox's ``dj-value-row-id`` carries — the row's
         ``row_key`` value as a string. The checkbox's own ``value`` (its checked
         state) arrives in ``kwargs`` and is ignored: the server state is the
         truth, so a stale client cannot desynchronise it.

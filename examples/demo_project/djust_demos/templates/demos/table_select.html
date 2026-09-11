@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}Table Selection Canary (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.table_select_demo.TableSelectView"
+     style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1 id="table-select-heading" style="font-size: 2rem; font-weight: 700;">Table Selection Canary</h1>
+    <p>Server selected_rows: <span id="selected-csv">{{ selected_csv }}</span></p>
+    <div id="table-select-host">{{ table.render }}</div>
+</div>
+{% endblock %}
