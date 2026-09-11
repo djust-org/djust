@@ -38,8 +38,11 @@ class TableComponent(LiveComponent):
                 ],
                 striped=True,
                 hoverable=True,
-                bordered=True
+                bordered=True,
+                filterable=True,  # one input matching any column (#2782)
             )
+            # {'key': 'name', 'label': 'Name', 'filterable': True} adds a
+            # per-column filter input under that header.
 
         # In template:
         {{ users_table.render }}
@@ -63,6 +66,18 @@ class TableComponent(LiveComponent):
         # (``rust_handlers.py`` builds ``{str(v) for v in selected_rows}``).
         self.row_key = kwargs.get("row_key", "id")
         self.selected_rows = [str(v) for v in kwargs.get("selected_rows", [])]
+        # Filtering (#2782) mirrors ``DataTableMixin``: one global query that
+        # matches ANY column case-insensitively (``on_table_search`` /
+        # ``_apply_table_search``, ``mixins/data_table.py``) and per-column
+        # filters keyed by column (``on_table_filter`` / ``_apply_table_filters``,
+        # an empty value removes the key). ``filterable=True`` renders the global
+        # input; ``{"key": ..., "filterable": True}`` on a column renders that
+        # column's input.
+        self.filterable = kwargs.get("filterable", False)
+        self.filter_query = str(kwargs.get("filter_query", "") or "")
+        self.column_filters: Dict[str, str] = {
+            str(k): str(v) for k, v in (kwargs.get("column_filters") or {}).items() if v
+        }
 
     def get_context(self) -> Dict[str, Any]:
         """Get table context"""
@@ -77,7 +92,89 @@ class TableComponent(LiveComponent):
             "sort_direction": self.sort_direction,
             "selectable": self.selectable,
             "selected_rows": self.selected_rows,
+            "filterable": self.filterable,
+            "filter_query": self.filter_query,
+            "column_filters": self.column_filters,
         }
+
+    # ------------------------------------------------------------------
+    # Filtering (#2782)
+    # ------------------------------------------------------------------
+
+    def _has_column_filters(self) -> bool:
+        return any(col.get("filterable", False) for col in self.columns)
+
+    def _matches(self, row: Dict[str, Any]) -> bool:
+        """Case-insensitive substring match — the ``icontains`` rule
+        ``DataTableMixin`` applies (``_apply_table_search`` /
+        ``_apply_table_filters``). The global query matches when ANY column's
+        string value contains it; a column filter must match THAT column."""
+        query = self.filter_query.lower()
+        if query and not any(query in str(row.get(col["key"], "")).lower() for col in self.columns):
+            return False
+        for key, needle in self.column_filters.items():
+            if needle.lower() not in str(row.get(key, "")).lower():
+                return False
+        return True
+
+    def _visible_rows(self) -> List[Dict[str, Any]]:
+        """The rows the table renders: ``rows`` filtered, then sorted — the
+        ``search -> filter -> sort`` order of ``DataTableMixin.refresh_table``.
+        ``rows`` itself is never narrowed, so clearing a filter restores them."""
+        visible = [row for row in self.rows if self._matches(row)]
+        if self.sort_column:
+            visible = sorted(
+                visible,
+                key=lambda x: x.get(self.sort_column, ""),
+                reverse=self.sort_direction == "desc",
+            )
+        return visible
+
+    def _global_filter_attr(self) -> str:
+        """Routing half of the global filter input: ``dj-input="filter_rows"``
+        with ``data-component-id`` (dispatched to THIS component — the #2776
+        lesson) and ``dj-debounce`` as ``{% data_table %}`` renders its search
+        box (``rust_handlers.py`` ``dj-debounce="{search_debounce}"``, 300ms).
+        The client sends the input's text as ``value``."""
+        return (
+            f'role="searchbox" aria-label="Search table" placeholder="Search..." '
+            f'value="{escape(self.filter_query)}" '
+            f'dj-input="filter_rows" dj-debounce="300" data-component-id="{self.component_id}"'
+        )
+
+    def _column_filter_attr(self, col: Dict[str, Any]) -> str:
+        """Routing half of a column filter input: ``dj-input="filter_column"``
+        with ``data-component-id`` and ``data-column`` carrying the key the
+        handler takes as ``column`` (the ``{% data_table %}`` filter-row shape)."""
+        key = col["key"]
+        return (
+            f'aria-label="Filter {escape(str(col.get("label", key)))}" placeholder="Filter..." '
+            f'value="{escape(self.column_filters.get(key, ""))}" '
+            f'dj-input="filter_column" dj-debounce="300" '
+            f'data-component-id="{self.component_id}" data-column="{escape(str(key))}"'
+        )
+
+    @event_handler()
+    def filter_rows(self, value: str = "", **kwargs: Any) -> None:
+        """Set the global filter query (#2782): rows whose ANY column contains
+        ``value`` case-insensitively stay visible; an empty value shows every
+        row. ``value`` is what ``dj-input`` sends — the same parameter
+        ``DataTableMixin.on_table_search`` takes."""
+        self.filter_query = str(value or "")
+        self.trigger_update()
+
+    @event_handler()
+    def filter_column(self, value: str = "", column: str = "", **kwargs: Any) -> None:
+        """Set one column's filter (#2782): ``column`` is the input's
+        ``data-column``; an empty ``value`` removes the filter, as
+        ``DataTableMixin.on_table_filter`` pops the key."""
+        column = str(column)
+        value = str(value or "")
+        if value:
+            self.column_filters = {**self.column_filters, column: value}
+        else:
+            self.column_filters = {k: v for k, v in self.column_filters.items() if k != column}
+        self.trigger_update()
 
     # ------------------------------------------------------------------
     # Row selection (#2779)
@@ -88,7 +185,8 @@ class TableComponent(LiveComponent):
         return str(row.get(self.row_key, ""))
 
     def _row_ids(self) -> List[str]:
-        return [self._row_id(row) for row in self.rows]
+        """Identities of the VISIBLE rows (after any filter, #2782)."""
+        return [self._row_id(row) for row in self._visible_rows()]
 
     def _all_selected(self) -> bool:
         ids = self._row_ids()
@@ -131,9 +229,12 @@ class TableComponent(LiveComponent):
 
     @event_handler()
     def toggle_all(self, **kwargs: Any) -> None:
-        """Header checkbox: select every row, or clear the selection when every
-        row is already selected (#2779). Mirrors ``DataTableMixin.on_table_select``
-        for ``__all__``."""
+        """Header checkbox: select every VISIBLE row, or clear the selection
+        when every visible row is already selected (#2779). Under a filter
+        (#2782) only the filtered-in rows are selected — the
+        ``DataTableMixin.on_table_select`` ``__all__`` contract, which selects
+        ``table_rows`` (the post-filter set). A hidden row that was selected
+        before the filter stays selected; clearing removes every id."""
         if self._all_selected():
             self.selected_rows = []
         else:
@@ -206,6 +307,22 @@ class TableComponent(LiveComponent):
         self.rows = sorted(self.rows, key=lambda x: x.get(column_key, ""), reverse=reverse)
         self.trigger_update()
 
+    def _filter_row(self, input_open: str, th_class: str = "") -> str:
+        """The second ``<thead>`` row of per-column filter inputs — the
+        ``{% data_table %}`` shape (``rust_handlers.py`` ``filter_cells``): one
+        cell per column, an input only under a ``filterable`` column, an empty
+        cell under the checkbox column. Nothing when no column is filterable."""
+        if not self._has_column_filters():
+            return ""
+        th_open = f'<th class="{th_class}">' if th_class else "<th>"
+        cells = [f"{th_open}</th>"] if self.selectable else []
+        for col in self.columns:
+            if col.get("filterable", False):
+                cells.append(f"{th_open}{input_open}{self._column_filter_attr(col)}></th>")
+            else:
+                cells.append(f"{th_open}</th>")
+        return f'<tr class="dj-table-filters">{"".join(cells)}</tr>'
+
     def render(self) -> SafeString:
         """Render table with inline HTML"""
         from django.utils.safestring import mark_safe
@@ -235,6 +352,11 @@ class TableComponent(LiveComponent):
         table_class = " ".join(classes)
 
         html = f'<div class="table-responsive" id="{self.component_id}">'
+        if self.filterable:
+            html += (
+                f'<div class="dj-table-filter mb-2"><input type="text" class="form-control" '
+                f"{self._global_filter_attr()}></div>"
+            )
         html += f'<table class="{table_class}">'
 
         # Header
@@ -257,12 +379,14 @@ class TableComponent(LiveComponent):
             else:
                 html += f"<th>{label}</th>"
 
-        html += "</tr></thead>"
+        html += "</tr>"
+        html += self._filter_row('<input type="text" class="form-control form-control-sm" ')
+        html += "</thead>"
 
         # Body
         html += "<tbody>"
 
-        for row in self.rows:
+        for row in self._visible_rows():
             html += "<tr>"
 
             if self.selectable:
@@ -288,6 +412,12 @@ class TableComponent(LiveComponent):
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS table"""
         html = f'<div class="overflow-x-auto" id="{self.component_id}">'
+        if self.filterable:
+            html += (
+                f'<div class="dj-table-filter mb-2"><input type="text" '
+                f'class="block w-full rounded-md border-gray-300 shadow-sm text-sm" '
+                f"{self._global_filter_attr()}></div>"
+            )
         html += '<table class="min-w-full divide-y divide-gray-200">'
 
         # Header
@@ -315,7 +445,12 @@ class TableComponent(LiveComponent):
             else:
                 html += f'<th class="{th_class}">{label}</th>'
 
-        html += "</tr></thead>"
+        html += "</tr>"
+        html += self._filter_row(
+            '<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm" ',
+            th_class="px-6 py-2",
+        )
+        html += "</thead>"
 
         # Body
         body_class = "bg-white divide-y divide-gray-200"
@@ -324,7 +459,7 @@ class TableComponent(LiveComponent):
 
         html += f'<tbody class="{body_class}">'
 
-        for idx, row in enumerate(self.rows):
+        for idx, row in enumerate(self._visible_rows()):
             row_class = ""
             if self.striped and idx % 2 == 1:
                 row_class = "bg-gray-50"
@@ -369,7 +504,10 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<table class="{table_class}" id="{self.component_id}">'
+        html = f'<div class="dj-table" id="{self.component_id}">'
+        if self.filterable:
+            html += f'<div class="dj-table-filter"><input type="text" {self._global_filter_attr()}></div>'
+        html += f'<table class="{table_class}">'
 
         # Header
         html += "<thead><tr>"
@@ -388,12 +526,14 @@ class TableComponent(LiveComponent):
             else:
                 html += f"<th>{label}</th>"
 
-        html += "</tr></thead>"
+        html += "</tr>"
+        html += self._filter_row('<input type="text" ')
+        html += "</thead>"
 
         # Body
         html += "<tbody>"
 
-        for row in self.rows:
+        for row in self._visible_rows():
             html += "<tr>"
 
             if self.selectable:
@@ -412,5 +552,5 @@ class TableComponent(LiveComponent):
             html += "</tr>"
 
         html += "</tbody>"
-        html += "</table>"
+        html += "</table></div>"
         return html

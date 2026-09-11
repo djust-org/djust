@@ -220,8 +220,35 @@ self.table.selected_rows  # ["3", "7"]
 ```
 
 The row checkbox toggles that row (`toggle_row`); the header checkbox selects
-every row, or clears the selection when every row is already selected
-(`toggle_all`).
+every **visible** row, or clears the selection when every visible row is
+already selected (`toggle_all`).
+
+`filterable=True` adds a global filter input above the table: rows stay visible
+when **any** column's string value contains the query, case-insensitively.
+`{"filterable": True}` on a column adds a filter input under that header that
+narrows on that column alone. Both compose (every filter must match), and they
+compose with the sort: rows are filtered, then sorted. The rows you passed are
+never narrowed — clearing an input restores them. The conventions mirror
+`{% data_table %}` / `DataTableMixin` (`icontains`, an empty value removes the
+filter, select-all is the post-filter set):
+
+```python
+self.table = TableComponent(
+    columns=[
+        {"key": "name", "label": "Name", "sortable": True, "filterable": True},
+        {"key": "email", "label": "Email"},
+    ],
+    rows=...,
+    filterable=True,
+)
+# after the user types:
+self.table.filter_query     # "ali"      — the global input (filter_rows)
+self.table.column_filters   # {"name": "al"}  — per column (filter_column)
+```
+
+The inputs are `dj-input` controls debounced at 300 ms (`dj-debounce="300"`),
+routed to the component with `data-component-id`, and labelled
+(`aria-label="Search table"` / `aria-label="Filter <label>"`).
 
 ### `PaginationComponent`
 
