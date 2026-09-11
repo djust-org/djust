@@ -79,6 +79,32 @@ runner results should be recorded separately.
 paths override configured discovery, so omitting a root is lost coverage, not an
 optimization. A dry-run test checks the command that make actually expands.
 
+## Local hooks and CI responsibilities
+
+Tests are separated by language and execution stage, but the Python CI gate still
+runs the complete collection rather than excluding slow tests.
+
+| Stage | Responsibility |
+| --- | --- |
+| Commit | Formatting, linting, secret detection, generated assets, and quick consistency checks on relevant files. |
+| Push | Affected Python tests, Rust crate tests, full JavaScript tests for JS changes, compile-heavy Clippy, and applicable audits. Shared-engine/harness changes fall back to the full local suite. |
+| PR CI | Full Python 3.12 shards, Rust/JS suites, integration/security gates, serial benchmarks, Django compatibility scoreboard, and free-threaded smoke checks. |
+| Main / scheduled CI | Additional Python versions on main and the daily serial Python run that exposes execution-order dependencies. |
+
+Full JavaScript tests and Clippy now explicitly use the `pre-push` stage, matching
+the existing Python and Rust test hooks. They previously inherited all stages and
+therefore ran on both commit and push. Their commands, arguments, and file filters
+are unchanged. A real pre-commit dispatch probe confirmed that they do not execute
+at commit, still execute at push, and still reject a push when a check fails.
+
+Cheap checks can run again on push because the pushed range may contain multiple
+commits. Expensive suites should not repeat at both local stages. CI remains
+necessary because it checks the complete branch in a clean runner environment.
+Local hooks do not replace it, and green targeted tests do not prove the full
+suite passes. Clippy currently has stricter local flags than the CI invocation;
+keep its push gate until any proposed CI-only policy establishes equivalent
+coverage.
+
 ## Alternatives worth investigating next
 
 | Alternative | Expected benefit | Tradeoff / verification needed |

@@ -1,1 +1,1 @@
-- **Reduce test overhead:** Build the native extension once per Python CI job, batch every exhaustive Unicode title-filter comparison, and include every Python test root in `make test`.
+- **Reduce test overhead:** Build the native extension once per Python CI job, batch every exhaustive Unicode title-filter comparison, and include every Python test root in `make test`. Full JavaScript tests and Clippy run at push time instead of repeating on both commit and push.
