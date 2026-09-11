@@ -26,6 +26,7 @@ class ShardSnapshot:
         from pytest_split.plugin import PytestSplitPlugin
 
         config = session.config
+        corpus_plugin = config.pluginmanager.get_plugin("tests.corpus_shards")
         items = list(session.items)
         groups = []
         # Leave normal collection unsplit. Only the probe calls the real
@@ -33,7 +34,11 @@ class ShardSnapshot:
         original = config.option.splits, config.option.group
         try:
             config.option.splits = self.splits
-            splitter = PytestSplitPlugin(config)
+            splitter = (
+                corpus_plugin.create_splitter(config)
+                if corpus_plugin is not None
+                else PytestSplitPlugin(config)
+            )
             for group in range(1, self.splits + 1):
                 config.option.group = group
                 selected = items.copy()
@@ -42,6 +47,10 @@ class ShardSnapshot:
         finally:
             config.option.splits, config.option.group = original
         self.result = {"collected": [item.nodeid for item in items], "groups": groups}
+        if corpus_plugin is not None:
+            self.result["shared_corpus"] = [
+                item.nodeid for item in corpus_plugin.shared_readers(items)
+            ]
 
 
 def main() -> int:
