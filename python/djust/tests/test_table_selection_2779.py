@@ -16,10 +16,15 @@ Row identity mirrors ``{% data_table %}`` / ``DataTableMixin``: the row's
 a ``selected_rows`` list moves between the two tables unchanged.
 
 The reproducers build the event the way the client does from the RENDERED
-control (``data-*`` → params, ``data-component-id`` → ``component_id``, and for
-``dj-change`` the checkbox's ``checked`` as ``value`` — ``09-event-binding.js``
-line ~756), over a real ``WebsocketCommunicator``. Harness lifted from
-``test_table_sort_handler_2776.py``.
+control, over a real ``WebsocketCommunicator``. For a ``dj-change`` that is
+``buildFormEventParams`` (``09-event-binding.js:525``): ``value`` = the
+checkbox's toggled ``checked``, ``component_id`` from ``data-component-id``,
+and the element's ``dj-value-*`` — and NOTHING from any other ``data-*``. The
+first cut of this file forwarded every ``data-*`` as a param (the ``dj-click``
+model, ``extractTypedParams``), which is why it stayed green while the
+rendered ``data-row-id`` never reached ``toggle_row`` in a browser (#2781;
+the same trap ``tests/js/no_data_field_name_2145.test.js`` records). Harness
+lifted from ``test_table_sort_handler_2776.py``.
 """
 
 from __future__ import annotations
@@ -110,33 +115,34 @@ def _checkboxes(html: str) -> list:
 
 def _row_checkbox(html: str, row_id: str) -> str:
     for t in _checkboxes(html):
-        if _attrs(t).get("data-row-id") == row_id:
+        if _attrs(t).get("dj-value-row-id") == row_id:
             return t
     raise AssertionError(f"no row checkbox for {row_id!r} in: {html}")
 
 
 def _header_checkbox(html: str) -> str:
     for t in _checkboxes(html):
-        if "data-row-id" not in t:
+        if "dj-value-row-id" not in t:
             return t
     raise AssertionError(f"no header checkbox in: {html}")
 
 
 def _client_change_params(tag: str) -> Dict[str, Any]:
-    """The params the client sends for a ``dj-change`` on ``tag``: every
-    ``data-*`` as a snake_case key, ``data-component-id`` → ``component_id``
-    (ONLY if present), and ``value`` = the checkbox's toggled ``checked``
-    (``09-event-binding.js``: ``e.target.type === 'checkbox' ? e.target.checked
-    : e.target.value``)."""
+    """The params the client sends for a ``dj-change`` on ``tag`` —
+    ``buildFormEventParams`` (``09-event-binding.js:525``) faithfully: ``value``
+    = the checkbox's toggled ``checked`` (``e.target.type === 'checkbox' ?
+    e.target.checked : e.target.value``), ``component_id`` from
+    ``data-component-id`` (ONLY if present, via ``addEventContext``), and every
+    ``dj-value-*`` as a snake_case key (``collectDjValues``). No other ``data-*``
+    is read on the form-event path (#2781 / #2145) — a ``data-row-id`` here is
+    dropped exactly as the browser drops it."""
     params: Dict[str, Any] = {}
     attrs = _attrs(tag)
     for name, value in attrs.items():
-        if not name.startswith("data-"):
-            continue
         if name == "data-component-id":
             params["component_id"] = value
-            continue
-        params[name[5:].replace("-", "_")] = value
+        elif name.startswith("dj-value-"):
+            params[name[len("dj-value-") :].replace("-", "_")] = value
     params["value"] = " checked" not in tag  # the click flips it
     return params
 
@@ -314,7 +320,7 @@ class TestSelectionState:
     def test_row_key_is_configurable(self):
         t = _table(row_key="email")
         html = _render_under(t, "plain")
-        assert 'data-row-id="z@x"' in html
+        assert 'dj-value-row-id="z@x"' in html
         t.toggle_all()
         assert t.selected_rows == ["z@x", "a@x", "m@x"]
 
@@ -333,8 +339,8 @@ class TestSelectionState:
     def test_row_id_is_escaped_in_the_attribute(self):
         t = _table(rows=[{"id": 'a"><b', "name": "x", "email": "y"}])
         html = _render_under(t, "plain")
-        assert 'data-row-id="a&quot;&gt;&lt;b"' in html
-        assert 'data-row-id="a">' not in html
+        assert 'dj-value-row-id="a&quot;&gt;&lt;b"' in html
+        assert 'dj-value-row-id="a">' not in html
 
     def test_selection_is_in_the_component_context(self):
         t = _table(selected_rows=["2"])
@@ -354,14 +360,14 @@ class TestRenderedCheckboxesCarryTheirRouting:
     @pytest.mark.parametrize("framework", _FRAMEWORKS)
     def test_row_checkboxes(self, framework):
         html = _render_under(_table(selected_rows=["3"]), framework)
-        rows = [t for t in _checkboxes(html) if "data-row-id" in t]
-        assert [_attrs(t)["data-row-id"] for t in rows] == ["2", "3", "1"], html
+        rows = [t for t in _checkboxes(html) if "dj-value-row-id" in t]
+        assert [_attrs(t)["dj-value-row-id"] for t in rows] == ["2", "3", "1"], html
         for t in rows:
             a = _attrs(t)
             assert a["dj-change"] == "toggle_row", t
             assert a["data-component-id"] == "t1", t
             assert a["aria-label"] == "Select row", t
-            assert (" checked" in t) == (a["data-row-id"] == "3"), t
+            assert (" checked" in t) == (a["dj-value-row-id"] == "3"), t
 
     @pytest.mark.parametrize("framework", _FRAMEWORKS)
     def test_header_checkbox(self, framework):
