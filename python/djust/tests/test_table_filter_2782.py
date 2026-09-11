@@ -234,11 +234,17 @@ def _summary(frame: Dict[str, Any], name: str) -> str:
 
 
 def _body_rows(html: str) -> list:
-    """``data-row-id`` of every rendered body checkbox, in order."""
+    """``dj-value-row-id`` of every rendered body checkbox, in order.
+
+    Row identity rides ``dj-value-row-id``, not ``data-row-id`` (#2781): a
+    checkbox's ``dj-change`` runs the client's form-event path
+    (``buildFormEventParams``), which never reads ``data-*`` — only
+    ``dj-value-*``. ``data-row-id`` was the pre-#2781 shape.
+    """
     return [
-        _attrs(t)["data-row-id"]
+        _attrs(t)["dj-value-row-id"]
         for t in _TAG.findall(html)
-        if 'type="checkbox"' in t and "data-row-id" in t
+        if 'type="checkbox"' in t and "dj-value-row-id" in t
     ]
 
 
@@ -343,9 +349,9 @@ class TestFilterOverWebSocket:
             assert _summary(resp, "sel") == "2,1"
             assert _summary(resp, "vis") == "2,3,1,4"
             boxes = {
-                _attrs(t)["data-row-id"]: " checked" in t
+                _attrs(t)["dj-value-row-id"]: " checked" in t
                 for t in _TAG.findall(resp["html"])
-                if "data-row-id" in t
+                if "dj-value-row-id" in t
             }
             assert boxes == {"2": True, "1": True, "3": False, "4": False}, boxes
         finally:
