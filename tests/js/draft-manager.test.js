@@ -4,7 +4,7 @@
  * (decorators, since deleted). These run against the bundle modules.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 
 // Evaluate the REAL bundle modules (not a copy): 06-draft-manager.js defines
@@ -22,20 +22,24 @@ const { DraftManager, globalDraftManager, collectFormData, restoreFormData } = n
 )(() => {}, ['__proto__', 'constructor', 'prototype']);
 
 describe('DraftManager', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
+    });
     let manager;
     let mockLocalStorage;
 
     beforeEach(() => {
         // Create mock localStorage
         mockLocalStorage = {};
-        global.localStorage = {
+        vi.stubGlobal('localStorage', {
             getItem: vi.fn(key => mockLocalStorage[key] || null),
             setItem: vi.fn((key, value) => { mockLocalStorage[key] = value; }),
             removeItem: vi.fn(key => { delete mockLocalStorage[key]; }),
             clear: vi.fn(() => { mockLocalStorage = {}; }),
             get length() { return Object.keys(mockLocalStorage).length; },
             key: vi.fn(index => Object.keys(mockLocalStorage)[index] || null)
-        };
+        });
 
         manager = new DraftManager();
         vi.useFakeTimers();

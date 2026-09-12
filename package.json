@@ -12,14 +12,14 @@
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.11",
-    "@vitest/ui": "^4.1.9",
+    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/ui": "^5.0.0",
     "eslint": "^10.10.0",
     "eslint-plugin-security": "^4.0.1",
     "happy-dom": "^20.14.0",
     "jsdom": "^30.0.1",
     "terser": "^5.51.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "flatted": ">=3.4.2"
