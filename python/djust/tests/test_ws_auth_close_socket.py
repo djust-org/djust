@@ -27,6 +27,27 @@ from django.test import override_settings  # noqa: E402
 from djust import LiveView  # noqa: E402
 from djust.decorators import event_handler  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _exclude_unrelated_hotreload(monkeypatch):
+    """Auth/socket tests must not receive another worker's file-watch events.
+
+    Clearing a channel layer cannot isolate a filesystem observer: this test's
+    freshly connected consumer would immediately rejoin its broadcast group.
+    Exclude only that subscription for this module; retain real auth, socket,
+    and all other channel-layer behavior. Monkeypatch restores it after each test.
+    """
+    from channels.layers import InMemoryChannelLayer
+
+    original = InMemoryChannelLayer.group_add
+
+    async def group_add(layer, group, channel):
+        if group != "djust_hotreload":
+            await original(layer, group, channel)
+
+    monkeypatch.setattr(InMemoryChannelLayer, "group_add", group_add)
+
+
 # Module-level flag the mutating handler flips if it ever executes. A raw client
 # that bypasses auth and reaches the handler would set this True.
 _HANDLER_RAN = False
@@ -363,3 +384,33 @@ async def test_single_objperm_denied_mount_still_closes_socket():
     assert out["type"] == "websocket.close", f"socket not closed after object-perm denial: {out!r}"
     assert out.get("code") == 4403
     await communicator.disconnect()
+
+
+@pytest.mark.django_db
+async def test_auth_socket_is_not_subscribed_to_development_reload():
+    """The fixture excludes reload traffic, while other channel groups work."""
+    from channels.layers import channel_layers, get_channel_layer
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    channel_layers.backends.clear()
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    try:
+        connected, _ = await communicator.connect()
+        assert connected
+        await communicator.receive_json_from(timeout=3)
+        layer = get_channel_layer()
+        assert not layer.groups.get("djust_hotreload")
+        probe = await layer.new_channel()
+        await layer.group_add("auth_probe", probe)
+        await layer.group_send("auth_probe", {"type": "probe"})
+        assert await layer.receive(probe) == {"type": "probe"}
+        await layer.group_discard("auth_probe", probe)
+        # Use the real broadcaster, not a hand-built browser frame. A watcher
+        # in another xdist worker can make exactly this call at any time.
+        await LiveViewConsumer.broadcast_reload("example.py")
+        await communicator.send_json_to({"type": "ping"})
+        assert (await communicator.receive_json_from(timeout=3))["type"] == "pong"
+    finally:
+        await communicator.disconnect()
