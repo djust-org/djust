@@ -179,7 +179,7 @@ class TestTemplateTagsOther:
         result = extract_template_variables(template)
         assert "items" in result
         assert "count" in result["items"]
-        assert "total" in result
+        assert "total" not in result  # scoped binding, not a context dependency
 
     def test_block_tag(self):
         """Test extraction from block tag."""

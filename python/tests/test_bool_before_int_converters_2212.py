@@ -70,7 +70,7 @@ EXPECTED = {
     ("crates/djust_live/src/lib.rs", "python_to_json_value"),
     ("crates/djust_live/src/lib.rs", "python_to_value"),
     ("crates/djust_live/src/lib.rs", "serialize_python_value"),
-    ("crates/djust_live/src/lib.rs", "python_to_json"),
+    ("crates/djust_live/src/lib.rs", "queryset_value_to_json"),
     ("crates/djust_live/src/model_serializer.rs", "python_to_json"),
 }
 
