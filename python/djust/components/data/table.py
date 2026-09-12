@@ -58,6 +58,15 @@ class TableComponent(LiveComponent):
         self.bordered = kwargs.get("bordered", False)
         self.hoverable = kwargs.get("hoverable", True)
         self.compact = kwargs.get("compact", False)
+        # Additive CSS hooks keep framework defaults while allowing utilities
+        # such as Bootstrap's align-middle/table-dark and caption-top.
+        self.table_class = str(kwargs.get("table_class") or "")
+        self.thead_class = str(kwargs.get("thead_class") or "")
+        self.tbody_class = str(kwargs.get("tbody_class") or "")
+        self.tfoot_class = str(kwargs.get("tfoot_class") or "")
+        self.caption_class = str(kwargs.get("caption_class") or "")
+        self.caption = kwargs.get("caption")
+        self.footer = kwargs.get("footer")  # Optional mapping keyed like a row
         self.sort_column = kwargs.get("sort_column", None)
         self.sort_direction = kwargs.get("sort_direction", "asc")  # asc, desc
         self.selectable = kwargs.get("selectable", False)
@@ -88,6 +97,13 @@ class TableComponent(LiveComponent):
             "bordered": self.bordered,
             "hoverable": self.hoverable,
             "compact": self.compact,
+            "table_class": self.table_class,
+            "thead_class": self.thead_class,
+            "tbody_class": self.tbody_class,
+            "tfoot_class": self.tfoot_class,
+            "caption_class": self.caption_class,
+            "caption": self.caption,
+            "footer": self.footer,
             "sort_column": self.sort_column,
             "sort_direction": self.sort_direction,
             "selectable": self.selectable,
@@ -348,6 +364,33 @@ class TableComponent(LiveComponent):
         else:
             return mark_safe(self._render_plain())
 
+    @staticmethod
+    def _section_open(tag: str, custom_class: str, default_class: str = "") -> str:
+        classes = " ".join(part for part in (default_class, custom_class) if part)
+        return f'<{tag} class="{escape(classes)}">' if classes else f"<{tag}>"
+
+    def _table_open(self, default_class: str) -> str:
+        html = self._section_open("table", self.table_class, default_class)
+        if self.caption is not None:
+            html += self._section_open("caption", self.caption_class)
+            html += f"{escape(self.caption)}</caption>"
+        return html
+
+    def _render_footer(self, cell_class: str = "") -> str:
+        if self.footer is None:
+            return ""
+        cell = self._section_open("td", cell_class)
+        cells = [f"{cell}</td>"] if self.selectable else []
+        cells.extend(
+            f"{cell}{escape(self.footer.get(col['key'], ''))}</td>" for col in self.columns
+        )
+        return (
+            self._section_open("tfoot", self.tfoot_class)
+            + "<tr>"
+            + "".join(cells)
+            + "</tr></tfoot>"
+        )
+
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 table"""
         classes = ["table"]
@@ -368,10 +411,10 @@ class TableComponent(LiveComponent):
                 f'<div class="dj-table-filter mb-2"><input type="text" class="form-control" '
                 f"{self._global_filter_attr()}></div>"
             )
-        html += f'<table class="{table_class}">'
+        html += self._table_open(table_class)
 
         # Header
-        html += "<thead><tr>"
+        html += self._section_open("thead", self.thead_class) + "<tr>"
 
         if self.selectable:
             html += f'<th><input type="checkbox" class="form-check-input" {self._header_checkbox_attr()}></th>'
@@ -395,7 +438,7 @@ class TableComponent(LiveComponent):
         html += "</thead>"
 
         # Body
-        html += "<tbody>"
+        html += self._section_open("tbody", self.tbody_class)
 
         for row in self._visible_rows():
             html += "<tr>"
@@ -417,6 +460,7 @@ class TableComponent(LiveComponent):
             html += "</tr>"
 
         html += "</tbody>"
+        html += self._render_footer()
         html += "</table></div>"
         return html
 
@@ -429,10 +473,10 @@ class TableComponent(LiveComponent):
                 f'class="block w-full rounded-md border-gray-300 shadow-sm text-sm" '
                 f"{self._global_filter_attr()}></div>"
             )
-        html += '<table class="min-w-full divide-y divide-gray-200">'
+        html += self._table_open("min-w-full divide-y divide-gray-200")
 
         # Header
-        html += '<thead class="bg-gray-50">'
+        html += self._section_open("thead", self.thead_class, "bg-gray-50")
         html += "<tr>"
 
         if self.selectable:
@@ -468,7 +512,7 @@ class TableComponent(LiveComponent):
         if self.striped:
             body_class = "divide-y divide-gray-200"
 
-        html += f'<tbody class="{body_class}">'
+        html += self._section_open("tbody", self.tbody_class, body_class)
 
         for idx, row in enumerate(self._visible_rows()):
             row_class = ""
@@ -502,6 +546,7 @@ class TableComponent(LiveComponent):
             html += "</tr>"
 
         html += "</tbody>"
+        html += self._render_footer("px-6 py-4")
         html += "</table></div>"
         return html
 
@@ -518,10 +563,10 @@ class TableComponent(LiveComponent):
         html = f'<div class="dj-table" id="{self.component_id}">'
         if self.filterable:
             html += f'<div class="dj-table-filter"><input type="text" {self._global_filter_attr()}></div>'
-        html += f'<table class="{table_class}">'
+        html += self._table_open(table_class)
 
         # Header
-        html += "<thead><tr>"
+        html += self._section_open("thead", self.thead_class) + "<tr>"
 
         if self.selectable:
             html += f'<th><input type="checkbox" {self._header_checkbox_attr()}></th>'
@@ -542,7 +587,7 @@ class TableComponent(LiveComponent):
         html += "</thead>"
 
         # Body
-        html += "<tbody>"
+        html += self._section_open("tbody", self.tbody_class)
 
         for row in self._visible_rows():
             html += "<tr>"
@@ -563,5 +608,6 @@ class TableComponent(LiveComponent):
             html += "</tr>"
 
         html += "</tbody>"
+        html += self._render_footer()
         html += "</table></div>"
         return html
