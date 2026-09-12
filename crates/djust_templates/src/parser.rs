@@ -3120,12 +3120,42 @@ fn extract_from_nodes(
                 extract_from_nodes(nodes, variables);
             }
             Node::With { assignments, nodes } => {
-                // Extract from with assignments: {% with x=variable.path %}
-                for (_var_name, expr) in assignments {
+                // Bindings evaluate in the OUTER scope, simultaneously. Resolve
+                // body paths separately so shadowed aliases cannot consume paths
+                // from preceding siblings or leak into following siblings.
+                let mut body = HashMap::new();
+                extract_from_nodes(nodes, &mut body);
+                for (name, expr) in assignments {
                     extract_from_operand(expr, variables);
+                    if let Some(paths) = body.remove(name) {
+                        let parts = crate::filter_lexer::split_pipes(expr);
+                        let source = parts.first().copied().unwrap_or(expr).trim();
+                        let mut source_vars = HashMap::new();
+                        extract_from_operand(source, &mut source_vars);
+                        for (root, prefixes) in source_vars {
+                            let prefixes = if prefixes.is_empty() {
+                                vec![String::new()]
+                            } else {
+                                prefixes
+                            };
+                            for prefix in prefixes {
+                                for path in &paths {
+                                    let full = if prefix.is_empty() {
+                                        path.clone()
+                                    } else if path.is_empty() {
+                                        prefix.clone()
+                                    } else {
+                                        format!("{prefix}.{path}")
+                                    };
+                                    variables.entry(root.clone()).or_default().push(full);
+                                }
+                            }
+                        }
+                    }
                 }
-                // Recurse into with body
-                extract_from_nodes(nodes, variables);
+                for (root, paths) in body {
+                    variables.entry(root).or_default().extend(paths);
+                }
             }
             Node::ReactComponent {
                 props,
@@ -5119,7 +5149,17 @@ mod tests {
         let vars = extract_template_variables(template).unwrap();
         assert!(vars.contains_key("items"));
         assert!(vars.get("items").unwrap().contains(&"count".to_string()));
-        assert!(vars.contains_key("total"));
+        assert!(!vars.contains_key("total")); // local binding, not context state
+    }
+
+    #[test]
+    fn test_extract_with_scoped_simultaneous_bindings() {
+        let vars = extract_template_variables(
+            r#"{{ a.before }}{% with a=row b=a %}{{ a.title }}{{ b.name }}{% endwith %}{{ a.after }}"#,
+        ).unwrap();
+        assert_eq!(vars["row"], vec!["title"]);
+        assert_eq!(vars["a"], vec!["after", "before", "name"]);
+        assert!(!vars.contains_key("b"));
     }
 
     // Edge case tests

@@ -25,8 +25,10 @@ _expected_keys_cache: Dict[Tuple[str, str], int] = {}
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
-    r'\{%\s*include\s+"{1,2}([^"]+)"{1,2}\s*%\}|\{%\s*include\s+\'{1,2}([^\']+)\'{1,2}\s*%\}'
+    r"\{%\s*include\s+(?:\"{1,2}([^\"]+)\"{1,2}|'{1,2}([^']+)'{1,2})(.*?)%\}",
+    re.DOTALL,
 )
+
 
 try:
     from .._rust import extract_template_variables
@@ -167,8 +169,10 @@ class JITMixin:
     def _inline_includes(template_content: str, template_dirs: List[str]) -> str:
         """Inline {% include "..." %} directives for variable extraction.
 
-        Only handles simple static includes (not variable includes).
-        Recursively resolves nested includes up to 5 levels deep.
+        Static include arguments become scoped ``with`` bindings for extraction.
+        ``only`` masks unbound roots in the partial. This is extraction source,
+        never the template passed to the renderer. Variable includes remain
+        unresolved; nested static includes are bounded to five levels.
         """
 
         def resolve(content: str, depth: int = 0) -> str:
@@ -176,14 +180,40 @@ class JITMixin:
                 return content
 
             def replacer(match: "re.Match[str]") -> str:
+                from django.utils.text import smart_split
+
                 include_path = match.group(1) or match.group(2)
+                bits = list(smart_split(match.group(3).strip()))
+                only = "only" in bits
+                if only:
+                    bits.remove("only")
+                assignments = {}
+                if bits:
+                    if bits.pop(0) != "with":
+                        return match.group(0)
+                    for bit in bits:
+                        name, sep, value = bit.partition("=")
+                        if not sep or not name.isidentifier() or not value:
+                            return match.group(0)
+                        assignments[name] = value
                 for tpl_dir in template_dirs:
                     full_path = os.path.join(tpl_dir, include_path)
                     if os.path.isfile(full_path):
                         try:
                             with open(full_path, "r") as f:
                                 included = f.read()
-                            return resolve(included, depth + 1)
+                            included = resolve(included, depth + 1)
+                            if only:
+                                roots = _cached_extract_template_variables(included)
+                                if roots is None:
+                                    return match.group(0)
+                                for root in roots:
+                                    if root.isidentifier() and root not in assignments:
+                                        assignments[root] = '""'
+                            if assignments:
+                                bindings = " ".join(f"{k}={v}" for k, v in assignments.items())
+                                return "{% with " + bindings + " %}" + included + "{% endwith %}"
+                            return included
                         except Exception as e:
                             logger.debug("Failed to read included template %s: %s", full_path, e)
                 return match.group(0)  # Keep original if not found

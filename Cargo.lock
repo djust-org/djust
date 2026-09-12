@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "djust_components"
-version = "1.2.0-rc.4"
+version = "1.2.0-rc.5"
 dependencies = [
  "ahash",
  "criterion",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "djust_core"
-version = "1.2.0-rc.4"
+version = "1.2.0-rc.5"
 dependencies = [
  "ahash",
  "criterion",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "djust_live"
-version = "1.2.0-rc.4"
+version = "1.2.0-rc.5"
 dependencies = [
  "bincode",
  "criterion",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "djust_templates"
-version = "1.2.0-rc.4"
+version = "1.2.0-rc.5"
 dependencies = [
  "ahash",
  "chrono",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "djust_vdom"
-version = "1.2.0-rc.4"
+version = "1.2.0-rc.5"
 dependencies = [
  "ahash",
  "criterion",
@@ -603,9 +603,9 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "indexmap"
-version = "2.14.1"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.0",
@@ -1310,9 +1310,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "socket2"

@@ -91,6 +91,12 @@ def _analyze_path(
             optimization.annotations[annotation_key] = annotations[field_name]
         return
 
+    # get_field() also accepts a ForeignKey's scalar attname (owner_id).
+    # Only the relation name is legal in select_related; its ID is already
+    # present on the row, including nullable and to_field relationships.
+    if isinstance(field, (ForeignKey, OneToOneField)) and field_name != field.name:
+        return
+
     # Build Django ORM path
     django_path = f"{prefix}__{field_name}" if prefix else field_name
 

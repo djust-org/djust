@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Iterable, List
 if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, fine for typing
     from ..serialization import DjangoJSONEncoder
 
+from django.db.models.fields.files import FieldFile
+
 logger = logging.getLogger(__name__)
 
 #: Memoized :func:`emittable_names` decisions (#2685 perf).
@@ -108,6 +110,11 @@ def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
     except Exception:
         logger.debug("attribute gate failed for %s; refusing every name", type(obj).__name__)
         return frozenset()
+
+
+def _empty_file(value: Any) -> bool:
+    """An empty Django file has no readable URL, size, or path."""
+    return isinstance(value, FieldFile) and not value
 
 
 def _gate_line(indent: int, gate_var: str, obj_expr: str, names: List[str]) -> str:
@@ -295,7 +302,7 @@ def _generate_nested_access(
         # shipped.
         lines.append(
             f"{ind}if '{root_attr}' in {gate_var} and "
-            f"hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:"
+            f"not _djust_empty_file({obj_var}) and hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:"
         )
 
         if tree:
@@ -407,7 +414,7 @@ def _generate_nested_access(
         # its own gate above.
         lines.append(
             f"{ind}if '{attr_name}' in {gate_var} and "
-            f"hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:"
+            f"not _djust_empty_file({obj_var}) and hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:"
         )
 
         if subtree:
@@ -467,7 +474,10 @@ def _generate_nested_access(
             else:
                 # Has nested attributes - create nested dict and recurse
                 dict_path = _build_dict_path(result_var, current_path)
-                lines.append(f"{ind}    {dict_path}['{attr_name}'] = {{}}")
+                lines.append(f"{ind}    if isinstance({obj_access}, dict):")
+                lines.append(f"{ind}        {dict_path}['{attr_name}'] = {obj_access}")
+                lines.append(f"{ind}    else:")
+                lines.append(f"{ind}        {dict_path}['{attr_name}'] = {{}}")
 
                 _generate_nested_access(
                     lines,
@@ -476,7 +486,7 @@ def _generate_nested_access(
                     obj_access,
                     result_var,
                     None,
-                    indent + 1,
+                    indent + 2,
                     gate_var="",
                     counter=counter,
                 )
@@ -545,6 +555,7 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         # (#2685). Bound here, not looked up per call, so a generated
         # serializer can never run without it.
         "_djust_gate": emittable_names,
+        "_djust_empty_file": _empty_file,
     }
 
     try:

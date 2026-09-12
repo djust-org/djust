@@ -250,6 +250,40 @@ The inputs are `dj-input` controls debounced at 300 ms (`dj-debounce="300"`),
 routed to the component with `data-component-id`, and labelled
 (`aria-label="Search table"` / `aria-label="Filter <label>"`).
 
+#### Table anatomy and CSS classes
+
+Use additive class hooks to customize the table without replacing its renderer.
+For Bootstrap, `table_class="align-middle caption-top"` enables vertical alignment
+and a top caption; `thead_class="table-dark"` styles the header. Supply utility
+classes appropriate to your stylesheet when using Tailwind or plain rendering.
+
+```python
+self.table = TableComponent(
+    columns=[{"key": "name", "label": "Name"}, {"key": "count", "label": "Count"}],
+    rows=[{"name": "Alice", "count": 3}],
+    table_class="align-middle caption-top",
+    thead_class="table-dark",
+    caption="Items by owner",
+    caption_class="text-muted",
+    footer={"name": "Total", "count": 3},
+    tfoot_class="table-light",
+)
+```
+
+| Option | Purpose | Default |
+| --- | --- | --- |
+| `table_class` | Classes appended to the framework's table classes | `""` |
+| `thead_class`, `tbody_class`, `tfoot_class` | Classes on the respective table sections | `""` |
+| `caption` | Text in a semantic `<caption>` before the header | `None` (omitted) |
+| `caption_class` | Classes on the caption | `""` |
+| `footer` | One summary row, a mapping keyed like the data rows | `None` (omitted) |
+
+Caption and footer text and all class strings are HTML-escaped. Footer cells follow
+the declared column order; missing keys render empty cells, and selection adds an
+empty alignment cell. The footer is a supplied summary, not an automatically
+calculated total, and is not sorted, filtered, or selected with the data rows.
+
+
 ### `PaginationComponent`
 
 ```python

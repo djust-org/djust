@@ -313,10 +313,9 @@ describe('Form Recovery on Reconnect', () => {
 
         const calls = getFetchCalls(dom);
         const colorCalls = calls.filter(c => c.eventName === 'set_color');
-        // Should fire for both radios whose state differs from default:
-        // red was checked by default, now unchecked = differs
-        // blue was unchecked by default, now checked = differs
-        expect(colorCalls.length).toBe(2);
+        // Match a normal radio change: only the selected value is sent.
+        expect(colorCalls.length).toBe(1);
+        expect(colorCalls[0].body.value).toBe('blue');
     });
 
     it('does NOT fire on initial page load (only on reconnect)', async () => {
