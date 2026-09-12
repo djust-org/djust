@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc5] - 2026-09-11
+
+### Added
+
+- **Customize TableComponent anatomy and styling.** Add semantic captions, a supplied footer summary row, and additive table/header/body/footer/caption class hooks across Bootstrap, Tailwind, and plain HTML. Bootstrap utilities such as `align-middle` can now be supplied directly. New text and class values are escaped; sorting, filtering, and selection retain their existing behavior (#2792).
+
+### Fixed
+
+- **Isolate WebSocket authorization tests from development reloads.** Exclude the unrelated hot-reload subscription within this test module so a filesystem write in another xdist worker cannot replace the expected pong with a reload frame. Authentication and other channel groups remain real and exercised (#2788).
+- **Preserve draft form values through reconnect mounts.** Eligible unfocused fields survive both mount DOM paths before automatic recovery runs; radio groups replay the selected value. Existing opt-outs and ordinary navigation/reset behavior remain respected. Clarify native JSON HTTP event fallback versus optional JavaScript-disabled HTML form submission (#2800, #2801).
+- **Preserve model-backed JIT template data.** Model-backed templates now retain dict/list properties in the Rust queryset serializer, avoid joins for scalar foreign-key IDs, and safely serialize guarded empty files. Static include arguments retain scoped alias paths during JIT extraction, including nested includes and `only` contexts (#2802, #2803, #2804, #2805).
+
 ## [1.2.0rc4] - 2026-09-11
 
 ### Added

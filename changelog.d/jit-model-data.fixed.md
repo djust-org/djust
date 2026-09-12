@@ -1,1 +1,0 @@
-- **Preserve model-backed JIT template data.** Model-backed templates now retain dict/list properties in the Rust queryset serializer, avoid joins for scalar foreign-key IDs, and safely serialize guarded empty files. Static include arguments retain scoped alias paths during JIT extraction, including nested includes and `only` contexts (#2802, #2803, #2804, #2805).
