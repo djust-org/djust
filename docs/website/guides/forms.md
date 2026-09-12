@@ -46,6 +46,31 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
+
+## HTTP fallback does not require a second view
+
+Use semantic HTML forms such as `<form dj-submit="submit_form">` with Django
+Form classes and `FormMixin`. Validation and form state do not require a separate
+traditional Django POST view: `FormMixin` supplies the decorated `submit_form`
+event handler.
+
+When WebSocket is unavailable, the djust browser client can send a
+CSRF-protected JSON event to the current LiveView URL using `fetch`. The inherited
+`LiveView.post()` dispatches the decorated event handler and returns JSON. Include
+`{% csrf_token %}` inside the form for this native HTTP event transport. No
+application `post()` override or duplicate form endpoint is needed.
+
+This transport still requires JavaScript. Supporting a browser with JavaScript
+disabled through ordinary URL-encoded or multipart form submissions is a separate,
+optional product requirement. If you deliberately support both protocols, ensure
+JSON events still reach `super().post()`: an override that returns HTML for them
+breaks the client's JSON response handling.
+
+File uploads have their own transport and lifecycle; JSON event fallback does not
+by itself provide every binary-upload capability. See the [upload guide](uploads.md) for the
+transport supported by your upload configuration.
+
+
 ## Adding Validation with Django Forms
 
 When you need real validation -- required fields, email formats, custom rules -- use Django's forms system with `FormMixin`:
@@ -376,7 +401,7 @@ Each `<ul>` gets the attribute independently. No form-level config, no class hie
 
 ## Tips
 
-- **Always include `{% csrf_token %}`** inside `dj-submit` forms (needed for HTTP fallback).
+- **Always include `{% csrf_token %}`** inside `dj-submit` forms (needed for the native, CSRF-protected JSON event fallback).
 - **Use `dj-change="validate_field"`** on fields for instant feedback before submission.
 - **Set `_model_instance` before `super().mount()`** when editing existing records.
 - **Keep `form_data` keys consistent.** FormMixin initializes all field keys in `mount()`. Don't add or remove keys -- it breaks VDOM diffing.

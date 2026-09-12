@@ -505,7 +505,11 @@ class LiveViewWebSocket {
                 this.autoMount();
                 break;
 
-            case 'mount':
+            case 'mount': {
+                const formRecoverySnapshot = window.djust._isReconnect
+                    && data.view === this.primaryViewPath
+                    && typeof window.djust._captureFormRecovery === 'function'
+                    ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
@@ -572,6 +576,7 @@ class LiveViewWebSocket {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             _morphTemp.innerHTML = data.html;
                             morphChildren(_morphContainer, _morphTemp);
+                            if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                             // #1813 (a): embedded-view wrappers
                             // (<div dj-view dj-sticky-view dj-sticky-root
                             //  data-djust-embedded=...>) carry NO `id`, so
@@ -719,6 +724,7 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
+                        if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                         // #1848: innerHTML never executes inserted <script>.
                         // Re-run classic page scripts inside the dj-root so
                         // inline page JS behaves the same as on the morph path.
@@ -748,6 +754,7 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+            }
 
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.

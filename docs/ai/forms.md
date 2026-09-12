@@ -64,3 +64,47 @@ Rules:
 - `form_valid`/`form_invalid` are called after validation
 - Always include `{% csrf_token %}` in form templates
 - Use `dj-submit` (not HTML form action) for LiveView form handling
+
+
+## Native HTTP event fallback
+
+A semantic `<form dj-submit="save">`, a Django Form class, and a decorated save
+handler are sufficient for a reactive form. `FormMixin` can supply validation,
+state, and `submit_form` instead of writing a manual handler. Neither approach
+requires a second application POST view.
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+from .forms import ContactForm
+
+class ContactView(LiveView):
+    template_name = "contact.html"
+
+    @event_handler()
+    def save(self, **form_data):
+        form = ContactForm(data=form_data)
+        if form.is_valid():
+            self.message = "Validated"
+        else:
+            self.errors = form.errors
+```
+
+```html
+<form dj-submit="save">
+    {% csrf_token %}
+    <input name="email" type="email" required>
+    <button type="submit">Save</button>
+</form>
+```
+
+When WebSocket cannot be used, the browser client sends a CSRF-protected JSON
+request to this LiveView's URL. The inherited `post()` dispatches the decorated
+handler and returns JSON. Do not add an ordinary form-processing `post()` override
+for this fallback. If the product deliberately accepts both protocols, its JSON
+events must still delegate to `super().post()`.
+
+Native HTTP fallback uses JavaScript (`fetch`). Plain URL-encoded/multipart HTML
+form submission without JavaScript is an optional separate requirement. File
+uploads also have their own transport; do not assume JSON event fallback carries
+binary files.

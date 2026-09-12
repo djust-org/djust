@@ -134,7 +134,7 @@ describe('structural pin: ONE page-container helper across src/ (#2632, #1646)',
     const EXPECTED_CALL_SITES = {
         '03-websocket.js': 3,   // prerender morph, html_update replace, autoMount
         '03b-sse.js': 1,        // SSE mount html target
-        '09-event-binding.js': 3, // delegated-listener root, getLiveViewRoot, form recovery
+        '09-event-binding.js': 5, // recovery capture + restore use the same page-root selector // delegated-listener root, getLiveViewRoot, form recovery
         '12-vdom-patch.js': 2,  // positional-fallback root, dj-id stamping root
         '14-init.js': 1,        // _switchToSSETransport
         '18-navigation.js': 2,  // getCurrentViewPath fallback, SW fast-path container
