@@ -38,6 +38,13 @@ updates:
       - "dependencies"
       - "javascript"
 
+    # Vitest packages declare exact-version peers and must upgrade together.
+    groups:
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"

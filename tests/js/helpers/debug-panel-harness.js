@@ -5,9 +5,13 @@
  * so tests exercise the real code paths instead of replicated logic.
  */
 
+import { afterEach, vi } from 'vitest';
+
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+afterEach(() => vi.unstubAllGlobals());
 
 const __harnessDir = dirname(fileURLToPath(import.meta.url));
 export const PANEL_SOURCE_PATH = resolve(
@@ -58,16 +62,16 @@ export function loadPanel(opts = {}) {
     };
     try {
         if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
-            window.localStorage = localStorageFallback;
+            vi.stubGlobal('localStorage', localStorageFallback);
         } else {
             // Test that localStorage actually works
             window.localStorage.getItem('__test__');
         }
     } catch {
-        window.localStorage = localStorageFallback;
+        vi.stubGlobal('localStorage', localStorageFallback);
     }
     // Also set on globalThis for new Function() scope
-    globalThis.localStorage = window.localStorage;
+    vi.stubGlobal('localStorage', window.localStorage);
 
     // Provide minimal sessionStorage (same pattern as localStorage)
     const sessionStore = {};
@@ -79,14 +83,14 @@ export function loadPanel(opts = {}) {
     };
     try {
         if (!window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') {
-            window.sessionStorage = sessionStorageFallback;
+            vi.stubGlobal('sessionStorage', sessionStorageFallback);
         } else {
             window.sessionStorage.getItem('__test__');
         }
     } catch {
-        window.sessionStorage = sessionStorageFallback;
+        vi.stubGlobal('sessionStorage', sessionStorageFallback);
     }
-    globalThis.sessionStorage = window.sessionStorage;
+    vi.stubGlobal('sessionStorage', window.sessionStorage);
 
     // Clear any stale debug history from previous test panel destroy
     try { window.sessionStorage.removeItem('djust-debug-history'); } catch { /* noop */ }
