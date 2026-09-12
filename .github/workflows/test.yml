@@ -457,6 +457,17 @@ jobs:
       - name: Run JavaScript tests
         run: npm test
 
+      - name: Measure JavaScript source coverage
+        run: npm run test:coverage
+
+      - name: Upload JavaScript coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: javascript-coverage
+          path: coverage/
+          if-no-files-found: ignore
+
       - name: Run JavaScript linter (if configured)
         run: |
           if [ -f "package.json" ] && grep -q "lint" package.json; then

@@ -816,3 +816,7 @@ endif
 		exit 1; \
 	fi
 	@echo "$(GREEN)No existing v$(VERSION) tag found locally or on origin.$(NC)"
+
+.PHONY: test-js-coverage
+test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
+	@npm run test:coverage

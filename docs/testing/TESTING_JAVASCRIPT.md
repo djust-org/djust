@@ -43,7 +43,7 @@ and evaluate it, or drive it through `window.djust.*` on the booted DOM.
 npm test                                   # all JS tests
 npx vitest run tests/js/foo.test.js        # one file
 npx vitest                                 # watch mode
-npx vitest run --coverage                  # coverage over static/djust/src/
+npm run test:coverage                      # mapped source coverage + regression floors
 ```
 
 Rebuild the bundle after editing `src/` — tests load `client.js`, not the
@@ -111,3 +111,5 @@ was loaded by nothing. Edit the `src/` module instead and rebuild.
 Yes — `tests/js/min_bundle_applypatches_1676.test.js` evaluates
 `client.min.js` to catch mangling regressions. Prefer `client.js` for
 readability unless the behaviour under test is minification-specific.
+
+See [JavaScript source coverage](JAVASCRIPT_COVERAGE.md) for instrumentation, reports, measured floors, and how to add covered module tests.

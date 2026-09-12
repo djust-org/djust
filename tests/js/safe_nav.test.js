@@ -1,3 +1,4 @@
+import { readScript } from './coverage-support/instrument.js';
 /**
  * Tests for the shared client-side navigation scheme/origin guard
  * (src/02b-safe-nav.js) and its application at every location.href sink:
@@ -24,10 +25,10 @@ import { dirname, resolve } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(__dirname, '../../python/djust/static/djust/src');
 
-const safeNavSrc = readFileSync(resolve(SRC, '02b-safe-nav.js'), 'utf8');
-const navSrc = readFileSync(resolve(SRC, '18-navigation.js'), 'utf8');
-const sseSrc = readFileSync(resolve(SRC, '03b-sse.js'), 'utf8');
-const wsSrc = readFileSync(resolve(SRC, '03-websocket.js'), 'utf8');
+const safeNavSrc = readScript(resolve(SRC, '02b-safe-nav.js'));
+const navSrc = readScript(resolve(SRC, '18-navigation.js'));
+const sseSrc = readScript(resolve(SRC, '03b-sse.js'));
+const wsSrc = readScript(resolve(SRC, '03-websocket.js'));
 
 const ORIGIN = 'https://app.example.com';
 
