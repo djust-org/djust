@@ -1147,6 +1147,7 @@ pytest -m "not slow"
 ## Additional Resources
 
 - [Testing JavaScript](testing/TESTING_JAVASCRIPT.md) - JavaScript testing guide
+- [JavaScript source coverage](testing/JAVASCRIPT_COVERAGE.md) - Dynamic-script instrumentation and regression floors
 - [Testing Pages](testing/TESTING_PAGES.md) - Automated test pages
 - [Smoke & Fuzz Testing](testing/TESTING_SMOKE_FUZZ.md) - Smoke and fuzz testing
 - [Pull Request Checklist](PULL_REQUEST_CHECKLIST.md) - PR review checklist

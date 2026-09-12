@@ -1,3 +1,4 @@
+import { readScript } from './coverage-support/instrument.js';
 /**
  * Tests that internal/client-only properties (_targetElement, _optimisticUpdateId,
  * _skipLoading, _djTargetSelector) are stripped from params before sending to server.
@@ -10,10 +11,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { readFileSync } from 'fs';
 
 // Load just the event handler source (not the full bundled client)
-const eventHandlerCode = readFileSync('./python/djust/static/djust/src/11-event-handler.js', 'utf-8');
+const eventHandlerCode = readScript('./python/djust/static/djust/src/11-event-handler.js');
 
 describe('handleEvent strips internal params before sending', () => {
     let handleEvent;

@@ -1,3 +1,4 @@
+import { readScript } from './coverage-support/instrument.js';
 /**
  * Tests for navigation — URL state management (src/18-navigation.js)
  */
@@ -7,7 +8,7 @@ import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
-const navSourceCode = fs.readFileSync('./python/djust/static/djust/src/18-navigation.js', 'utf-8');
+const navSourceCode = readScript('./python/djust/static/djust/src/18-navigation.js');
 
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(

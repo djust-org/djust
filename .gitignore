@@ -95,3 +95,6 @@ packages/
 docs/website/guides/scaffolding.md
 python/djust/libdjust_live.dylib.dSYM/
 context/
+
+# Instrumented scripts used only by JavaScript coverage
+.coverage-scripts/
