@@ -212,3 +212,15 @@ Core `djust.components` use `config.get("css_framework")` with per-framework ren
 ```python
 DJUST = {"css_framework": "bootstrap5"}  # or "tailwind", "plain"
 ```
+
+
+### Table presentation
+
+`TableComponent` supports `caption` text, `caption_class`, and a `footer` mapping
+keyed by column names. `table_class`, `thead_class`, `tbody_class`, and
+`tfoot_class` add classes without replacing framework defaults. For Bootstrap,
+use `table_class="align-middle caption-top"` and `thead_class="table-dark"` for
+vertical alignment, a top caption, and a dark header. These options are available
+in all three renderers; choose classes supplied by the configured stylesheet.
+Footer values are caller-supplied summaries and do not participate in sorting,
+filtering, or selection. New text and class options are escaped, not raw HTML.
