@@ -413,7 +413,7 @@ When a Django model is passed to a template, djust automatically serializes:
 #### 1. All Model Fields
 All concrete fields on the model are serialized:
 - CharField, TextField, IntegerField, etc. → their values
-- DateTimeField, DateField, TimeField → ISO 8601 strings (see [Datetime Gotcha](#datetime-fields-become-iso-strings))
+- DateTimeField, DateField, TimeField → native Python temporal values in JIT template contexts
 - ForeignKey → `{id: ..., pk: ..., __str__: ...}` (if not prefetched)
 - ForeignKey (prefetched) → full nested serialization
 
@@ -500,40 +500,20 @@ These methods are intentionally skipped:
 
 ### Common Gotchas
 
-#### Datetime Fields Become ISO Strings
+#### Datetime Fields and Django Filters
 
-**Problem:** Django template filters like `|date` don't work with ISO strings.
-
-```python
-# Model
-class Event(models.Model):
-    start_time = models.DateTimeField()
-```
+JIT queryset and model serializers preserve native Python datetime, date, time,
+and timedelta values for template rendering. Keep formatting in templates:
 
 ```html
-<!-- ❌ This WON'T work as expected -->
-{{ event.start_time|date:"M d, Y" }}
-<!-- Outputs: "2024-01-15T09:30:00" (the raw string) -->
+{% load tz %}
+{{ event.start_time|utc|date:"M d, Y · H:i" }} UTC
 ```
 
-**Solution:** Use a `get_*` method to format dates:
-
-```python
-class Event(models.Model):
-    start_time = models.DateTimeField()
-
-    def get_start_time_formatted(self):
-        """Return formatted date string for templates."""
-        if self.start_time:
-            return self.start_time.strftime("%b %d, %Y")
-        return ""
-```
-
-```html
-<!-- ✅ This works -->
-{{ event.get_start_time_formatted }}
-<!-- Outputs: "Jan 15, 2024" -->
-```
+This also applies to temporal values returned by methods or nested inside
+containers. JSON transport encoding remains a separate step. In 1.2.0rc5 and
+earlier, the queryset path converted temporal values to strings; assigning
+`list(queryset)` was a workaround for native Django filters.
 
 #### Related Objects Without Prefetching
 
@@ -600,8 +580,8 @@ If data isn't appearing in your template, check:
    - Returns str/int/float/bool/None
 
 4. **For datetime issues:**
-   - Create a `get_*_formatted()` method
-   - Or use JavaScript to format in the client
+   - Use native Django `date`, `time`, and timezone filters in templates
+   - Ensure the value is a Python temporal object rather than a preformatted string
 
 ### Cache Invalidation
 

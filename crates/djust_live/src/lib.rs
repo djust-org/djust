@@ -3405,9 +3405,7 @@ fn serialize_queryset_py(
         // Iterate over objects
         for obj in objects.iter() {
             let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate)?;
-            // Convert serde_json::Value to Python dict
-            let py_dict = json_value_to_py(py, &serialized)?;
-            result_list.append(py_dict)?;
+            result_list.append(serialized)?;
         }
 
         Ok(result_list.into())
@@ -3816,10 +3814,8 @@ fn serialize_object_with_paths(
     obj: &Bound<'_, PyAny>,
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
-) -> PyResult<serde_json::Value> {
-    use serde_json::{Map, Value as JsonValue};
-
-    let mut result = Map::new();
+) -> PyResult<Py<PyAny>> {
+    let result = PyDict::new(py);
 
     // Every attribute this function reads is gated by the ONE serialization
     // chokepoint (#2685). A denied name is omitted from the dict, so the
@@ -3843,7 +3839,7 @@ fn serialize_object_with_paths(
 
         // Check if None
         if attr_value.is_none() {
-            result.insert(attr_name.clone(), JsonValue::Null);
+            result.set_item(attr_name, py.None())?;
             continue;
         }
 
@@ -3855,7 +3851,8 @@ fn serialize_object_with_paths(
                     match attr_value.call0() {
                         Ok(method_result) => {
                             // Method call succeeded - use the result
-                            result.insert(attr_name.clone(), python_to_json(py, &method_result)?);
+                            result
+                                .set_item(attr_name, queryset_template_value(&method_result, 0)?)?;
                         }
                         Err(_) => {
                             // Method call failed - skip this attribute (don't insert null)
@@ -3865,7 +3862,7 @@ fn serialize_object_with_paths(
                     }
                 } else {
                     // Not callable - it's a direct attribute value
-                    result.insert(attr_name.clone(), python_to_json(py, &attr_value)?);
+                    result.set_item(attr_name, queryset_template_value(&attr_value, 0)?)?;
                 }
             }
             PathNode::Object(nested_tree) => {
@@ -3875,11 +3872,11 @@ fn serialize_object_with_paths(
                     || attr_value.is_instance_of::<PyList>()
                     || attr_value.is_instance_of::<PyTuple>()
                 {
-                    python_to_json(py, &attr_value)?
+                    queryset_template_value(&attr_value, 0)?
                 } else {
                     serialize_object_with_paths(py, &attr_value, nested_tree, gate)?
                 };
-                result.insert(attr_name.clone(), nested_result);
+                result.set_item(attr_name, nested_result)?;
             }
             PathNode::List(nested_tree) => {
                 // Iterate over list and serialize each item
@@ -3920,20 +3917,18 @@ fn serialize_object_with_paths(
                     }
                 }
 
-                result.insert(attr_name.clone(), JsonValue::Array(list_results));
+                result.set_item(attr_name, PyList::new(py, list_results)?)?;
             }
         }
     }
 
-    Ok(JsonValue::Object(result))
+    Ok(result.into_any().unbind())
 }
 
-/// Convert Python value to JSON value
-fn python_to_json(_py: Python, value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    queryset_value_to_json(value, 0)
-}
-
-fn queryset_value_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<serde_json::Value> {
+/// Preserve native temporal values for Django filters; normalize other leaves
+/// using the existing queryset scalar conversion contract.
+fn queryset_template_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<Py<PyAny>> {
+    let py = value.py();
     // Properties can return cyclic containers. Refuse before exhausting the
     // native stack, matching Python's recursion-error failure mode.
     if depth >= 64 {
@@ -3944,14 +3939,14 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<se
     if let Ok(dict) = value.cast::<PyDict>() {
         let pairs =
             djust_core::multi_value_dict_pairs(value).unwrap_or_else(|| dict.iter().collect());
-        let mut result = serde_json::Map::with_capacity(pairs.len());
+        let result = PyDict::new(py);
         for (key, item) in pairs {
-            result.insert(
+            result.set_item(
                 key.extract::<String>()?,
-                queryset_value_to_json(&item, depth + 1)?,
-            );
+                queryset_template_value(&item, depth + 1)?,
+            )?;
         }
-        return Ok(serde_json::Value::Object(result));
+        return Ok(result.into_any().unbind());
     }
     let items: Option<Vec<Bound<'_, PyAny>>> = if let Ok(list) = value.cast::<PyList>() {
         Some(list.iter().collect())
@@ -3961,12 +3956,23 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<se
         None
     };
     if let Some(items) = items {
-        return items
+        let values = items
             .iter()
-            .map(|item| queryset_value_to_json(item, depth + 1))
-            .collect::<PyResult<Vec<_>>>()
-            .map(serde_json::Value::Array);
+            .map(|item| queryset_template_value(item, depth + 1))
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(PyList::new(py, values)?.into_any().unbind());
     }
+    // datetime is a date subclass; these checks also preserve user subclasses.
+    if value.is_instance_of::<pyo3::types::PyDate>()
+        || value.is_instance_of::<pyo3::types::PyTime>()
+        || value.is_instance_of::<pyo3::types::PyDelta>()
+    {
+        return Ok(value.clone().unbind());
+    }
+    json_value_to_py(py, &queryset_value_to_json(value)?)
+}
+
+fn queryset_value_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     // Handle None
     if value.is_none() {
         return Ok(serde_json::Value::Null);
