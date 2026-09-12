@@ -1733,6 +1733,58 @@ function _processAutoRecover() {
  * Fires events sequentially (batched) via handleEvent() to avoid
  * race conditions on the server.
  */
+function _formRecoveryFields(root) {
+    return Array.from(root.querySelectorAll('input, textarea, select')).filter(field =>
+        (field.hasAttribute('dj-change') || field.hasAttribute('dj-input') || field.closest('[dj-auto-recover]'))
+        && !field.hasAttribute('dj-no-recover') && !field.hasAttribute('dj-force-value')
+        && !field.disabled && field.type !== 'file');
+}
+
+function _formRecoveryKey(field, root) {
+    const form = field.form;
+    return JSON.stringify([
+        form ? (form.getAttribute('id') || form.getAttribute('name') || Array.from(root.querySelectorAll('form')).indexOf(form)) : null,
+        field.id, field.name, field.tagName, field.type,
+        field.type === 'radio' ? field.value : null,
+        field.getAttribute('dj-change'), field.getAttribute('dj-input'),
+    ]);
+}
+
+// Capture before mount mutates the DOM. Keep defaults in the NEW markup so
+// the normal recovery scanner can still compare the draft with server state.
+function _captureFormRecovery() {
+    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    if (!root) return null;
+    const values = new Map();
+    for (const field of _formRecoveryFields(root)) {
+        const key = _formRecoveryKey(field, root);
+        if (!values.has(key)) values.set(key, []);
+        values.get(key).push({
+            value: field.value, checked: field.checked,
+            selected: field.multiple ? Array.from(field.selectedOptions, option => option.value) : null,
+        });
+    }
+    return { view: root.getAttribute('dj-view'), values: values };
+}
+
+function _restoreFormRecovery(snapshot) {
+    if (!snapshot) return;
+    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    if (!root || root.getAttribute('dj-view') !== snapshot.view) return;
+    for (const field of _formRecoveryFields(root)) {
+        const values = snapshot.values.get(_formRecoveryKey(field, root));
+        if (!values || !values.length) continue;
+        const saved = values.shift();
+        if (field.type === 'checkbox' || field.type === 'radio') {
+            field.checked = saved.checked;
+        } else if (saved.selected) {
+            for (const option of field.options) option.selected = saved.selected.includes(option.value);
+        } else {
+            field.value = saved.value;
+        }
+    }
+}
+
 function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
@@ -1741,15 +1793,12 @@ function _processFormRecovery() {
     if (!root) return;
 
     // Collect fields to recover
-    const fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    const fields = _formRecoveryFields(root);
     const pendingEvents = [];
 
     for (let i = 0; i < fields.length; i++) {
         // eslint-disable-next-line security/detect-object-injection
         const field = fields[i];
-
-        // Skip fields with dj-no-recover
-        if (field.hasAttribute('dj-no-recover')) continue;
 
         // Skip fields inside dj-auto-recover containers (custom handler takes precedence)
         if (field.closest('[dj-auto-recover]')) continue;
@@ -1773,8 +1822,11 @@ function _processFormRecovery() {
             domValue = field.checked;
             serverDefault = field.hasAttribute('checked');
         } else if (fieldType === 'radio') {
-            domValue = field.checked;
-            serverDefault = field.hasAttribute('checked');
+            // Match native change events: one selected VALUE, not two boolean
+            // events that can restore the wrong member of the group.
+            if (!field.checked) continue;
+            domValue = field.value;
+            serverDefault = field.hasAttribute('checked') ? field.value : null;
         } else if (tagName === 'select') {
             domValue = field.value;
             // Server default: the option with 'selected' attribute, or the first option
@@ -1790,7 +1842,7 @@ function _processFormRecovery() {
         if (domValue === serverDefault) continue;
 
         // Build event params matching dj-change param structure
-        const value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        const value = domValue;
         const fieldName = field.name || field.id || null;
         const params = { value: value, field: fieldName };
 
@@ -1826,4 +1878,6 @@ window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
 window.djust._processAutoRecover = _processAutoRecover;
 window.djust._processFormRecovery = _processFormRecovery;
+window.djust._captureFormRecovery = _captureFormRecovery;
+window.djust._restoreFormRecovery = _restoreFormRecovery;
 window.djust._isReconnect = false;
