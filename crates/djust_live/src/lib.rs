@@ -3714,6 +3714,9 @@ fn build_field_tree(paths: &[String]) -> std::collections::HashMap<String, PathN
                         .entry(part.to_string())
                         .or_insert_with(|| PathNode::Object(HashMap::new()));
 
+                    if matches!(entry, PathNode::Leaf) {
+                        *entry = PathNode::Object(HashMap::new());
+                    }
                     match entry {
                         PathNode::Object(nested_map) => {
                             current = nested_map;
@@ -3748,6 +3751,9 @@ fn add_path_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, path
             let entry = current
                 .entry(part.to_string())
                 .or_insert_with(|| PathNode::Object(HashMap::new()));
+            if matches!(entry, PathNode::Leaf) {
+                *entry = PathNode::Object(HashMap::new());
+            }
             match entry {
                 PathNode::Object(nested_map) => {
                     current = nested_map;
@@ -3863,9 +3869,16 @@ fn serialize_object_with_paths(
                 }
             }
             PathNode::Object(nested_tree) => {
-                // Nested object
-                let nested_result =
-                    serialize_object_with_paths(py, &attr_value, nested_tree, gate)?;
+                // JSONField and computed containers carry data keys, not model
+                // attributes. Preserve them just as the codegen root path does.
+                let nested_result = if attr_value.is_instance_of::<PyDict>()
+                    || attr_value.is_instance_of::<PyList>()
+                    || attr_value.is_instance_of::<PyTuple>()
+                {
+                    python_to_json(py, &attr_value)?
+                } else {
+                    serialize_object_with_paths(py, &attr_value, nested_tree, gate)?
+                };
                 result.insert(attr_name.clone(), nested_result);
             }
             PathNode::List(nested_tree) => {
@@ -3917,6 +3930,43 @@ fn serialize_object_with_paths(
 
 /// Convert Python value to JSON value
 fn python_to_json(_py: Python, value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    queryset_value_to_json(value, 0)
+}
+
+fn queryset_value_to_json(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<serde_json::Value> {
+    // Properties can return cyclic containers. Refuse before exhausting the
+    // native stack, matching Python's recursion-error failure mode.
+    if depth >= 64 {
+        return Err(pyo3::exceptions::PyRecursionError::new_err(
+            "queryset property exceeds the container nesting limit",
+        ));
+    }
+    if let Ok(dict) = value.cast::<PyDict>() {
+        let pairs =
+            djust_core::multi_value_dict_pairs(value).unwrap_or_else(|| dict.iter().collect());
+        let mut result = serde_json::Map::with_capacity(pairs.len());
+        for (key, item) in pairs {
+            result.insert(
+                key.extract::<String>()?,
+                queryset_value_to_json(&item, depth + 1)?,
+            );
+        }
+        return Ok(serde_json::Value::Object(result));
+    }
+    let items: Option<Vec<Bound<'_, PyAny>>> = if let Ok(list) = value.cast::<PyList>() {
+        Some(list.iter().collect())
+    } else if let Ok(tuple) = value.cast::<PyTuple>() {
+        Some(tuple.iter().collect())
+    } else {
+        None
+    };
+    if let Some(items) = items {
+        return items
+            .iter()
+            .map(|item| queryset_value_to_json(item, depth + 1))
+            .collect::<PyResult<Vec<_>>>()
+            .map(serde_json::Value::Array);
+    }
     // Handle None
     if value.is_none() {
         return Ok(serde_json::Value::Null);

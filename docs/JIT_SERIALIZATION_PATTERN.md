@@ -639,3 +639,20 @@ clear_jit_cache()  # Returns number of entries cleared
 - **Documentation**:
   - `CLAUDE.md` - Project overview and architecture
   - `README.md` - User-facing documentation
+
+## Template access through JIT
+
+Static includes preserve their `with` aliases during field extraction. For example,
+`{% include "author.html" with author=entry.owner only %}` and
+`{{ author.avatar.layers }}` in the partial request `owner.avatar.layers` from each
+entry. Aliases are local to the include, and `only` excludes unbound outer-context
+names. Nested static includes are resolved with a bounded depth; dynamic include
+names still cannot be inferred statically.
+
+Dictionary and list properties retain their structure, so their contents can be
+used in template lookups and loops. Scalar FK IDs such as `entry.owner_id` do not
+add a join; accessing `entry.owner.name` does. Optional `FileField` and `ImageField`
+values support the usual `{% if entry.image %}{{ entry.image.url }}{% endif %}`
+guard, including when serialization falls back to generated Python code. The
+Rust queryset converter refuses property containers nested 64 levels deep,
+including cycles, rather than exhausting its native stack.
