@@ -52,6 +52,7 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust.template_tags",
         "djust.template_tags._builtin",
         "djust.template_tags._django_expr",
+        "djust.template_tags.audio",
         "djust.template_tags.client_config",
         "djust.template_tags.debug",
         "djust.template_tags.flash",
@@ -68,7 +69,7 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust.utils",
     }
 )
-assert len(ALLOWLIST_PACKAGE) == 22
+assert len(ALLOWLIST_PACKAGE) == 23
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
@@ -86,7 +87,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 34
+assert len(ALLOWLIST_BACKEND) == 35
 
 
 # The compat shim (``djust/template_backend.py``) is one extra module.
@@ -101,6 +102,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.apps",
         "djust.checks",
         "djust.checks.accessibility",
+        "djust.checks.audio",
         "djust.checks.components",
         "djust.checks.configuration",
         "djust.checks.integrations",
@@ -123,7 +125,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 57
+assert len(ALLOWLIST_SETUP) == 59
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

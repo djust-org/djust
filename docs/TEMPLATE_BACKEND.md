@@ -315,7 +315,7 @@ Bridged filters are Django's own callables, forwarded to the Rust engine by the 
 
 Refused loudly on `{% load %}` (0): none — a filter the Rust engine structurally cannot serve is registered by the load as a filter that raises `TemplateSyntaxError` naming it, never a silent blank. The `tz` three (`localtime`, `timezone`, `utc`) were the last entries; they bridge verbatim since #2541, the datetime crossing the boundary as a typed value.
 
-**djust extensions (not Django tags, not scored):** `dj_flash`, `djust_client_config`, `djust_markdown`, `djust_offline_indicator`, `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `live_render`
+**djust extensions (not Django tags, not scored):** `dj_flash`, `djust_audio`, `djust_client_config`, `djust_markdown`, `djust_offline_indicator`, `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `live_render`
 <!-- /generated:template-backend-lists -->
 
 ### Conformance

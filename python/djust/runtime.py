@@ -3651,6 +3651,8 @@ class ViewRuntime:
         await self.transport.send(msg)
         await self._flush_all_pending()
 
+        # Child side effects carry their own audio scope; drain the child's queue.
+        self._flush_push_events(target_view)
         # Dispatch any background work the child handler scheduled (WS parity).
         self._dispatch_async_work(event_name)
         return True
@@ -4475,11 +4477,11 @@ class ViewRuntime:
         # in canonical order, not just push_events/navigation/deferred.
         await self._flush_all_pending()
 
-    def _flush_push_events(self) -> None:
+    def _flush_push_events(self, view: Optional[Any] = None) -> None:
         """Drain push_events and send via the transport (sync-safe — pushes
         get queued but the actual send is fire-and-forget to keep the
         flush points cheap)."""
-        view = self.view_instance
+        view = self.view_instance if view is None else view
         if not view or not hasattr(view, "_drain_push_events"):
             return
         for event_name, payload in view._drain_push_events():

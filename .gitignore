@@ -98,3 +98,5 @@ context/
 
 # Instrumented scripts used only by JavaScript coverage
 .coverage-scripts/
+# Also ignore local dependency symlinks in worktrees.
+node_modules

@@ -28,6 +28,7 @@ from . import (  # noqa: F401  (imported for @register side effects + re-export)
     templates,
     accessibility,
     quality,
+    audio,
 )
 
 _pkg = _sys.modules[__name__]
@@ -40,6 +41,7 @@ for _mod in (
     templates,
     accessibility,
     quality,
+    audio,
 ):
     for _name in dir(_mod):
         # Skip dunders and the per-submodule ``import djust.checks as
