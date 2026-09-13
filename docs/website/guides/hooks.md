@@ -85,7 +85,7 @@ window.djust.hooks = {
 |----------|------------|
 | `mounted()` | Element first appears in the DOM. Initialize libraries, bind listeners. |
 | `updated()` | After a server re-render patches the DOM. Sync libraries with new data. |
-| `beforeUpdate()` | Just before a DOM patch. Save state that would be lost (scroll position, selection). |
+| `beforeUpdate()` | Before an incremental patch batch or full HTML morph, once per update within the updated root (including scoped child updates). Save state that would be lost (scroll position, selection). |
 | `destroyed()` | Element removed from the DOM. Clean up libraries, observers, timers. |
 | `disconnected()` | WebSocket connection drops. Show offline indicators. |
 | `reconnected()` | WebSocket restored after disconnect. Refresh state. |

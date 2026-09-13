@@ -782,6 +782,22 @@ function preserveFormValues(container, updateFn) {
     }
 }
 
+// Notify once per synchronous DOM update, before even snapshotting children.
+// Morph recursion and dj-update recursion share the same lifecycle boundary.
+let _hookUpdateDepth = 0;
+function _withBeforeUpdateHooks(root, mutate) {
+    const outermost = _hookUpdateDepth++ === 0;
+    try {
+        if (outermost && root && window.djust
+            && typeof window.djust.beforeUpdateHooks === 'function') {
+            window.djust.beforeUpdateHooks(root);
+        }
+        return mutate();
+    } finally {
+        _hookUpdateDepth--;
+    }
+}
+
 /**
  * Morph existing DOM children to match desired DOM children.
  * Preserves existing elements (and their event listeners) where possible.
@@ -797,6 +813,10 @@ function preserveFormValues(container, updateFn) {
  * @param {Element} desired  - Target DOM parent (parsed from server HTML)
  */
 function morphChildren(existing, desired) {
+    return _withBeforeUpdateHooks(existing, () => _morphChildrenInner(existing, desired));
+}
+
+function _morphChildrenInner(existing, desired) {
     const existingNodes = Array.from(existing.childNodes);
     const desiredNodes = Array.from(desired.childNodes);
 
@@ -947,6 +967,10 @@ function morphChildren(existing, desired) {
  * @param {Element} desired  - Target element to match
  */
 function morphElement(existing, desired) {
+    return _withBeforeUpdateHooks(existing, () => _morphElementInner(existing, desired));
+}
+
+function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
         // Clean up poll timers before replacing (prevents orphaned intervals)
@@ -1065,6 +1089,10 @@ function morphElement(existing, desired) {
 }
 
 function applyDjUpdateElements(existingRoot, newRoot) {
+    return _withBeforeUpdateHooks(existingRoot, () => _applyDjUpdateElementsInner(existingRoot, newRoot));
+}
+
+function _applyDjUpdateElementsInner(existingRoot, newRoot) {
     // Find all elements with dj-update attribute in the new content
     const djUpdateElements = newRoot.querySelectorAll('[dj-update]');
 
@@ -2404,7 +2432,9 @@ async function applyPatches(patches, rootEl = null) {
  */
 function _applyPatchesInner(patches, rootEl) {
     try {
-        return _applyPatchesInnerRaw(patches, rootEl);
+        if (!patches || patches.length === 0) return true;
+        return _withBeforeUpdateHooks(rootEl || getLiveViewRoot(),
+            () => _applyPatchesInnerRaw(patches, rootEl));
     } finally {
         if (typeof window.djust._flushVirtualKeyedOps === 'function') {
             window.djust._flushVirtualKeyedOps();
