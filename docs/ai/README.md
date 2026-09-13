@@ -21,4 +21,4 @@ Load individual sections into LLM context as needed, or use `../llms-full.txt` f
 
 ## Component guides
 
-- [Markdown editor](../components-markdown-editor.md) -- Native form fields with optional Visual/Markdown editing, source preservation and shared theme variables.
+- [Markdown editor](../website/guides/markdown-editor.md) -- Native form fields with optional Visual/Markdown editing, source preservation and shared theme variables.

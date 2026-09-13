@@ -110,6 +110,6 @@ uploads also have their own transport; do not assume JSON event fallback carries
 binary files.
 
 For Markdown fields with optional Visual editing, see the
-[Markdown editor guide](../components-markdown-editor.md). Use a native textarea,
+[Markdown editor guide](../website/guides/markdown-editor.md). Use a native textarea,
 declarative widget attributes and the supplied controls template; keep FormMixin
 validation, transport and submit behavior.

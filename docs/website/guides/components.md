@@ -1097,3 +1097,8 @@ def card(assigns):
 ```
 
 yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_slot slots.col.0 %}` emits the content of a slot at a given path — useful when you need to reference a slot inside a rendered loop. `{% render_slot slots.col.0.content %}` names the body directly and emits the same markup; both are the parent's already-rendered output, so both are emitted live rather than escaped a second time. Any OTHER path — a plain context variable, or a `content` key on a dict that is not a slot entry — is escaped, because nothing has vouched for it.
+
+## Markdown editor
+
+See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
+native form integration, asset loading, theme variables and editing limitations.

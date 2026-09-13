@@ -68,6 +68,12 @@ navigation:
         order: 2
         level: intermediate
 
+      - title: Markdown Editor
+        slug: markdown-editor
+        file: guides/markdown-editor.md
+        order: 3
+        level: intermediate
+
   - title: State Management
     slug: state
     url: /docs/state/
