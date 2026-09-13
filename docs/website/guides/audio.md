@@ -1,6 +1,6 @@
 # Declarative audio
 
-Local feature implementation on the rc5 base; not yet a published djust release.
+Unreleased feature implementation in PR #2815, based on current main.
 Short sound effects are application-owned static files. Python emits names;
 the optional djust player owns browser activation and playback.
 

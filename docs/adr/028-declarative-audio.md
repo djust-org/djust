@@ -1,6 +1,6 @@
 # ADR-028: Declarative audio in the djust package
 
-**Status**: Proposed — short-cue implementation available in a local rc5 feature branch
+**Status**: Proposed — short-cue implementation available in PR #2815 (unreleased)
 **Date**: 2026-09-05
 **Deciders**: Project maintainers
 **Related**:
