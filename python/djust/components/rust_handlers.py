@@ -8657,6 +8657,7 @@ class MarkdownEditorHandler:
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
+        mode = "visual" if kw.get("mode") == "visual" else "markdown"
         name = kw.get("name", "content")
         value = kw.get("value", "")
         preview = kw.get("preview", True)
@@ -8702,22 +8703,28 @@ class MarkdownEditorHandler:
                     f'data-suffix="{conditional_escape(suffix)}" '
                     f'aria-label="{btn_id.title()}">{label}</button>'
                 )
-            toolbar_html = f'<div class="dj-md-editor__toolbar">{"".join(btns)}</div>'
+            toolbar_html = f'<div class="dj-md-editor__toolbar" data-markdown-ui dj-update="ignore">{"".join(btns)}</div>'
 
         textarea_html = (
-            f'<textarea class="dj-md-editor__textarea" name="{e_name}" '
+            f'<textarea class="dj-md-editor__textarea" name="{e_name}" data-markdown-editor="{mode}" '
             f'placeholder="{e_placeholder}" rows="{rows}"'
             f"{disabled_attr}{event_attr}>{e_value}</textarea>"
         )
 
         preview_html = ""
         if preview:
-            preview_html = '<div class="dj-md-editor__preview" aria-label="Preview"></div>'
+            from djust.markdown import render_markdown
+
+            preview_html = (
+                '<div class="dj-md-editor__preview dj-prose" aria-label="Preview">'
+                + str(render_markdown(str(value), provisional=False, task_lists=True))
+                + "</div>"
+            )
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
         return _safe(
-            f'<div class="{class_str}" dj-hook="MarkdownEditor">{toolbar_html}{panes}</div>'
+            f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{mode}">{toolbar_html}{panes}</div>'
         )
 
 

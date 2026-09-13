@@ -1,0 +1,1 @@
+- **Markdown editor**: Implement formatting controls and sanitized server previews, with an optional Visual mode that edits Markdown through native form events. Include a reusable controls template, pinned Tiptap build, theme variables and source-preservation tests.
