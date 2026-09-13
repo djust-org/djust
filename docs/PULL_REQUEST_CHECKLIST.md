@@ -2,6 +2,15 @@
 
 This document outlines the mandatory checks that must be evaluated when reviewing any Pull Request to djust.
 
+## Native-first application review
+
+- [ ] New application helpers/mixins identify the product behavior they add and
+  the native Django/djust capability considered. Prefer native declarations and
+  hooks to duplicate plumbing; services are not mandatory for every write.
+- [ ] Framework accommodations include a version, reproduction, issue and removal
+  condition. Test the behavior claimed, not just successful rendering.
+- [ ] Application examples follow [the conventions](ai/conventions.md).
+
 ## 🔍 Pre-Review Quick Checks
 
 - [ ] **PR Title** follows format: `[type]: brief description` (e.g., `feat:`, `fix:`, `docs:`, `refactor:`)

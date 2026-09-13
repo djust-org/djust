@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code when working with the djust framework.
 
+## Application conventions
+
+For application code, examples and scaffolding, start with
+[Application engineering conventions](docs/ai/conventions.md) and load the
+relevant [AI reference sections](docs/ai/README.md).
+
 ## Project Overview
 
 djust is a hybrid Python/Rust framework bringing Phoenix LiveView-style reactive server-side rendering to Django. Rust handles performance-critical operations (template rendering, VDOM diffing, HTML parsing) via PyO3; Python provides the developer-facing API.

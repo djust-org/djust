@@ -955,3 +955,16 @@ SCHEMA_LIST_HTML = """\
 </div>
 {%% endblock %%}
 """
+
+
+# Keep this an entry point, not a second copy of the framework conventions.
+AGENTS_MD = """# djust application guidance
+
+Before changing live views, forms, templates or navigation, read:
+- [Application engineering conventions](https://github.com/djust-org/djust/blob/main/docs/ai/conventions.md)
+- [Focused AI reference](https://github.com/djust-org/djust/tree/main/docs/ai)
+
+Use the documentation/source matching the installed djust release; main may
+contain newer APIs. Prefer native Django/djust behavior and declarative options
+before application wrappers. Keep project-specific instructions in this file.
+"""

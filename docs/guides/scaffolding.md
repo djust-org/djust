@@ -184,3 +184,11 @@ The legacy commands mirror Django's vanilla `django-admin startproject`
 `LIVEVIEW_ALLOWED_MODULES`, `LiveSessionMiddleware`, the WS routing
 include). Reach for these when you want explicit Django parity over
 the curated `djust new` experience.
+
+## AI agent discovery
+
+Generated projects include `AGENTS.md`, a short pointer to the canonical
+[application conventions](../ai/conventions.md) and focused API references.
+Add project-specific rules there. Existing project directories are not
+rewritten by `djust new`; for existing applications, add the pointer to their
+current agent entry file. Agents do not automatically read dependency docs.
