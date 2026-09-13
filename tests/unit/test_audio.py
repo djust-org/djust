@@ -99,7 +99,8 @@ def test_manifest_and_controls_are_escaped_without_executable_inline_script():
     html = Template("{% load live_tags %}{% djust_audio %}").render(Context(context))
     assert "<script" not in html
     assert "<bad>" not in html
-    assert 'data-audio-src="/static/djust/audio.js"' in html
+    assert "data-audio-src" not in html
+    assert "data-audio-css" not in html
     assert 'dj-update="ignore"' in html
 
 

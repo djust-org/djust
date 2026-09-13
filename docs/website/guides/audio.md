@@ -43,6 +43,13 @@ live navigation. Refresh collected static files when updating the framework. The
 `--dj-audio-text`, `--dj-audio-muted`, `--dj-audio-accent`,
 `--dj-audio-border` and `--dj-audio-button` on a surrounding element.
 
+Load the standard djust client as an external script. The loader resolves the
+fixed filenames `audio.js` and `audio.css` beside that executing client script,
+including when the client is hosted on a CDN or has a hashed filename. Publish
+those two stable filenames alongside the client (Django's standard collectstatic
+retains them). Deployments that publish only hashed files must retain these two
+files as well. Rendered attributes cannot override executable asset locations.
+
 `play_sounds(bank, [{"id": "job-123:1", "sound": "done"}, ...])` preserves an
 ordered batch of up to 32 cues. These can overlap. Each bank supports up to eight
 voices; incoming cues are dropped when full. `stop_sounds(bank)` stops a bank in

@@ -83,6 +83,40 @@ describe('framework audio', () => {
         expect(dom.window.document.querySelector('script')).toBeNull();
         dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close();
     });
+    it.each(['https://evil.example/payload.js', 'data:text/javascript,alert(1)', 'javascript:alert(1)'])(
+        'ignores injected asset URLs: %s', async (untrusted) => {
+            const dom = new JSDOM('<body><div dj-audio="{}"></div></body>', {
+                url: 'https://app.example/room/', runScripts: 'dangerously',
+            });
+            const d = dom.window.document;
+            const marker = d.querySelector('[dj-audio]');
+            marker.setAttribute('data-audio-src', untrusted);
+            marker.setAttribute('data-audio-css', untrusted);
+            const client = d.createElement('script');
+            client.src = 'https://cdn.example/assets/djust/client.min.abc123.js';
+            Object.defineProperty(d, 'currentScript', { value: client });
+            dom.window.eval(loader);
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect([...d.querySelectorAll('script')].map(el => el.src)).toEqual([
+                'https://cdn.example/assets/djust/audio.js',
+            ]);
+            expect(d.querySelector('link').href).toBe('https://cdn.example/assets/djust/audio.css');
+            marker.setAttribute('dj-audio', '{"version":1}');
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(d.querySelectorAll('script')).toHaveLength(1);
+            dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+            dom.window.close();
+        },
+    );
+    it('does not resolve executable assets without an executing framework script', async () => {
+        const dom = new JSDOM('<body><div dj-audio="{}" data-audio-src="https://evil.example/x.js"></div></body>', {
+            url: 'https://app.example', runScripts: 'dangerously',
+        });
+        dom.window.eval(loader);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(dom.window.document.querySelector('script, link')).toBeNull();
+        dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close();
+    });
 });
 
 describe('audio resource and root boundaries', () => {

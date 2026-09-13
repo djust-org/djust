@@ -18099,21 +18099,25 @@ globalThis.djust.djTransitionGroup = {
     let loading = false;
     let styled = false;
     const ownerDocument = document;
+    // Capture the executing framework script, never a selector-controlled URL.
+    const clientSource = document.currentScript && document.currentScript.src;
+    const audioSource = clientSource ? new URL('audio.js', clientSource).href : null;
+    const audioStyle = clientSource ? new URL('audio.css', clientSource).href : null;
     function syncAudio() {
         if (!window.document || !ownerDocument.body || !ownerDocument.defaultView) return;
-        const marker = document.querySelector('[dj-audio][data-audio-src]');
-        if (marker && !styled && marker.hasAttribute('data-audio-css')) {
+        const marker = document.querySelector('[dj-audio]');
+        if (marker && !styled && audioStyle) {
             styled = true;
             const stylesheet = document.createElement('link');
             stylesheet.rel = 'stylesheet';
-            stylesheet.href = marker.getAttribute('data-audio-css');
+            stylesheet.href = audioStyle;
             document.head.appendChild(stylesheet);
         }
         if (window.djustAudio) { window.djustAudio.sync(); return; }
-        if (!marker || loading) return;
+        if (!marker || loading || !audioSource) return;
         loading = true;
         const script = document.createElement('script');
-        script.src = marker.getAttribute('data-audio-src');
+        script.src = audioSource;
         script.onload = function () {
             if (window.djustAudio) window.djustAudio.sync();
         };

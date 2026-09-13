@@ -43,13 +43,11 @@ logger = logging.getLogger(__name__)
 @register.simple_tag(takes_context=True)
 def djust_audio(context: Any) -> SafeString:
     """Opt in to framework audio. Requires AudioMixin on the owning view."""
-    from django.templatetags.static import static
-
     manifest = context.get("djust_audio_manifest")
     if manifest is None:
         raise TemplateSyntaxError("djust_audio requires AudioMixin on the view")
     return format_html(
-        '<div dj-audio="{}" data-audio-src="{}" data-audio-css="{}">'
+        '<div dj-audio="{}">'
         '<div dj-update="ignore" data-audio-controls>'
         '<button type="button" data-audio-toggle aria-pressed="false">'
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -62,8 +60,6 @@ def djust_audio(context: Any) -> SafeString:
         '<span data-audio-status role="status">Sound off</span>'
         "</div></div>",
         manifest,
-        static("djust/audio.js"),
-        static("djust/audio.css"),
     )
 
 
