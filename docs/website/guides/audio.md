@@ -4,6 +4,11 @@ Local feature implementation on the rc5 base; not yet a published djust release.
 Short sound effects are application-owned static files. Python emits names;
 the optional djust player owns browser activation and playback.
 
+This example assumes an existing LiveView page with the standard djust client
+loaded. Put the sound at `inbox/static/inbox/done.wav` in an installed Django
+application. Place `AudioMixin` before `LiveView` in the inheritance list, then
+add the control tag inside that view's existing `dj-root` element.
+
 ```python
 from djust import LiveView
 from djust.audio import AudioMixin, Sound, SoundBank
@@ -52,6 +57,22 @@ for the first listener. Snake Arena is a reference implementation.
 
 ## Delivery and lifecycle
 
+### Python API
+
+| API | Meaning |
+| --- | --- |
+| `Sound(path, volume=1.0)` | Relative staticfiles path and finite gain from 0 to 1. |
+| `SoundBank(sounds, max_voices=8)` | Mapping of names to sounds; 1–32 sounds and 1–8 simultaneous voices. |
+| `play_sound(bank, sound, event_id=None)` | Queue one cue; omitted IDs are generated automatically. |
+| `play_sounds(bank, events)` | Queue dictionaries with `id` and `sound`; at most 32 per call and per pending turn. |
+| `stop_sounds(bank)` | Stop active voices in the named bank for this view. |
+
+Bank and sound names use 1–64 letters, digits, underscores, or hyphens. Explicit
+event IDs use 1–128 characters. Unknown names and invalid values raise
+`ValueError`; bank entries must contain `Sound` instances. Calls during HTTP
+prerender or initial mount do not play. Reusing an event ID suppresses a duplicate
+within the client's bounded window; it is not an exactly-once delivery guarantee.
+
 Audio is optional, best-effort feedback. Events received while disabled, muted,
 hidden or loading are consumed without playback. There is no replay backlog.
 A view has a random delivery scope, independent of bank names. Duplicate IDs are
@@ -89,6 +110,23 @@ configuration, never supplied in playback events. No microphone, recording,
 external service, persistence of volume preferences or telemetry is used.
 
 ## Verification status
+
+### Troubleshooting
+
+- **Controls are absent:** check that the view inherits `AudioMixin`, the template
+  loads `live_tags`, and `{% djust_audio %}` is inside the owning `dj-root`.
+- **Sound stays off:** click Enable sound in the browser. A server handler cannot
+  satisfy browser activation requirements. After browser suspension, use Resume sound.
+- **Retry sound appears:** check the asset request, CORS/CSP policy, file limits,
+  and browser codec support. Retry loads assets again; it does not replay old cues.
+- **Files are missing after deployment:** run `uv run python manage.py collectstatic
+  --noinput` in the deployment environment and refresh cached static assets.
+  `djust.audio.W001` identifies missing declared assets; `djust.audio.E001`
+  identifies invalid bank declarations during system checks.
+- **Some cues are silent:** muted, hidden, loading, duplicate, and excess cues are
+  deliberately dropped. Keep visual feedback for every meaningful application event.
+
+### Coverage and remaining qualification
 
 The implementation has Python tests for validation, template escaping, scoped
 batches, ephemeral state, WS/SSE delivery and audio-only ticks, plus browser

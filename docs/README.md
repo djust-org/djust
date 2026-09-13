@@ -22,6 +22,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Scaffolding Generator](guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
 
 ### 🔌 Real-Time Features
+- **[Declarative Audio](website/guides/audio.md)** - Opt-in short sound effects, playback controls, and delivery limits (unreleased)
 - **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
 - **[Flash Messages](website/guides/flash-messages.md)** - Transient notifications with put_flash (Phoenix-style)
 - **[Presence](guides/presence.md)** - Real-time user presence tracking and live cursors
