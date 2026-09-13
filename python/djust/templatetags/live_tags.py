@@ -40,6 +40,33 @@ register = template.Library()
 logger = logging.getLogger(__name__)
 
 
+@register.simple_tag(takes_context=True)
+def djust_audio(context: Any) -> SafeString:
+    """Opt in to framework audio. Requires AudioMixin on the owning view."""
+    from django.templatetags.static import static
+
+    manifest = context.get("djust_audio_manifest")
+    if manifest is None:
+        raise TemplateSyntaxError("djust_audio requires AudioMixin on the view")
+    return format_html(
+        '<div dj-audio="{}" data-audio-src="{}" data-audio-css="{}">'
+        '<div dj-update="ignore" data-audio-controls>'
+        '<button type="button" data-audio-toggle aria-pressed="false">'
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/>'
+        "</svg><span data-audio-label>Enable sound</span></button>"
+        '<label><span>Volume</span><input data-audio-volume type="range" min="0" max="1" '
+        'step="0.05" value="0.5" aria-label="Sound volume"></label>'
+        '<output data-audio-level aria-hidden="true">50%</output>'
+        '<span data-audio-status role="status">Sound off</span>'
+        "</div></div>",
+        manifest,
+        static("djust/audio.js"),
+        static("djust/audio.css"),
+    )
+
+
 def _record_child_dj_model_allowlist(child: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).

@@ -476,6 +476,7 @@ def _register_builtins() -> None:
         from . import pwa  # noqa: F401
         from . import templatetag  # noqa: F401
         from . import flash  # noqa: F401
+        from . import audio  # noqa: F401
         from . import markdown  # noqa: F401
         from . import client_config  # noqa: F401
         from . import live_render  # noqa: F401  # #1145

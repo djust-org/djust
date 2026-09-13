@@ -1,0 +1,23 @@
+from typing import Any, Iterable, Mapping, TypedDict
+
+class Sound:
+    path: str
+    volume: float
+    def __init__(self, path: str, volume: float = ...) -> None: ...
+
+class SoundBank:
+    sounds: Mapping[str, Sound]
+    max_voices: int
+    def __init__(self, sounds: Mapping[str, Sound], max_voices: int = ...) -> None: ...
+
+class SoundEvent(TypedDict):
+    id: str
+    sound: str
+
+class AudioMixin:
+    audio_banks: Mapping[str, SoundBank]
+    def __init__(self, **kwargs: Any) -> None: ...
+    def get_context_data(self, **kwargs: Any) -> dict[str, Any]: ...
+    def play_sound(self, bank: str, sound: str, *, event_id: str | None = ...) -> None: ...
+    def play_sounds(self, bank: str, events: Iterable[SoundEvent]) -> None: ...
+    def stop_sounds(self, bank: str) -> None: ...

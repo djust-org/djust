@@ -4289,6 +4289,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "[djust] Tick on %s produced no state changes, skipping render",
                     self.view_instance.__class__.__name__,
                 )
+                await self._flush_all_pending()
                 return False
 
             if hasattr(self.view_instance, "_sync_state_to_rust"):
@@ -4315,6 +4316,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     source="tick",
                 )
                 return True
+            await self._flush_all_pending()
             return False
         finally:
             self._render_lock.release()
