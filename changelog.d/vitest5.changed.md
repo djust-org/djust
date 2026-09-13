@@ -1,1 +1,0 @@
-- **Vitest 5 test tooling** — Upgrade core, coverage, and UI together, group future Dependabot updates, and use restorable storage mocks compatible with readonly browser globals.

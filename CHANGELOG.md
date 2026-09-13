@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc6] - 2026-09-12
+
+### Changed
+
+- **Vitest 5 test tooling** — Upgrade core, coverage, and UI together, group future Dependabot updates, and use restorable storage mocks compatible with readonly browser globals.
+
+### Fixed
+
+- **Queryset datetime filters** — Preserve native datetime, date, time, and timedelta values in queryset template contexts so Django timezone and date filters behave consistently with model-list assignments.
+- **JavaScript coverage attribution** — Instrument dynamically executed bundles and standalone modules with source maps, collect JSDOM coverage, and enforce measured source-coverage regression floors in CI.
+
 ## [1.2.0rc5] - 2026-09-11
 
 ### Added
