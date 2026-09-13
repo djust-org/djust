@@ -293,6 +293,11 @@ def _extract_client_bound_prefix_families() -> Set[str]:
 # --- explicit, justified exclusions (#2064: "no silent exclusions") ---
 
 _STRUCTURAL_EXCLUSIONS: Dict[str, str] = {
+    "dj-audio": (
+        "JSON manifest emitted by {% djust_audio %} from AudioMixin sound banks; "
+        "template authors use the tag, not this generated attribute. "
+        "The public API is documented in docs/website/guides/audio.md."
+    ),
     "dj-id": (
         "Auto-assigned by the Rust template parser for VDOM identity; an "
         "authored dj-id is IGNORED, never read back (#1253 / "
