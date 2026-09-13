@@ -197,3 +197,25 @@ class TestRealWorldTemplates:
         """
         result = benchmark(render_template, template, nested_context)
         assert "John Doe" in result
+
+
+class _SequenceRow:
+    """Keep the benchmark on live Python lookup, not dictionary projection."""
+
+    __slots__ = ("tags",)
+
+    def __init__(self):
+        self.tags = ["<first>", "&second"]
+
+
+@pytest.mark.benchmark(group="template_live_sequence")
+def test_live_object_numeric_sequence_lookup(benchmark):
+    """Exercise the numeric getattr-miss/dir/index path found by native profiling."""
+    from djust._rust import RustLiveView
+
+    view = RustLiveView("{% for row in rows %}{{ row.tags.0 }}:{{ row.tags.1 }};{% endfor %}")
+    view.set_state("rows", [_SequenceRow() for _ in range(1000)])
+    expected = "&lt;first&gt;:&amp;second;" * 1000
+    assert view.render() == expected
+    result = benchmark.pedantic(view.render, rounds=7, iterations=3)
+    assert result == expected
