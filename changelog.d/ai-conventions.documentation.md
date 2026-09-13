@@ -1,1 +1,0 @@
-- **AI application conventions**: Add canonical native-first guidance, discovery links and a generated AGENTS.md entry point for `djust new` projects.

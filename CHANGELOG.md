@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc7] - 2026-09-13
+
+### Added
+
+- **Declarative short sound effects for LiveViews.** Add opt-in `AudioMixin`,
+  validated sound banks, and `{% djust_audio %}` controls with gesture-based
+  activation, bounded playback, mount-scoped delivery, and optional client assets.
+
+### Fixed
+
+- Invoke client hook `beforeUpdate` before incremental patch batches and HTML morphs, once per update and scoped to the updated view.
+- **Markdown editor**: Implement formatting controls and sanitized server previews, with an optional Visual mode that edits Markdown through native form events. Include a reusable controls template, pinned Tiptap build, theme variables and source-preservation tests.
+
+### Documentation
+
+- **AI application conventions**: Add canonical native-first guidance, discovery links and a generated AGENTS.md entry point for `djust new` projects.
+
 ## [1.2.0rc6] - 2026-09-12
 
 ### Changed
