@@ -9,7 +9,10 @@ from typing import Any
 class MarkdownEditor(Component):
     """Split-pane markdown editor with live preview.
 
-    Uses ``dj-hook="MarkdownEditor"`` for client-side preview rendering.
+    Uses ``dj-hook="MarkdownEditor"`` for selection-aware formatting. Preview
+    rendering uses the native sanitized server-side Markdown renderer. Load
+    ``djust_components/markdown-editor.js`` after the djust client.
+    Bind ``event`` and update ``value`` to refresh the preview through LiveView.
 
     Usage in a LiveView::
 
@@ -37,6 +40,7 @@ class MarkdownEditor(Component):
         disabled: disable editing
         event: djust event on change
         custom_class: additional CSS classes
+        mode: initial editing mode; visual requires the optional visual bundle
     """
 
     TOOLBAR_BUTTONS = [
@@ -58,6 +62,7 @@ class MarkdownEditor(Component):
         disabled: bool = False,
         event: str = "",
         custom_class: str = "",
+        mode: str = "markdown",
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -70,8 +75,12 @@ class MarkdownEditor(Component):
             disabled=disabled,
             event=event,
             custom_class=custom_class,
+            mode=mode,
             **kwargs,
         )
+        if mode not in {"markdown", "visual"}:
+            raise ValueError("mode must be markdown or visual")
+        self.mode = mode
         self.name = name
         self.value = value
         self.preview = preview
@@ -112,18 +121,24 @@ class MarkdownEditor(Component):
                     f'data-suffix="{html.escape(suffix)}" '
                     f'aria-label="{btn_id.title()}">{label}</button>'
                 )
-            toolbar_html = f'<div class="dj-md-editor__toolbar">{"".join(btns)}</div>'
+            toolbar_html = f'<div class="dj-md-editor__toolbar" data-markdown-ui dj-update="ignore">{"".join(btns)}</div>'
 
         textarea_html = (
-            f'<textarea class="dj-md-editor__textarea" name="{e_name}" '
+            f'<textarea class="dj-md-editor__textarea" name="{e_name}" data-markdown-editor="{self.mode}" '
             f'placeholder="{e_placeholder}" rows="{self.rows}"'
             f"{disabled_attr}{event_attr}>{e_value}</textarea>"
         )
 
         preview_html = ""
         if self.preview:
-            preview_html = '<div class="dj-md-editor__preview" aria-label="Preview"></div>'
+            from djust.markdown import render_markdown
+
+            preview_html = (
+                '<div class="dj-md-editor__preview dj-prose" aria-label="Preview">'
+                + str(render_markdown(self.value, provisional=False, task_lists=True))
+                + "</div>"
+            )
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
-        return f'<div class="{class_str}" dj-hook="MarkdownEditor">{toolbar_html}{panes}</div>'
+        return f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{self.mode}">{toolbar_html}{panes}</div>'

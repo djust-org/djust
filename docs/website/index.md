@@ -115,6 +115,7 @@ Real-time form validation and submission with Django Forms.
 | ------------------------------------ | ----------------------------------------------------------- |
 | **[Forms Overview](forms/index.md)** | `dj-submit`, `FormMixin`, real-time validation              |
 | **[Forms Guide](guides/forms.md)**   | Full guide with `as_live`, model forms, reset, confirmation |
+| **[Markdown Editor](guides/markdown-editor.md)** | Visual/Markdown editing with native form fields |
 
 ---
 

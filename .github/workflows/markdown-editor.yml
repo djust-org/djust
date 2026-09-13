@@ -1,0 +1,31 @@
+name: Markdown editor
+on:
+  pull_request:
+    paths:
+      - 'js/markdown-editor/**'
+      - 'python/djust/components/static/djust_components/markdown-*'
+      - '.github/workflows/markdown-editor.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'js/markdown-editor/**'
+      - 'python/djust/components/static/djust_components/markdown-*'
+      - '.github/workflows/markdown-editor.yml'
+permissions:
+  contents: read
+jobs:
+  visual-editor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: js/markdown-editor/package-lock.json
+      - run: npm ci
+        working-directory: js/markdown-editor
+      - run: npm test
+        working-directory: js/markdown-editor
+      - name: Verify shipped assets match their source
+        run: git diff --exit-code -- python/djust/components/static/djust_components/markdown-visual.js python/djust/components/static/djust_components/markdown-visual.LICENSE.txt

@@ -18,3 +18,7 @@ these references. The topic sections below are concise API examples.
 ## Usage
 
 Load individual sections into LLM context as needed, or use `../llms-full.txt` for a single-file reference.
+
+## Component guides
+
+- [Markdown editor](../website/guides/markdown-editor.md) -- Native form fields with optional Visual/Markdown editing, source preservation and shared theme variables.

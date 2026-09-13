@@ -820,3 +820,10 @@ endif
 .PHONY: test-js-coverage
 test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
 	@npm run test:coverage
+
+.PHONY: markdown-editor-build test-markdown-editor
+markdown-editor-build: ## Build the optional visual editor assets (Node is for contributors only)
+	cd js/markdown-editor && npm ci && npm run build
+
+test-markdown-editor: ## Test Markdown/Visual conversion and native form integration
+	cd js/markdown-editor && npm ci && npm test

@@ -406,3 +406,8 @@ Each `<ul>` gets the attribute independently. No form-level config, no class hie
 - **Set `_model_instance` before `super().mount()`** when editing existing records.
 - **Keep `form_data` keys consistent.** FormMixin initializes all field keys in `mount()`. Don't add or remove keys -- it breaks VDOM diffing.
 - **Use `form_errors` for cross-field validation.** Errors from `clean()` go to `form_errors`, per-field errors go to `field_errors`.
+
+## Markdown editor
+
+See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
+native form integration, asset loading, theme variables and editing limitations.
