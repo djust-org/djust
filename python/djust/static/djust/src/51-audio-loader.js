@@ -4,7 +4,7 @@
     let styled = false;
     const ownerDocument = document;
     function syncAudio() {
-        if (!ownerDocument.body || !ownerDocument.defaultView) return;
+        if (!window.document || !ownerDocument.body || !ownerDocument.defaultView) return;
         const marker = document.querySelector('[dj-audio][data-audio-src]');
         if (marker && !styled && marker.hasAttribute('data-audio-css')) {
             styled = true;
@@ -32,6 +32,7 @@
         syncAudio();
         let queued = false;
         const observer = new MutationObserver(function (changes) {
+            if (!window.document) { observer.disconnect(); return; }
             if (queued || !changes.some(function (change) {
                 return change.type === 'childList' || change.attributeName === 'dj-audio';
             })) return;

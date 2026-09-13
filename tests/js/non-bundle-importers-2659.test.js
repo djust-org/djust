@@ -30,6 +30,8 @@ const BUNDLE_OUTPUTS = new Set([
 
 // Standalone assets: NOT in the bundle, but each has a real loader.
 const STANDALONE_WITH_LOADER = {
+    // Opt-in audio asset loaded only when a view declares an audio manifest.
+    'audio.js': 'python/djust/static/djust/src/51-audio-loader.js',
     // Registered as a service worker by the PWA views (python/djust/pwa/).
     'service-worker.js': 'python/djust/pwa',
     // Extension asset resolved by python/djust/extensions.py ("chart").
