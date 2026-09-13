@@ -407,6 +407,10 @@ pip install target/wheels/djust-*.whl
 
 ## Documentation
 
+Building with an AI coding agent? Start with the [application conventions](docs/ai/conventions.md)
+and [focused AI references](docs/ai/README.md). `djust new` includes an `AGENTS.md`
+entry point; existing applications can add the same pointer to their agent instructions.
+
 The full documentation lives at [docs.djust.org](https://docs.djust.org). The
 sections below cover the core API; see [Getting Started](#getting-started) above
 for first-time setup.

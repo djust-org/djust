@@ -245,6 +245,9 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
     # .gitignore
     _write(project_dir / ".gitignore", T.GITIGNORE)
 
+    # Agent entry point: link to the canonical conventions.
+    _write(project_dir / "AGENTS.md", T.AGENTS_MD)
+
     # .env.example — committed template the developer copies to .env for
     # local dev. Scaffolded settings.py reads DEBUG / SECRET_KEY /
     # ALLOWED_HOSTS from the environment with fail-safe defaults, so an
