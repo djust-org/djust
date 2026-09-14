@@ -2289,8 +2289,13 @@ mod tests {
 mod render_include_cache_tests {
     use super::*;
 
+    // One test deliberately bumps the process-wide registry generation.
+    // Keep it from invalidating another test's in-flight include selection.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn cache_is_render_scoped_and_nested_renders_restore_outer_selection() {
+        let _serial = TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("card.html");
         std::fs::write(&path, "card").unwrap();
@@ -2317,6 +2322,7 @@ mod render_include_cache_tests {
 
     #[test]
     fn generation_and_search_directories_are_part_of_selection() {
+        let _serial = TEST_LOCK.lock().unwrap();
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         std::fs::write(first.path().join("card.html"), "first").unwrap();
@@ -2338,6 +2344,7 @@ mod render_include_cache_tests {
 
     #[test]
     fn uncached_directories_keep_per_call_loading() {
+        let _serial = TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("card.html");
         std::fs::write(&path, "card").unwrap();
