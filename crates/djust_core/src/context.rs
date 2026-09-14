@@ -2703,6 +2703,18 @@ impl Context {
 /// `dir()` failing is answered `false`, which restores the fall-through: this
 /// probe may only ADD a propagation, never suppress one.
 fn name_exists_on(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
+    // Exact built-in sequences have no all-digit attribute names. After a
+    // numeric getattr miss, building and sorting dir() cannot find one.
+    // Keep subclasses on Django's general path: their __dir__ and numeric
+    // descriptors can turn an apparent index miss into a real exception.
+    if !name.is_empty()
+        && name.bytes().all(|byte| byte.is_ascii_digit())
+        && (obj.is_exact_instance_of::<pyo3::types::PyList>()
+            || obj.is_exact_instance_of::<pyo3::types::PyTuple>()
+            || obj.is_exact_instance_of::<pyo3::types::PyString>())
+    {
+        return false;
+    }
     let probe = || -> PyResult<bool> { obj.dir()?.contains(name) };
     probe().unwrap_or(false)
 }
