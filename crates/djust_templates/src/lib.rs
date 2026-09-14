@@ -255,6 +255,7 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<(String, Vec<String>)> {
+        let _includes = inheritance::IncludeRenderGuard::new();
         renderer::render_nodes_collecting(self.effective_nodes(), context, Some(loader))
     }
 
@@ -269,6 +270,7 @@ impl Template {
         changed_keys: &HashSet<String>,
         node_html_cache: &[String],
     ) -> Result<(String, Vec<String>, Vec<usize>)> {
+        let _includes = inheritance::IncludeRenderGuard::new();
         if self.uses_extends() && self.resolved.get().is_none() {
             // Extends not yet resolved — fall back to full render
             let (html, fragments) =
@@ -314,6 +316,7 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<String> {
+        let _includes = inheritance::IncludeRenderGuard::new();
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
         // the cache is keyed by source (#2517).

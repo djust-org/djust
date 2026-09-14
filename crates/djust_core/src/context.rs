@@ -131,6 +131,19 @@ pub(crate) fn protect_sidecar_strict<'py>(
     protect.call1((obj,)).ok()
 }
 
+/// Reuse only exact builtin values with no user-defined timezone behavior.
+/// Subclasses can override display, truthiness and methods; aware values can
+/// carry mutable tzinfo implementations, so both take normal live conversion.
+fn reusable_temporal(obj: &Bound<'_, PyAny>) -> bool {
+    use pyo3::types::{PyDate, PyDateTime, PyDelta, PyTime};
+
+    if obj.is_exact_instance_of::<PyDate>() || obj.is_exact_instance_of::<PyDelta>() {
+        return true;
+    }
+    (obj.is_exact_instance_of::<PyDateTime>() || obj.is_exact_instance_of::<PyTime>())
+        && obj.getattr("tzinfo").is_ok_and(|tz| tz.is_none())
+}
+
 pub(crate) fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     // (1) mapping item access, with the segment as a STRING. `ObjectKey`
     //     hashes its `Str` variant exactly as the `str` does, so this is the
@@ -2316,6 +2329,19 @@ impl Context {
                     // Python refuses to convert is a MISS, which renders empty
                     // — the same fail-to-absent every other arm of this
                     // function takes.
+                    Walked::Object(obj)
+                        if rest.is_empty()
+                            && obj.is(handle.bind(py))
+                            && reusable_temporal(&obj) =>
+                    {
+                        // The live walk still enforces auto-call and the shared
+                        // protection floor. Exact immutable temporal values
+                        // already have a carrier; rebuilding it invokes every
+                        // temporal method for each bare variable occurrence.
+                        // Dotted lookups always walk live, including timestamp()
+                        // whose answer depends on the process timezone.
+                        Ok(Some(Some(Value::Encoded(encoded.clone()))))
+                    }
                     Walked::Object(obj) => Ok(Some(obj.extract::<Value>().ok())),
                     // Django's `VariableDoesNotExist`, which the caller
                     // renders as `string_if_invalid` ("") — and which is

@@ -219,3 +219,57 @@ def test_live_object_numeric_sequence_lookup(benchmark):
     assert view.render() == expected
     result = benchmark.pedantic(view.render, rounds=7, iterations=3)
     assert result == expected
+
+
+@pytest.mark.benchmark(group="template_retained")
+def test_repeated_immutable_datetime(benchmark):
+    """Date formatting should not rebuild temporal metadata per occurrence."""
+    from datetime import datetime
+
+    from djust._rust import RustLiveView
+
+    view = RustLiveView('{% for row in rows %}{{ stamp|date:"Y-m-d H:i:s" }};{% endfor %}')
+    view.set_state("rows", list(range(2000)))
+    view.set_state("stamp", datetime(2026, 9, 13, 12, 34, 56))
+    result = benchmark.pedantic(view.render, rounds=7, iterations=3)
+    assert result == "2026-09-13 12:34:56;" * 2000
+
+
+@pytest.mark.benchmark(group="template_retained")
+def test_repeated_filesystem_include(benchmark, tmp_path):
+    """Repeated includes share selection within a render and reload next render."""
+    from djust._rust import RustLiveView
+
+    (tmp_path / "card.html").write_text("<li>{{ row }}</li>")
+    view = RustLiveView('{% for row in rows %}{% include "card.html" %}{% endfor %}')
+    view.set_template_dirs([str(tmp_path)])
+    view.set_state("rows", ["<row>"] * 2000)
+    result = benchmark.pedantic(view.render, rounds=7, iterations=3)
+    assert result == "<li>&lt;row&gt;</li>" * 2000
+
+
+@pytest.mark.benchmark(group="template_diff")
+def test_tracked_update_full_html_serialization(benchmark):
+    """A small patch still returns the complete escaped, hydrated HTML."""
+    from djust._rust import RustLiveView
+
+    view = RustLiveView(
+        "<main><h1>{{ tick }}</h1><ul>"
+        "{% for row in rows %}<li>{{ row }}</li>{% endfor %}</ul></main>"
+    )
+    view.set_state("rows", ["<row>é"] * 2000)
+    view.set_state("tick", 0)
+    view.render_with_diff()
+    tick = 0
+
+    def update():
+        nonlocal tick
+        tick += 1
+        view.set_state("tick", tick)
+        view.set_changed_keys(["tick"])
+        return view.render_with_diff()
+
+    html, patches, _ = benchmark.pedantic(update, rounds=7, iterations=3)
+    assert html.count("&lt;row&gt;é") == 2000
+    assert f">{tick}</h1>" in html
+    assert "dj-id=" in html and patches

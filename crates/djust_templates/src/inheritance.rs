@@ -793,6 +793,46 @@ fn absolute_template_path(input: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+// Includes select the same compiled file repeatedly inside loops. Keep those
+// successful selections for one top-level render; the next render revalidates
+// search order and mtime through the existing process-wide parse cache.
+#[derive(Hash, PartialEq, Eq)]
+struct IncludeCacheKey {
+    dirs: Vec<PathBuf>,
+    name: String,
+    namespace: u64,
+    generation: u64,
+}
+
+type IncludeCache = HashMap<IncludeCacheKey, Arc<[Node]>>;
+thread_local! {
+    static RENDER_INCLUDES: std::cell::RefCell<Option<IncludeCache>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// A nested render gets its own cache and restores the outer render on exit.
+/// This guard is thread-bound, including on error/unwind paths.
+pub(crate) struct IncludeRenderGuard {
+    previous: Option<IncludeCache>,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl IncludeRenderGuard {
+    pub(crate) fn new() -> Self {
+        Self {
+            previous: RENDER_INCLUDES.with(|cache| cache.replace(Some(HashMap::new()))),
+            _thread_bound: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for IncludeRenderGuard {
+    fn drop(&mut self) {
+        RENDER_INCLUDES.with(|cache| cache.replace(self.previous.take()));
+    }
+}
+
 /// Filesystem-based template loader for production use
 #[derive(Clone)]
 pub struct FilesystemTemplateLoader {
@@ -926,11 +966,49 @@ impl TemplateLoader for FilesystemTemplateLoader {
     /// two loader instances with different `template_dirs` search orders
     /// that resolve to the SAME file within one engine share the cache entry; invalidated by
     /// registry generation and mtime so an on-disk edit (including a hot-reload save) is picked up
-    /// on the next call without any explicit `clear()`/invalidation wiring.
+    /// on the next render (or call outside a render) without explicit invalidation.
+    /// A render-scoped selection cache avoids repeated filesystem validation
+    /// inside loops; the process cache retains AST identity between renders.
     fn load_template_cached(&self, name: &str) -> Result<Arc<[Node]>> {
-        use crate::lexer;
-        use crate::parser;
+        // Uncached loaders intentionally preserve per-call selection and
+        // allocation semantics. Custom TemplateLoader implementations never
+        // enter this filesystem-only optimization.
+        let cache_key = if self.uncached_dirs.is_empty()
+            && RENDER_INCLUDES.with(|cache| cache.borrow().is_some())
+        {
+            Some(IncludeCacheKey {
+                dirs: self.template_dirs.clone(),
+                name: name.to_string(),
+                namespace: crate::registry_scope::current(),
+                generation: crate::registry::registry_generation(),
+            })
+        } else {
+            None
+        };
+        if let Some(key) = &cache_key {
+            if let Some(nodes) = RENDER_INCLUDES.with(|cache| {
+                cache
+                    .borrow()
+                    .as_ref()
+                    .and_then(|cache| cache.get(key).cloned())
+            }) {
+                return Ok(nodes);
+            }
+        }
+        let nodes = self.load_template_validated(name)?;
+        if let Some(key) = cache_key {
+            RENDER_INCLUDES.with(|cache| {
+                if let Some(cache) = cache.borrow_mut().as_mut() {
+                    cache.insert(key, nodes.clone());
+                }
+            });
+        }
+        Ok(nodes)
+    }
+}
 
+impl FilesystemTemplateLoader {
+    fn load_template_validated(&self, name: &str) -> Result<Arc<[Node]>> {
         let path = self.find_template(name)?;
         let generation = crate::registry::registry_generation();
         let mtime = std::fs::metadata(&path)
@@ -968,8 +1046,8 @@ impl TemplateLoader for FilesystemTemplateLoader {
                 e
             ))
         })?;
-        let (tokens, spans) = lexer::tokenize_spanned(&source)?;
-        let mut nodes_vec = parser::parse_with_source_spanned(&tokens, &spans, &source)
+        let (tokens, spans) = crate::lexer::tokenize_spanned(&source)?;
+        let mut nodes_vec = crate::parser::parse_with_source_spanned(&tokens, &spans, &source)
             .map_err(DjangoRustError::into_template_syntax)
             .map_err(|error| error.with_template_source(&source, &path.to_string_lossy()))?;
         set_node_sources(
@@ -2204,5 +2282,77 @@ mod tests {
             "Base wrapper should be replaced by middle's, got: {}",
             result
         );
+    }
+}
+
+#[cfg(test)]
+mod render_include_cache_tests {
+    use super::*;
+
+    // One test deliberately bumps the process-wide registry generation.
+    // Keep it from invalidating another test's in-flight include selection.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn cache_is_render_scoped_and_nested_renders_restore_outer_selection() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("card.html");
+        std::fs::write(&path, "card").unwrap();
+        let loader = FilesystemTemplateLoader::new(vec![dir.path().to_path_buf()]);
+        {
+            let _outer = IncludeRenderGuard::new();
+            let first = loader.load_template_cached("card.html").unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert!(Arc::ptr_eq(
+                &first,
+                &loader.load_template_cached("card.html").unwrap()
+            ));
+            {
+                let _nested = IncludeRenderGuard::new();
+                assert!(loader.load_template_cached("card.html").is_err());
+            }
+            assert!(Arc::ptr_eq(
+                &first,
+                &loader.load_template_cached("card.html").unwrap()
+            ));
+        }
+        assert!(loader.load_template_cached("card.html").is_err());
+    }
+
+    #[test]
+    fn generation_and_search_directories_are_part_of_selection() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("card.html"), "first").unwrap();
+        std::fs::write(second.path().join("card.html"), "second").unwrap();
+        let a = FilesystemTemplateLoader::new(vec![first.path().into(), second.path().into()]);
+        let b = FilesystemTemplateLoader::new(vec![second.path().into(), first.path().into()]);
+        let _render = IncludeRenderGuard::new();
+        let nodes = a.load_template_cached("card.html").unwrap();
+        assert!(!Arc::ptr_eq(
+            &nodes,
+            &b.load_template_cached("card.html").unwrap()
+        ));
+        crate::registry::bump_registry_generation();
+        assert!(!Arc::ptr_eq(
+            &nodes,
+            &a.load_template_cached("card.html").unwrap()
+        ));
+    }
+
+    #[test]
+    fn uncached_directories_keep_per_call_loading() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("card.html");
+        std::fs::write(&path, "card").unwrap();
+        let loader = FilesystemTemplateLoader::new(vec![dir.path().into()])
+            .with_uncached_dirs(vec![dir.path().into()]);
+        let _render = IncludeRenderGuard::new();
+        loader.load_template_cached("card.html").unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(loader.load_template_cached("card.html").is_err());
     }
 }

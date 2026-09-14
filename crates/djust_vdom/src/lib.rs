@@ -453,29 +453,40 @@ impl VNode {
     /// `<style>`, whose text content must NOT be HTML-escaped per the
     /// HTML spec (they are "raw text elements").
     fn _to_html(&self, in_raw_text: bool) -> String {
-        // Use cached HTML if available (set on dj-update="ignore" subtrees)
+        let mut html = String::new();
+        self.write_html(&mut html, in_raw_text);
+        html
+    }
+
+    /// Append directly to the render's buffer; descendants do not allocate
+    /// intermediate HTML strings. Cached ignored subtrees remain verbatim.
+    fn write_html(&self, html: &mut String, in_raw_text: bool) {
         if let Some(ref cached) = self.cached_html {
-            return cached.clone();
+            html.push_str(cached);
+            return;
         }
 
         if self.is_text() {
-            let text = self.text.clone().unwrap_or_default();
+            let text = self.text.as_deref().unwrap_or_default();
             // Raw text elements (<script>, <style>) must not have their
             // text content HTML-escaped — the browser treats the bytes
             // literally, so escaping `&` to `&amp;` would corrupt JS/CSS
             // code and cause double-escaping bugs (#613).
             if in_raw_text {
-                return text;
+                html.push_str(text);
+            } else {
+                write_escaped(html, text, false);
             }
-            return html_escape(&text);
+            return;
         }
 
         if self.is_comment() {
             // Comment nodes: render as HTML comments
-            return format!("<!--{}-->", self.text.clone().unwrap_or_default());
+            html.push_str("<!--");
+            html.push_str(self.text.as_deref().unwrap_or_default());
+            html.push_str("-->");
+            return;
         }
-
-        let mut html = String::new();
 
         // Void elements that don't have closing tags
         let void_elements = [
@@ -491,15 +502,18 @@ impl VNode {
         html.push('<');
         html.push_str(&self.tag);
 
-        // Attributes (sorted for deterministic output)
-        let mut attrs: Vec<_> = self.attrs.iter().collect();
-        attrs.sort_by_key(|(k, _)| *k);
-        for (key, value) in attrs {
-            html.push(' ');
-            html.push_str(key);
-            html.push_str("=\"");
-            html.push_str(&html_escape_attr(value));
-            html.push('"');
+        // Sorting is needed only for multiple attributes. Most hydrated
+        // elements carry just their generated id.
+        if self.attrs.len() <= 1 {
+            for (key, value) in &self.attrs {
+                write_attribute(html, key, value);
+            }
+        } else {
+            let mut attrs: Vec<_> = self.attrs.iter().collect();
+            attrs.sort_unstable_by_key(|(key, _)| *key);
+            for (key, value) in attrs {
+                write_attribute(html, key, value);
+            }
         }
 
         if is_void {
@@ -510,7 +524,7 @@ impl VNode {
             // Children — propagate raw-text context so text nodes inside
             // <script>/<style> are emitted verbatim.
             for child in &self.children {
-                html.push_str(&child._to_html(is_raw_text));
+                child.write_html(html, is_raw_text);
             }
 
             // Closing tag
@@ -518,8 +532,6 @@ impl VNode {
             html.push_str(&self.tag);
             html.push('>');
         }
-
-        html
     }
 }
 
@@ -569,20 +581,38 @@ pub fn cache_ignore_subtree_html(node: &mut VNode) {
     }
 }
 
-/// Escape HTML special characters in text content
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\u{00A0}', "&nbsp;")
+fn html_escape(text: &str) -> String {
+    let mut html = String::with_capacity(text.len());
+    write_escaped(&mut html, text, false);
+    html
 }
 
-/// Escape HTML special characters in attribute values
-fn html_escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+fn write_attribute(html: &mut String, key: &str, value: &str) {
+    html.push(' ');
+    html.push_str(key);
+    html.push_str("=\"");
+    write_escaped(html, value, true);
+    html.push('"');
+}
+
+/// Escape in one pass while copying unchanged spans directly. Text and
+/// attribute escaping deliberately differ for quotes and non-breaking spaces.
+fn write_escaped(html: &mut String, text: &str, attribute: bool) {
+    let mut start = 0;
+    for (index, ch) in text.char_indices() {
+        let escaped = match ch {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' if attribute => "&quot;",
+            '\u{00a0}' if !attribute => "&nbsp;",
+            _ => continue,
+        };
+        html.push_str(&text[start..index]);
+        html.push_str(escaped);
+        start = index + ch.len_utf8();
+    }
+    html.push_str(&text[start..]);
 }
 
 /// A patch operation to apply to the DOM
@@ -1421,6 +1451,38 @@ fn djust_vdom(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serialization_preserves_escaping_order_and_raw_context() {
+        let mut ignored = VNode::element("aside");
+        ignored.cached_html = Some("<aside data-d=\"keep\">&amp;cached</aside>".into());
+        let mut comment = VNode::element("#comment");
+        comment.text = Some("marker&<>".into());
+        let node = VNode::element("main")
+            .with_attr("z", "<>&\"\u{a0}é")
+            .with_attr("a", "&amp;")
+            .with_child(VNode::text("<>&\"\u{a0}東京😀"))
+            .with_child(comment)
+            .with_child(VNode::element("script").with_child(VNode::text("x < y && z > 0")))
+            .with_child(VNode::element("br"))
+            .with_child(ignored);
+        assert_eq!(
+            node.to_html(),
+            concat!(
+                "<main a=\"&amp;amp;\" z=\"&lt;&gt;&amp;&quot;\u{a0}é\">",
+                "&lt;&gt;&amp;\"&nbsp;東京😀<!--marker&<>-->",
+                "<script>x < y && z > 0</script><br />",
+                "<aside data-d=\"keep\">&amp;cached</aside></main>"
+            )
+        );
+    }
+
+    #[test]
+    fn single_attribute_and_empty_text_serialize() {
+        let node = VNode::element("input").with_attr("value", "é\"<&");
+        assert_eq!(node.to_html(), "<input value=\"é&quot;&lt;&amp;\" />");
+        assert_eq!(VNode::text("").to_html(), "");
+    }
 
     #[test]
     fn test_vnode_creation() {
