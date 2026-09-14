@@ -110,6 +110,8 @@ import importlib
 import threading
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+from django.utils.functional import Promise
+
 logger = logging.getLogger(__name__)
 
 #: Libraries that resolve but are NOT bridged: djust's own
@@ -1000,8 +1002,17 @@ def _materialize_lazy(value: Any) -> Any:
     of a ``SafeString`` is a ``SafeString``). Anything that is not a promise
     crosses untouched.
     """
-    from django.utils.functional import Promise
-
+    # Exact builtin leaves cannot be lazy proxies. Leave subclasses on the
+    # general path so custom values and SafeString keep their existing behavior.
+    value_type = type(value)
+    if (
+        value is None
+        or value_type is str
+        or value_type is int
+        or value_type is float
+        or value_type is bool
+    ):
+        return value
     if isinstance(value, Promise):
         return str(value)
     if isinstance(value, dict):
