@@ -56,6 +56,26 @@ def test_extract_referenced_names_ignores_if_keywords():
     assert {"a", "b", "c"} <= names
 
 
+def test_extract_referenced_names_if_dotted_attribute_resolves_on_root_only():
+    """#2824 (found dogfooding the demo project against T018): `{% if
+    todo.done %}` must yield ONLY the root `todo`, never also `done` as a
+    separate top-level reference -- a dotted attribute tail resolves on the
+    root name only (issue caveat #2). Before this fix, `_IDENT_RE.findall()`
+    scanned the whole expression and picked up `done` as if it were its own
+    bare reference, false-positiving on every `{% if x.y %}` in the demo
+    project's active (non-legacy) todo-list views."""
+    src = "{% if todo.done %}checked{% endif %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert names == {"todo"}, "must extract ONLY the root, not the attribute tail"
+
+
+def test_extract_referenced_names_if_multiple_dotted_paths():
+    """Two dotted paths in one boolean expression both yield only their roots."""
+    src = "{% if todo.done and user.is_staff %}x{% endif %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert names == {"todo", "user"}
+
+
 def test_extract_template_locals_binds_for_and_with():
     src = "{% for k, v in items %}{% with foo=1 %}{% endwith %}{% endfor %}"
     locals_ = _extract_template_locals(src)

@@ -3,10 +3,13 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+import ast
+import inspect
 import logging
 import os
 import re
-from typing import Any
+import textwrap
+from typing import Any, Optional
 
 from django.core.checks import CheckMessage, register
 
@@ -18,10 +21,12 @@ from djust.checks.utils import (
     _iter_template_files,
     _get_template_dirs,
     _strip_verbatim_blocks,
+    _walk_subclasses,
     _LIVE_RENDER_TAG_RE,
     _LIVE_RENDER_STICKY_TRUTHY_RE,
     _LIVE_RENDER_STICKY_FALSY_RE,
 )
+from djust.checks.components import _routed_liveview_classes
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +623,232 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 id="djust.A090",
             )
         )
+
+    return errors
+
+
+# T018 (#2824) -- undefined template variable references. An undefined
+# `{{ variable }}` (or `{% if variable %}` / `{% for x in variable %}` head)
+# renders as empty string with NO error and NO warning — a typo'd or
+# never-set context name is invisible to both the test suite and
+# `manage.py djust_check`. This check compares each LiveView's template
+# variable references against its statically-determinable context (public
+# class attributes, `self.x = ...` assignments in `mount()`/anywhere in the
+# class body, literal `get_context_data()` dict keys, template-declared loop
+# vars, and the framework/Django-injected names) and warns on names that
+# resolve nowhere.
+#
+# Rather than re-implement the extraction (regex-over-`{{ }}`/`{% %}`,
+# attribute-tail / filter-pipe stripping, loop-var tracking, the
+# framework-injected-names allowlist), this delegates to the SAME helpers
+# `manage.py djust_typecheck` already uses (`djust.management.commands.
+# djust_typecheck`, shipped since v0.5.1 / #849) via the shared
+# `_check_view_source()` extraction point (added in this PR, #2824) so the
+# two entry points can never drift apart (#1646). `djust_typecheck` itself
+# only covers `template_name`-based (file) templates; this check ALSO covers
+# the inline `template = "..."` string form (the issue's own repro used
+# inline `template`), which is the one gap `djust_typecheck` left.
+#
+# KNOWN LIMITATION (v1, intentional): templates using `{% extends %}` are
+# SKIPPED entirely. A `{% block %}` override's variable references are
+# template-inheritance context — a name may be legitimately supplied by the
+# parent template's surrounding block scope, which this check has no way to
+# see (it only reads the child template's own source). Rather than risk
+# false positives on every `{% extends %}` page, v1 stays conservative and
+# skips the whole template; this is the same trade-off the issue itself
+# recommends ("an advisory check with a documented opt-out is safer than a
+# hard error"). Suppress project-wide with
+# `DJUST_CONFIG = {'suppress_checks': ['T018']}`, or per-template/per-name
+# with a `{# djust_typecheck: noqa #}` / `{# djust_typecheck: noqa name #}`
+# comment (the same pragma `djust_typecheck` already honors — reused rather
+# than inventing a second noqa convention for the same underlying check).
+def _is_bare_super_get_context_data_call(node: ast.expr) -> bool:
+    """True for ``super().get_context_data(...)`` / ``super(X, self).get_context_data(...)``."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get_context_data"
+        and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name)
+        and node.func.value.func.id == "super"
+    )
+
+
+def _get_context_data_is_too_dynamic(cls: type) -> bool:
+    """True if any user-code override of ``get_context_data()`` does more
+    than return a literal dict or delegate straight to
+    ``super().get_context_data(...)``.
+
+    ``djust_typecheck``'s ``_extract_context_keys_from_ast`` only harvests
+    keys from a LITERAL ``return {...}``; a common, entirely legitimate
+    pattern -- ``context = super().get_context_data(**kwargs);
+    context['extra'] = self.foo; return context`` -- adds a key
+    (``extra``) that extraction can't see. Per the issue's caveat #7,
+    T018 must never false-positive on such a view, so when
+    ``get_context_data`` does anything this check can't statically follow,
+    the WHOLE view is skipped (silently) rather than partially trusted.
+    """
+    for klass in cls.__mro__:
+        if klass is object:
+            continue
+        mod = getattr(klass, "__module__", "") or ""
+        if (mod.startswith("djust.") or mod.startswith("djust_")) and (
+            "test" not in mod and "example" not in mod
+        ):
+            continue
+        method = klass.__dict__.get("get_context_data")
+        if method is None:
+            continue
+        try:
+            src = inspect.getsource(method)
+        except (OSError, TypeError):
+            return True  # Can't introspect -- be conservative.
+        try:
+            tree = ast.parse(textwrap.dedent(src))
+        except SyntaxError:
+            return True
+        if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        func = tree.body[0]
+        for node in ast.walk(func):
+            if isinstance(node, ast.Return) and node.value is not None:
+                if isinstance(node.value, ast.Dict):
+                    continue
+                if _is_bare_super_get_context_data_call(node.value):
+                    continue
+                return True
+    return False
+
+
+@register("djust")
+def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """T018: Warn on template variable references that resolve nowhere."""
+    errors: list[CheckMessage] = []
+
+    if _is_check_suppressed("djust.T018"):
+        return errors
+
+    try:
+        from djust.live_view import LiveView
+        from djust.management.commands.djust_typecheck import _check_view_source
+    except ImportError:
+        return errors
+
+    # Same discovery union as check_liveviews (V0xx): __subclasses__() alone
+    # misses a URL-routed view whose module nothing else has imported yet
+    # (#1674) — walking the resolver imports every routed view module.
+    discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+
+    for cls in sorted(
+        discovered,
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
+        module = getattr(cls, "__module__", "") or ""
+        if module.startswith("djust.") or module.startswith("djust_"):
+            if "test" not in module and "example" not in module:
+                continue
+
+        # User-declared abstract base classes opt out (mirrors check_liveviews).
+        if cls.__dict__.get("abstract") is True:
+            continue
+
+        # A get_context_data() this check can't statically follow means we
+        # can't trust the "available names" set -- skip the whole view
+        # rather than risk a false positive (issue caveat #7).
+        if _get_context_data_is_too_dynamic(cls):
+            continue
+
+        # Runtime precedence in TemplateMixin.get_template(): inline
+        # `self.template` wins over `self.template_name`. `getattr` already
+        # does MRO resolution, so no manual parent walk is needed here.
+        template_attr = getattr(cls, "template", None)
+        template_name_attr = getattr(cls, "template_name", None)
+
+        src: Optional[str] = None
+        template_name: Optional[str] = None
+        template_path = ""
+
+        if isinstance(template_attr, str) and template_attr:
+            src = template_attr
+        elif isinstance(template_name_attr, str) and template_name_attr:
+            template_name = template_name_attr
+            try:
+                from django.template.loader import get_template
+
+                tpl = get_template(template_name_attr)
+                origin = getattr(tpl, "origin", None)
+                origin_name = getattr(origin, "name", None) if origin else None
+                if origin_name:
+                    with open(origin_name, "r", encoding="utf-8", errors="replace") as fh:
+                        src = fh.read()
+                    template_path = origin_name
+            except Exception:
+                # Template not resolvable statically (missing file, loader
+                # error, etc.) — silently skip rather than risk a false
+                # positive. Other checks already cover missing templates.
+                src = None
+
+        if not src:
+            continue
+
+        # Known limitation (see module-level comment above): skip
+        # `{% extends %}` templates entirely for v1 — `{% block %}`
+        # overrides are template-inheritance context this check can't see.
+        if "{% extends" in src or "{%extends" in src:
+            continue
+
+        try:
+            report = _check_view_source(cls, template_name, src)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "T018: failed to statically check template context for %s: %s",
+                "%s.%s" % (cls.__module__, cls.__qualname__),
+                e,
+            )
+            continue
+
+        if not report or not report.get("missing"):
+            continue
+
+        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        if not template_path:
+            try:
+                template_path = inspect.getfile(cls)
+            except (OSError, TypeError):
+                template_path = ""
+
+        for miss in report["missing"]:
+            name = miss["name"]
+            line = miss["line"]
+            errors.append(
+                DjustWarning(
+                    "%s -- template references undefined variable '%s' at "
+                    "line %d (%s) -- it resolves to nothing and renders as "
+                    "empty string, with no error." % (cls_label, name, line, report["template"]),
+                    hint=(
+                        "'%s' is never set via a class attribute, a "
+                        "`self.%s = ...` assignment, or a literal "
+                        "`get_context_data()` return key on %s, and it isn't "
+                        "one of the framework/Django-injected names "
+                        "(csrf_token, request, user, messages, forloop, ...). "
+                        "If this is a typo, fix it. If it's set dynamically "
+                        "(a value `djust_typecheck`'s static AST walk can't "
+                        "follow), silence with a "
+                        "`{# djust_typecheck: noqa %s #}` template comment, "
+                        "or suppress this check globally with "
+                        "DJUST_CONFIG = {'suppress_checks': ['T018']}."
+                        % (name, name, cls_label, name)
+                    ),
+                    id="djust.T018",
+                    fix_hint=(
+                        "Set `self.%s` in `%s.mount()` (or return it from "
+                        "`get_context_data()`), or fix the typo at line %d "
+                        "in the template for `%s`." % (name, cls_label, line, cls_label)
+                    ),
+                    file_path=template_path,
+                    line_number=line if template_name else None,
+                )
+            )
 
     return errors
 
