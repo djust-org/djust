@@ -4108,6 +4108,16 @@ function _normalizeKeyName(name) {
         'arrowdown': 'ArrowDown',
         'arrowleft': 'ArrowLeft',
         'arrowright': 'ArrowRight',
+        // Bare direction words. `docs/website/guides/tutorials.md` documents
+        // `dj-keydown.right="skip_tutorial"` as a copy-pasteable example, and
+        // without these the lookup fell through to the RAW name while `e.key`
+        // is `ArrowRight` — so the documented modifier never fired, the same
+        // silently-inert class as #2831. Added for all four directions rather
+        // than only the one the docs happen to spell out (parallel-path drift).
+        'up': 'ArrowUp',
+        'down': 'ArrowDown',
+        'left': 'ArrowLeft',
+        'right': 'ArrowRight',
     };
     // eslint-disable-next-line security/detect-object-injection
     return keyMap[lower] || name;
@@ -4536,23 +4546,48 @@ function buildFormEventParams(element, value) {
 }
 
 /**
- * Get or create a rate-limited handler wrapper for an element.
- * @param {WeakMap} stateMap - WeakMap storing per-element rate limit state
+ * Get or create a rate-limited handler wrapper for one element+BINDING pair.
+ *
+ * @param {WeakMap} stateMap - WeakMap of element -> Map<variant, wrapper>
  * @param {HTMLElement} element - Element to get/create wrapper for
  * @param {string} eventType - Event type (for server rate limit lookup)
  * @param {Function} rawHandler - The raw (unwrapped) handler function
+ * @param {string} [variant] - The matched attribute name, for elements that
+ *   can carry several bindings for one event type
  * @returns {Function} - Rate-limited wrapper or raw handler
  */
-function _getOrCreateRateLimitedHandler(stateMap, element, eventType, rawHandler) {
-    const state = stateMap.get(element);
-    if (state) return state.wrapped;
+function _getOrCreateRateLimitedHandler(stateMap, element, eventType, rawHandler, variant) {
+    // The cache CANNOT be keyed on the element alone, for two independent
+    // reasons — both found in review of #2831:
+    //
+    //  1. The rawHandler closure captures the matched attribute NAME
+    //     (`dj-keydown` vs `dj-keydown.enter`). A single slot per element would
+    //     freeze whichever binding arrived first: a morphdom attribute swap on a
+    //     surviving node would then keep dispatching the stale binding, going
+    //     silently dead with no error.
+    //  2. The wrapper OWNS rate-limit state. `debounce()` keeps its timer inside
+    //     the closure it returns, so REBUILDING the wrapper resets that timer
+    //     and defeats `dj-debounce` / `dj-throttle` entirely — N server events
+    //     for N keystrokes. With one binding per element the slot was stable and
+    //     hid this; an element carrying two bindings alternated variants on
+    //     every keystroke and rebuilt the wrapper each time.
+    //
+    // Keying on (element, variant) gives each binding ONE persistent wrapper,
+    // which is what both concerns need.
+    const key = variant ?? eventType;
+    let byVariant = stateMap.get(element);
+    if (!byVariant) {
+        byVariant = new Map();
+        stateMap.set(element, byVariant);
+    }
+    if (byVariant.has(key)) return byVariant.get(key);
 
     // Create rate-limited wrapper for this element
     let wrapped = _applyRateLimitAttrs(element, rawHandler);
     if (wrapped === rawHandler && window.djust.rateLimit) {
         wrapped = window.djust.rateLimit.wrapWithRateLimit(element, eventType, rawHandler);
     }
-    stateMap.set(element, { wrapped });
+    byVariant.set(key, wrapped);
     return wrapped;
 }
 
@@ -4948,27 +4983,86 @@ async function _handleDjPaste(element, e) {
 }
 
 /**
- * Handle dj-keydown / dj-keyup events via delegation.
- * @param {HTMLElement} element - Element with dj-keydown or dj-keyup attribute
+ * Find EVERY binding for `directive` on the path from `node` outward, nearest
+ * element first and attribute order within an element. A binding is either bare
+ * or carries a dotted modifier suffix — `dj-keydown` AND `dj-keydown.enter`.
+ *
+ * A dot is a legal attribute-name character, so `[dj-keydown]` cannot match the
+ * dotted form: the same trap `#1999` documents for `dj-input.debounce-200`. The
+ * framework treats the dotted form as a legitimate convention
+ * (`_warnUnrecognizedDjModifiers` deliberately does not warn about it), so it
+ * must be found — hence matching on the attribute NAME by prefix, the same
+ * scan-and-prefix-match shape that warning function uses.
+ *
+ * @param {Element} node - Node to start from (walks up via parentElement)
+ * @param {string} directive - Bare directive name, e.g. 'dj-keydown'
+ * @returns {{element: Element, attrName: string}|null}
+ */
+function _keyboardBindings(node, directive) {
+    const prefix = directive + '.';
+    const out = [];
+    for (let el = node; el && el.attributes; el = el.parentElement) {
+        const attrs = el.attributes;
+        for (let i = 0; i < attrs.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const name = attrs[i].name;
+            if (name === directive || name.startsWith(prefix)) {
+                out.push({ element: el, attrName: name });
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * The key a binding declares, or null when it fires on any key.
+ *
+ * The modifier can only come from the attribute NAME: a value never contains a
+ * dot, which is why deriving it from the value left the check dead. `dj-key` is
+ * deliberately NOT consulted — it is the framework's VNode list-identity
+ * attribute (`docs/guides/lists.md`, `schema.py`, the Rust parser), so reading
+ * it as a keyboard filter silently killed handlers on keyed list rows (#2831
+ * review).
+ */
+function _declaredKey(attrName) {
+    // Only the FIRST modifier is honoured: `dj-keydown.enter.shift` is read as
+    // `.enter`, and the scoped twin reads the same suffix as the literal string
+    // 'enter.shift' (so it never matches). The syntax is undocumented; this
+    // spelling is the more forgiving of the two, and it does not throw.
+    return attrName.includes('.') ? attrName.split('.')[1] : null;
+}
+
+/** Does this binding fire for this event? Synchronous, so the delegation can
+ *  decide whether to keep walking to outer bindings without awaiting. */
+function _keyboardBindingMatches(attrName, e) {
+    const declared = _declaredKey(attrName);
+    return !declared || e.key === _normalizeKeyName(declared);
+}
+
+/**
+ * Dispatch one dj-keydown / dj-keyup binding.
+ *
+ * @param {HTMLElement} element - Element carrying the attribute
  * @param {Event} e - The original keyboard event
  * @param {string} eventType - 'keydown' or 'keyup'
+ * @param {string} [attrName] - The matched attribute name (`dj-keydown` or
+ *   `dj-keydown.enter`); the value is read at fire time so a morph that changes
+ *   the handler name is picked up
+ * @returns {Promise<void>|undefined}
  */
-async function _handleDjKeyboard(element, e, eventType) {
-    // Read attribute at fire time
-    const keyHandler = element.getAttribute('dj-' + eventType);
+async function _handleDjKeyboard(element, e, eventType, attrName) {
+    // Read attribute at fire time. `attrName` is the name the delegation
+    // actually matched (`dj-keydown` or `dj-keydown.enter`); falling back keeps
+    // direct callers working.
+    const name = attrName || 'dj-' + eventType;
+    const keyHandler = element.getAttribute(name);
     if (!keyHandler) return;
+    const handlerName = keyHandler;
 
-    // Check for key modifiers (e.g. dj-keydown.enter)
-    const modifiers = keyHandler.split('.');
-    const handlerName = modifiers[0];
-    const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
-
-    if (requiredKey) {
-        if (requiredKey === 'enter' && e.key !== 'Enter') return;
-        if (requiredKey === 'escape' && e.key !== 'Escape') return;
-        if (requiredKey === 'space' && e.key !== ' ') return;
-        // Add more key mappings as needed
-    }
+    // Defensive: the delegation already matched this binding synchronously
+    // (`_keyboardBindingMatches`) so it could decide whether to keep walking to
+    // outer bindings. Re-checked here for direct callers.
+    if (!_keyboardBindingMatches(name, e)) return false;
 
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
@@ -5128,21 +5222,49 @@ function installDelegatedListeners(root) {
 
     // keydown → dj-keydown
     on('keydown', function(e) {
-        const keyEl = e.target.closest('[dj-keydown]');
-        if (keyEl) {
-            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
-            const wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
-            wrapped(e);
+        // Walk EVERY binding from the target outward, not just the nearest
+        // element: an element may carry several (`dj-keydown.enter` +
+        // `dj-keydown.escape` is documented as a pair in the four files
+        // core-concepts/events.md, core-concepts/templates.md,
+        // guides/template-cheatsheet.md and ai/templates.md), and a binding
+        // whose key does not match must not swallow the event for a
+        // container-level handler (#2831 review).
+        const bindings = _keyboardBindings(e.target, 'dj-keydown');
+        for (let i = 0; i < bindings.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const hit = bindings[i];
+            if (!_keyboardBindingMatches(hit.attrName, e)) continue;
+            const keyEl = hit.element;
+            const keyAttr = hit.attrName;
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown', keyAttr); };
+            _getOrCreateRateLimitedHandler(
+                _keydownRateLimitState, keyEl, 'keydown', rawHandler, keyAttr,
+            )(e);
+            // No early return: keep walking. Same semantics as the scoped
+            // `dj-window-keydown` delegation, which dispatches EVERY matching
+            // registry entry. Returning here made a bare binding on the same
+            // element shadow a dotted sibling permanently (a bare binding
+            // matches every key), and let a matching descendant suppress a
+            // container handler that origin/main did fire (#2831 review).
+            // Double-submit protection stays the job of `dj-lock`, which
+            // `_handleDjKeyboard` honours.
         }
     });
 
     // keyup → dj-keyup (separate WeakMap from keydown to avoid handler collision)
     on('keyup', function(e) {
-        const keyEl = e.target.closest('[dj-keyup]');
-        if (keyEl) {
-            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
-            const wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
-            wrapped(e);
+        const bindings = _keyboardBindings(e.target, 'dj-keyup');
+        for (let i = 0; i < bindings.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const hit = bindings[i];
+            if (!_keyboardBindingMatches(hit.attrName, e)) continue;
+            const keyEl = hit.element;
+            const keyAttr = hit.attrName;
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup', keyAttr); };
+            _getOrCreateRateLimitedHandler(
+                _keyupRateLimitState, keyEl, 'keyup', rawHandler, keyAttr,
+            )(e);
+            // No early return — see the keydown delegation above.
         }
     });
 
