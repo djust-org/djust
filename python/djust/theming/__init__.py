@@ -47,6 +47,41 @@ from .presets import (
     ThemeTokens,
 )
 
+# The theming domain model. Defined in `_types` (a private module holding
+# public types) and never re-exported, so `from djust.theming import
+# ThemePack` raised ImportError even though `register_theme_pack` accepts one
+# and `_types.__all__` advertises it. The documented model was unusable.
+from ._types import (  # noqa: E402
+    AnimationStyle,
+    DesignSystem,
+    IconStyle,
+    IllustrationStyle,
+    InteractionStyle,
+    LayoutStyle,
+    PatternStyle,
+    SurfaceStyle,
+    SurfaceTreatment,
+    ThemePack,
+    TypographyStyle,
+)
+
+# Request-scoped helpers — the documented way to read and change the active
+# theme from a view. Thin wrappers over ThemeManager.
+from .api import (  # noqa: E402
+    get_active_mode,
+    get_active_pack,
+    get_theme_css_url,
+    reset_to_defaults,
+    set_active_mode,
+    set_active_pack,
+)
+
+# Named style constants the pack-authoring docs import, and the pack CSS
+# generator. Same class of gap as the types above: defined, documented, and
+# not reachable from the package.
+from ._constants import ILLUST_LINE, PATTERN_MINIMAL  # noqa: E402
+from .pack_css_generator import generate_pack_css  # noqa: E402
+
 __all__ = [
     # Cache
     "clear_css_cache",
@@ -94,6 +129,29 @@ __all__ = [
     "generate_tailwindv4_theme_block",
     "generate_tailwindv4_theme_block_cached",
     "export_preset_as_tailwind_colors",
+    # Theming domain model
+    "ThemePack",
+    "DesignSystem",
+    "SurfaceTreatment",
+    "TypographyStyle",
+    "LayoutStyle",
+    "SurfaceStyle",
+    "IconStyle",
+    "AnimationStyle",
+    "InteractionStyle",
+    "PatternStyle",
+    "IllustrationStyle",
+    # Request-scoped helpers
+    "get_active_pack",
+    "set_active_pack",
+    "get_active_mode",
+    "set_active_mode",
+    "reset_to_defaults",
+    "get_theme_css_url",
+    # Named style constants + pack CSS generation
+    "PATTERN_MINIMAL",
+    "ILLUST_LINE",
+    "generate_pack_css",
 ]
 
 __version__ = "0.4.0rc4"

@@ -253,6 +253,7 @@ def theme_context(request: HttpRequest) -> dict:
         "theme_preset": state.preset,
         "theme_mode": state.mode,
         "theme_resolved_mode": state.resolved_mode,
+        "theme_pack": state.pack,
         "theme_presets": presets,
     }
 
