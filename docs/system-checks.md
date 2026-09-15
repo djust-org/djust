@@ -54,6 +54,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
 | T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
+| T018 | Templates | Warning | Template references a variable that resolves nowhere (renders blank, no error) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -555,6 +556,47 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: Static check only — it does not change html5ever's HTML5-spec
   foster-parenting; it warns at startup so the silent failure is caught before
   a request hits.
+
+### T018 — Undefined template variable reference (#2824)
+- **Severity**: Warning
+- **Method**: AST + regex (per-LiveView static analysis, not a per-file scan)
+- **What it detects**: A template `{{ variable }}` / `{% if variable %}` /
+  `{% for x in variable %}` head reference that resolves to nothing —
+  Django (and the Rust engine) render it as an empty string with **no error
+  and no warning**, so a typo'd or never-set context name is invisible to
+  both the test suite and this check family until now. T018 compares each
+  LiveView's template variable references against its statically-derivable
+  context: public class attributes, `self.x = ...` assignments anywhere in
+  the class (mount, event handlers, mixins), literal `get_context_data()`
+  dict-return keys, `{% for %}`-declared loop vars in the same template, and
+  the framework/Django-injected names (`csrf_token`, `request`, `user`,
+  `messages`, `forloop`, …). Covers both `template_name` (file) and inline
+  `template = "..."` views. Delegates its extraction to the same helpers
+  `manage.py djust_typecheck` has shipped since v0.5.1 (#849), via a shared
+  `_check_view_source()` extraction point, so the two entry points can never
+  drift apart.
+- **Fix**: Set the missing name via `self.x = ...` in `mount()`, return it
+  from `get_context_data()`, or fix the typo in the template.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T018"]}` project-wide,
+  or `{# djust_typecheck: noqa name #}` (or bare `{# djust_typecheck: noqa #}`)
+  in the template for a single name/template — the same pragma
+  `djust_typecheck` already honors, not a second competing convention.
+- **False positives avoided**: a dotted attribute tail (`row.options`)
+  resolves on the root name only; `{{ value|default:"x" }}` resolves on
+  `value` alone; framework-injected names and template-declared loop vars are
+  never flagged; a view whose `get_context_data()` does anything this check
+  can't statically follow (anything beyond a literal dict return or a bare
+  `super().get_context_data(...)` delegation) is skipped **entirely**, never
+  partially trusted.
+- **Known limitation (v1)**: templates using `{% extends %}` are **skipped
+  entirely** — a `{% block %}` override's variable references are
+  template-inheritance context this check has no way to see (it only reads
+  the child template's own source). This trades some false negatives for
+  zero false positives on inheritance-based templates, per the issue's own
+  guidance that an advisory check with a documented gap is safer than a
+  noisy one.
+- **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
+  are skipped, matching the other V/T checks' convention.
 
 ---
 

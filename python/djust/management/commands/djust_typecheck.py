@@ -93,6 +93,18 @@ _TAG_RE = re.compile(r"\{%\s*(\w+)\s*([^%]*?)\s*%\}")
 # Match a bare identifier at the start of a fragment (used inside tag args).
 _IDENT_RE = re.compile(r"([A-Za-z_][\w]*)")
 
+# Match a dotted-path expression, capturing only its ROOT identifier
+# (group 1) -- `todo.done` -> `todo`. Used where an expression may contain
+# multiple space-separated dotted paths (an `{% if %}`/`{% elif %}`/
+# `{% while %}` boolean expression), where a plain `_IDENT_RE.findall()`
+# would incorrectly also yield the attribute TAIL (`done`) as if it were
+# its own top-level reference (#2824 caveat #2: a dotted attribute tail
+# resolves on the root name only). `_IDENT_RE.match()` on a single token
+# already stops at the first `.` on its own (`\w` excludes `.`), so this
+# is only needed where multiple identifiers are scanned via `finditer`
+# across a whole expression string.
+_DOTTED_ROOT_RE = re.compile(r"([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*")
+
 # Silence pragma inline in templates.
 _NOQA_RE = re.compile(r"\{#\s*djust_typecheck:\s*noqa(?:\s+(\w+(?:\s*,\s*\w+)*))?\s*#\}")
 
@@ -283,7 +295,15 @@ def _extract_referenced_names(src: str) -> List[tuple]:
         args = match.group(2)
         line = src.count("\n", 0, match.start()) + 1
         if tag in {"if", "elif", "while"}:
-            for ident in _IDENT_RE.findall(args):
+            # Root-only extraction (#2824): `todo.done` must yield `todo`,
+            # not also `done` as a separate top-level reference. Uses a
+            # distinct variable name (`dotted_match`, not `m`) from the
+            # `Match[str] | None` `m` used elsewhere in this function --
+            # `finditer()` only ever yields real matches (never None), and
+            # reusing `m` narrows mypy's inferred type incompatibly with
+            # the later `_IDENT_RE.match(...)` assignments (#2824 review).
+            for dotted_match in _DOTTED_ROOT_RE.finditer(args):
+                ident = dotted_match.group(1)
                 if ident in {"and", "or", "not", "in", "is", "True", "False", "None"}:
                     continue
                 if ident.isdigit():
@@ -362,30 +382,23 @@ def _globals_from_settings() -> Set[str]:
     return {str(x) for x in raw}
 
 
-def _check_view(cls: type, verbose: bool = False) -> Optional[Dict[str, Any]]:
-    template_name = getattr(cls, "template_name", None)
-    if not template_name or not isinstance(template_name, str):
-        return None
-    path = _find_template_path(template_name)
-    if path is None:
-        return {
-            "view": f"{cls.__module__}.{cls.__qualname__}",
-            "template": template_name,
-            "error": "template not found by Django loaders",
-            "missing": [],
-            "strict": bool(getattr(cls, "strict_context", False)),
-        }
-    try:
-        src = path.read_text(encoding="utf-8")
-    except OSError as e:
-        return {
-            "view": f"{cls.__module__}.{cls.__qualname__}",
-            "template": template_name,
-            "error": f"could not read template: {e}",
-            "missing": [],
-            "strict": bool(getattr(cls, "strict_context", False)),
-        }
+def _check_view_source(
+    cls: type, template_name: Optional[str], src: str, verbose: bool = False
+) -> Optional[Dict[str, Any]]:
+    """Run the missing-name check against an already-loaded template ``src``.
 
+    Extracted from ``_check_view`` (#2824) so a second call site — the
+    ``djust.checks.templates`` system check (``djust.T018``) — can run the
+    identical extraction logic against a view's INLINE ``template = "..."``
+    string, which ``_check_view`` never covers (it requires ``template_name``
+    and loads via the Django template loaders). Sharing this function instead
+    of re-implementing the walk is the #1646 parallel-path-drift cure: one
+    body, two callers, no divergence between ``manage.py djust_typecheck``
+    and ``manage.py check``.
+
+    ``template_name`` is used only to label the report (``None`` for an
+    inline template); the actual scan runs entirely against ``src``.
+    """
     available = set(_ALWAYS_AVAILABLE)
     available |= _public_class_attrs(cls)
     available |= _extract_context_keys_from_ast(cls)
@@ -412,11 +425,40 @@ def _check_view(cls: type, verbose: bool = False) -> Optional[Dict[str, Any]]:
         return None
     return {
         "view": f"{cls.__module__}.{cls.__qualname__}",
-        "template": template_name,
-        "template_path": str(path),
+        "template": template_name if template_name else "<inline>",
         "missing": missing,
         "strict": bool(getattr(cls, "strict_context", False)),
     }
+
+
+def _check_view(cls: type, verbose: bool = False) -> Optional[Dict[str, Any]]:
+    template_name = getattr(cls, "template_name", None)
+    if not template_name or not isinstance(template_name, str):
+        return None
+    path = _find_template_path(template_name)
+    if path is None:
+        return {
+            "view": f"{cls.__module__}.{cls.__qualname__}",
+            "template": template_name,
+            "error": "template not found by Django loaders",
+            "missing": [],
+            "strict": bool(getattr(cls, "strict_context", False)),
+        }
+    try:
+        src = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return {
+            "view": f"{cls.__module__}.{cls.__qualname__}",
+            "template": template_name,
+            "error": f"could not read template: {e}",
+            "missing": [],
+            "strict": bool(getattr(cls, "strict_context", False)),
+        }
+
+    result = _check_view_source(cls, template_name, src, verbose=verbose)
+    if result is not None:
+        result["template_path"] = str(path)
+    return result
 
 
 class Command(BaseCommand):
