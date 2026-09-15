@@ -310,6 +310,49 @@ DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareRedisBackend'
 DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareMemoryBackend'
 ```
 
+## Tenant-Aware Presence
+
+The state backends above isolate view state per tenant. Presence is separate
+and has its own tenant-aware backends, in `djust.tenants.backends`:
+
+```python
+from djust.tenants.backends import (
+    TenantAwareBackendMixin,       # prefixes every key `tenant:<id>:<key>`
+    TenantAwareRedisBackend,       # PresenceBackend + tenant scoping
+    TenantAwareMemoryBackend,      # PresenceBackend + tenant scoping
+    get_tenant_presence_backend,   # (tenant_id: str) -> PresenceBackend
+)
+```
+
+`TenantAwareBackendMixin` is a mixin, not a standalone backend — it is what
+gives the two backend classes their key prefixing, so use one of those rather
+than mixing it in yourself.
+
+To scope presence for the whole project, point the config at a tenant-aware
+backend:
+
+```python
+# settings.py
+DJUST_CONFIG = {
+    "PRESENCE_BACKEND": "djust.tenants.backends.TenantAwareRedisBackend",
+}
+```
+
+Or scope it per view, when only some pages are tenant-scoped:
+
+```python
+from djust.tenants.backends import get_tenant_presence_backend
+
+class CollaborationView(TenantMixin, LiveView):
+    def mount(self, request, **kwargs):
+        # Takes the tenant id as a string; returns an object with the standard
+        # presence API (join / leave / list / count / heartbeat).
+        self.presence = get_tenant_presence_backend(self.tenant.id)
+```
+
+Without this, presence is project-wide — two tenants' users would see each
+other in the same room.
+
 ## Template Context
 
 Tenant info is automatically available in templates:
