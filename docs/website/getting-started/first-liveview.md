@@ -67,7 +67,7 @@ Create `myapp/templates/myapp/counter.html`:
 
 **Template requirements:**
 
-- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~58 KB gz) into every LiveView response
+- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~61 KB gz) into every LiveView response
 - `dj-root` marks the reactive region — only this subtree is patched on updates. It is the only root attribute you write; djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page, which is what connects the page to the WebSocket session
 - (Write `dj-view="myapp.views.MyView"` yourself only to name a specific view — an embedded or sticky view, or a template shared by several views. It is a literal path; there is no `dj_view_id` variable)
 - `dj-click="increment"` binds a click event to the `increment` handler

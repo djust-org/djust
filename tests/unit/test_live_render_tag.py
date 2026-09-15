@@ -210,6 +210,38 @@ class _ChildWithTrickyAttrs(LiveView):
         pass
 
 
+class _ChildWithKeyboardEventAttrs(LiveView):
+    """Child whose keyboard event attrs use the dotted in-name modifier form.
+
+    #2841: ``_stamp_view_id`` skipped elements whose ONLY event attribute is
+    dotted (``dj-keydown.enter``) — the compiled matcher required ``=``
+    directly after the bare attribute name, and a dot is a legal
+    attribute-name character. The scoped family
+    (``dj-window-keydown.escape``) was not listed at all, so it was missed
+    dotted AND bare.
+    """
+
+    template = (
+        "<div>"
+        '<input dj-keydown.enter="submit_search"/>'
+        '<input dj-keydown.escape="clear_search"/>'
+        '<div dj-window-keydown.escape="close_modal"></div>'
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def submit_search(self, **kwargs):
+        pass
+
+    def clear_search(self, **kwargs):
+        pass
+
+    def close_modal(self, **kwargs):
+        pass
+
+
 class _NotALiveView:
     """Intentionally NOT a LiveView — used for the subclass-validation test."""
 
@@ -475,6 +507,107 @@ class TestViewIdStamping:
                 "Found legacy 'view_id' attr on <%s>: %r — should be "
                 "'data-djust-embedded'" % (tag, attrs)
             )
+
+
+# ---------------------------------------------------------------------------
+# #2841 — dotted event attributes are stamped too
+# ---------------------------------------------------------------------------
+
+
+class TestDottedKeyboardEventStamping:
+    """Elements whose ONLY event attribute is dotted get ``data-djust-embedded``.
+
+    Before the fix, ``_LIVE_RENDER_ELEMENT_WITH_EVENT_RE`` required ``=``
+    immediately after the bare attribute name, so ``dj-keydown.enter="go"``
+    (ONE literal attribute name — a dot is a legal attribute-name character,
+    #2831/#1999) could not match. Without the stamp the client's
+    ``getEmbeddedViewId`` walk finds no ``view_id`` and the child's keyboard
+    events route to the parent instead of the embedded view. The scoped
+    family (``dj-window-keydown``/``dj-document-*``) was missing from
+    ``_LIVE_RENDER_EVENT_ATTRS`` entirely — missed dotted AND bare.
+    """
+
+    def _render_child(self, rf):
+        parent = _make_parent(rf)
+        out = _render_tag(
+            '{% live_render "tests.unit.test_live_render_tag._ChildWithKeyboardEventAttrs" %}',
+            {"view": parent, "request": parent.request},
+        )
+        child_id = next(iter(parent._child_views))
+        return out, child_id
+
+    def test_dotted_keydown_only_element_is_stamped(self, rf):
+        out, child_id = self._render_child(rf)
+        tree = _parse(out)
+        inputs = [attrs for tag, attrs in tree.elements if tag == "input"]
+        assert len(inputs) == 2, "expected the two dotted-keydown inputs, got %r" % (inputs,)
+        for attrs in inputs:
+            dotted = [a for a in attrs if a.startswith("dj-keydown.")]
+            assert dotted, "fixture drift: input has no dotted keydown attr: %r" % (attrs,)
+            # The dotted attr is the element's ONLY event attribute — the
+            # exact shape the issue reports as unstamped.
+            assert attrs.get("data-djust-embedded") == child_id, (
+                "input %r was not stamped (expected data-djust-embedded=%r)"
+                % (sorted(attrs), child_id)
+            )
+
+    def test_scoped_window_keydown_element_is_stamped(self, rf):
+        out, child_id = self._render_child(rf)
+        tree = _parse(out)
+        scoped = [attrs for _tag, attrs in tree.elements if "dj-window-keydown.escape" in attrs]
+        assert len(scoped) == 1
+        assert scoped[0].get("dj-window-keydown.escape") == "close_modal"
+        assert scoped[0].get("data-djust-embedded") == child_id, (
+            "dj-window-keydown.escape div was not stamped: %r" % (scoped[0],)
+        )
+
+    def test_stamp_view_id_bare_keydown_control(self):
+        """Control: the undotted spelling is still stamped (pre-existing)."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        out = _stamp_view_id('<input dj-keydown="go">', "v1")
+        assert _attr_values(out, "data-djust-embedded") == ["v1"]
+
+    def test_stamp_view_id_multi_dot_modifier_is_stamped(self):
+        """`dj-keydown.enter.shift` is one literal name; the runtime honours
+        the first modifier, and the stamper must accept the whole name."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        out = _stamp_view_id('<input dj-keydown.enter.shift="go">', "v1")
+        assert _attr_values(out, "data-djust-embedded") == ["v1"]
+
+    def test_stamp_view_id_dotted_with_space_before_equals(self):
+        """HTML allows whitespace between the attribute name and ``=``."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        out = _stamp_view_id('<input dj-keydown.enter ="go">', "v1")
+        assert _attr_values(out, "data-djust-embedded") == ["v1"]
+
+    def test_stamp_view_id_dotted_plus_bare_coexist(self):
+        """The issue's masking case: a bare event attr on the same element
+        already stamped — must keep working."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        out = _stamp_view_id('<input dj-keydown.enter="go" dj-click="x">', "v1")
+        assert _attr_values(out, "data-djust-embedded") == ["v1"]
+
+    def test_stamp_view_id_still_requires_real_event_attr(self):
+        """The ``=`` anchor must not relax into prefix matching: an attribute
+        that merely STARTS with an event-attr name is not an event attr and
+        is not stamped."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        out = _stamp_view_id('<input dj-keydownbogus="go">', "v1")
+        assert _attr_values(out, "data-djust-embedded") == []
+
+    def test_stamp_view_id_idempotent_on_dotted_attribute(self):
+        """Stamping an already-stamped dotted element must not stack attrs."""
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        once = _stamp_view_id('<input dj-keydown.enter="go">', "v1")
+        twice = _stamp_view_id(once, "v1")
+        assert _attr_values(twice, "data-djust-embedded") == ["v1"]
+        assert twice == once
 
 
 # ---------------------------------------------------------------------------

@@ -1306,6 +1306,21 @@ _LIVE_RENDER_EVENT_ATTRS = (
     "dj-viewport-leave",
     "dj-mouseenter",
     "dj-mouseleave",
+    # Scoped / window-level directives (#2841). These dispatch through
+    # ``addEventContext`` like every other event attribute, so an element
+    # carrying one inside an embedded child needs the stamp for its events
+    # to route to the child view — they were missing entirely (missed both
+    # bare and dotted).
+    "dj-window-keydown",
+    "dj-window-keyup",
+    "dj-window-click",
+    "dj-window-scroll",
+    "dj-window-resize",
+    "dj-document-keydown",
+    "dj-document-keyup",
+    "dj-document-click",
+    "dj-document-scroll",
+    "dj-document-resize",
 )
 
 # Pre-compiled regex: matches the opening of an element tag that carries
@@ -1322,6 +1337,13 @@ _LIVE_RENDER_ELEMENT_WITH_EVENT_RE = re.compile(
     r"("
     r"(?:\s+[^\s\"'<>/=]+(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s<>]+))?)*?"
     r"\s+(?:" + "|".join(re.escape(a) for a in _LIVE_RENDER_EVENT_ATTRS) + r")"
+    # Optional dotted in-name modifiers, e.g. ``dj-keydown.enter`` (also
+    # ``dj-keydown.enter.shift`` — one literal attribute name; the runtime
+    # honours the first modifier). A dot is a legal attribute-name character
+    # (#2831, #1999), so without this suffix the matcher required ``=``
+    # directly after the bare name and never stamped an element whose ONLY
+    # event attribute is dotted (#2841).
+    r"(?:\.[^\s\"'<>/=]+)*"
     r")"
     r"(\s*=)",  # (3) trailing '='
     re.IGNORECASE | re.DOTALL,

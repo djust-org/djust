@@ -214,6 +214,52 @@ function _sweepOrphanedScopedListeners() {
     }
 }
 
+// Key-name map for `_normalizeKeyName`: lowercased attribute suffix →
+// `KeyboardEvent.key` value. Anything NOT in this map resolves through the
+// RAW-name fallback (`_KEY_NAME_MAP[lower] || name`) — that fallback is what
+// lets single characters (`.a`) and correctly-cased DOM key names (`.PageUp`,
+// `.F1`) fire, and what leaves multi-character all-lowercase misspellings
+// (`.esc`, `.f1`) silently inert forever, since every multi-character
+// KeyboardEvent.key is UpperCamelCase. `_warnUnrecognizedDjModifiers` consults
+// this same map to warn about that inert class in debug mode (#2842) — one
+// map, two readers, so they cannot drift (#1646).
+const _KEY_NAME_MAP = {
+    'escape': 'Escape',
+    'enter': 'Enter',
+    'tab': 'Tab',
+    'space': ' ',
+    'backspace': 'Backspace',
+    'delete': 'Delete',
+    'arrowup': 'ArrowUp',
+    'arrowdown': 'ArrowDown',
+    'arrowleft': 'ArrowLeft',
+    'arrowright': 'ArrowRight',
+    // Bare direction words. `docs/website/guides/tutorials.md` documents
+    // `dj-keydown.right="skip_tutorial"` as a copy-pasteable example, and
+    // without these the lookup fell through to the RAW name while `e.key`
+    // is `ArrowRight` — so the documented modifier never fired, the same
+    // silently-inert class as #2831. Added for all four directions rather
+    // than only the one the docs happen to spell out (parallel-path drift).
+    'up': 'ArrowUp',
+    'down': 'ArrowDown',
+    'left': 'ArrowLeft',
+    'right': 'ArrowRight',
+};
+
+// Directives whose dotted in-name modifier is a KEY name
+// (`dj-keydown.escape`). `_declaredKey` reads the FIRST modifier only;
+// the #2842 warning pass mirrors that. Scoped twins split on the dot the
+// same way: `dj-window-keydown.escape`.split('.') gives the base as
+// `dj-window-keydown` (hyphens, not dots, inside the base name).
+const _KEYBOARD_KEY_DIRECTIVES = {
+    'dj-keydown': true,
+    'dj-keyup': true,
+    'dj-window-keydown': true,
+    'dj-window-keyup': true,
+    'dj-document-keydown': true,
+    'dj-document-keyup': true,
+};
+
 /**
  * Normalize a key name to match KeyboardEvent.key values.
  * @param {string} name - Key name from attribute (e.g. 'escape', 'enter', 'k')
@@ -221,30 +267,8 @@ function _sweepOrphanedScopedListeners() {
  */
 function _normalizeKeyName(name) {
     const lower = name.toLowerCase();
-    const keyMap = {
-        'escape': 'Escape',
-        'enter': 'Enter',
-        'tab': 'Tab',
-        'space': ' ',
-        'backspace': 'Backspace',
-        'delete': 'Delete',
-        'arrowup': 'ArrowUp',
-        'arrowdown': 'ArrowDown',
-        'arrowleft': 'ArrowLeft',
-        'arrowright': 'ArrowRight',
-        // Bare direction words. `docs/website/guides/tutorials.md` documents
-        // `dj-keydown.right="skip_tutorial"` as a copy-pasteable example, and
-        // without these the lookup fell through to the RAW name while `e.key`
-        // is `ArrowRight` — so the documented modifier never fired, the same
-        // silently-inert class as #2831. Added for all four directions rather
-        // than only the one the docs happen to spell out (parallel-path drift).
-        'up': 'ArrowUp',
-        'down': 'ArrowDown',
-        'left': 'ArrowLeft',
-        'right': 'ArrowRight',
-    };
     // eslint-disable-next-line security/detect-object-injection
-    return keyMap[lower] || name;
+    return _KEY_NAME_MAP[lower] || name;
 }
 
 // ============================================================================
@@ -1605,6 +1629,15 @@ function bindLiveViewEvents(scope) {
  * `dj-loading.class` / `.show` / `.hide` / `.disable` / `.for`), which are
  * real key / loading-state modifiers, not this mistake.
  *
+ * A SECOND pass (#2842) warns when a KEYBOARD directive's dotted key-name
+ * modifier (`dj-keydown.<key>`) spells a key that can never match: any
+ * multi-character name that is not in `_KEY_NAME_MAP`. HTML parsers lowercase
+ * attribute names, so `.PageUp` arrives as `.pageup` while `e.key` is
+ * `"PageUp"` — the raw-name fallback in `_normalizeKeyName` can never return
+ * a cased multi-character key name, and no such KeyboardEvent.key is
+ * all-lowercase. The handler is silently inert forever. Single characters
+ * (`.a`) DO fire via the raw fallback and are deliberately NOT warned about.
+ *
  * Skipped entirely outside debug mode (zero production cost).
  *
  * @param {ParentNode} scope - Root to scan (defaults to document).
@@ -1625,20 +1658,52 @@ function _warnUnrecognizedDjModifiers(scope) {
             // eslint-disable-next-line security/detect-object-injection
             const name = attrs[j].name;
             const m = MODEL_MODIFIER.exec(name);
-            if (!m || m[1] === 'dj-model') continue;
-            const base = m[1];
+            if (m && m[1] !== 'dj-model') {
+                const base = m[1];
+                console.warn(
+                    '[LiveView] Unrecognized modifier suffix on attribute "' +
+                        name +
+                        '": the `.lazy` / `.debounce-N` in-name modifier is only ' +
+                        'supported on `dj-model`, so `' +
+                        name +
+                        '` is a literal attribute that never binds (no handler ' +
+                        'attaches). For `' +
+                        base +
+                        '`, use the standalone form instead — e.g. `' +
+                        base +
+                        '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+                );
+                continue;
+            }
+
+            // #2842: inert keyboard key-name modifier.
+            const dot = name.indexOf('.');
+            if (dot === -1) continue;
+            const baseName = name.slice(0, dot);
+            // eslint-disable-next-line security/detect-object-injection
+            if (!_KEYBOARD_KEY_DIRECTIVES[baseName]) continue;
+            // First modifier only — the same spelling `_declaredKey` honours.
+            const suffix = name.slice(dot + 1).split('.')[0];
+            // eslint-disable-next-line security/detect-object-injection
+            if (_KEY_NAME_MAP[suffix]) continue;
+            if (suffix.length === 1) continue; // single chars fire via the raw fallback
+            // Every multi-character suffix outside the map is inert. HTML
+            // parsers LOWERCASE attribute names, so `.PageUp` arrives here as
+            // `.pageup` while `e.key` is `"PageUp"` — the raw-name fallback in
+            // `_normalizeKeyName` can never return a cased key name, and no
+            // multi-character KeyboardEvent.key is all-lowercase.
             console.warn(
-                '[LiveView] Unrecognized modifier suffix on attribute "' +
+                '[LiveView] Unrecognized keyboard modifier on attribute "' +
                     name +
-                    '": the `.lazy` / `.debounce-N` in-name modifier is only ' +
-                    'supported on `dj-model`, so `' +
-                    name +
-                    '` is a literal attribute that never binds (no handler ' +
-                    'attaches). For `' +
-                    base +
-                    '`, use the standalone form instead — e.g. `' +
-                    base +
-                    '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+                    '": the key name "' +
+                    suffix +
+                    '" never matches a KeyboardEvent.key, so this handler ' +
+                    'will never fire. Recognized names: escape, enter, tab, space, ' +
+                    'backspace, delete, arrowup, arrowdown, arrowleft, arrowright, ' +
+                    'up, down, left, right — plus any single character ' +
+                    '(dj-keydown.a). HTML lowercases attribute names, so ' +
+                    '.F1/.PageUp-style casing cannot match either. For example, ' +
+                    'use .escape, not .esc.'
             );
         }
     }

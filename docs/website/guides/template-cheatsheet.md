@@ -20,7 +20,7 @@ Every LiveView template needs these two things:
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~58 KB gz client JavaScript #}
+    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~61 KB gz client JavaScript #}
 </head>
 <body>
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
@@ -34,7 +34,7 @@ Every LiveView template needs these two things:
 | Attribute / Tag | Required | Description |
 |---|---|---|
 | `{% load live_tags %}` | Yes | Load djust template tag library |
-| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~58 KB gz) into every LiveView response |
+| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~61 KB gz) into every LiveView response |
 | `dj-view="myapp.views.CounterView"` | Yes | On `<body>` — literal dotted path to your LiveView class |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 

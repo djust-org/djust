@@ -11,7 +11,7 @@ Every LiveView template needs two things:
 <html>
 <head>
     {% load live_tags %}
-    {% djust_client_config %}   {# Emits client config meta tags; djust auto-injects the ~58 KB gz client JS #}
+    {% djust_client_config %}   {# Emits client config meta tags; djust auto-injects the ~61 KB gz client JS #}
 </head>
 <body>
     <div dj-root>                    {# Reactive region — only this is patched #}
