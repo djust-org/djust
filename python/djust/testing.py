@@ -48,6 +48,7 @@ import inspect
 import os
 import re
 import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 
@@ -112,11 +113,17 @@ class LiveViewTestClient:
         self.via_websocket: Optional[bool] = None
         # Stable per-test-client synthetic WS session id (#2821). There's no
         # real transport for the test client to proxy a session id from, but
-        # the id must stay IDENTICAL across repeated mount() calls on the
-        # same client (mirrors a real connection's session_id being stable
-        # for the connection's lifetime) — e.g. the VDOM cache-key path
-        # (mixins/rust_bridge.py:354) keys on it.
-        self._synthetic_ws_session_id = f"testclient-{id(self):x}"
+        # the id must stay IDENTICAL across repeated mount() calls on the same
+        # client — a same-client remount SHOULD reuse the cache key — and
+        # UNIQUE across different clients, because a reconnect is a new
+        # connection with a new id in production (`websocket.py` uses
+        # ``str(uuid.uuid4())`` per connection).
+        #
+        # uuid4 rather than ``id(self)``: CPython recycles ``id()``, so a
+        # destroyed client's id is handed to a new client, which then collides
+        # on the VDOM cache key (``mixins/rust_bridge.py:354``) against whatever
+        # the process-wide state backend still holds (#2821 review).
+        self._synthetic_ws_session_id = f"testclient-{uuid4().hex}"
 
     def mount(self, via_websocket: bool = True, **params: Any) -> "LiveViewTestClient":
         """
@@ -465,6 +472,17 @@ class LiveViewTestClient:
         if session is not None:
             request.session = session
         instance.request = request
+        # Stamp the same WS-mount identity attributes mount() does, so this
+        # really is the "WebSocket-mount-shaped instance" its callers assume
+        # (#2821 review). Without them the ws side of
+        # ``assert_http_ws_djid_parity`` rendered through the HTTP cache branch
+        # and could never catch a WS-branch dj-id drift.
+        instance._djust_mount_view_path = (
+            f"{self.view_class.__module__}.{self.view_class.__qualname__}"
+        )
+        instance._websocket_session_id = f"testclient-{uuid4().hex}"
+        instance._websocket_path = request.path
+        instance._websocket_query_string = request.META.get("QUERY_STRING", "")
         if hasattr(instance, "_initialize_temporary_assigns"):
             instance._initialize_temporary_assigns()
         instance.mount(request, **mount_kwargs)

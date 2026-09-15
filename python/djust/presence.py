@@ -263,9 +263,18 @@ class PresenceMixin:
             # guard returns early when _websocket_session_id is absent.
             return f"anon_{id(self)}"
 
-        # Fallback to session key for anonymous users
+        # Fallback to session key for anonymous users. An UNSAVED session has
+        # ``session_key is None``, which would make every such session collapse
+        # onto the single identity ``anon_None`` — many clients counting as one
+        # presence. Reachable from ``LiveViewTestClient`` (whose sessions are
+        # deliberately not saved, and which since #2821 takes the WebSocket
+        # branch by default, so a view's mount()-time ``track_presence()``
+        # really runs). Fall back to the instance id, matching the branch above.
         if hasattr(self, "request") and hasattr(self.request, "session"):
-            return f"anon_{self.request.session.session_key}"
+            session_key = self.request.session.session_key
+            if session_key:
+                return f"anon_{session_key}"
+            return f"anon_{id(self)}"
 
         # Last resort - use a default identifier
         return "unknown_user"
