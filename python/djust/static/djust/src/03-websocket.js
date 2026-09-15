@@ -485,6 +485,11 @@ class LiveViewWebSocket {
      * preserve unhandled-rejection visibility.
      */
     handleMessage(data) {
+        // Strip inbound copies of client-owned frame flags (#2829). One shared
+        // helper, called at each transport's inbound entry — SSE and the HTTP
+        // fallback call it too, so this is not the only choke point and must
+        // not be described as one.
+        stripClientOwnedFrameFlags(data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -865,8 +870,48 @@ class LiveViewWebSocket {
 
                 if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
                     // Buffer server-initiated patch — will be applied after
-                    // all pending event responses arrive.
-                    _tickBuffer.push(data);
+                    // all pending event responses arrive. Marked so the version
+                    // check treats the resulting gap as our own deferral rather
+                    // than a dropped patch (#2829). The marker is client-side
+                    // only and never goes back over the wire.
+                    const contiguous = (
+                        clientVdomVersion !== null &&
+                        typeof data.version === 'number' &&
+                        data.version === clientVdomVersion + 1
+                    );
+                    _tickBuffer.push({
+                        ...data,
+                        _deferred: true,
+                        _versionConsumed: contiguous,
+                    });
+                    // Consume the version HERE, at receipt — but ONLY when it is
+                    // CONTIGUOUS with the cursor. The frame has arrived and will
+                    // be applied on flush, so a contiguous version must already
+                    // be accounted for; otherwise the next in-order frame (an
+                    // event response arriving after this deferral) sees a
+                    // phantom gap in a sequence the server issued legitimately,
+                    // and forces a full-HTML recovery (#2829).
+                    //
+                    // Contiguity is the whole guard. Consuming a NON-contiguous
+                    // version would vouch for every version between the cursor
+                    // and this frame — frames the server allocated and never
+                    // shipped, the drop class `_hotreload_broadcast_suppressed`
+                    // exists for (#763/#2215/#2233). Silently accepting those
+                    // leaves the client permanently diverged with recovery never
+                    // firing.
+                    //
+                    // Declining the version is only half of it: the decision has
+                    // to SURVIVE to the flush, or the replay re-vouches for the
+                    // frame (that is what swallowed the drop on the noop-close
+                    // path, where the closing frame runs no strict check). So the
+                    // frame carries `_versionConsumed`, and the replay advances
+                    // the cursor only for frames whose version really was
+                    // consumed. A declined frame falls through to the strict
+                    // check and the loss still surfaces — via the closing frame,
+                    // or via the flush when the window closed with a noop.
+                    if (contiguous) {
+                        clientVdomVersion = data.version;
+                    }
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
                     }

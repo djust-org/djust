@@ -150,6 +150,11 @@ class LiveViewSSE {
      * shape as `LiveViewWebSocket.handleMessage`. Closes #1098.
      */
     handleMessage(data) {
+        // Strip inbound copies of client-owned frame flags (#2829). SSE never
+        // buffers, so its version check would otherwise be suppressible by a
+        // wire-supplied ``_deferred`` — the flag is client-owned and only the
+        // WebSocket buffering path may set it.
+        stripClientOwnedFrameFlags(data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
