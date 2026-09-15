@@ -657,7 +657,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 # false positives on every `{% extends %}` page, v1 stays conservative and
 # skips the whole template; this is the same trade-off the issue itself
 # recommends ("an advisory check with a documented opt-out is safer than a
-# hard error"). Suppress project-wide with
+# hard error"). The skip is REPORTED (#2833): each run that skipped views
+# emits one Info-level `djust.T018` message with the skipped count, so a
+# "passed" result is falsifiable instead of silently meaning "examined
+# nothing". Suppress project-wide with
 # `DJUST_CONFIG = {'suppress_checks': ['T018']}`, or per-template/per-name
 # with a `{# djust_typecheck: noqa #}` / `{# djust_typecheck: noqa name #}`
 # comment (the same pragma `djust_typecheck` already honors — reused rather
@@ -739,6 +742,8 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
     # (#1674) — walking the resolver imports every routed view module.
     discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
 
+    extends_skipped = 0
+
     for cls in sorted(
         discovered,
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
@@ -794,7 +799,11 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
         # Known limitation (see module-level comment above): skip
         # `{% extends %}` templates entirely for v1 — `{% block %}`
         # overrides are template-inheritance context this check can't see.
+        # The skip is REPORTED (#2833): a silent skip makes a "passed"
+        # result unfalsifiable (indistinguishable from "examined everything
+        # and found nothing").
         if "{% extends" in src or "{%extends" in src:
+            extends_skipped += 1
             continue
 
         try:
@@ -849,6 +858,26 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
                     line_number=line if template_name else None,
                 )
             )
+
+    # Make the extends skip visible (#2833): a "passed" run that examined
+    # nothing must be distinguishable from one that examined everything.
+    # Count only — view names would duplicate what the WARNINGs already
+    # label, and the count is the falsifiability signal the issue asks for.
+    if extends_skipped:
+        errors.append(
+            DjustInfo(
+                "T018: skipped %d view(s) whose template(s) use {%% extends %%} "
+                "-- extends templates are not analysed in v1 (block-override "
+                "context is inheritance-scoped)." % extends_skipped,
+                hint=(
+                    "`manage.py djust_typecheck` DOES analyse extends templates "
+                    "for template_name-based views (same extraction helpers) -- "
+                    "run it for inheritance-based coverage. Or suppress this "
+                    "check with DJUST_CONFIG = {'suppress_checks': ['T018']}."
+                ),
+                id="djust.T018",
+            )
+        )
 
     return errors
 
