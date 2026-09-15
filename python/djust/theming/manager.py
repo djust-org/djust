@@ -256,6 +256,16 @@ class ThemeManager:
         if self.session and self.config["persist_in_session"]:
             self.session[self._session_key] = data
 
+    def reset(self) -> None:
+        """Clear persisted theme state, returning to configured defaults.
+
+        Removes the session entry rather than writing defaults into it, so a
+        later change to the project's configured defaults still takes effect
+        for this user.
+        """
+        if self.session:
+            self.session.pop(self._session_key, None)
+
     def get_state(self) -> ThemeState:
         """
         Get current theme state.
@@ -422,6 +432,34 @@ class ThemeManager:
 
         session_data = self._get_session_data()
         session_data["preset"] = preset_name
+        self._set_session_data(session_data)
+        return True
+
+    def set_pack(self, pack_name: str | None) -> bool:
+        """Set the active theme pack.
+
+        The sibling of :meth:`set_theme` and :meth:`set_preset`, and the only
+        way to select a pack at runtime — a pack bundles a design system and a
+        colour preset, so setting one overrides both (see the pack branch in
+        :meth:`get_state`).
+
+        Args:
+            pack_name: Name of the pack, or ``None`` to clear the pack and fall
+                back to the design system + preset.
+
+        Returns:
+            True if the pack was known and stored, or cleared.
+        """
+        from ._registry_accessor import get_registry
+
+        if pack_name is not None and not get_registry().has_pack(pack_name):
+            return False
+
+        session_data = self._get_session_data()
+        if pack_name is None:
+            session_data.pop("pack", None)
+        else:
+            session_data["pack"] = pack_name
         self._set_session_data(session_data)
         return True
 

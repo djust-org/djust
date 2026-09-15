@@ -448,6 +448,6 @@ Chains are for **fast, declarative DOM work**. For anything that needs JavaScrip
 
 ## See also
 
-- [Event handlers](event-handlers.md) — the `@event_handler` decorator reference
+- [Event handlers](../core-concepts/events.md) — the `@event_handler` decorator reference
 - [Hooks](hooks.md) — client-side `dj-hook` integration
 - [`dj-paste`](dj-paste.md) — paste event handling that pairs well with JS Commands for optimistic UI

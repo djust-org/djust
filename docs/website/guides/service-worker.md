@@ -281,7 +281,7 @@ before `client.js` runs.
 ## Caveats & best practices
 
 - **Shell staleness**. The cached shell is tagged `djust-shell-v1`. When you deploy a template that changes `<head>` or `<nav>`, users will see the old shell until it is refreshed. Clear it by posting `{type: 'DJUST_CLEAR_SHELL'}` to the SW, or bumping the cache name in `service-worker.js`. A future version will wire this into djust's deploy signals.
-- **Server actions must be idempotent over replay**. The reconnection bridge replays buffered events best-effort. If a buffered event triggers a server-side side effect (payment, email send), the server currently has no dedup logic (v0.5.0 risk — see [Out of scope](#out-of-scope)). Use `@event_handler` for reads and low-stakes writes; guard high-stakes writes with your own idempotency keys.
+- **Server actions must be idempotent over replay**. The reconnection bridge replays buffered events best-effort. If a buffered event triggers a server-side side effect (payment, email send), the server currently has no dedup logic (v0.5.0 risk — see [Out of scope](#out-of-scope-for-v050)). Use `@event_handler` for reads and low-stakes writes; guard high-stakes writes with your own idempotency keys.
 - **Don't register the SW on authentication/session URLs**. Scope the registration to `/app/` if you have a login flow that must not be cached.
 - **Dev mode**. The SW caches the shell on the first successful navigate. During template development this can cache a broken shell. Either skip `instantShell: true` in dev, or bump `SHELL_CACHE` to invalidate.
 

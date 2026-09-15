@@ -969,6 +969,112 @@ async def _await_coro(coro: Any) -> Any:
     return await coro
 
 
+class LiveComponentTestClient:
+    """Test a :class:`~djust.components.base.LiveComponent` in isolation.
+
+    The component counterpart to :class:`LiveViewTestClient`. A component
+    cannot be mounted through ``LiveViewTestClient`` — it has no view, no
+    template_name dispatch and no URL — so testing one previously meant
+    wrapping it in a throwaway parent view.
+
+    Like its view counterpart, this calls the component's own methods
+    directly rather than routing through the WebSocket consumer. That makes
+    it fast and deterministic, and it means ``@event_handler`` metadata is
+    *not* enforced here: a handler that the real consumer would reject as
+    undecorated will still run. Use ``LiveViewTestClient.send_event`` when
+    the routing contract itself is what you are testing.
+
+    Example:
+        client = LiveComponentTestClient(StarRating).mount(value=3, max=5)
+        client.send_event("hover_star", n=4)
+        assert client.get_state()["hover"] == 4
+    """
+
+    def __init__(self, component_class: Type[Any]) -> None:
+        self.component_class = component_class
+        self.component: Optional[Any] = None
+        self.events: List[Dict[str, Any]] = []
+
+    def mount(self, **props: Any) -> "LiveComponentTestClient":
+        """Instantiate the component and run its ``mount()``.
+
+        ``props`` are passed to ``mount()``, matching how the parent view
+        passes props when it constructs a component.
+
+        Returns self, so construction and mounting read as one expression.
+        """
+        component = self.component_class()
+        component.mount(**props)
+        self.component = component
+        return self
+
+    def _require_mounted(self) -> Any:
+        if self.component is None:
+            raise RuntimeError("Component not mounted. Call client.mount() first.")
+        return self.component
+
+    def send_event(self, event_name: str, **params: Any) -> Dict[str, Any]:
+        """Call the component method named ``event_name``.
+
+        Raises:
+            RuntimeError: if not mounted.
+            NoHandlerFoundError: if the component has no such method — a
+                renamed handler should fail loudly rather than silently
+                no-op, which is how a test can pass while the feature is
+                broken.
+        """
+        component = self._require_mounted()
+
+        handler = getattr(component, event_name, None)
+        if handler is None or not callable(handler):
+            raise NoHandlerFoundError(f"{type(component).__name__} has no handler {event_name!r}")
+
+        state_before = self.get_state()
+        started = time.perf_counter()
+        handler(**params)
+        duration_ms = (time.perf_counter() - started) * 1000
+
+        result = {
+            "success": True,
+            "error": None,
+            "state_before": state_before,
+            "state_after": self.get_state(),
+            "duration_ms": duration_ms,
+        }
+        self.events.append({"event": event_name, "params": params, **result})
+        return result
+
+    def get_state(self) -> Dict[str, Any]:
+        """Public (non-underscore) attributes on the component.
+
+        Underscore-prefixed attributes are internal by the framework's own
+        convention and are deliberately not exposed, so a test asserting on
+        component state sees the same surface a template would.
+        """
+        component = self._require_mounted()
+        return {k: v for k, v in vars(component).items() if not k.startswith("_")}
+
+    def get_event_history(self) -> List[Dict[str, Any]]:
+        """Every event sent through this client, with before/after state."""
+        return list(self.events)
+
+    def render(self) -> str:
+        """Render the component to HTML."""
+        return str(self._require_mounted().render())
+
+    def assert_state(self, **expected: Any) -> None:
+        """Assert the component's public state equals ``expected`` exactly."""
+        actual = self.get_state()
+        assert actual == expected, f"expected {expected!r}, got {actual!r}"
+
+    def assert_state_contains(self, **expected: Any) -> None:
+        """Assert the public state contains ``expected`` (subset match)."""
+        actual = self.get_state()
+        for key, value in expected.items():
+            assert key in actual, f"{key!r} missing from component state"
+            assert actual[key] == value, f"{key!r}: expected {value!r}, got {actual[key]!r}"
+
+
 class SnapshotTestMixin:
     """
     Mixin for snapshot testing rendered output.

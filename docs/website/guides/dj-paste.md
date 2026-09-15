@@ -128,4 +128,4 @@ Use `dj-input` for "keep the server copy of this field in sync" and `dj-paste` f
 ## See also
 
 - [File uploads](uploads.md) — the `dj-upload` pipeline that `dj-paste` routes files through.
-- [Event handlers](event-handlers.md) — the `@event_handler` decorator reference.
+- [Event handlers](../core-concepts/events.md) — the `@event_handler` decorator reference.

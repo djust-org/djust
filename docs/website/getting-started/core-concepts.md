@@ -128,6 +128,6 @@ djust enforces strict security by default:
 
 ## Next Steps
 
-- [Guides](../guides/) — real-time features, navigation, presence, uploads
+- [Guides](/guides/) — real-time features, navigation, presence, uploads
 - [State Management](../state/index.md) — debounce, throttle, loading states, optimistic updates
 - [API Reference](../api-reference/liveview.md) — complete LiveView API

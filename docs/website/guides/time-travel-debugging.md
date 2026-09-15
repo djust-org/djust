@@ -159,7 +159,7 @@ any branch node jumps the view to that snapshot.
 
 Branches are **in-memory only** — they disappear on page refresh or
 server restart. To persist a branch for a regression test, use
-`time_travel.save_fixture()` (see [Testing](#testing-with-time-travel)).
+`time_travel.save_fixture()` (see [Testing](testing.md)).
 
 ### Per-component snapshots
 
@@ -247,5 +247,5 @@ to capture the final state.
 - [Developer Tools](developer-tools.md) — the debug panel and its tabs.
 - [Hot View Replacement](hot-view-replacement.md) — state-preserving
   Python reload in dev (v0.6.1 sibling feature).
-- [State Snapshot API](state-snapshot.md) — the underlying
+- [LiveView API reference](../api-reference/liveview.md) — the underlying
   `_capture_snapshot_state` filter reused here.

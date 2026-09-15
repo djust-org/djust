@@ -54,24 +54,18 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ## Loading States
 
-Show feedback while a slow handler is running:
-
-```python
-from djust.decorators import event_handler, loading
-
-@event_handler()
-@loading("is_saving")
-def save(self, **form_data):
-    """Sets self.is_saving=True while running, False when done."""
-    time.sleep(1)  # Simulate slow operation
-    self.saved = True
-```
+Show feedback while a slow handler is running. This is **not a decorator** —
+it is a declarative attribute on the element that fires the event:
 
 ```html
-<button dj-click="save" {% if is_saving %}disabled{% endif %}>
-    {% if is_saving %}Saving...{% else %}Save{% endif %}
-</button>
+<button dj-click="save" dj-loading.disable>Save</button>
 ```
+
+djust disables the button for the duration of the request. There is no
+handler code and no state to manage.
+
+For spinners, show/hide, and CSS classes, see
+[Loading States & Background Work](../guides/loading-states.md).
 
 ## Optimistic Updates
 
@@ -146,8 +140,7 @@ assignments trigger djust's normal server re-render.
 Auto-save form input to localStorage so users don't lose work on navigation or accidental close:
 
 ```python
-from djust.mixins import DraftModeMixin
-from djust import LiveView
+from djust import DraftModeMixin, LiveView
 
 class ContactFormView(DraftModeMixin, LiveView):
     template_name = "contact.html"
@@ -179,7 +172,6 @@ You'll see logs like:
 | ------------------------- | --------------------------------------- | -------------------- |
 | `@debounce(wait)`         | `wait`: seconds (float)                 | Search, autosave     |
 | `@throttle(interval)`     | `interval`: seconds (float)             | Scroll, resize       |
-| `@loading(attr)`          | `attr`: attribute name (str)            | Long operations      |
 | `@background`             | —                                       | API calls, AI gen    |
 | `@optimistic`             | —                                       | Toggles, counters    |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
