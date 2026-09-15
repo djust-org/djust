@@ -19,7 +19,6 @@ from djust.decorators import (
     optimistic,
     cache,
     client_state,
-    loading,
     permission_required,
     background,
 )
@@ -215,34 +214,18 @@ def update_filter(self, filter: str = "all", **kwargs):
 
 ---
 
-## `@loading`
+## Loading states
 
-Set a boolean attribute to `True` while the handler is running, `False` after. Use to show loading spinners or disable buttons.
-
-```python
-@loading(attr)
-```
-
-**Parameters:**
-
-- `attr` (`str`) — Name of the boolean attribute to set.
-
-**Usage:**
-
-```python
-@event_handler()
-@loading("is_saving")
-def save(self, **form_data):
-    """self.is_saving=True while this runs."""
-    time.sleep(1)
-    self.saved = True
-```
+Loading indicators are **not a decorator**. They are declarative attributes on
+the element that fires the event, so they need no handler code at all:
 
 ```html
-<button dj-click="save" {% if is_saving %}disabled{% endif %}>
-    {% if is_saving %}Saving...{% else %}Save{% endif %}
-</button>
+<button dj-click="save" dj-loading.disable>Save</button>
+<div dj-loading.show style="display:none">Saving...</div>
 ```
+
+See [Loading States & Background Work](../guides/loading-states.md) for the
+full set — `.show`, `.hide`, `.disable`, `.class`, and `.for` scoping.
 
 ---
 

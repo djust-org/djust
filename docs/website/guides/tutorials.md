@@ -475,12 +475,12 @@ A few real constraints worth knowing:
 
 Future phases on the same foundation:
 
-- **Phase 4 (v0.5.x)** — multi-user broadcast via `broadcast_commands(chain, group=...)` and the consent envelope from [ADR-005](../adr/005-consent-envelope-for-remote-control.md). Enables instructor-led classroom tours where one instructor drives 30 students' real LiveViews in lockstep.
-- **Phase 5 (v0.5.x)** — LLM-driven `AssistantMixin` from [ADR-002 Phase 5](../adr/002-backend-driven-ui-automation.md#ai-interaction-llm-driven-ui-from-user-speech). Users can speak their intent and an LLM generates the tour steps on the fly, adapting to real user actions.
-- **v0.6.0** — AI-generated UIs with capture-and-promote from [ADR-006](../adr/006-ai-generated-uis-with-capture-and-promote.md). Tours become one kind of generative UI among many.
+- **Phase 4 (v0.5.x)** — multi-user broadcast via `broadcast_commands(chain, group=...)` and the consent envelope from [ADR-005](../../adr/005-consent-envelope-for-remote-control.md). Enables instructor-led classroom tours where one instructor drives 30 students' real LiveViews in lockstep.
+- **Phase 5 (v0.5.x)** — LLM-driven `AssistantMixin` from [ADR-002 Phase 5](../../adr/002-backend-driven-ui-automation.md#ai-interaction-llm-driven-ui-from-user-speech). Users can speak their intent and an LLM generates the tour steps on the fly, adapting to real user actions.
+- **v0.6.0** — AI-generated UIs with capture-and-promote from [ADR-006](../../adr/006-ai-generated-uis-with-capture-and-promote.md). Tours become one kind of generative UI among many.
 
 ## See also
 
 - [Server-Driven UI](server-driven-ui.md) — `push_commands` and `wait_for_event` primitives
 - [JS Commands](js-commands.md) — the 11-command vocabulary that tour chains use
-- [ADR-002](../adr/002-backend-driven-ui-automation.md) — full design, motivation, alternatives, security model
+- [ADR-002](../../adr/002-backend-driven-ui-automation.md) — full design, motivation, alternatives, security model

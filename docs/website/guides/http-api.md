@@ -480,5 +480,5 @@ Per [ADR-008](../../adr/008-auto-generated-http-api-from-event-handlers.md) §"O
 See also:
 
 - [ADR-008 full design rationale](../../adr/008-auto-generated-http-api-from-event-handlers.md)
-- [Decorators reference](../../STATE_MANAGEMENT_API.md)
+- [Decorators reference](../../state-management/STATE_MANAGEMENT_API.md)
 - Manifesto principle #4 — One stack, one truth

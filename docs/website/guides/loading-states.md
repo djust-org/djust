@@ -446,7 +446,7 @@ Templates read the flags directly:
 ```
 
 The `{% djust_skeleton %}` template tag (v0.6.0) emits a shimmer placeholder with no
-bespoke CSS required — see the [declarative UX attributes guide](declarative-ux-attrs.md#-djust_skeleton---template-tag)
+bespoke CSS required — see the [declarative UX attributes guide](declarative-ux-attrs.md#-djust_skeleton--template-tag)
 for the full argument list. You can still hand-roll your own `<div class="skeleton-card">`
 styles if you prefer bespoke shapes.
 

@@ -216,12 +216,12 @@ Most "chain didn't do anything" issues are selector mismatches or `push_commands
 
 ## What's next
 
-`push_commands` is **Phase 1a** of the backend-driven UI story in [ADR-002](../adr/002-backend-driven-ui-automation.md). Two more primitives land in the same v0.4.2 release on top of this one:
+`push_commands` is **Phase 1a** of the backend-driven UI story in [ADR-002](../../adr/002-backend-driven-ui-automation.md). Two more primitives land in the same v0.4.2 release on top of this one:
 
 - **Phase 1b: `wait_for_event`** — see [Waiting for the user](#waiting-for-the-user) below.
 - **Phase 1c: [`TutorialMixin`](tutorials.md)** — a declarative state machine for guided tours. Describe the tour as a list of `TutorialStep` entries (target, message, wait-for event, optional on-enter/on-exit chains) and call `start_tutorial()`. The mixin handles step ordering, highlight cleanup, timeout handling, and skip/cancel. Zero boilerplate.
 
-After v0.4.2, Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `AssistantMixin`) extend the primitive into multi-user and AI-driven scenarios. See [ADR-002](../adr/002-backend-driven-ui-automation.md) for the full roadmap.
+After v0.4.2, Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `AssistantMixin`) extend the primitive into multi-user and AI-driven scenarios. See [ADR-002](../../adr/002-backend-driven-ui-automation.md) for the full roadmap.
 
 ## Waiting for the user
 
@@ -355,6 +355,6 @@ This is exactly the state machine `TutorialMixin` will formalize in Phase 1c —
 ## See also
 
 - [JS Commands](js-commands.md) — the full command vocabulary (11 ops, scoped targets, immutable chains)
-- [ADR-002](../adr/002-backend-driven-ui-automation.md) — full design doc with motivation, alternatives, and the multi-user / AI follow-through
+- [ADR-002](../../adr/002-backend-driven-ui-automation.md) — full design doc with motivation, alternatives, and the multi-user / AI follow-through
 - [Hooks](hooks.md) — when to reach for client-side `dj-hook` lifecycle callbacks instead
 - [Debug Panel](../advanced/debug-panel.md) — inspecting push events and exec chains at runtime

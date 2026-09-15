@@ -277,7 +277,7 @@ Suppress C014 only while the migration is *in progress*; remove the suppression 
 
 ### Verifying isolation
 
-After cutting a tenant over, verify no rows leak across `tenant_id` boundaries before trusting the path (the [canary test in section 7](#7-canary-test-no-cross-tenant-row-leaks) automates this) — manually, resolve as tenant A and confirm a tenant-B object is invisible:
+After cutting a tenant over, verify no rows leak across `tenant_id` boundaries before trusting the path (the [canary test in section 7](#7-canary-test--no-cross-tenant-row-leaks) automates this) — manually, resolve as tenant A and confirm a tenant-B object is invisible:
 
 ```python
 from djust.tenants import set_current_tenant

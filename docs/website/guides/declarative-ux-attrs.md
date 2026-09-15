@@ -9,7 +9,7 @@ Small declarative HTML attributes that replace custom `dj-hook` code every produ
 - [`dj-remove`](#dj-remove) — exit animations before element removal
 - [`dj-transition-group`](#dj-transition-group) — enter/leave animations for every child of a list container
 - [`dj-flip`](#dj-flip) — smooth transform animation when keyed children reorder
-- [`{% djust_skeleton %}`](#-djust_skeleton---template-tag) — shimmer placeholder blocks for loading states
+- [`{% djust_skeleton %}`](#-djust_skeleton--template-tag) — shimmer placeholder blocks for loading states
 - [`dj-force-value`](#dj-force-value--broadcast-value-preservation) — apply the server value to a field even while it is focused
 
 ---
