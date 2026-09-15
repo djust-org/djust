@@ -23,6 +23,9 @@ global.cancelPendingRateLimits = vi.fn();
 global._stampDjIds = vi.fn();
 global.bindLiveViewEvents = vi.fn();
 global.handleServerResponse = vi.fn();
+// Sibling from 02-response-handler.js; modules 00-20 share one scope in the
+// built bundle, so provide it here the same way as handleServerResponse.
+global.stripClientOwnedFrameFlags = vi.fn();
 global.globalLoadingManager = { stopLoading: vi.fn() };
 global.dispatchPushEventToHooks = vi.fn();
 
@@ -173,6 +176,15 @@ describe('LiveViewSSE', () => {
             });
             expect(sse.viewMounted).toBe(true);
             expect(global.clientVdomVersion).toBe(5);
+        });
+
+        it('strips client-owned frame flags before dispatching (#2829)', async () => {
+            const sse = new LiveViewSSE();
+            global.stripClientOwnedFrameFlags.mockClear();
+            await sse.handleMessage({ type: 'patch', patches: [], version: 2 });
+            expect(global.stripClientOwnedFrameFlags).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'patch' }),
+            );
         });
 
         it('calls handleServerResponse on patch message', async () => {

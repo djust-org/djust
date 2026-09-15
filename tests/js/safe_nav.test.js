@@ -201,6 +201,11 @@ describe('SSE navigate handler — scheme guard (finding #16)', () => {
             _stampDjIds: () => {},
             bindLiveViewEvents: () => {},
             handleServerResponse: () => {},
+            // Sibling from 02-response-handler.js. This harness runs each
+            // module in an isolated scope, so a new cross-module free variable
+            // must be provided here or the call throws ReferenceError — which
+            // is exactly how this file caught the #2829 strip (#2836 review).
+            stripClientOwnedFrameFlags: () => {},
             globalLoadingManager: { stopLoading: () => {} },
             dispatchPushEventToHooks: () => {},
         };

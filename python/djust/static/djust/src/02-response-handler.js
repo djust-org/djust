@@ -4,6 +4,33 @@
 // ============================================================================
 
 /**
+ * Drop CLIENT-OWNED frame flags from an INBOUND server frame.
+ *
+ * ``_deferred`` is set by the client on frames we deliberately deferred while a
+ * user event was pending (see `_tickBuffer`), and the version check uses it to
+ * tell our own deferral from a dropped patch (#2829). It must therefore never
+ * be settable from the wire — otherwise a server (or anything that can write to
+ * the transport) could suppress the dropped-patch detection for a frame.
+ *
+ * Every transport that hands a server frame to `handleServerResponse` calls
+ * this first: the WebSocket (`03-websocket.js`), SSE (`03b-sse.js`) and the
+ * HTTP fallback (`11-event-handler.js`). One helper rather than an inline
+ * `delete` per transport, so a future transport cannot quietly omit it. The
+ * deferred REPLAY calls `handleServerResponse` directly and so keeps our own
+ * marker.
+ *
+ * @param {object} data - Parsed inbound frame (mutated in place)
+ * @returns {object} the same frame
+ */
+function stripClientOwnedFrameFlags(data) {
+    if (data && typeof data === 'object') {
+        delete data._deferred;
+        delete data._versionConsumed;
+    }
+    return data;
+}
+
+/**
  * Check whether the global WebSocket connection is open and ready.
  * @returns {boolean}
  */
@@ -55,6 +82,21 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+            } else if (data._deferred && data._versionConsumed) {
+                // A deferred frame whose version was ALREADY consumed at
+                // receipt (see _tickBuffer, 03-websocket.js): the gap between it
+                // and the cursor is our own deferral, not a dropped patch, so
+                // applying it must not trigger a recovery (#2829). Forward only —
+                // a flush runs after later frames may have advanced the cursor.
+                //
+                // `_versionConsumed` is load-bearing: a deferred frame whose
+                // version was NOT consumed (the buffer site declined it because
+                // it was non-contiguous) must FALL THROUGH to the strict check
+                // below. Advancing for it here would vouch for the versions in
+                // between and swallow the drop permanently — which is exactly
+                // what an unconditional advance did on the noop-close path,
+                // where no strict check runs on the closing frame.
+                clientVdomVersion = Math.max(clientVdomVersion, data.version);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
                 if (globalThis.djustDebug) {
@@ -73,8 +115,10 @@ async function handleServerResponse(data, eventName, triggerElement) {
 
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 return true;
+            } else {
+                // Normal in-order frame: advance the cursor.
+                clientVdomVersion = data.version;
             }
-            clientVdomVersion = data.version;
         }
 
         // Clear optimistic state BEFORE applying changes
