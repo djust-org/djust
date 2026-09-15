@@ -46,6 +46,7 @@ if not settings.configured:
 
 from djust.testing import (
     LiveViewTestClient,
+    NoHandlerFoundError,
     SnapshotTestMixin,
     performance_test,
     MockRequest,
@@ -201,12 +202,24 @@ class TestLiveViewTestClient:
         assert "duration_ms" in result
         assert result["duration_ms"] >= 0
 
-    def test_send_event_unknown_handler(self):
-        """Test that send_event() handles unknown handlers."""
+    def test_send_event_unknown_handler_raises_by_default(self):
+        """Test that send_event() raises NoHandlerFoundError by default (#2823) —
+        matches production's WS consumer, where a missing handler is an error,
+        not a silent no-op."""
         client = LiveViewTestClient(MockLiveView)
         client.mount()
 
-        result = client.send_event("nonexistent_handler")
+        with pytest.raises(NoHandlerFoundError, match="No handler found"):
+            client.send_event("nonexistent_handler")
+
+    def test_send_event_unknown_handler_escape_hatch_returns_envelope(self):
+        """Test that send_event(raise_on_missing=False) keeps the old
+        envelope-return behavior for tests that deliberately probe the
+        error-envelope shape (#2823)."""
+        client = LiveViewTestClient(MockLiveView)
+        client.mount()
+
+        result = client.send_event("nonexistent_handler", raise_on_missing=False)
 
         assert result["success"] is False
         assert "No handler found" in result["error"]
