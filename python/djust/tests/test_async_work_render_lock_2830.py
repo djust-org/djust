@@ -6,10 +6,20 @@ which all acquire it. The render helper it calls documents that "the caller MUST
 already hold ``self._render_lock``", so the async path violates a stated
 precondition — on a PyO3 view whose VDOM baseline is not thread-safe.
 
-The test is DETERMINISTIC rather than timing-based: it holds the lock itself and
-asserts the async render cannot complete while it is held, then releases and
-asserts it does. There is no race to win — holding the lock is enough, because a
-path that respects the lock cannot render through it.
+The test holds the lock itself rather than racing a timer. Be precise about what
+that buys:
+
+- The FIXED direction is unconditional: a path that respects the lock cannot
+  render through a lock the test holds, so it cannot flake green-to-red.
+- The DETECTION direction (unfixed code) is settle-window based: the assertion
+  is correct only if the buggy path reaches its render inside the 0.1s window.
+  Measured on base under full CPU saturation, task-start to `render_with_diff`
+  was 2.7 / 17.7 / 8.0 ms — roughly 6-37x headroom — and 0 of 44 adversarial
+  runs (including 12 concurrent pytest processes) false-passed. A false-pass
+  would need the hop chain ~6x slower than the worst observed.
+
+Both arms are covered: the success arm and the ERROR arm, which re-renders to
+display the error state and is the documented `handle_async_result` pattern.
 """
 
 from __future__ import annotations
@@ -97,3 +107,56 @@ async def test_the_async_render_waits_for_the_render_lock():
 
     await asyncio.wait_for(task, timeout=5)
     assert len(renders) >= 1, "the async render must still happen once the lock is free"
+
+
+class _ErrorAsyncView(LiveView):
+    """The documented error-state pattern: a callback that raises, plus
+    ``handle_async_result`` to render the error."""
+
+    template = "<div>{{ n }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+
+    def handle_async_result(self, task_name, result=None, error=None):
+        self.n = -1
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_the_ERROR_arm_render_also_waits_for_the_render_lock():
+    """The error arm re-renders through the same helper, so it must hold the
+    same lock — it was the arm the first version of this fix missed."""
+    view = _ErrorAsyncView()
+    consumer, _sent = await _make_consumer(view)
+
+    renders: list[int] = []
+    real_render = view.render_with_diff
+
+    def counting_render(*args, **kwargs):
+        renders.append(1)
+        return real_render(*args, **kwargs)
+
+    view.render_with_diff = counting_render
+
+    def _boom():
+        raise RuntimeError("callback failed")
+
+    await consumer._render_lock.acquire()
+    try:
+        task = asyncio.ensure_future(consumer._run_async_work("t", _boom, (), {}))
+        await asyncio.sleep(0.1)
+        rendered_while_locked = len(renders)
+    finally:
+        consumer._render_lock.release()
+
+    assert rendered_while_locked == 0, (
+        "the error-arm re-render ran while _render_lock was held — the error arm "
+        "renders through the same helper and must serialise too (#2830)"
+    )
+
+    await asyncio.wait_for(task, timeout=5)
+    assert len(renders) >= 1, "the error re-render must still happen once the lock is free"

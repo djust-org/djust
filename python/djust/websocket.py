@@ -1200,6 +1200,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # wait and skipping: a skipped async render is an async result the
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
+                # Identity re-check INSIDE the lock (#1940): the guard above ran
+                # before an unbounded wait, during which the view can be torn down
+                # or replaced. Rendering the stale view would bump the
+                # connection-wide version and overwrite _recovery_html with
+                # old-view HTML. (The wait's cost to the tick / broadcast paths is
+                # documented on the error arm below.)
+                if self.view_instance is not view:
+                    return
                 # Re-render and send patches (mirrors the server_push path)
                 if hasattr(view, "_sync_state_to_rust"):
                     await sync_to_async(view._sync_state_to_rust)()
@@ -1276,37 +1284,60 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
 
                     # Re-render to show error state
-                    if hasattr(view, "_sync_state_to_rust"):
-                        await sync_to_async(view._sync_state_to_rust)()
+                    # Same lock as the success arm, the event path and the tick
+                    # path (#2830). This arm does the SAME render +
+                    # version-allocate + send, so leaving it lock-free kept a
+                    # server-initiated ``source="async"`` frame — the #2829
+                    # enabler — racing an event-path render. Reachable whenever a
+                    # callback raises AND the view defines ``handle_async_result``,
+                    # which is the documented error-state pattern.
+                    #
+                    # Cost, recorded because it is a deliberate trade: this WAITS
+                    # unboundedly, so a slow render holds the lock while the tick
+                    # and broadcast paths — bounded 0.1s wait, SKIP on timeout —
+                    # drop their renders for that window (a stateful tick handler
+                    # loses the work, not just latency). That matches the
+                    # documented contention philosophy (db_notify's note), but it
+                    # is why an async render must not be slow.
+                    async with self._render_lock:
+                        # Identity re-check INSIDE the lock: the guard above ran
+                        # before an UNBOUNDED wait, during which the view can be
+                        # torn down or replaced (#1940). Rendering the stale view
+                        # would bump the connection-wide version and overwrite
+                        # _recovery_html with old-view HTML.
+                        if self.view_instance is not view:
+                            return
+                        if hasattr(view, "_sync_state_to_rust"):
+                            await sync_to_async(view._sync_state_to_rust)()
 
-                    html, patches, version = await sync_to_async(view.render_with_diff)()
+                        html, patches, version = await sync_to_async(view.render_with_diff)()
 
-                    if patches is not None:
-                        patch_list = fast_json_loads(patches) if patches else []
-                        # Render-send: arm recovery so _recovery_version tracks
-                        # this error re-render's version (#1817). ``html`` is the
-                        # pre-strip render from render_with_diff() above.
-                        await self._send_update(
-                            patches=patch_list,
-                            version=self._next_version_armed(html),
-                            event_name=event_name,
-                            source="async",
-                        )
-                    else:
-                        html_stripped, html_content = await sync_to_async(
-                            lambda h: (
-                                view._strip_comments_and_whitespace(h),
-                                view._extract_liveview_content(
-                                    view._strip_comments_and_whitespace(h)
-                                ),
+                        if patches is not None:
+                            patch_list = fast_json_loads(patches) if patches else []
+                            # Render-send: arm recovery so _recovery_version tracks
+                            # this error re-render's version (#1817). ``html`` is the
+                            # pre-strip render from render_with_diff() above.
+                            await self._send_update(
+                                patches=patch_list,
+                                version=self._next_version_armed(html),
+                                event_name=event_name,
+                                source="async",
                             )
-                        )(html)
-                        await self._send_update(
-                            html=html_content,
-                            version=self._next_version_armed(html),
-                            event_name=event_name,
-                            source="async",
-                        )
+                        else:
+                            html_stripped, html_content = await sync_to_async(
+                                lambda h: (
+                                    view._strip_comments_and_whitespace(h),
+                                    view._extract_liveview_content(
+                                        view._strip_comments_and_whitespace(h)
+                                    ),
+                                )
+                            )(html)
+                            await self._send_update(
+                                html=html_content,
+                                version=self._next_version_armed(html),
+                                event_name=event_name,
+                                source="async",
+                            )
 
                 except Exception:
                     logger.exception(
