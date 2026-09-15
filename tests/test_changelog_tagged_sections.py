@@ -5,15 +5,21 @@ section (the v1.1.0rc5 consolidation incident). ``check-changelog-tagged-section
 catches it by comparing every shipped section against the newest release
 tag's frozen ``CHANGELOG.md`` snapshot.
 
-These tests run against the REAL repo + tags (the check reads git tags from the
+#2854 extends the check with *absence* detection: a release tag whose version
+has NO section used to be invisible (the gate silently fell back to the
+previous tag — v1.1.3 shipped to PyPI that way).
+
+Some tests run against the REAL repo + tags (the check reads git tags from the
 repo root), so the empirical canary (#1459) is a permanent regression: injecting
 spurious content into a shipped section MUST make the check fail, and the
-untouched tree MUST pass.
+untouched tree MUST pass. Tag-set scenarios that the real repo cannot exhibit
+run in throwaway git repos with the script installed under ``scripts/``.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -133,3 +139,148 @@ def test_newest_shipped_section_is_frozen(tmp_path, target):
     )
     assert result.returncode == 1
     assert f"Section '## [{newest}]' was rewritten" in result.stderr
+
+
+@requires_shipped
+def test_missing_newest_section_is_caught(tmp_path):
+    """#2854 replay on the real repo: delete the anchor's own section from a
+    copy. Before the fix the gate fell back to the previous tag and reported
+    OK (the exact way v1.1.3 shipped); now it must fail naming the tag."""
+    sections = check._split_sections(CHANGELOG.read_text(encoding="utf-8"))
+    anchor = next(ver for ver, _ in sections if check._tag_exists(f"v{ver}"))
+    text = CHANGELOG.read_text(encoding="utf-8")
+    start = text.index(f"## [{anchor}]")
+    end = text.find("## [", start + 1)
+    text = text[:start] + (text[end:] if end != -1 else "")
+    copy = tmp_path / "CHANGELOG.md"
+    copy.write_text(text, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(copy)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert f"no '## [{anchor}]' section" in result.stderr
+
+
+class TestParseVersion:
+    """The absence check sorts tags, so the pre-release order must be right:
+    ``1.2.0rc7 < 1.2.0`` and ``1.1.2 < 1.1.3``."""
+
+    def test_final_release_outranks_its_own_rcs(self):
+        assert check._parse_version("1.2.0rc7") < check._parse_version("1.2.0")
+
+    def test_rc_numbers_sort_numerically(self):
+        assert check._parse_version("1.2.0rc2") < check._parse_version("1.2.0rc7")
+
+    def test_patch_bump_sorts_above(self):
+        assert check._parse_version("1.1.2") < check._parse_version("1.1.3")
+
+    def test_alpha_beta_rc_final_order(self):
+        keys = [check._parse_version(v) for v in ("0.2.0a1", "0.2.0b1", "0.2.0rc1", "0.2.0")]
+        assert keys == sorted(keys)
+
+    def test_non_release_tag_is_not_a_version(self):
+        assert check._parse_version("not-a-version") is None
+        assert check._parse_version("v") is None
+
+
+class _TempRepo:
+    """A throwaway git repo with the check script installed, so tag-set
+    scenarios the real repo cannot exhibit (a sectionless release tag) can be
+    built without touching the real repo's tags."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        (root / "scripts").mkdir(parents=True)
+        shutil.copy2(SCRIPT, root / "scripts" / SCRIPT.name)
+        self._git("init", "-q", "-b", "main")
+        self._git("config", "user.email", "test@example.com")
+        self._git("config", "user.name", "test")
+        self.set_sections([])
+
+    def _git(self, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(self.root), check=True, capture_output=True)
+
+    def set_sections(self, versions: "list[str]") -> None:
+        """Rewrite CHANGELOG.md with one section per version and commit."""
+        text = "# Changelog\n\n## [Unreleased]\n\n" + "".join(
+            f"## [{v}] - 2026-09-15\n\n- Section {v}.\n\n" for v in versions
+        )
+        (self.root / "CHANGELOG.md").write_text(text, encoding="utf-8")
+        self._git("add", "-A")
+        self._git("commit", "-q", "--allow-empty", "-m", "changelog")
+
+    def tag(self, name: str) -> None:
+        self._git("tag", "-a", name, "-m", name)
+
+    def tag_on_side_branch(self, name: str) -> None:
+        """Tag a commit that is NOT an ancestor of main (the multi-branch
+        case: another release line's tags must not demand sections here)."""
+        self._git("checkout", "-q", "-b", "side")
+        self._git("commit", "-q", "--allow-empty", "-m", "side work")
+        self._git("tag", "-a", name, "-m", name)
+        self._git("checkout", "-q", "main")
+
+    def run_check(self) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(self.root / "scripts" / SCRIPT.name)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.root),
+        )
+
+
+class TestMissingSectionForHigherTag:
+    def test_higher_tag_without_section_fails(self, tmp_path):
+        # The v1.1.3 shape: tag cut, section never written. The gate used to
+        # silently fall back to the previous tag and report OK (#2854).
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.tag("v1.1.3")
+        result = repo.run_check()
+        assert result.returncode == 1
+        assert "no '## [1.1.3]' section" in result.stderr
+
+    def test_higher_tag_with_section_passes(self, tmp_path):
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2", "1.1.3"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.tag("v1.1.3")
+        assert repo.run_check().returncode == 0
+
+    def test_final_release_tag_above_rc_anchor_needs_section(self, tmp_path):
+        # rc ordering: a v1.2.0 final tag ranks ABOVE a 1.2.0rc7 anchor, so it
+        # demands a [1.2.0] section even though 1.2.0rc7 is sectioned.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.2.0rc7"])
+        repo.tag("v1.2.0rc7")
+        repo.tag("v1.2.0")
+        result = repo.run_check()
+        assert result.returncode == 1
+        assert "no '## [1.2.0]' section" in result.stderr
+
+        # Writing the section turns the same tag set green again.
+        repo.set_sections(["1.2.0", "1.2.0rc7"])
+        assert repo.run_check().returncode == 0
+
+    def test_unreachable_higher_tag_is_not_demanded(self, tmp_path):
+        # Multi-branch guard: main never carried the 1.1.x maintenance
+        # sections and the 1.1 branch never carried main's rc sections — a
+        # tag from another release line must not fail this branch's check.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.tag_on_side_branch("v1.1.3")
+        assert repo.run_check().returncode == 0
+
+    def test_non_release_tag_is_ignored(self, tmp_path):
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1"])
+        repo.tag("v1.1.1")
+        repo.tag("vnot-a-version")
+        assert repo.run_check().returncode == 0
