@@ -216,3 +216,157 @@ def test_count_phrase_without_file_path_is_skipped(tmp_path: Path) -> None:
     )
     result = _run(tmp_path)
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# #2839 — prose containing "it (" / "test (" must not count as a JS test.
+# The pre-#2839 regex matched any whitespace-preceded it|test before '(',
+# so a comment sentence like "...block below it (`requiredKey`)..." counted
+# as a test and a CORRECT changelog claim was rejected as drift.
+# ---------------------------------------------------------------------------
+
+
+def test_js_prose_it_paren_is_not_a_test(tmp_path: Path) -> None:
+    """The exact #2839 repro: prose 'below it (…)' in a docstring is not a test.
+
+    The file has 4 it() blocks; the fragment's claim of 4 is correct and must
+    pass. The pre-fix regex counted the docstring sentence as a fifth test and
+    rejected the correct claim.
+    """
+    _write_tree(
+        tmp_path,
+        {
+            "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n- prior\n",
+            "changelog.d/2839.fixed.md": textwrap.dedent(
+                """\
+                - **Dotted keydown (#2839).** 4 JSDOM cases in
+                  `tests/js/prose_repro_2839.test.js`.
+                """
+            ),
+            "tests/js/prose_repro_2839.test.js": textwrap.dedent(
+                """\
+                /**
+                 * Validates the dotted keydown path. The modifier-parsing
+                 * block below it (`requiredKey`) is dead code by construction,
+                 * so only the attribute-name scan matters here.
+                 */
+                describe('dotted keydown', () => {
+                  it('enter fires', () => {});
+                  it('escape fires', () => {});
+                  it('space fires', () => {});
+                  it('plain key still works', () => {});
+                });
+                """
+            ),
+        },
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_js_prose_cannot_inflate_a_wrong_claim(tmp_path: Path) -> None:
+    """False-negative direction: a prose 'it (' must not make a wrong claim pass.
+
+    The file has 4 real it() blocks; the fragment wrongly claims 5. The
+    pre-fix regex counted the comment sentence "worth it (see below)" as a
+    fifth test, so the wrong claim slipped through. It must fail.
+    """
+    _write_tree(
+        tmp_path,
+        {
+            "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n- prior\n",
+            "changelog.d/2839.fixed.md": textwrap.dedent(
+                """\
+                - **Foo (#2839).** 5 JSDOM cases in
+                  `tests/js/prose_inflate_2839.test.js`.
+                """
+            ),
+            "tests/js/prose_inflate_2839.test.js": textwrap.dedent(
+                """\
+                describe('foo', () => {
+                  it('a', () => {});
+                  it('b', () => {});
+                  it('c', () => {});
+                  it('d', () => {});
+                });
+                // Paying the cost once is worth it (see below).
+                """
+            ),
+        },
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "file has 4" in result.stderr
+
+
+def test_js_prose_in_comment_shapes_is_not_a_test(tmp_path: Path) -> None:
+    """Comment prose shapes from the real corpus must not count as tests.
+
+    Mirrors the eight phantom matches the corpus scan found (// trailing
+    comments, block-comment docstrings, mid-line prose after a statement).
+    Two real it() blocks; claim 2 must pass.
+    """
+    _write_tree(
+        tmp_path,
+        {
+            "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n- prior\n",
+            "changelog.d/2839.fixed.md": textwrap.dedent(
+                """\
+                - **Foo (#2839).** 2 JSDOM cases in
+                  `tests/js/prose_comment_shapes_2839.test.js`.
+                """
+            ),
+            "tests/js/prose_comment_shapes_2839.test.js": textwrap.dedent(
+                """\
+                /**
+                 * Setup: the server's VDOM child indices skip it (Rust drops
+                 * it) but the client could keep it (MoveSubtree if-outer-0).
+                 */
+                describe('foo', () => {
+                  it('a', () => {});
+                  it('b', () => {});
+                  // Late for this window — and, for the cases above, shadows it (#2135).
+                  const h = createHarness();
+                  // A real <section> inserted before the outer moves it (depth handled).
+                  // Paying it (see #2659) twice is fine.
+                });
+                """
+            ),
+        },
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_js_each_declaration_counts_once(tmp_path: Path) -> None:
+    """it.each(...) is one test declaration — it must count.
+
+    The pre-#2839 regex missed it.each entirely (the modifier group only
+    allowed .only/.skip), undercounting files that use it — the same
+    correct-claim-rejected failure, from the other direction. One it.each
+    counts once, matching the Python side's convention of counting a
+    parametrize() function as one test. Arbitrary nesting indent still counts.
+    """
+    _write_tree(
+        tmp_path,
+        {
+            "CHANGELOG.md": "# Changelog\n\n## [0.1.0] - 2026-01-01\n- prior\n",
+            "changelog.d/2839.fixed.md": textwrap.dedent(
+                """\
+                - **Foo (#2839).** 3 JSDOM cases in
+                  `tests/js/each_declaration_2839.test.js`.
+                """
+            ),
+            "tests/js/each_declaration_2839.test.js": textwrap.dedent(
+                """\
+                describe('foo', () => {
+                  it.each(['a', 'b', 'c'])('handles %s', () => {});
+                  it('plain one', () => {});
+                    it('deeper-nested one', () => {});
+                });
+                """
+            ),
+        },
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
