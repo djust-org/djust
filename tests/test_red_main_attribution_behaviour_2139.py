@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import scrub_host_git_state
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/pre-push-pytest.sh"
 
@@ -68,13 +70,23 @@ def _git(cwd: Path, *args: str) -> None:
         cwd=cwd,
         check=True,
         capture_output=True,
-        env={
-            **os.environ,
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-        },
+        # `**os.environ` is here for the author identity below — and it also
+        # inherits the host repo's git STATE. pre-commit exports GIT_INDEX_FILE
+        # (the index it stashes your tree into) to every hook, so this fixture's
+        # `git add -A` was writing the FIXTURE's tree into the real repository's
+        # index. That is what failed the very hook this file tests: pre-commit
+        # reports any hook that modifies files as Failed regardless of its exit
+        # code, so the script's attribution never got a chance to matter. See
+        # tests/git_env.py.
+        env=scrub_host_git_state(
+            {
+                **os.environ,
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@t",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@t",
+            }
+        ),
     )
 
 
@@ -146,7 +158,11 @@ def _run(repo: Path, merge_base: str | None = None) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": ""},
+        # Scrubbed for the same reason as _git above: this env reaches the
+        # script under test, which runs `git worktree add` / `git merge-base`.
+        env=scrub_host_git_state(
+            {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": ""}
+        ),
     )
     return r.stdout + r.stderr
 

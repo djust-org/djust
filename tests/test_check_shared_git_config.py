@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import scrub_host_git_state
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check-shared-git-config.sh"
 
@@ -34,6 +36,9 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     # setting can never influence (or be influenced by) these throwaway repos.
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    # ...and from the host repo's git STATE (GIT_DIR/GIT_INDEX_FILE/...), which
+    # pre-commit exports into hook environments. See tests/git_env.py.
+    scrub_host_git_state(env)
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -48,6 +53,7 @@ def _run_checker(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    scrub_host_git_state(env)
     return subprocess.run(
         ["bash", str(CHECKER), *args],
         cwd=cwd,

@@ -68,10 +68,10 @@ STATUS=${PIPESTATUS[0]}
 # A node id is `path::name` or `path::name[params]`, so " - " can only occur
 # inside the brackets. Tracking bracket depth is therefore exact, not a
 # heuristic.
-FAILED_IDS=()
-while IFS= read -r _line; do
-    [ -n "$_line" ] && FAILED_IDS+=("$_line")
-done < <(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | awk '{
+# Node ids from `FAILED <nodeid> - <message>` lines. Shared by the branch run
+# and the base run below, so the two cannot drift in how they read a report.
+_extract_failed() {
+    grep -E '^FAILED ' "$1" | sed 's/^FAILED //' | awk '{
     depth = 0
     n = length($0)
     for (i = 1; i <= n; i++) {
@@ -81,7 +81,13 @@ done < <(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | awk '{
         else if (depth == 0 && substr($0, i, 3) == " - ") { print substr($0, 1, i - 1); next }
     }
     print $0
-}' | sort -u)
+}' | sort -u
+}
+
+FAILED_IDS=()
+while IFS= read -r _line; do
+    [ -n "$_line" ] && FAILED_IDS+=("$_line")
+done < <(_extract_failed "$REPORT")
 
 if [ "${#FAILED_IDS[@]}" -eq 0 ]; then
     echo
@@ -96,8 +102,34 @@ echo "  $COUNT failing test(s):"
 printf '%s\n' "${FAILED_IDS[@]}" | sed 's/^/    /'
 echo "──────────────────────────────────────────────────────────────────────"
 
-# Which of these were already failing on the merge-base?
-BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+# Which base are these failures attributable to?
+#
+# NOT `origin/HEAD`. That is `main`, and a branch based on a maintenance line
+# (1.1, 1.0) diverges from main where the line was CUT — so every failure the
+# maintenance line has accumulated since then is attributed to this branch.
+# That is the same confidently-wrong answer this script has already fixed three
+# times (the worktree interpreter, the single-invocation parsing, the `head -1`
+# `.so` copy), reached from a fourth direction. Observed on sec/1.1.2-backports:
+# 13 failures that reproduce unchanged on a pristine origin/1.1 checkout, every
+# one of them announced as "new on this branch".
+#
+# The branch's upstream is the base its PR merges into, which is the base this
+# question is actually about. Fall back to the default branch when the branch
+# has no upstream yet (a brand-new local branch).
+# Prefer the branch's OWN base: its upstream, the base its PR merges into.
+# `origin/HEAD` is `main`, and a branch based on a maintenance line (1.1, 1.0)
+# diverges from main where the line was CUT — so every failure the maintenance
+# line has accumulated since then is attributed to this branch. Only an
+# `origin/*` upstream is usable here: BASE must name a branch on `origin` for
+# the merge-base line below to resolve, so anything else falls back to the
+# default branch, which is the previous behaviour.
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+case "$UPSTREAM" in
+    origin/*) BASE="${UPSTREAM#origin/}" ;;
+esac
+if [ -z "${BASE:-}" ]; then
+    BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+fi
 [ -z "$BASE" ] && BASE=main
 MERGE_BASE=$(git merge-base HEAD "origin/$BASE" 2>/dev/null || true)
 
@@ -108,8 +140,9 @@ if [ -z "$MERGE_BASE" ]; then
     exit "$STATUS"
 fi
 if [ "$(git rev-parse HEAD)" = "$MERGE_BASE" ]; then
-    echo "  HEAD is the merge-base, so every failure above is pre-existing."
-    exit "$STATUS"
+    echo "  HEAD is the merge-base, so every failure above is pre-existing —"
+    echo "  and a pre-existing failure is not this push's to fix."
+    exit 0
 fi
 
 # ALL of them, not `head -1`: the tree carries one .so per Python ABI
@@ -161,12 +194,14 @@ PYBIN="$(bash scripts/run-with-venv-python.sh --print 2>/dev/null || true)"
 # one.
 PRE_IDS=()
 NEW_IDS=()
+SKIPPED_IDS=()
 UNRESOLVED=0
 CHECKED=0
 SKIPPED_FOR_CAP=0
 for _id in "${FAILED_IDS[@]}"; do
     if [ "$CHECKED" -ge "$MAX_ATTRIBUTED" ]; then
         SKIPPED_FOR_CAP=$((SKIPPED_FOR_CAP + 1))
+        SKIPPED_IDS+=("$_id")
         continue
     fi
     CHECKED=$((CHECKED + 1))
@@ -228,6 +263,49 @@ for _id in "${FAILED_IDS[@]}"; do
     esac
 done
 
+# ORDER-DEPENDENT failures — a per-id re-run cannot see them.
+#
+# Every id above was re-run ALONE at the merge-base. A failure that appears only
+# when the whole suite runs together — test pollution, the class Gate 3's
+# three-clean-runs rule exists for — PASSES in isolation there, and is therefore
+# announced as NEW on this branch. That is the confidently-wrong answer this
+# script keeps meeting, reached from a fifth direction, and it is not rare: on
+# the 1.1 line, 14 `tests/unit` failures were reported as the branch's this way,
+# and every one of them fails identically on a pristine origin/1.1 checkout.
+#
+# Settled with ONE base-suite run over the same paths: an id failing in BOTH
+# runs is pre-existing, whatever the ordering does to it. Skipped when a run is
+# unresolved (that case blocks regardless) or when nothing was called new.
+if [ "${#NEW_IDS[@]}" -gt 0 ] && [ "$UNRESOLVED" -eq 0 ]; then
+    _BASE_REPORT=$(mktemp)
+    echo
+    echo "  Re-checking the ${#NEW_IDS[@]} new failure(s) against a FULL base run:"
+    echo "  a per-id re-run cannot reproduce order-dependent failures."
+    ( cd "$SCRATCH" && PYTHONPATH="$SCRATCH/python:$SCRATCH" \
+        bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q 2>&1 ) > "$_BASE_REPORT" || true
+    _BASE_FAILED=$(_extract_failed "$_BASE_REPORT")
+    _reclassified=0
+    _still_new=()
+    for _id in "${NEW_IDS[@]}"; do
+        if printf '%s\n' "$_BASE_FAILED" | grep -qxF -- "$_id"; then
+            PRE_IDS+=("$_id")
+            _reclassified=$((_reclassified + 1))
+        else
+            _still_new+=("$_id")
+        fi
+    done
+    if [ "${#_still_new[@]}" -gt 0 ]; then
+        NEW_IDS=("${_still_new[@]}")
+    else
+        NEW_IDS=()
+    fi
+    if [ "$_reclassified" -gt 0 ]; then
+        echo "  $_reclassified of them also fail at origin/$BASE when the suite runs"
+        echo "  together, so they are NOT this branch's."
+    fi
+    rm -f "$_BASE_REPORT"
+fi
+
 PRE_COUNT=${#PRE_IDS[@]}
 YOURS=${#NEW_IDS[@]}
 RESOLVED=$((PRE_COUNT + YOURS))
@@ -281,4 +359,49 @@ if [ "$SKIPPED_FOR_CAP" -gt 0 ]; then
 fi
 echo "──────────────────────────────────────────────────────────────────────"
 
-exit "$STATUS"
+# Block only on what this branch introduced.
+#
+# `exit "$STATUS"` made the attribution above informational: it blocked the
+# push even when every failure was pre-existing, so a branch based on a red line
+# could never be pushed at all — the situation #2139 was written to end. A
+# contributor cannot fix another line's failures from their branch, and telling
+# them to is how `--no-verify` becomes a habit. It also inverts this script's own
+# promise: it goes to real trouble to say WHOSE failures these are, then ignores
+# its own answer.
+if [ "$UNRESOLVED" -gt 0 ]; then
+    echo "  $UNRESOLVED failure(s) could not be checked against origin/$BASE, so"
+    echo "  they are treated as blocking rather than assumed pre-existing."
+    exit 1
+fi
+if [ "$YOURS" -gt 0 ]; then
+    echo "  Blocking: $YOURS failure(s) are new on this branch (origin/$BASE)."
+    exit 1
+fi
+# The cap's rationale is that the first N ids are "entirely representative"
+# because a systemic break produces hundreds of identical failures. A MIXED run
+# falsifies that, and the failure is silent: a test this branch ADDS can sort
+# past the cap, never be checked, and be allowed by omission. Measured with a
+# deliberately-failing probe test whose id sorted last — it was reported as
+# pre-existing by not being looked at. Screened cheaply rather than with
+# $SKIPPED_FOR_CAP more pytest starts: a failure in a file that does not exist
+# at the base is new here, whoever caused it.
+if [ "$SKIPPED_FOR_CAP" -gt 0 ]; then
+    _unchecked_new=0
+    for _id in "${SKIPPED_IDS[@]}"; do
+        _file="${_id%%::*}"
+        git cat-file -e "$MERGE_BASE:$_file" 2>/dev/null || _unchecked_new=$((_unchecked_new + 1))
+    done
+    if [ "$_unchecked_new" -gt 0 ]; then
+        echo "  Blocking: $_unchecked_new of the $SKIPPED_FOR_CAP unchecked"
+        echo "  failure(s) are in file(s) absent at origin/$BASE, so they are new"
+        echo "  on this branch. Raise MAX_ATTRIBUTED=$MAX_ATTRIBUTED to attribute"
+        echo "  them properly."
+        exit 1
+    fi
+    echo "  ($SKIPPED_FOR_CAP failure(s) went unchecked, beyond the cap of"
+    echo "  MAX_ATTRIBUTED=$MAX_ATTRIBUTED; their files all exist at origin/$BASE,"
+    echo "  so they are treated as pre-existing.)"
+fi
+echo "  All $PRE_COUNT checked failure(s) fail at origin/$BASE too — allowing the push."
+echo "  They are not this branch's to fix; they belong to origin/$BASE."
+exit 0

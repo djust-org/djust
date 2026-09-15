@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import scrub_host_git_state
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCTOR_SCRIPT = REPO_ROOT / "scripts" / "doctor.sh"
 
@@ -66,6 +68,11 @@ def _run_doctor(extra_env: dict[str, str] | None = None) -> subprocess.Completed
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    # doctor.sh resolves the repo via `git rev-parse --git-common-dir` /
+    # `--git-dir`, so an inherited GIT_DIR/GIT_INDEX_FILE (pre-commit exports
+    # the latter) changes what it inspects — the same leak class as the
+    # fixture-repo tests. See tests/git_env.py.
+    scrub_host_git_state(env)
     return subprocess.run(
         ["bash", str(DOCTOR_SCRIPT)],
         cwd=REPO_ROOT,

@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import scrub_host_git_state
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVER = REPO_ROOT / "scripts" / "run-with-venv-python.sh"
 
@@ -32,6 +34,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     # Don't let the host user's global git config leak in.
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    scrub_host_git_state(env)
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -46,6 +49,7 @@ def _run_resolver(
     cwd: Path, *args: str, extra_path: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    scrub_host_git_state(env)
     if extra_path is not None:
         env["PATH"] = extra_path
     return subprocess.run(
