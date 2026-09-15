@@ -243,22 +243,30 @@ describe('Tick/async patch version sequencing (#2829)', () => {
 
 describe('client-owned frame flags are stripped on every inbound transport (#2829)', () => {
 
-    it('each transport calls the shared strip (caller-set pin, derived not restated)', () => {
-        // `_deferred` is a client-owned control flag: if a transport hands a
-        // wire-supplied copy to handleServerResponse, the version check can be
-        // suppressed on that path. The shared helper makes the behaviour
-        // identical wherever it is called, so what needs pinning is the CALLER
-        // SET — a future transport that omits the call re-opens the hole.
+    it('each inbound transport calls the shared strip exactly once (caller-set pin)', () => {
+        // `_deferred` / `_versionConsumed` are client-owned control flags: if a
+        // transport hands a wire-supplied copy to handleServerResponse, the
+        // version check can be suppressed on that path. The helper makes the
+        // behaviour identical wherever it is called, so what needs pinning is
+        // the CALLER SET — a transport that omits the call re-opens the hole.
         //
-        // Derived from the built bundle rather than restated as a magic number
-        // (canon #2727), and asserted as exact equality so both an omission AND
-        // an unexplained extra call site fail here.
-        const definition = (clientCode.match(/function stripClientOwnedFrameFlags\(/g) || []).length;
-        const calls = (clientCode.match(/stripClientOwnedFrameFlags\(data\);/g) || []).length;
-        expect(definition, 'one definition').toBe(1);
-        expect(
-            calls,
-            'exactly one call per inbound transport: websocket, sse, http fallback',
-        ).toBe(3);
+        // Asserted against the SOURCES, one enumerated file at a time, not the
+        // built bundle: the coverage run swaps in an instrumented bundle
+        // (`scripts/prepare-js-coverage.mjs`) in which a bundle-text occurrence
+        // count is meaningless. Naming the files also makes an omission report
+        // WHICH transport lost the strip, and makes a legitimate fourth
+        // transport an explicit edit here rather than a confusing count bump.
+        const transports = ['03-websocket.js', '03b-sse.js', '11-event-handler.js'];
+        for (const file of transports) {
+            const src = fs.readFileSync(`./python/djust/static/djust/src/${file}`, 'utf-8');
+            const calls = (src.match(/stripClientOwnedFrameFlags\(data\);/g) || []).length;
+            expect(calls, `${file} must call stripClientOwnedFrameFlags(data) exactly once`).toBe(1);
+        }
+
+        // ...and the helper has exactly one definition, so the calls cannot
+        // resolve to per-transport copies that drift apart (#1646).
+        const defSrc = fs.readFileSync('./python/djust/static/djust/src/02-response-handler.js', 'utf-8');
+        const defs = (defSrc.match(/function stripClientOwnedFrameFlags\(/g) || []).length;
+        expect(defs, 'one definition in the centralized response handler').toBe(1);
     });
 });
