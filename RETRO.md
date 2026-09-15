@@ -380,6 +380,77 @@ issue or be explicitly closed with a reason.
 | 338 | `dj-shortcut` / `dj-click-away` keep serving the OLD handler closure when the attribute VALUE changes on a surviving element | Retro v1.2.0-6 (PR #2843) | #2845 | Open | Same drift class #2832 retired for REMOVAL; the bind loops capture the value and skip marked elements (#1646) |
 | 339 | `_dispatch_single_event` still resolves `_skip_render` vs `_force_full_html` the pre-#2834 way — force dropped and the flag leaked | Retro v1.2.0-6 (PR #2846) | #2847 | Open | Fourth render turn the issue never enumerated; also makes `_resolve_skip_render`'s "every render turn … cannot drift" docstring false as written |
 | 340 | Enforce the review-artifact requirement mechanically (a Code Review that never reaches the PR) | Retro v1.2.0-6 (PRs #2837, #2838) | — | OUT-OF-REPO | The gate belongs in pipeline-skills' `pipeline-gates.sh` (repo `johnrtipton/pipeline-skills`), which already implements `changelog-boundary`/`docs-only`/`premerge`; upstream issue not yet filed (no verified access from here). In-repo mitigation is live: the Stage 11 rule in CLAUDE.md's v1.2.0-6 section |
+| 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
+| 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
+
+## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
+
+**Date**: 2026-09-15
+**Scope**: A **backfill**, not a normal milestone retro. Fourteen drain buckets reached `ROADMAP.md` completion with every issue closed but **no `RETRO.md` entry and no `CLAUDE.md` canonicalization**. This entry records the gap, what the surviving evidence supports, and — explicitly — what it does not.
+
+**Why this is one entry and not fourteen.** A retro's primary input is the per-PR retro. Across the 63 PRs that closed these 87 issues, only **20 have a Retrospective comment**; the other **43** do not. There is therefore no uniform evidence base per bucket, and writing fourteen full entries (each with What We Learned, Review Stats, and per-PR numbers the template asks for) would have meant inventing the numbers. Findings below are limited to what the surviving review/retro text actually shows.
+
+### The buckets
+
+| bucket | goal | issues | closing PRs | with retro | gate violations |
+|---|---|---|---|---|---|
+| `v1.2.0-1` | Measure (drain bucket → ships in 1.2.0) | 8 | 9 | 4 | 5 |
+| `v1.2.0-2` | Resolve like Django (drain bucket → ships in | 5 | 3 | 2 | 1 |
+| `v1.2.0-3` | Plain-Django completeness (drain bucket → sh | 8 | 4 | 0 | 4 |
+| `v1.2.0-4` | Install and positioning (drain bucket → ship | 4 | 4 | 0 | 4 |
+| `v1.2.0-5` | the discussion #2437 cluster: getting-starte | 4 | 3 | 0 | 3 |
+| `v1.1.1-7` | filter-layer semantics, and one security fin | 6 | 3 | 2 | 1 |
+| `v1.1.1-6` | the v1.1.1-5 chain links (drain bucket → shi | 4 | 4 | 1 | 3 |
+| `v1.1.1-5` | Django filter-parity divergences surfaced by | 9 | 3 | 0 | 3 |
+| `v1.1.1-4` | the v1.1.1-3 chain links (drain bucket → shi | 7 | 6 | 0 | 6 |
+| `v1.1.1-3` | the #2214 Decimal follow-ups (drain bucket → | 6 | 5 | 0 | 5 |
+| `v1.1.1-1` | post-1.1.0 process drain: merge-gate enforce | 7 | 4 | 3 | 1 |
+| `v1.1.0-14` | post-13 drain: form-validation wire contract | 11 | 7 | 0 | 7 |
+| `v1.1.0-10` | brainstorm shortlist drain: silent-failure h | 6 | 6 | 6 | 0 |
+| `v1.1.0-9` | regroup review follow-ups: template-engine a | 2 | 2 | 2 | 0 |
+| **total** | | **87** | **63** | **20** | **43** |
+
+Every issue in every bucket above is CLOSED (verified via `gh issue list --state all`). PR attribution comes from each issue's `closedByPullRequestsReferences`, not from issue mentions in PR bodies — mention-matching over-collects badly (it attributed 128 PRs to `v1.2.0-2`, which has 3).
+
+### What We Learned
+
+**1. "A fix that reproduces the bug it exists to remove" is the dominant recurrence — and it is the same failure the v1.2.0-6 retro found in isolation.**
+The phrase appears verbatim in `#2147`'s review: *"🔴s were this fix reproducing the bug it exists to remove"*. The same bucket's `#2146` review says the fix *"repeated the 🔴's own class"*. Both are `v1.1.0-14`, seven weeks before `v1.2.0-6`'s four-round saga where every round's fix introduced the next round's defect. This is not a one-milestone accident; it is the repo's steady-state failure mode, and it is the #1646 parallel-path-drift class seen from the repair side rather than the code side.
+
+**Action taken**: Closed — canonicalized as rule 1 of `CLAUDE.md`'s "Process canonicalizations from the v1.2.0-6 retro arc" (shared-cache/caller-invariant enumeration before the first edit), which generalizes the same lesson from a different bucket.
+
+**2. False or stale claims in durable artifacts are systemic and long-standing — not a v1.2.0-6 quirk.**
+Five instances across three of these buckets, each caught by a human or reviewer reading the artifact against the code, none by a check: `#2546`, whose review recorded that the first version "shipped a false categorical claim of exactly the class this row exists to kill"; `#2534`'s PR body claims `TestPlainBackendMatchesDjango` has "14 shapes" where `CASES` has 19; `#2554`'s CHANGELOG cites "two new cases in `TestCustomFilters` of the #1121 file" and **no such class exists**; `#2573`'s CHANGELOG and `__init__.py` docstring assert an import-ordering fact that does not hold; `#2607` leaves `docs/TEMPLATE_BACKEND.md:260` reporting `47.09% (493 of 1047)` after a behaviour change that moved it. `#2838`'s false `dj-key` premise — which *caused* a regression — belongs to the same family. The repo checks doc snippets and documented methods; it checks neither changelog fragments nor PR bodies.
+
+**Action taken**: Open — tracked in Action Tracker #342 (GitHub #2849).
+
+**3. The retro step is skippable in practice, and the gap recurred after being fixed once.**
+`#2140` was filed and closed as *"Backfill milestone retros for v1.1.0-12 and #2094–#2128"* — a **previous** backfill of the same kind, marked ✅ in the ROADMAP. It did not hold: fourteen further buckets accumulated the same gap. `/pipeline-retro` is invoked manually, and `/pipeline-run`'s housekeeping only *reminds*; nothing ties "bucket is complete" to "bucket has a retro". Backfilling afterwards is strictly harder, because the per-PR input has decayed — a third of these PRs' retro evidence is simply gone.
+
+**Action taken**: Open — tracked in Action Tracker #341 (GitHub #2848).
+
+### Insights
+
+- **The backfill's own difficulty is the strongest argument for the gate.** Reconstructing provenance for 14 buckets took a reliable issue→PR attribution method (`closedByPullRequestsReferences`), a three-format section parser, and 60 PR fetches — and still could not recover per-bucket Review Stats. At retro time, with the per-PR retros in hand, all of it is free.
+- **Review comments are the durable artifact; retros decay.** 51 of 60 PRs carry review/finding text while only 19 carry a retro. Whatever a future backfill needs, the review comment is what survives — a further argument for the v1.2.0-6 rule that reviews must be posted to the PR.
+- **A pattern confirmed across buckets is worth more than a pattern asserted once.** The v1.2.0-6 retro inferred the repair-loop problem from a single PR; these buckets show the same sentence written independently seven weeks earlier, which is what turns a hypothesis into a rule.
+- **Documentation-only PRs behave very differently.** `#1469` (a docs-only canon PR) closed with `0 / 0 / 1` findings, and several buckets contain purely docs/CI rows. Bucket-level stats that average those with engine PRs would be misleading, which is another reason not to fabricate the missing numbers.
+
+### Review Stats
+
+**Not reconstructible for these buckets, and deliberately not estimated.** A per-Bucket table needs tests-added, 🔴/🟡 counts, CI failures, and findings-by-pattern-class — all of which live in per-PR retros, and 43 of the 63 PRs have none. The per-bucket issue and PR counts in the table above are measured; nothing beyond that is claimed. Reconstructing the rest would have produced numbers with no source.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: none new from this backfill — its findings resolve to rules already written in the v1.2.0-6 section (rules 1 and 2) or to the two tracker rows below.
+**Pipeline template**: none.
+**Skills**: none from this backfill (the v1.2.0-6 retro's `pipeline-run` edit covers the worktree lessons).
+**GitHub issues filed by this backfill**: #2848 (retro-coverage gate), #2849 (claim checks).
+
+### Open Items
+
+- [ ] A mechanical gate tying a completed ROADMAP bucket to a `RETRO.md` entry — tracked in Action Tracker #341 (GitHub #2848)
+- [ ] Mechanical checks for false/stale claims in changelog fragments and PR bodies — tracked in Action Tracker #342 (GitHub #2849)
 
 ## v1.2.0-6 — transport fidelity, wire versioning, and check coverage (PRs #2835–#2846)
 
