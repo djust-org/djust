@@ -34,6 +34,11 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+function _unmarkHandlerBound(element, type) {
+    const set = _boundHandlers.get(element);
+    if (set) set.delete(type);
+}
+
 // ============================================================================
 // Scoped Listener Helpers (window/document event binding)
 // ============================================================================
@@ -64,24 +69,147 @@ function _cleanupScopedListeners(element) {
  * @param {string} eventType - DOM event type (e.g. 'keydown')
  * @param {Function} handler - Event handler function
  * @param {boolean} [capture=false] - Use capture phase
+ * @param {string} attrName - The directive attribute that declares this
+ *   listener (e.g. 'dj-shortcut'). The orphan sweep evicts per attribute
+ *   (#2832), so it must know what declared each listener.
+ * @param {string} boundType - Key used in the _boundHandlers marker map
+ *   (e.g. 'shortcut'), so eviction can un-mark the element and a later
+ *   re-declaration of the attribute can re-bind.
  */
-function _addScopedListener(element, target, eventType, handler, capture) {
+function _addScopedListener(element, target, eventType, handler, capture, attrName, boundType) {
     if (!element._djustScopedListeners) element._djustScopedListeners = [];
     const useCapture = capture || false;
-    element._djustScopedListeners.push({ target, eventType, handler, capture: useCapture });
+    element._djustScopedListeners.push({
+        target, eventType, handler, capture: useCapture,
+        attrName: attrName, boundType: boundType,
+    });
     target.addEventListener(eventType, handler, useCapture);
     _scopedListenerElements.add(element);
 }
 
+// ============================================================================
+// Shared scoped-listener eviction predicate (#2832)
+// ============================================================================
+
+// LiveView roots governing scoped-listener eviction. Recomputed by
+// _refreshScopedGovernorRoots() — called from _scanScopedElements(), which
+// bindLiveViewEvents() runs on EVERY bind — so every consumer below (the
+// registry eviction, the orphan sweep) reads a root set fresh from the
+// current DOM. Held at module level because the eviction predicate must be
+// reachable from BOTH scoped-listener paths: isGoverned() used to be a
+// closure over this set inside _scanScopedElements(), and the orphan sweep
+// could not share it — so it kept a stale copy of the pre-#2108 predicate
+// and dj-shortcut / dj-click-away kept firing after the template stopped
+// declaring them (#2832). One predicate, implemented once.
+let _scopedGovernorRoots = [];
+
 /**
- * Sweep all tracked scoped-listener elements and remove listeners for any
- * elements that are no longer in the DOM. Called before binding new scoped
- * listeners to prevent accumulation from conditional rendering.
+ * Recompute the module-level LiveView-root set used by the shared eviction
+ * predicate. EVERY LiveView root, not just the first (a page can carry more
+ * than one — {% live_render %} children, sticky views; picking only the
+ * first meant a second root's elements were never governed — #2110).
+ *
+ * Keep only the OUTERMOST roots: containment is transitive, so a nested
+ * root's subtree is already covered by its ancestor, and querySelectorAll
+ * returns document order in which an ancestor always precedes its
+ * descendants — a single pass comparing against the last kept root suffices.
+ * This MUST stay in lockstep with the scan set in _scanScopedElements():
+ * when the sweep's governed set and the scan's disagreed, an entry outside
+ * the scanned root was neither refreshed nor evicted — exactly the #2110 bug.
+ */
+function _refreshScopedGovernorRoots() {
+    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
+    const roots = [];
+    allRoots.forEach(function(r) {
+        if (roots.length && roots[roots.length - 1].contains(r)) return;
+        roots.push(r);
+    });
+    _scopedGovernorRoots = roots;
+}
+
+/** Is `el` one of the roots, or inside one? (No roots ⇒ document fallback.) */
+function _isGovernedByScopedRoots(el) {
+    if (_scopedGovernorRoots.length === 0) return true;
+    for (let i = 0; i < _scopedGovernorRoots.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const r = _scopedGovernorRoots[i];
+        if (r === el || r.contains(el)) return true;
+    }
+    return false;
+}
+
+/**
+ * THE eviction predicate for scoped listeners (#2832) — the single
+ * implementation behind BOTH paths:
+ *
+ *   1. the _scopedRegistry path (dj-window-* / dj-document-*), where
+ *      _scanScopedElements() drops registry entries, and
+ *   2. the _sweepOrphanedScopedListeners() path (dj-shortcut /
+ *      dj-click-away), which removes real addEventListener handles.
+ *
+ * An entry is stale when the element left the DOM, the server dropped the
+ * declaring attribute, or the element is no longer governed by any root.
+ * The middle case matters because morphdom PATCHES a surviving element's
+ * attributes rather than replacing the node — a replaced element is evicted
+ * by the contains() check, but one that is merely mutated would otherwise
+ * keep dispatching a directive the template no longer declares (#2108).
+ * The last case keeps the sweep symmetric with the scan (#2110): an entry
+ * the scan can no longer reach must not keep firing a value nothing will
+ * refresh. Both paths used to carry their own copy of this predicate and
+ * only the registry path got the #2108 fix (#2832).
+ */
+function _scopedListenerIsStale(element, attrName) {
+    return (
+        !document.contains(element) ||
+        element.getAttribute(attrName) === null ||
+        !_isGovernedByScopedRoots(element)
+    );
+}
+
+/**
+ * Sweep all tracked scoped-listener elements and evict every listener whose
+ * declaring attribute is stale — judged by the SAME predicate the registry
+ * path uses (#2832), so dj-shortcut / dj-click-away cannot keep firing after
+ * the template stops declaring them on a surviving element.
+ *
+ * Eviction is per declaring attribute: one element may carry several scoped
+ * directives (e.g. dj-shortcut + dj-click-away) and only the ones whose
+ * attribute the template dropped must be removed. Evicting also un-marks
+ * the _boundHandlers entry — the other half of this bug: a surviving
+ * element keeps its marker, so the re-scan would otherwise never re-bind
+ * even after the attribute returns.
+ *
+ * Call ordering: bindLiveViewEvents() must run this AFTER the
+ * dj-click-away / dj-shortcut bind loops, not before. The bind loops are
+ * document-wide, so a sweep that ran first would evict an entry (e.g. an
+ * ungoverned element) that the loops immediately re-bind — eviction that is
+ * undone in the same tick is decoration, not enforcement. Sweeping last
+ * means every attached listener is judged at a point where nothing re-adds
+ * it until the next bind.
  */
 function _sweepOrphanedScopedListeners() {
     for (const element of _scopedListenerElements) {
-        if (!document.contains(element)) {
-            _cleanupScopedListeners(element);
+        const listeners = element._djustScopedListeners;
+        if (!listeners || listeners.length === 0) {
+            _scopedListenerElements.delete(element);
+            continue;
+        }
+        const survivors = [];
+        for (let i = 0; i < listeners.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const entry = listeners[i];
+            if (_scopedListenerIsStale(element, entry.attrName)) {
+                entry.target.removeEventListener(entry.eventType, entry.handler, entry.capture || false);
+                if (entry.boundType) _unmarkHandlerBound(element, entry.boundType);
+            } else {
+                survivors.push(entry);
+            }
+        }
+        if (survivors.length === 0) {
+            element._djustScopedListeners = [];
+            _scopedListenerElements.delete(element);
+        } else if (survivors.length !== listeners.length) {
+            element._djustScopedListeners = survivors;
         }
     }
 }
@@ -141,58 +269,20 @@ let _scopedDelegationInstalled = false;
 function _scanScopedElements() {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
-    // EVERY LiveView root, not just the first. A page can carry more than one
-    // (`{% live_render %}` children, sticky views), and picking only
-    // querySelector's first match meant a second root's scoped attrs never
-    // registered at all — and, once #2108 added refresh-on-rescan, that a root
-    // which stopped being the first match kept dispatching its original
-    // handlers forever (#2110).
-    //
-    // The sweep and the scan below MUST agree on this set. When they disagreed
-    // — sweep document-wide, scan root-scoped — an entry outside the scanned
-    // root was neither refreshed nor evicted, which is exactly the bug.
-    //
-    // Keep only the OUTERMOST roots. Containment is transitive, so a nested
-    // root's subtree is already covered by its ancestor: the set is exactly
-    // equivalent for both the scan and isGoverned, but scanning every root
-    // would re-walk each nested subtree once per level — cost grows with
-    // nesting DEPTH (measured ~+20% at depth 4, ~+300% at depth 50, vs ~+1%
-    // once filtered). querySelectorAll returns document order, in which an
-    // ancestor always precedes its descendants, so a single pass comparing
-    // against the last kept root is sufficient.
-    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
-    const roots = [];
-    allRoots.forEach(function(r) {
-        if (roots.length && roots[roots.length - 1].contains(r)) return;
-        roots.push(r);
-    });
+    // Refresh the shared governed-roots set first: the registry eviction
+    // below and the orphan sweep both judge staleness against it, and the
+    // set must describe the CURRENT DOM on every bind. Root-selection rules
+    // (every root, outermost only, MUST match the sweep's set) live on
+    // _refreshScopedGovernorRoots (#2110, #2832).
+    _refreshScopedGovernorRoots();
 
-    /** Is `el` one of the roots, or inside one? (No roots ⇒ document fallback.) */
-    function isGoverned(el) {
-        if (roots.length === 0) return true;
-        for (let i = 0; i < roots.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            const r = roots[i];
-            if (r === el || r.contains(el)) return true;
-        }
-        return false;
-    }
-
-    // Clear stale entries: the element left the DOM, the server dropped the
-    // attribute, or the element is no longer governed by any root. The middle
-    // case matters because morphdom PATCHES a surviving element's attributes
-    // rather than replacing the node — a replaced element is evicted by the
-    // contains() check, but one that is merely mutated would otherwise keep
-    // dispatching a directive the template no longer declares (#2108). The last
-    // case keeps the sweep symmetric with the scan (#2110): an entry the scan
-    // can no longer reach must not keep firing a value nothing will refresh.
+    // Clear stale entries through the SAME predicate the orphan sweep uses
+    // (#2832): the element left the DOM, the server dropped the attribute,
+    // or the element is no longer governed by any root. The predicate's
+    // comment carries the per-condition reasoning (#2108 / #2110).
     _scopedRegistry.forEach(function(entries, _key) {
         entries.forEach(function(entry) {
-            if (
-                !document.contains(entry.element) ||
-                entry.element.getAttribute(entry.attrName) === null ||
-                !isGoverned(entry.element)
-            ) {
+            if (_scopedListenerIsStale(entry.element, entry.attrName)) {
                 entries.delete(entry);
             }
         });
@@ -268,7 +358,7 @@ function _scanScopedElements() {
         }
     }
 
-    if (roots.length === 0) {
+    if (_scopedGovernorRoots.length === 0) {
         // No LiveView root on the page — fall back to the whole document.
         // `document` itself has no .attributes (scanning it would throw), and
         // its querySelectorAll('*') already covers <html>/<body>.
@@ -278,7 +368,7 @@ function _scanScopedElements() {
 
     // Each outermost root plus its descendants. Nested roots need no separate
     // visit — they are already inside one of these subtrees.
-    roots.forEach(function(r) {
+    _scopedGovernorRoots.forEach(function(r) {
         scanElement(r);
         r.querySelectorAll('*').forEach(scanElement);
     });
@@ -1360,10 +1450,6 @@ function bindLiveViewEvents(scope) {
     // content would silently never bind (#1996).
     _scanScopedElements();
 
-    // Sweep orphaned scoped listeners (click-away, shortcut) for elements
-    // removed from DOM by conditional rendering
-    _sweepOrphanedScopedListeners();
-
     // --- Feature 2: dj-click-away ---
     document.querySelectorAll('[dj-click-away]').forEach(element => {
         if (_isHandlerBound(element, 'click-away')) return;
@@ -1385,7 +1471,7 @@ function bindLiveViewEvents(scope) {
         };
 
         // Use capture phase so stopPropagation inside doesn't prevent detection
-        _addScopedListener(element, document, 'click', clickAwayHandler, true);
+        _addScopedListener(element, document, 'click', clickAwayHandler, true, 'dj-click-away', 'click-away');
     });
 
     // --- Feature 3: dj-shortcut ---
@@ -1461,8 +1547,16 @@ function bindLiveViewEvents(scope) {
             }
         };
 
-        _addScopedListener(element, document, 'keydown', shortcutHandler, false);
+        _addScopedListener(element, document, 'keydown', shortcutHandler, false, 'dj-shortcut', 'shortcut');
     });
+
+    // Sweep orphaned scoped listeners (click-away, shortcut) AFTER the bind
+    // loops above: eviction judged by the shared predicate (#2832) must not
+    // be immediately undone by a bind loop re-attaching what the sweep just
+    // removed — sweep-last means every attached listener is judged at a
+    // point where nothing re-adds it until the next bind.
+    _sweepOrphanedScopedListeners();
+
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();
