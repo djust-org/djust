@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-09-15
+
+Security-only patch release on the `1.1` maintenance branch, closing an
+authorization bypass on the HTTP POST event transport. `post()` never consulted
+the three authorization layers every other transport applies, so an event could
+be dispatched to a caller the GET and WebSocket/SSE paths would have refused.
+Present in every release from 1.0.0 through 1.1.2.
+
+### Security
+
+- **The HTTP POST event transport now enforces the same authorization as every other transport (#2852).** `post()` applied only the event-name format check and the `@event_handler` decorator policy. The three authorization layers that `get()` and the WebSocket/SSE event paths apply — view-level `login_required` / `permission_required`, handler-level `@permission_required`, and the ADR-017 object-level check — were not consulted, so an event could be dispatched to a caller the other transports would refuse. All three now run before dispatch, via the same `check_view_auth` / `check_handler_permission` / `enforce_object_permission` entry points the other paths use.
+
+### Fixed
+
+- **A malformed request body no longer masks its own cause.** `post()`'s `except` block referenced `event_name` and `params`, which are assigned inside the `try`, so a failure before their assignment (a body that is not valid JSON is the easy one) raised `UnboundLocalError` from the error path itself — reporting a controlled failure as an unexplained 500 and never logging the real exception. Both names are now initialised before the `try`.
+
 ## [1.1.2] - 2026-08-30
 
 Security-only patch release on the `1.1` maintenance branch, closing one XSS
