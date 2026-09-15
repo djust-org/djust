@@ -48,10 +48,25 @@ import inspect
 import os
 import re
 import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 
 from django.test import RequestFactory
+
+
+class NoHandlerFoundError(Exception):
+    """Raised by :meth:`LiveViewTestClient.send_event` when no handler exists
+    for the requested event name (#2823).
+
+    Matches the production WebSocket consumer's behavior: a missing handler
+    is an error, not a silent no-op — so a typo'd or renamed event name in a
+    test fails loudly and immediately, instead of returning a
+    ``{"success": False, ...}`` envelope nothing inspects. Pass
+    ``raise_on_missing=False`` to :meth:`~LiveViewTestClient.send_event` to
+    opt back into the envelope-return behavior (e.g. for a test that
+    deliberately probes the error-envelope shape).
+    """
 
 
 class LiveViewTestClient:
@@ -92,15 +107,53 @@ class LiveViewTestClient:
         self.events: List[Dict[str, Any]] = []
         self.patches: List[Any] = []
         self._mounted = False
+        # Which branch the last mount() call took — set by mount(), read by
+        # tests that want to assert which path was exercised (#2821). None
+        # until mount() has been called at least once.
+        self.via_websocket: Optional[bool] = None
+        # Stable per-test-client synthetic WS session id (#2821). There's no
+        # real transport for the test client to proxy a session id from, but
+        # the id must stay IDENTICAL across repeated mount() calls on the same
+        # client — a same-client remount SHOULD reuse the cache key — and
+        # UNIQUE across different clients, because a reconnect is a new
+        # connection with a new id in production (`websocket.py` uses
+        # ``str(uuid.uuid4())`` per connection).
+        #
+        # uuid4 rather than ``id(self)``: CPython recycles ``id()``, so a
+        # destroyed client's id is handed to a new client, which then collides
+        # on the VDOM cache key (``mixins/rust_bridge.py:354``) against whatever
+        # the process-wide state backend still holds (#2821 review).
+        self._synthetic_ws_session_id = f"testclient-{uuid4().hex}"
 
-    def mount(self, **params: Any) -> "LiveViewTestClient":
+    def mount(self, via_websocket: bool = True, **params: Any) -> "LiveViewTestClient":
         """
         Initialize the view with optional params.
 
-        This simulates the WebSocket mount process, calling the view's mount()
-        method with a mock request.
+        By default (``via_websocket=True``) this simulates the WebSocket/SSE
+        mount process: the view instance is stamped with the same identity
+        attributes the real mount path sets on a live connection —
+        ``_websocket_session_id``, ``_websocket_path``,
+        ``_websocket_query_string``, ``_djust_mount_view_path`` — mirroring
+        ``ViewRuntime.dispatch_mount`` (``runtime.py:2033-2038``). This makes
+        WebSocket-only setup code gated on
+        ``hasattr(self, "_websocket_session_id")`` (the framework's own
+        pattern — see the ``#1612`` guard in ``presence.py``) actually run
+        under test (#2821).
+
+        Pass ``via_websocket=False`` to instead exercise the HTTP-prerender
+        branch: no WS identity attributes are set, matching a cold HTTP GET
+        before any WebSocket connects. Use this when a test specifically
+        wants to cover prerender-only behavior.
+
+        Which branch was taken is recorded as ``self.via_websocket`` on the
+        client (not on the view instance, so it never leaks into template
+        context / ``get_state()``) — a test can assert it explicitly instead
+        of the branch being implied.
 
         Args:
+            via_websocket: If True (default), stamp WS-mount identity
+                attributes on the view instance before calling its
+                ``mount()``. If False, mount as a bare HTTP-prerender view.
             **params: Parameters to pass to mount() (like URL kwargs)
 
         Returns:
@@ -108,6 +161,7 @@ class LiveViewTestClient:
 
         Example:
             client.mount(item_id=123, mode='edit')
+            client.mount(via_websocket=False)  # HTTP-prerender branch only
         """
         # Create the view instance
         self.view_instance = self.view_class()
@@ -134,6 +188,19 @@ class LiveViewTestClient:
         # many LiveViews access self.request in get_context_data etc.)
         self.view_instance.request = request
 
+        if via_websocket:
+            # Mirror ViewRuntime.dispatch_mount's identity stamps
+            # (runtime.py:2033-2038) BEFORE calling mount() — same order as
+            # production, so mount() itself can observe them (#2821).
+            self.view_instance._djust_mount_view_path = (
+                f"{self.view_class.__module__}.{self.view_class.__qualname__}"
+            )
+            self.view_instance._websocket_session_id = self._synthetic_ws_session_id
+            self.view_instance._websocket_path = request.path
+            self.view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+
+        self.via_websocket = via_websocket
+
         # Initialize temporary assigns if the method exists
         if hasattr(self.view_instance, "_initialize_temporary_assigns"):
             self.view_instance._initialize_temporary_assigns()
@@ -146,13 +213,16 @@ class LiveViewTestClient:
             {
                 "type": "mount",
                 "params": params,
+                "via_websocket": via_websocket,
                 "timestamp": time.time(),
             }
         )
 
         return self
 
-    def send_event(self, event_name: str, **params: Any) -> Dict[str, Any]:
+    def send_event(
+        self, event_name: str, raise_on_missing: bool = True, **params: Any
+    ) -> Dict[str, Any]:
         """
         Send an event and return the result.
 
@@ -161,6 +231,14 @@ class LiveViewTestClient:
 
         Args:
             event_name: Name of the event handler method
+            raise_on_missing: If True (default), raise
+                :class:`NoHandlerFoundError` when no handler exists for
+                ``event_name`` — matches the production WebSocket consumer,
+                where a missing handler is an error frame, not a silent
+                no-op (#2823). Pass False to get the old
+                ``{"success": False, ...}`` envelope-return behavior, e.g.
+                for a test that deliberately probes the error-envelope
+                shape.
             **params: Parameters to pass to the handler
 
         Returns:
@@ -173,10 +251,20 @@ class LiveViewTestClient:
 
         Raises:
             RuntimeError: If view not mounted
+            NoHandlerFoundError: If no handler is found for ``event_name``
+                and ``raise_on_missing`` is True (the default).
 
         Example:
             result = client.send_event('search', query='test', page=1)
             assert result['success']
+
+            # A typo'd/renamed handler raises by default:
+            with pytest.raises(NoHandlerFoundError):
+                client.send_event('serach')
+
+            # Opt back into the envelope to inspect the error shape:
+            result = client.send_event('serach', raise_on_missing=False)
+            assert result['success'] is False
         """
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
@@ -187,9 +275,14 @@ class LiveViewTestClient:
         # Get the handler
         handler = getattr(self.view_instance, event_name, None)
         if not handler or not callable(handler):
+            from .websocket_utils import _format_handler_not_found_error
+
+            error_msg = _format_handler_not_found_error(self.view_instance, event_name)
+            if raise_on_missing:
+                raise NoHandlerFoundError(error_msg)
             return {
                 "success": False,
-                "error": f"No handler found for event: {event_name}",
+                "error": error_msg,
                 "state_before": state_before,
                 "state_after": state_before,
                 "duration_ms": 0,
@@ -379,6 +472,17 @@ class LiveViewTestClient:
         if session is not None:
             request.session = session
         instance.request = request
+        # Stamp the same WS-mount identity attributes mount() does, so this
+        # really is the "WebSocket-mount-shaped instance" its callers assume
+        # (#2821 review). Without them the ws side of
+        # ``assert_http_ws_djid_parity`` rendered through the HTTP cache branch
+        # and could never catch a WS-branch dj-id drift.
+        instance._djust_mount_view_path = (
+            f"{self.view_class.__module__}.{self.view_class.__qualname__}"
+        )
+        instance._websocket_session_id = f"testclient-{uuid4().hex}"
+        instance._websocket_path = request.path
+        instance._websocket_query_string = request.META.get("QUERY_STRING", "")
         if hasattr(instance, "_initialize_temporary_assigns"):
             instance._initialize_temporary_assigns()
         instance.mount(request, **mount_kwargs)
