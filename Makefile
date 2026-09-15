@@ -759,6 +759,16 @@ endif
 		echo "Run: make version VERSION=$(VERSION)"; \
 		exit 1; \
 	fi
+	@# Verify the target version has a CHANGELOG section BEFORE tagging (#2854).
+	@# The [Unreleased] -> [$(VERSION)] rename is a manual step, and v1.1.3 was
+	@# tagged + pushed to PyPI with no section and its fragment still unfolded.
+	@# The pre-commit hook cannot catch this: at the version-bump commit the
+	@# v$(VERSION) tag does not exist yet, so only the release path knows the
+	@# target and runs at the point the defect is introduced.
+	@if ! grep -q "^## \[$(VERSION)\]" CHANGELOG.md; then \
+		echo "$(RED)ERROR: CHANGELOG.md has no '## [$(VERSION)]' section. Fold changelog.d/ fragments, rename '[Unreleased]' -> '[$(VERSION)]', commit, then re-run make release (v1.1.3 shipped without a section — #2854).$(NC)"; \
+		exit 1; \
+	fi
 	@# Verify lockfile self-entries are in sync (closes #1498)
 	@$(PYTHON) scripts/check-lockfile-versions.py || \
 		{ echo "$(RED)ERROR: lockfile self-entries stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
