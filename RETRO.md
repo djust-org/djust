@@ -382,6 +382,9 @@ issue or be explicitly closed with a reason.
 | 340 | Enforce the review-artifact requirement mechanically (a Code Review that never reaches the PR) | Retro v1.2.0-6 (PRs #2837, #2838) | — | OUT-OF-REPO | The gate belongs in pipeline-skills' `pipeline-gates.sh` (repo `johnrtipton/pipeline-skills`), which already implements `changelog-boundary`/`docs-only`/`premerge`; upstream issue not yet filed (no verified access from here). In-repo mitigation is live: the Stage 11 rule in CLAUDE.md's v1.2.0-6 section |
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
+| 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Open | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: —  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
+| 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -518,6 +521,146 @@ Three worktrees ran concurrently and did progress in parallel — but the accoun
 - [ ] `dj-shortcut`/`dj-click-away` serve the old handler closure on value change — tracked in Action Tracker #338 (GitHub #2845)
 - [ ] `_dispatch_single_event` resolves `_skip_render`/`_force_full_html` the pre-#2834 way — tracked in Action Tracker #339 (GitHub #2847)
 - [ ] Mechanical enforcement of the review-artifact rule — tracked in Action Tracker #340 (OUT-OF-REPO: pipeline-skills)
+
+## v1.2.0-5 — the discussion #2437 cluster: getting-started is broken (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 4 issues · 3 closing PR(s) · 0 of 3 PRs carry a per-PR retro
+(**3 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.2.0-4 — Install and positioning (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 4 issues · 4 closing PR(s) · 0 of 4 PRs carry a per-PR retro
+(**4 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.2.0-3 — Plain-Django completeness (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 8 issues · 4 closing PR(s) · 0 of 4 PRs carry a per-PR retro
+(**4 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.2.0-2 — Resolve like Django (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 5 issues · 3 closing PR(s) · 2 of 3 PRs carry a per-PR retro
+(**1 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.2.0-1 — Measure (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 8 issues · 9 closing PR(s) · 4 of 9 PRs carry a per-PR retro
+(**5 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-7 — filter-layer semantics, and one security finding (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 6 issues · 3 closing PR(s) · 2 of 3 PRs carry a per-PR retro
+(**1 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-6 — the v1.1.1-5 chain links (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 4 issues · 4 closing PR(s) · 1 of 4 PRs carry a per-PR retro
+(**3 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-5 — Django filter-parity divergences surfaced by the #2250 sweep (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 9 issues · 3 closing PR(s) · 0 of 3 PRs carry a per-PR retro
+(**3 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-4 — the v1.1.1-3 chain links (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 7 issues · 6 closing PR(s) · 0 of 6 PRs carry a per-PR retro
+(**6 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-3 — the #2214 Decimal follow-ups (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 6 issues · 5 closing PR(s) · 0 of 5 PRs carry a per-PR retro
+(**5 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.1-1 — post-1.1.0 process drain: merge-gate enforcement + roadmap accuracy (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 7 issues · 4 closing PR(s) · 3 of 4 PRs carry a per-PR retro
+(**1 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.0-14 — post-13 drain: form-validation wire contract + dj-virtual content ops  (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 11 issues · 7 closing PR(s) · 0 of 7 PRs carry a per-PR retro
+(**7 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 6 issues · 6 closing PR(s) · 6 of 6 PRs carry a per-PR retro
+(**0 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
+
+## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (backfilled)
+
+**Backfilled**: 2026-09-15. This bucket was completed without a retro entry; see
+"Retro backfill — 14 un-retro'd drain buckets" for the shared analysis, evidence
+method and the reason per-bucket Review Stats are not reconstructible.
+
+**Scope**: 2 issues · 2 closing PR(s) · 2 of 2 PRs carry a per-PR retro
+(**0 RETRO_GATE_VIOLATION(s)** — the per-PR retro input for this bucket has partly decayed).
+PR attribution from `closedByPullRequestsReferences`, not issue mentions.
 
 ## v1.1.1-2 — Django-parity drain: timezone, locale, datetime filters (PRs #2213–#2233)
 
