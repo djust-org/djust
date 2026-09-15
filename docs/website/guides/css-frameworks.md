@@ -375,6 +375,111 @@ runtime requirement, just a convention worth borrowing.
 
 ---
 
+## Common Pitfalls
+
+Four ways CSS goes wrong in production. Each has a system check that catches
+it, so `python manage.py check` finds them before a deploy does.
+
+### Tailwind CDN in production
+
+`<script src="https://cdn.tailwindcss.com"></script>` is a development
+convenience only: roughly 300 KB uncompressed, render-blocking, with no
+tree-shaking. Compile instead. **Caught by `djust.C010`.**
+
+### Loading client.js by hand
+
+Adding `<script src="{% static 'djust/client.js' %}">` duplicates what djust
+auto-injects for every LiveView page — double initialisation and a race
+between the two. Remove the tag. **Caught by `djust.C012`.**
+
+### Deploying without compiling CSS
+
+The development fallback does not exist in production, so the page ships
+unstyled. Run the build before deploying. **Caught by `djust.C011`, which
+warns when `output.css` is missing.**
+
+### Template paths that don't match
+
+If `tailwind.config.js` content globs don't match the real template
+directories, the build purges classes that are actually used — the utilities
+go missing and the result can be *larger*, not smaller. Use
+`djust_setup_css` to auto-detect the directories, or check the globs by hand.
+
+## CI/CD Integration
+
+### GitHub Actions
+
+```yaml
+name: Build CSS
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          npm install -D tailwindcss
+
+      - name: Build CSS
+        run: python manage.py djust_setup_css tailwind --minify
+
+      - name: System checks
+        run: python manage.py check
+```
+
+### Docker
+
+```dockerfile
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y nodejs npm
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+
+RUN npm install -D tailwindcss
+RUN python manage.py djust_setup_css tailwind --minify
+RUN python manage.py check
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+```
+
+## Custom Adapters
+
+There is **no** `djust.css.CSSAdapter` module and **no** `DJUST_CSS_ADAPTER`
+setting. Two real customization points exist:
+
+**Generated files.** `djust_setup_css tailwind` writes `tailwind.config.js`
+and the input CSS only when they are absent, so pre-create or edit those files
+to change content globs, theme, or plugins — the build respects them and
+prints the command it ran.
+
+**Form-field classes.** Subclass `djust.frameworks.FrameworkAdapter` and
+register it to control the CSS classes djust's form renderers emit:
+
+```python
+from djust.frameworks import FrameworkAdapter, register_adapter
+
+class MyAdapter(FrameworkAdapter):
+    def render_field(self, field, **attrs): ...
+    def render_errors(self, field): ...
+    def get_field_class(self, field): ...
+
+register_adapter("myui", MyAdapter())
+```
+
 ## Troubleshooting
 
 **`STATICFILES_DIRS not configured` error**
