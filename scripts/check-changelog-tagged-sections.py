@@ -14,8 +14,19 @@ fragment unfolded while the gate reported OK against v1.1.2. Every
 release-version tag reachable from HEAD that sorts *above* the anchor must
 therefore have a working-tree section; a missing one fails by name.
 
+Also detects *deletion* (#2862): the pinned sections are the union of the
+working tree's sections at or below the anchor and the anchor snapshot's
+sections. Iterating only the tree's own sections — as #2028 first did —
+never visits a shipped section that was deleted from the tree, so its
+removal passed silently. Every section the anchor tag shipped must still be
+present in the working tree; a missing one fails by name (a distinct
+message from a rewritten body, because the operator's next action differs:
+restore the section vs. revert the edit).
+
 Exits 0 on match or when there's nothing to check (no tagged section, or git
-unavailable). Exits 1 with a per-section diff on any mismatch.
+unavailable). Exits 1 with a per-section diff on any mismatch (deleted
+sections are named without a diff — there is no working copy to diff
+against).
 
 Usage::
 
@@ -158,7 +169,9 @@ def check_changelog(changelog_path: Path) -> int:
     missing = _missing_higher_release_sections(anchor_ver, {ver for ver, _ in working})
 
     mismatches: list[str] = []
+    deleted: list[str] = []
     checked = 0
+    working_versions = {ver for ver, _ in working}
     # The anchor itself is shipped too. Only newer untagged sections may change.
     for ver, body in working[anchor_index:]:
         if ver not in snapshot:
@@ -181,11 +194,30 @@ def check_changelog(changelog_path: Path) -> int:
                 f"  merge rewriting shipped history (see #2028). Restore '[{ver}]' "
                 f"to match v{anchor_ver}.\n{diff}"
             )
+    # Deletion detection (#2862): iterate the snapshot's sections too. The
+    # loop above only visits sections the working tree still has, so a
+    # shipped section deleted from the tree was never compared and its
+    # removal passed silently. Every snapshot section predates the anchor
+    # tag, so demanding its presence cannot touch newer untagged sections.
+    for ver in snapshot:
+        if ver not in working_versions:
+            deleted.append(ver)
 
-    if mismatches or missing:
+    if mismatches or deleted or missing:
         print("CHANGELOG shipped-section pin FAILED:", file=sys.stderr)
         for m in mismatches:
             print(m, file=sys.stderr)
+        for ver in deleted:
+            print(
+                f"\n✗ Section '## [{ver}]' shipped in v{anchor_ver}'s CHANGELOG "
+                f"but is missing from the\n  working tree — it was deleted after "
+                f"it shipped (see #2028/#2862; the realistic route is\n  a "
+                f"cross-branch CHANGELOG merge resolved toward the branch without "
+                f"the section).\n  Restore it verbatim: 'git show "
+                f"v{anchor_ver}:CHANGELOG.md' and re-insert the '## [{ver}]'\n"
+                f"  section.",
+                file=sys.stderr,
+            )
         for ver in missing:
             print(
                 f"\n✗ Release tag 'v{ver}' exists on this branch's history but "
