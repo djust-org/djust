@@ -390,11 +390,13 @@ def _resolve_skip_render(view_instance: Any) -> bool:
     """Resolve the per-turn skip-render decision — the single owner of the
     ``_skip_render`` vs ``_force_full_html`` precedence (#2834).
 
-    Every render turn (runtime event spine, server_push, db_notify, tick)
-    ends in either a render or a skip; this helper is the shared owner of
-    that decision so the parallel paths cannot drift (#1646). It reads both
-    flags and consumes ``_skip_render`` (resets it when set) so a stale True
-    never leaks into the next turn.
+    Every render turn (runtime event spine, server_push, db_notify, tick, and
+    both deferred-activity re-dispatch twins — ``ViewRuntime._dispatch_single_event``
+    and the WS consumer's ``_dispatch_single_event``, joined in #2847) ends in
+    either a render or a skip; this helper is the shared owner of that decision
+    so the parallel paths cannot drift (#1646). It reads both flags and
+    consumes ``_skip_render`` (resets it when set) so a stale True never leaks
+    into the next turn.
 
     ``_force_full_html`` (#1981, set by ``set_changed_keys()``) ALWAYS wins
     over ``_skip_render``: a handler that explicitly asked for a forced
@@ -1217,10 +1219,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     logger.debug("Async task %s was cancelled, skipping re-render", task_name)
                     return
 
-            # Call handle_async_result if defined (success path)
-            if hasattr(view, "handle_async_result"):
-                await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)
-
             # Serialise on the SAME lock server_push / db_notify / _tick_once
             # use, and for the same reason: the render helper documents that its
             # caller must already hold it, and the PyO3 view's VDOM baseline is
@@ -1230,12 +1228,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # wait and skipping: a skipped async render is an async result the
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
+                # Call handle_async_result if defined (success path) — INSIDE
+                # the lock (#2840): a handler that mutates view state (the
+                # documented pattern — set ``self.result`` / ``self.error`` so
+                # the re-render displays it) must not interleave with a
+                # concurrent lock-holding render of the same view. The extra
+                # lock hold-time matches what ``_flush_all_pending`` below
+                # already contributes (user deferred callbacks run inline
+                # under the lock); the documented "an async render must not
+                # be slow" trade covers the handler too. Ordering: the
+                # handler still runs BEFORE the identity re-check below
+                # (mirrors the error arm), so a view torn down mid-handler
+                # still gets its user callback — only the stale re-render is
+                # dropped.
+                if hasattr(view, "handle_async_result"):
+                    await sync_to_async(view.handle_async_result)(
+                        task_name, result=result, error=None
+                    )
+
                 # Identity re-check INSIDE the lock (#1940): the guard above ran
-                # before an unbounded wait, during which the view can be torn down
-                # or replaced. Rendering the stale view would bump the
-                # connection-wide version and overwrite _recovery_html with
-                # old-view HTML. (The wait's cost to the tick / broadcast paths is
-                # documented on the error arm below.)
+                # before the unbounded handler + render wait, during which the
+                # view can be torn down or replaced. Rendering the stale view
+                # would bump the connection-wide version and overwrite
+                # _recovery_html with old-view HTML. (The wait's cost to the
+                # tick / broadcast paths is documented on the error arm below.)
                 if self.view_instance is not view:
                     return
                 # Re-render and send patches (mirrors the server_push path)
@@ -1309,10 +1325,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Call handle_async_result if defined (error path)
             if hasattr(view, "handle_async_result"):
                 try:
-                    await sync_to_async(view.handle_async_result)(
-                        task_name, result=None, error=error
-                    )
-
                     # Re-render to show error state
                     # Same lock as the success arm, the event path and the tick
                     # path (#2830). This arm does the SAME render +
@@ -1322,6 +1334,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # callback raises AND the view defines ``handle_async_result``,
                     # which is the documented error-state pattern.
                     #
+                    # #2840: the handler await sits INSIDE the lock too (both
+                    # arms) — its error-state mutation must not interleave with
+                    # a concurrent lock-holding render. Ordering is preserved
+                    # (handler → identity re-check → re-render): the re-check
+                    # deliberately runs AFTER the handler so a view torn down
+                    # mid-handler still gets its user error callback — only the
+                    # stale re-render is dropped.
+                    #
                     # Cost, recorded because it is a deliberate trade: this WAITS
                     # unboundedly, so a slow render holds the lock while the tick
                     # and broadcast paths — bounded 0.1s wait, SKIP on timeout —
@@ -1330,11 +1350,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # documented contention philosophy (db_notify's note), but it
                     # is why an async render must not be slow.
                     async with self._render_lock:
+                        await sync_to_async(view.handle_async_result)(
+                            task_name, result=None, error=error
+                        )
+
                         # Identity re-check INSIDE the lock: the guard above ran
-                        # before an UNBOUNDED wait, during which the view can be
-                        # torn down or replaced (#1940). Rendering the stale view
-                        # would bump the connection-wide version and overwrite
-                        # _recovery_html with old-view HTML.
+                        # before an UNBOUNDED wait (now handler + render), during
+                        # which the view can be torn down or replaced (#1940).
+                        # Rendering the stale view would bump the
+                        # connection-wide version and overwrite _recovery_html
+                        # with old-view HTML.
                         if self.view_instance is not view:
                             return
                         if hasattr(view, "_sync_state_to_rust"):
@@ -1699,7 +1724,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Auto-skip when no public assigns changed (same rule as
         # handle_event). This keeps a deferred side-effect-only handler
         # from triggering an unnecessary render frame on the client.
-        skip_render = getattr(view, "_skip_render", False)
+        # _resolve_skip_render owns the skip decision (#2834/#2847) — this
+        # twin previously read the two flags inline and resolved the
+        # collision the pre-#2834 way: with BOTH flags set the noop branch
+        # won, silently dropping the forced full render AND leaking
+        # ``_force_full_html`` into a later unrelated turn (the #1646
+        # "hatch dropped" class). The helper consumes ``_skip_render``
+        # whenever set and lets ``_force_full_html`` win.
+        skip_render = _resolve_skip_render(view)
         force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
@@ -1709,7 +1741,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
         if skip_render:
-            view._skip_render = False
+            # (_skip_render was already consumed by _resolve_skip_render —
+            # it is the single owner of that reset, #2834/#2847.)
             has_async = getattr(view, "_async_pending", None) is not None
             await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
