@@ -18,6 +18,13 @@ lifts the tick's resolution into a shared ``_resolve_skip_render`` helper and
 points the three sibling paths at it. These tests pin the parity: each path,
 same two flags, one answer.
 
+#2847 extended the pin to the two deferred-activity re-dispatch twins
+(``ViewRuntime._dispatch_single_event`` + the WS consumer's
+``_dispatch_single_event``): both still resolved the collision the pre-#2834
+way — with BOTH flags set the noop branch won, silently dropping the forced
+render AND leaking ``_force_full_html`` into a later turn. Both now join the
+shared helper; their four cases live in ``TestDispatchSingleEventParity2847``.
+
 Harness provenance (#1077 lift-from-reference):
 - ``_event_runtime_with_view`` imported from
   ``test_transport_behavioral_parity`` (the harness ``test_runtime_child_routing_1892``
@@ -165,6 +172,35 @@ class CollisionNotifyView(_CollisionHandler, LiveView):
             self._set_both_flags()
 
 
+class CollisionDeferredView(_CollisionHandler, LiveView):
+    """Deferred re-dispatch twins (#2847): ``ViewRuntime._dispatch_single_event``
+    and the WS consumer's ``_dispatch_single_event``.
+
+    The twins validate queued events through the FULL security pipeline
+    (``_validate_event_security`` — decorator allowlist included), so unlike
+    the push/notify views above these handlers must be ``@event_handler``
+    decorated, exactly like the live ``dispatch_event`` view's.
+    """
+
+    template = (
+        f'<div dj-root dj-view="{_ALLOWED}.CollisionDeferredView" dj-id="0">c={{{{ c }}}}</div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.c = 0
+
+    def get_context_data(self, **kwargs):
+        return {"c": self.c}
+
+    @event_handler()
+    def collide(self, **kwargs):
+        self._set_both_flags()
+
+    @event_handler()
+    def skip_only(self, **kwargs):
+        self._skip_render = True
+
+
 # ---------------------------------------------------------------------------
 # Tests — one collision + one gate-off sibling per path
 # ---------------------------------------------------------------------------
@@ -262,3 +298,101 @@ class TestSkipRenderForceParity2834:
         )
         assert _noops(consumer.sent), f"expected a noop ack, got {consumer.sent!r}"
         assert consumer.view_instance._skip_render is False, "the skip flag must be consumed"
+
+
+# ---------------------------------------------------------------------------
+# #2847 — the deferred re-dispatch twins join the shared resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+class TestDispatchSingleEventParity2847:
+    """Both ``_dispatch_single_event`` twins (runtime + WS consumer).
+
+    Driven directly, exactly as the ActivityMixin flush drives them
+    (``mixins/activity.py``): the flush awaits
+    ``dispatch(target_view, event_name, params)`` once per queued event. The
+    WS twin's contract is that the caller already holds
+    ``consumer._render_lock`` — the test honors it.
+    """
+
+    # ---- ViewRuntime._dispatch_single_event --------------------------------
+
+    async def test_runtime_single_event_force_wins_over_skip_render(self):
+        runtime, transport = _event_runtime_with_view(CollisionDeferredView())
+        view = runtime.view_instance
+        view.mount(None)
+
+        await runtime._dispatch_single_event(view, "collide", {})
+
+        assert _updates(transport.sent), (
+            "_force_full_html (set_changed_keys()) must win over _skip_render "
+            f"on the runtime deferred re-dispatch path, got {transport.sent!r}"
+        )
+        assert view._force_full_html is False, (
+            "the forced render must consume the flag on the turn that served "
+            "it — a leaked _force_full_html forces a surprise full render on a "
+            "later unrelated turn"
+        )
+        assert view._skip_render is False, "the skip flag must be consumed on the render turn"
+
+    async def test_runtime_single_event_skip_only_still_skips(self):
+        """GATE-OFF sibling (#1468): skip-only must still noop on the twin."""
+        runtime, transport = _event_runtime_with_view(CollisionDeferredView())
+        view = runtime.view_instance
+        view.mount(None)
+
+        await runtime._dispatch_single_event(view, "skip_only", {})
+
+        assert not _updates(transport.sent), (
+            "a handler that sets only _skip_render must still suppress the "
+            f"deferred re-dispatch render, got {transport.sent!r}"
+        )
+        assert _noops(transport.sent), f"expected a noop ack, got {transport.sent!r}"
+        assert view._skip_render is False, "the skip flag must be consumed"
+
+    # ---- LiveViewConsumer._dispatch_single_event ---------------------------
+
+    def _ws_consumer_for_twin(self):
+        """The shared consumer harness + the per-connection rate limiter the
+        bare consumer only creates at ``connect()`` (a MagicMock suffices: the
+        parity handlers carry no ``@rate_limit``, so it is never consulted)."""
+        from unittest.mock import MagicMock
+
+        consumer = _consumer_with_view(CollisionDeferredView)
+        rate_limiter = MagicMock()
+        rate_limiter.check.return_value = True
+        consumer._rate_limiter = rate_limiter
+        return consumer
+
+    async def test_ws_single_event_force_wins_over_skip_render(self):
+        consumer = self._ws_consumer_for_twin()
+        view = consumer.view_instance
+
+        async with consumer._render_lock:  # the twin's documented caller contract
+            await consumer._dispatch_single_event(view, "collide", {})
+
+        assert _updates(consumer.sent), (
+            "_force_full_html (set_changed_keys()) must win over _skip_render "
+            f"on the WS deferred re-dispatch path, got {consumer.sent!r}"
+        )
+        assert view._force_full_html is False, (
+            "the forced render must consume the flag on the turn that served it"
+        )
+        assert view._skip_render is False, "the skip flag must be consumed on the render turn"
+
+    async def test_ws_single_event_skip_only_still_skips(self):
+        """GATE-OFF sibling (#1468): skip-only must still noop on the WS twin."""
+        consumer = self._ws_consumer_for_twin()
+        view = consumer.view_instance
+
+        async with consumer._render_lock:
+            await consumer._dispatch_single_event(view, "skip_only", {})
+
+        assert not _updates(consumer.sent), (
+            "a handler that sets only _skip_render must still suppress the "
+            f"WS deferred re-dispatch render, got {consumer.sent!r}"
+        )
+        assert _noops(consumer.sent), f"expected a noop ack, got {consumer.sent!r}"
+        assert view._skip_render is False, "the skip flag must be consumed"
