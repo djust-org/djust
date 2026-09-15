@@ -1693,6 +1693,32 @@ Four rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823,
 
 - **Parallel pipeline worktrees: cap concurrency, and merge `origin/main` early (#2835-#2846).** Two independent lessons from running three worktree pipelines at once. (a) **The shared quota, not the checkout, is the ceiling.** Three concurrent pipelines exhausted the account's usage quota fast enough that all three agents died at the same step -- immediately before spawning their own reviewers -- and their PRs reached CI-green unreviewed; fresh-context review is the pipeline's main quality mechanism, so one or two concurrent pipelines is the honest limit, and the executor should expect to finish PRs by hand. (b) **A worktree branch goes stale against sibling merges.** All three were cut from `origin/main` before four drain PRs landed, after which they conflicted in *generated* artifacts (`client.js`, `client.min.js`, `client-sizes.json`, `CLAUDE.md`) while their source diff stayed clean -- a merge blocker that cost a review round. **Rule:** merge `origin/main` into a worktree branch early, while it is still one or two files, and resolve generated-artifact conflicts by **regenerating** them, never by hand-merging.
 
+## Pipeline
+
+- default_branch: main
+- test_command: `npx vitest run` (JS) · `pytest` (Python; see `pyproject.toml` testpaths)
+- regenerate: `bash scripts/build-client.sh` — run this after any merge that touched
+  `static/djust/src/`; never hand-merge `client.js` / `client.min.js` / `client-sizes.json`
+- merge: squash (main carries no PR merge commits); drain PRs merge with `--admin`,
+  since the author cannot approve their own PR and human review is at the milestone level
+
+**Running the suite from a git worktree** (three parallel worktrees is the tested shape):
+the venv's editable install points at the *main* checkout, so a bare `import djust` inside a
+worktree resolves to the main source and the tests exercise the wrong code — silently. Pin it
+and prove it:
+
+```bash
+PYTHONPATH="$WT/python" "$MAIN/.venv/bin/python" -c "import djust; print(djust.__file__)"
+```
+
+Also copy the gitignored Rust extension into the worktree and symlink `node_modules`; do NOT
+symlink `target/` (concurrent cargo builds collide).
+
+**Failure classes**: `docs/patterns/` is this repo's pattern wiki — one page per class, each
+with an instance table whose `rule in force?` column `/pipeline-retro` Stage 3.7 counts to
+KEEP / HARDEN / DEMOTE the matching rule above. `scripts/check-retro-coverage.py` enforces
+that a completed drain bucket has a `RETRO.md` entry (#2848).
+
 ## Additional Documentation
 
 - `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default

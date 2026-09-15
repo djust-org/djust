@@ -154,6 +154,12 @@ repos:
   # and tests/test_changelog_test_counts.py. Closes #908.
   - repo: local
     hooks:
+      - id: check-retro-coverage
+        name: check completed drain buckets have a RETRO.md entry (#2848)
+        entry: python scripts/check-retro-coverage.py
+        language: system
+        files: ^(ROADMAP|RETRO)\.md$
+        pass_filenames: false
       - id: check-changelog-test-counts
         name: check CHANGELOG test counts
         entry: python scripts/check-changelog-test-counts.py
