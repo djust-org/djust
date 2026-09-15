@@ -573,8 +573,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `messages`, `forloop`, …). Covers both `template_name` (file) and inline
   `template = "..."` views. Delegates its extraction to the same helpers
   `manage.py djust_typecheck` has shipped since v0.5.1 (#849), via a shared
-  `_check_view_source()` extraction point, so the two entry points can never
-  drift apart.
+  `_check_view_source()` extraction point. Shared EXTRACTION means the two
+  entry points never disagree about what a given template means — but their
+  COVERAGE differs by design (#2833): this check additionally covers inline
+  `template = "..."` views and additionally skips `{% extends %}` templates
+  (below), while `manage.py djust_typecheck` covers `{% extends %}`
+  `template_name` templates but not inline ones. Run both for full coverage;
+  neither is a superset of the other.
 - **Fix**: Set the missing name via `self.x = ...` in `mount()`, return it
   from `get_context_data()`, or fix the typo in the template.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T018"]}` project-wide,
@@ -594,7 +599,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   the child template's own source). This trades some false negatives for
   zero false positives on inheritance-based templates, per the issue's own
   guidance that an advisory check with a documented gap is safer than a
-  noisy one.
+  noisy one. The skip is **reported, not silent** (#2833): a run that
+  skipped one or more views emits one Info-level `djust.T018` message with
+  the skipped count, so `All djust checks passed!` is falsifiable — "passed
+  with 2 views skipped" is distinguishable from "examined everything and
+  found nothing".
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
 
