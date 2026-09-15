@@ -75,16 +75,72 @@ function _cleanupScopedListeners(element) {
  * @param {string} boundType - Key used in the _boundHandlers marker map
  *   (e.g. 'shortcut'), so eviction can un-mark the element and a later
  *   re-declaration of the attribute can re-bind.
+ * @param {string} [boundValue] - The attribute VALUE (or composite key) the
+ *   handler closure was built from. The #2845 rebuild check compares this
+ *   against the current attribute on every bind pass: an element that
+ *   survives a morph keeps both its listener and its _boundHandlers marker,
+ *   so only a value match justifies skipping the re-bind.
  */
-function _addScopedListener(element, target, eventType, handler, capture, attrName, boundType) {
+function _addScopedListener(element, target, eventType, handler, capture, attrName, boundType, boundValue) {
     if (!element._djustScopedListeners) element._djustScopedListeners = [];
     const useCapture = capture || false;
     element._djustScopedListeners.push({
         target, eventType, handler, capture: useCapture,
-        attrName: attrName, boundType: boundType,
+        attrName: attrName, boundType: boundType, boundValue: boundValue,
     });
     target.addEventListener(eventType, handler, useCapture);
     _scopedListenerElements.add(element);
+}
+
+/**
+ * The value the existing scoped listener for `boundType` on `element` was
+ * built from (#2845), or undefined when none is attached. The bind loops
+ * compare this against the CURRENT attribute value to decide skip vs rebuild
+ * — the sweep predicate judges attribute PRESENCE only, so it cannot detect
+ * a value change on a surviving element.
+ * @param {HTMLElement} element
+ * @param {string} boundType
+ * @returns {string|undefined}
+ */
+function _scopedBoundValue(element, boundType) {
+    const listeners = element._djustScopedListeners;
+    if (!listeners) return undefined;
+    for (let i = 0; i < listeners.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (listeners[i].boundType === boundType) return listeners[i].boundValue;
+    }
+    return undefined;
+}
+
+/**
+ * Remove every scoped listener an element carries for one boundType (#2845):
+ * detach the real addEventListener handles, un-mark the _boundHandlers entry,
+ * and drop the entries — the targeted per-boundType counterpart of the
+ * sweep's eviction, used by the bind loops to REBUILD a closure whose
+ * declaring attribute value changed under a surviving element.
+ * @param {HTMLElement} element
+ * @param {string} boundType
+ */
+function _removeScopedListeners(element, boundType) {
+    const listeners = element._djustScopedListeners;
+    if (!listeners || listeners.length === 0) return;
+    const survivors = [];
+    for (let i = 0; i < listeners.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const entry = listeners[i];
+        if (entry.boundType === boundType) {
+            entry.target.removeEventListener(entry.eventType, entry.handler, entry.capture || false);
+            if (entry.boundType) _unmarkHandlerBound(element, entry.boundType);
+        } else {
+            survivors.push(entry);
+        }
+    }
+    if (survivors.length === 0) {
+        element._djustScopedListeners = [];
+        _scopedListenerElements.delete(element);
+    } else if (survivors.length !== listeners.length) {
+        element._djustScopedListeners = survivors;
+    }
 }
 
 // ============================================================================
@@ -1452,10 +1508,18 @@ function bindLiveViewEvents(scope) {
 
     // --- Feature 2: dj-click-away ---
     document.querySelectorAll('[dj-click-away]').forEach(element => {
-        if (_isHandlerBound(element, 'click-away')) return;
-        _markHandlerBound(element, 'click-away');
-
         const handlerName = element.getAttribute('dj-click-away');
+        if (_isHandlerBound(element, 'click-away')) {
+            // #2845 — a surviving element keeps both its listener and its
+            // marker across a morph, so the marker alone cannot justify the
+            // skip: only an UNCHANGED attribute value can. A changed value
+            // means the template re-points the directive; evict the old
+            // listener and rebuild the closure from the new value (the sweep
+            // path's counterpart of the #2108 registry refresh).
+            if (_scopedBoundValue(element, 'click-away') === handlerName) return;
+            _removeScopedListeners(element, 'click-away');
+        }
+        _markHandlerBound(element, 'click-away');
 
         const clickAwayHandler = async (e) => {
             // Only fire if click is outside the element
@@ -1471,16 +1535,26 @@ function bindLiveViewEvents(scope) {
         };
 
         // Use capture phase so stopPropagation inside doesn't prevent detection
-        _addScopedListener(element, document, 'click', clickAwayHandler, true, 'dj-click-away', 'click-away');
+        _addScopedListener(element, document, 'click', clickAwayHandler, true, 'dj-click-away', 'click-away', handlerName);
     });
 
     // --- Feature 3: dj-shortcut ---
     document.querySelectorAll('[dj-shortcut]').forEach(element => {
-        if (_isHandlerBound(element, 'shortcut')) return;
-        _markHandlerBound(element, 'shortcut');
-
         const attrValue = element.getAttribute('dj-shortcut');
         const allowInInput = element.hasAttribute('dj-shortcut-in-input');
+
+        // #2845 — same rebuild-or-skip rule as the dj-click-away loop above.
+        // The closure captures BOTH the parsed bindings (from the attribute
+        // VALUE) and the input gate (from dj-shortcut-in-input PRESENCE), so
+        // the rebuild key must cover both: a change to either under a
+        // surviving element must rebuild, an unchanged pair must not
+        // (double-attach would dispatch every keypress twice).
+        const boundKey = allowInInput ? attrValue + '\u0000in-input' : attrValue;
+        if (_isHandlerBound(element, 'shortcut')) {
+            if (_scopedBoundValue(element, 'shortcut') === boundKey) return;
+            _removeScopedListeners(element, 'shortcut');
+        }
+        _markHandlerBound(element, 'shortcut');
 
         // Parse comma-separated bindings
         // Each binding: [modifier+...]key:handler[:prevent]
@@ -1547,7 +1621,7 @@ function bindLiveViewEvents(scope) {
             }
         };
 
-        _addScopedListener(element, document, 'keydown', shortcutHandler, false, 'dj-shortcut', 'shortcut');
+        _addScopedListener(element, document, 'keydown', shortcutHandler, false, 'dj-shortcut', 'shortcut', boundKey);
     });
 
     // Sweep orphaned scoped listeners (click-away, shortcut) AFTER the bind
