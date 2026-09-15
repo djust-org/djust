@@ -1342,8 +1342,15 @@ _LIVE_RENDER_ELEMENT_WITH_EVENT_RE = re.compile(
     # honours the first modifier). A dot is a legal attribute-name character
     # (#2831, #1999), so without this suffix the matcher required ``=``
     # directly after the bare name and never stamped an element whose ONLY
-    # event attribute is dotted (#2841).
-    r"(?:\.[^\s\"'<>/=]+)*"
+    # event attribute is dotted (#2841). The modifier class EXCLUDES ``.``:
+    # each iteration then consumes exactly one literal ``.`` plus a non-dot
+    # run, so the partition of a dot-run is unique and a failed trailing
+    # ``(\s*=)`` has nothing to backtrack over. With ``.`` allowed in the
+    # class, ``<div dj-keydown`` + ".a"*n + ``!`` (a malformed, unterminated
+    # attribute — the shape a template typo produces) backtracks through the
+    # exponentially many partitions: ~94 ms at n=20, ~1.5 s at n=24, ~24 s at
+    # n=28 (ReDoS; caught by review measurement, PR #2857).
+    r"(?:\.[^\s\"'<>/.=]+)*"
     r")"
     r"(\s*=)",  # (3) trailing '='
     re.IGNORECASE | re.DOTALL,

@@ -591,6 +591,51 @@ class TestDottedKeyboardEventStamping:
         out = _stamp_view_id('<input dj-keydown.enter="go" dj-click="x">', "v1")
         assert _attr_values(out, "data-djust-embedded") == ["v1"]
 
+    def test_stamp_view_id_unterminated_dotted_run_completes(self):
+        """A malformed, unterminated dotted attribute must not hang the stamper.
+
+        ReDoS caught in PR review of this PR: the first dotted-suffix revision
+        allowed ``.`` inside the modifier char class, so a dot-run could be
+        partitioned among star iterations in exponentially many ways, and a
+        failed trailing ``=`` backtracked through all of them. Measured on
+        ``<div dj-keydown`` + ``'.a' * n`` + ``'!'`` (the shape a template
+        typo produces): ~94 ms at n=20, ~1.5 s at n=24, ~24 s at n=28.
+        Excluding ``.`` from the class pins each iteration to exactly one
+        literal dot plus a non-dot run, so the partition is unique and there
+        is nothing to backtrack over (measured flat 0.01-0.13 ms, n=24..816).
+
+        Bounded-completion assertion, not a timing threshold (#1795/#1830):
+        SIGALRM at 5 s asserts the call RETURNS. The fixed pattern takes
+        ~0.1 ms at n=32 while the vulnerable one needs minutes, so the alarm
+        fires with 3+ orders of magnitude of margin — no flake. Verified
+        empirically that CPython's sre engine delivers SIGALRM mid-search
+        (a 24 s search was interrupted at 1.0 s).
+        """
+        import signal
+
+        from djust.templatetags.live_tags import _stamp_view_id
+
+        if not hasattr(signal, "SIGALRM"):
+            pytest.skip("SIGALRM unavailable on this platform")
+        html = "<div dj-keydown" + ".a" * 32 + "!"
+
+        def _alarm(signum, frame):
+            raise AssertionError(
+                "_stamp_view_id did not complete within 5s on an unterminated "
+                "dotted attribute run (n=32) — exponential regex backtracking"
+            )
+
+        old_handler = signal.signal(signal.SIGALRM, _alarm)
+        try:
+            signal.alarm(5)
+            out = _stamp_view_id(html, "v1")
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        # The malformed element is not stamped, and the call returned a string.
+        assert isinstance(out, str)
+        assert "data-djust-embedded" not in out
+
     def test_stamp_view_id_still_requires_real_event_attr(self):
         """The ``=`` anchor must not relax into prefix matching: an attribute
         that merely STARTS with an event-attr name is not an event attr and
