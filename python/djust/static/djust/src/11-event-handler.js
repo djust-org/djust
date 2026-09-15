@@ -246,6 +246,10 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown) return;
         const data = await response.json();
+        // Same client-owned-flag strip as the WebSocket and SSE transports
+        // (#2829) — the HTTP fallback dispatches straight into
+        // handleServerResponse, so it needs its own call.
+        stripClientOwnedFrameFlags(data);
         await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {

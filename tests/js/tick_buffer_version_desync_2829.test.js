@@ -168,9 +168,11 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         const refA = getSeqState().pendingEventRef;
         await ws.handleMessage({ type: 'patch', patches: [], version: 2, source: 'event', ref: refA });
 
-        // The strip lives in handleMessage — the single choke point both the
-        // socket and SSE transports route through — so this frame is
-        // indistinguishable from a wire-supplied one by the time it matters.
+        // The strip is a shared helper called at each transport's inbound
+        // entry (WebSocket, SSE, HTTP fallback), so by the time the frame
+        // reaches the version check it is indistinguishable from a
+        // wire-supplied one. The caller-set pin below keeps a future transport
+        // from omitting it.
         await ws.handleMessage({
             type: 'patch', patches: [], version: 4, source: 'event', ref: refA + 1,
             _deferred: true, // hostile/buggy server trying to skip the check
@@ -180,5 +182,51 @@ describe('Tick/async patch version sequencing (#2829)', () => {
             requestHtmlCount(sentMessages),
             'a server-supplied _deferred must be ignored — the flag is client-owned',
         ).toBe(1);
+    });
+
+    it('a patch dropped INSIDE the buffered window still forces recovery', async () => {
+        // The window that matters: v2 is allocated by the server and LOST in
+        // transit while a user event is pending, then v3 arrives and is
+        // buffered. Consuming the buffered frame's version must not vouch for
+        // the versions between it and the cursor — otherwise the gap is
+        // accepted, nothing ever fails the strict check, and the dropped patch
+        // is applied by no one: permanent silent DOM/server divergence.
+        const { dom, sentMessages, getSeqState } = createDom();
+        const ws = await makeWS(dom);
+
+        ws.sendEvent('click', { n: 1 });
+        const refA = getSeqState().pendingEventRef;
+
+        // v2 never arrives.
+        await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
+        await ws.handleMessage({ type: 'patch', patches: [], version: 4, source: 'event', ref: refA });
+
+        expect(
+            requestHtmlCount(sentMessages),
+            'a patch lost inside the buffered window must still force recovery',
+        ).toBe(1);
+    });
+
+});
+
+describe('client-owned frame flags are stripped on every inbound transport (#2829)', () => {
+
+    it('each transport calls the shared strip (caller-set pin, derived not restated)', () => {
+        // `_deferred` is a client-owned control flag: if a transport hands a
+        // wire-supplied copy to handleServerResponse, the version check can be
+        // suppressed on that path. The shared helper makes the behaviour
+        // identical wherever it is called, so what needs pinning is the CALLER
+        // SET — a future transport that omits the call re-opens the hole.
+        //
+        // Derived from the built bundle rather than restated as a magic number
+        // (canon #2727), and asserted as exact equality so both an omission AND
+        // an unexplained extra call site fail here.
+        const definition = (clientCode.match(/function stripClientOwnedFrameFlags\(/g) || []).length;
+        const calls = (clientCode.match(/stripClientOwnedFrameFlags\(data\);/g) || []).length;
+        expect(definition, 'one definition').toBe(1);
+        expect(
+            calls,
+            'exactly one call per inbound transport: websocket, sse, http fallback',
+        ).toBe(3);
     });
 });

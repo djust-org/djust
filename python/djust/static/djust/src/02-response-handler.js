@@ -4,6 +4,32 @@
 // ============================================================================
 
 /**
+ * Drop CLIENT-OWNED frame flags from an INBOUND server frame.
+ *
+ * ``_deferred`` is set by the client on frames we deliberately deferred while a
+ * user event was pending (see `_tickBuffer`), and the version check uses it to
+ * tell our own deferral from a dropped patch (#2829). It must therefore never
+ * be settable from the wire — otherwise a server (or anything that can write to
+ * the transport) could suppress the dropped-patch detection for a frame.
+ *
+ * Every transport that hands a server frame to `handleServerResponse` calls
+ * this first: the WebSocket (`03-websocket.js`), SSE (`03b-sse.js`) and the
+ * HTTP fallback (`11-event-handler.js`). One helper rather than an inline
+ * `delete` per transport, so a future transport cannot quietly omit it. The
+ * deferred REPLAY calls `handleServerResponse` directly and so keeps our own
+ * marker.
+ *
+ * @param {object} data - Parsed inbound frame (mutated in place)
+ * @returns {object} the same frame
+ */
+function stripClientOwnedFrameFlags(data) {
+    if (data && typeof data === 'object') {
+        delete data._deferred;
+    }
+    return data;
+}
+
+/**
  * Check whether the global WebSocket connection is open and ready.
  * @returns {boolean}
  */

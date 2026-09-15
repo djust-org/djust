@@ -485,16 +485,11 @@ class LiveViewWebSocket {
      * preserve unhandled-rejection visibility.
      */
     handleMessage(data) {
-        // ``_deferred`` is a CLIENT-OWNED control flag: the buffer path below
-        // sets it on frames we deliberately deferred, and the version check
-        // uses it to tell our own deferral from a dropped patch (#2829). Strip
-        // any inbound copy here — the single choke point both the socket and
-        // the SSE transport route through — so the wire can never suppress the
-        // dropped-patch detection. (The flush calls handleServerResponse
-        // directly, so our own marker survives.)
-        if (data && typeof data === 'object') {
-            delete data._deferred;
-        }
+        // Strip inbound copies of client-owned frame flags (#2829). One shared
+        // helper, called at each transport's inbound entry — SSE and the HTTP
+        // fallback call it too, so this is not the only choke point and must
+        // not be described as one.
+        stripClientOwnedFrameFlags(data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -880,16 +875,27 @@ class LiveViewWebSocket {
                     // than a dropped patch (#2829). The marker is client-side
                     // only and never goes back over the wire.
                     _tickBuffer.push({ ...data, _deferred: true });
-                    // Consume the version HERE, at receipt. The frame has
-                    // arrived and will be applied on flush, so the cursor must
-                    // already account for it — otherwise the next in-order
-                    // frame (an event response arriving after this deferral)
-                    // sees a phantom gap in a sequence the server issued
-                    // legitimately, and forces a full-HTML recovery (#2829).
+                    // Consume the version HERE, at receipt — but ONLY when it is
+                    // CONTIGUOUS with the cursor. The frame has arrived and will
+                    // be applied on flush, so a contiguous version must already
+                    // be accounted for; otherwise the next in-order frame (an
+                    // event response arriving after this deferral) sees a
+                    // phantom gap in a sequence the server issued legitimately,
+                    // and forces a full-HTML recovery (#2829).
+                    //
+                    // Contiguity is the whole guard. Consuming a NON-contiguous
+                    // version would vouch for every version between the cursor
+                    // and this frame — frames the server allocated and never
+                    // shipped, the drop class `_hotreload_broadcast_suppressed`
+                    // exists for (#763/#2215/#2233). Silently accepting those
+                    // leaves the client permanently diverged with recovery never
+                    // firing. Leaving the cursor alone lets the EXISTING strict
+                    // check surface the gap on the next frame, so the loss still
+                    // recovers through the normal path.
                     if (
                         clientVdomVersion !== null &&
                         typeof data.version === 'number' &&
-                        data.version > clientVdomVersion
+                        data.version === clientVdomVersion + 1
                     ) {
                         clientVdomVersion = data.version;
                     }

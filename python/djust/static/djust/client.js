@@ -287,6 +287,32 @@ function reinitLiveViewForTurboNav() {
 // ============================================================================
 
 /**
+ * Drop CLIENT-OWNED frame flags from an INBOUND server frame.
+ *
+ * ``_deferred`` is set by the client on frames we deliberately deferred while a
+ * user event was pending (see `_tickBuffer`), and the version check uses it to
+ * tell our own deferral from a dropped patch (#2829). It must therefore never
+ * be settable from the wire — otherwise a server (or anything that can write to
+ * the transport) could suppress the dropped-patch detection for a frame.
+ *
+ * Every transport that hands a server frame to `handleServerResponse` calls
+ * this first: the WebSocket (`03-websocket.js`), SSE (`03b-sse.js`) and the
+ * HTTP fallback (`11-event-handler.js`). One helper rather than an inline
+ * `delete` per transport, so a future transport cannot quietly omit it. The
+ * deferred REPLAY calls `handleServerResponse` directly and so keeps our own
+ * marker.
+ *
+ * @param {object} data - Parsed inbound frame (mutated in place)
+ * @returns {object} the same frame
+ */
+function stripClientOwnedFrameFlags(data) {
+    if (data && typeof data === 'object') {
+        delete data._deferred;
+    }
+    return data;
+}
+
+/**
  * Check whether the global WebSocket connection is open and ready.
  * @returns {boolean}
  */
@@ -1140,16 +1166,11 @@ class LiveViewWebSocket {
      * preserve unhandled-rejection visibility.
      */
     handleMessage(data) {
-        // ``_deferred`` is a CLIENT-OWNED control flag: the buffer path below
-        // sets it on frames we deliberately deferred, and the version check
-        // uses it to tell our own deferral from a dropped patch (#2829). Strip
-        // any inbound copy here — the single choke point both the socket and
-        // the SSE transport route through — so the wire can never suppress the
-        // dropped-patch detection. (The flush calls handleServerResponse
-        // directly, so our own marker survives.)
-        if (data && typeof data === 'object') {
-            delete data._deferred;
-        }
+        // Strip inbound copies of client-owned frame flags (#2829). One shared
+        // helper, called at each transport's inbound entry — SSE and the HTTP
+        // fallback call it too, so this is not the only choke point and must
+        // not be described as one.
+        stripClientOwnedFrameFlags(data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -1535,16 +1556,27 @@ class LiveViewWebSocket {
                     // than a dropped patch (#2829). The marker is client-side
                     // only and never goes back over the wire.
                     _tickBuffer.push({ ...data, _deferred: true });
-                    // Consume the version HERE, at receipt. The frame has
-                    // arrived and will be applied on flush, so the cursor must
-                    // already account for it — otherwise the next in-order
-                    // frame (an event response arriving after this deferral)
-                    // sees a phantom gap in a sequence the server issued
-                    // legitimately, and forces a full-HTML recovery (#2829).
+                    // Consume the version HERE, at receipt — but ONLY when it is
+                    // CONTIGUOUS with the cursor. The frame has arrived and will
+                    // be applied on flush, so a contiguous version must already
+                    // be accounted for; otherwise the next in-order frame (an
+                    // event response arriving after this deferral) sees a
+                    // phantom gap in a sequence the server issued legitimately,
+                    // and forces a full-HTML recovery (#2829).
+                    //
+                    // Contiguity is the whole guard. Consuming a NON-contiguous
+                    // version would vouch for every version between the cursor
+                    // and this frame — frames the server allocated and never
+                    // shipped, the drop class `_hotreload_broadcast_suppressed`
+                    // exists for (#763/#2215/#2233). Silently accepting those
+                    // leaves the client permanently diverged with recovery never
+                    // firing. Leaving the cursor alone lets the EXISTING strict
+                    // check surface the gap on the next frame, so the loss still
+                    // recovers through the normal path.
                     if (
                         clientVdomVersion !== null &&
                         typeof data.version === 'number' &&
-                        data.version > clientVdomVersion
+                        data.version === clientVdomVersion + 1
                     ) {
                         clientVdomVersion = data.version;
                     }
@@ -2448,6 +2480,11 @@ class LiveViewSSE {
      * shape as `LiveViewWebSocket.handleMessage`. Closes #1098.
      */
     handleMessage(data) {
+        // Strip inbound copies of client-owned frame flags (#2829). SSE never
+        // buffers, so its version check would otherwise be suppressible by a
+        // wire-supplied ``_deferred`` — the flag is client-owned and only the
+        // WebSocket buffering path may set it.
+        stripClientOwnedFrameFlags(data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -6380,6 +6417,10 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown) return;
         const data = await response.json();
+        // Same client-owned-flag strip as the WebSocket and SSE transports
+        // (#2829) — the HTTP fallback dispatches straight into
+        // handleServerResponse, so it needs its own call.
+        stripClientOwnedFrameFlags(data);
         await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
