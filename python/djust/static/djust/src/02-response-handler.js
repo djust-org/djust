@@ -55,6 +55,15 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+            } else if (data._deferred) {
+                // A frame we deliberately deferred while a user event was in
+                // flight (see _tickBuffer, 03-websocket.js). Its version was
+                // already consumed server-side, so the gap between it and our
+                // cursor is OUR deferral, not a dropped patch — applying it must
+                // not trigger a recovery morph (#2829). Forward only: a flush
+                // runs after later frames have advanced the cursor, so an
+                // unconditional assignment here would walk it backwards.
+                clientVdomVersion = Math.max(clientVdomVersion, data.version);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
                 if (globalThis.djustDebug) {
@@ -73,8 +82,10 @@ async function handleServerResponse(data, eventName, triggerElement) {
 
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 return true;
+            } else {
+                // Normal in-order frame: advance the cursor.
+                clientVdomVersion = data.version;
             }
-            clientVdomVersion = data.version;
         }
 
         // Clear optimistic state BEFORE applying changes

@@ -338,6 +338,15 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+            } else if (data._deferred) {
+                // A frame we deliberately deferred while a user event was in
+                // flight (see _tickBuffer, 03-websocket.js). Its version was
+                // already consumed server-side, so the gap between it and our
+                // cursor is OUR deferral, not a dropped patch — applying it must
+                // not trigger a recovery morph (#2829). Forward only: a flush
+                // runs after later frames have advanced the cursor, so an
+                // unconditional assignment here would walk it backwards.
+                clientVdomVersion = Math.max(clientVdomVersion, data.version);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
                 if (globalThis.djustDebug) {
@@ -356,8 +365,10 @@ async function handleServerResponse(data, eventName, triggerElement) {
 
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 return true;
+            } else {
+                // Normal in-order frame: advance the cursor.
+                clientVdomVersion = data.version;
             }
-            clientVdomVersion = data.version;
         }
 
         // Clear optimistic state BEFORE applying changes
@@ -1129,6 +1140,16 @@ class LiveViewWebSocket {
      * preserve unhandled-rejection visibility.
      */
     handleMessage(data) {
+        // ``_deferred`` is a CLIENT-OWNED control flag: the buffer path below
+        // sets it on frames we deliberately deferred, and the version check
+        // uses it to tell our own deferral from a dropped patch (#2829). Strip
+        // any inbound copy here — the single choke point both the socket and
+        // the SSE transport route through — so the wire can never suppress the
+        // dropped-patch detection. (The flush calls handleServerResponse
+        // directly, so our own marker survives.)
+        if (data && typeof data === 'object') {
+            delete data._deferred;
+        }
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -1509,8 +1530,24 @@ class LiveViewWebSocket {
 
                 if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
                     // Buffer server-initiated patch — will be applied after
-                    // all pending event responses arrive.
-                    _tickBuffer.push(data);
+                    // all pending event responses arrive. Marked so the version
+                    // check treats the resulting gap as our own deferral rather
+                    // than a dropped patch (#2829). The marker is client-side
+                    // only and never goes back over the wire.
+                    _tickBuffer.push({ ...data, _deferred: true });
+                    // Consume the version HERE, at receipt. The frame has
+                    // arrived and will be applied on flush, so the cursor must
+                    // already account for it — otherwise the next in-order
+                    // frame (an event response arriving after this deferral)
+                    // sees a phantom gap in a sequence the server issued
+                    // legitimately, and forces a full-HTML recovery (#2829).
+                    if (
+                        clientVdomVersion !== null &&
+                        typeof data.version === 'number' &&
+                        data.version > clientVdomVersion
+                    ) {
+                        clientVdomVersion = data.version;
+                    }
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
                     }
