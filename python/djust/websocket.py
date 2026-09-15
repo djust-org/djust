@@ -4232,6 +4232,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         Event sequencing (#560):
         - Skips render when handle_tick() doesn't change any public assigns
+        - Skips render (and the second ``_snapshot_assigns`` call) when
+          ``handle_tick()`` sets ``_skip_render = True`` — mirrors the
+          event paths' ``_skip_render`` check (websocket.py server_push /
+          db_notify, runtime.py ``dispatch_event``) so a tick handler that
+          knows it changed nothing (e.g. an early return for a non-host
+          session) doesn't pay for change-detection fingerprinting it
+          already knows is a no-op (#2822). ``_force_full_html`` (#1981)
+          always wins over ``_skip_render`` here.
         - Acquires _render_lock to serialize with event handlers
         - Yields to user events: if a user event is being processed, the
           tick is skipped instead of blocking
@@ -4275,6 +4283,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             await sync_to_async(self.view_instance.handle_tick)()
 
+            # Views can set _skip_render = True inside handle_tick to
+            # suppress the re-render cycle entirely (e.g. an early return
+            # for a non-host session) — mirrors the event paths' check
+            # (websocket.py server_push/db_notify, runtime.py
+            # dispatch_event) but, unlike those, also skips the second
+            # _snapshot_assigns() call below, which is the expensive half
+            # of the tick's change-detection cost (#2822). Consumed
+            # (reset to False) unconditionally so a stale True never
+            # leaks into the next tick. _force_full_html (#1981) always
+            # wins over _skip_render: a handler that explicitly asked
+            # for a forced full-HTML render must not be silently
+            # dropped by a concurrently-set _skip_render.
+            skip_render = getattr(self.view_instance, "_skip_render", False)
+            force_full_html = getattr(self.view_instance, "_force_full_html", False)
+            if skip_render:
+                self.view_instance._skip_render = False
+            if skip_render and not force_full_html:
+                logger.debug(
+                    "[djust] Tick on %s skipped render via _skip_render",
+                    self.view_instance.__class__.__name__,
+                )
+                await self._flush_all_pending()
+                return False
+
             # Skip render if tick handler didn't change any state.
             # Honor _force_full_html (set by set_changed_keys(), #1981)
             # like the event paths do (runtime.py / handle_event) — an
@@ -4282,9 +4314,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # snapshot, so without this guard the hatch would be
             # silently dropped on the tick path (#1646 parallel-path).
             post_assigns = _snapshot_assigns(self.view_instance)
-            if pre_assigns == post_assigns and not getattr(
-                self.view_instance, "_force_full_html", False
-            ):
+            if pre_assigns == post_assigns and not force_full_html:
                 logger.debug(
                     "[djust] Tick on %s produced no state changes, skipping render",
                     self.view_instance.__class__.__name__,
