@@ -1191,51 +1191,68 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if hasattr(view, "handle_async_result"):
                 await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)
 
-            # Re-render and send patches (mirrors the server_push path)
-            if hasattr(view, "_sync_state_to_rust"):
-                await sync_to_async(view._sync_state_to_rust)()
+            # Serialise on the SAME lock server_push / db_notify / _tick_once
+            # use, and for the same reason: the render helper documents that its
+            # caller must already hold it, and the PyO3 view's VDOM baseline is
+            # not thread-safe (#2830).
+            #
+            # Unlike those paths this one WAITS rather than taking a bounded
+            # wait and skipping: a skipped async render is an async result the
+            # client never receives, whereas a delayed one still lands.
+            async with self._render_lock:
+                # Identity re-check INSIDE the lock (#1940): the guard above ran
+                # before an unbounded wait, during which the view can be torn down
+                # or replaced. Rendering the stale view would bump the
+                # connection-wide version and overwrite _recovery_html with
+                # old-view HTML. (The wait's cost to the tick / broadcast paths is
+                # documented on the error arm below.)
+                if self.view_instance is not view:
+                    return
+                # Re-render and send patches (mirrors the server_push path)
+                if hasattr(view, "_sync_state_to_rust"):
+                    await sync_to_async(view._sync_state_to_rust)()
 
-            html, patches, version = await sync_to_async(view.render_with_diff)()
+                html, patches, version = await sync_to_async(view.render_with_diff)()
 
-            if patches is not None:
-                patch_list = fast_json_loads(patches) if patches else []
-                # Refresh the recovery baseline so a later request_html (e.g.
-                # an async-triggered patch that fails on the client) has fresh
-                # HTML to serve. Mirrors handle_event and server_push (#1202).
-                # Without this, an html_recovery that already consumed
-                # _recovery_html leaves it None, the next request_html returns
-                # "Recovery HTML unavailable", and the client freezes at the
-                # transitional state even though the backend advanced (#1636).
-                # Stamp the consumer-owned wire version (#1788), discarding the
-                # Rust ``version`` for the wire, AND arm recovery in one step so
-                # _recovery_version == this frame's version (#1817).
-                version = self._next_version_armed(html)
-                await self._send_update(
-                    patches=patch_list,
-                    version=version,
-                    event_name=event_name,
-                    source="async",
-                )
-            else:
-                # Full HTML fallback
-                html_stripped, html_content = await sync_to_async(
-                    lambda h: (
-                        view._strip_comments_and_whitespace(h),
-                        view._extract_liveview_content(view._strip_comments_and_whitespace(h)),
+                if patches is not None:
+                    patch_list = fast_json_loads(patches) if patches else []
+                    # Refresh the recovery baseline so a later request_html (e.g.
+                    # an async-triggered patch that fails on the client) has fresh
+                    # HTML to serve. Mirrors handle_event and server_push (#1202).
+                    # Without this, an html_recovery that already consumed
+                    # _recovery_html leaves it None, the next request_html returns
+                    # "Recovery HTML unavailable", and the client freezes at the
+                    # transitional state even though the backend advanced (#1636).
+                    # Stamp the consumer-owned wire version (#1788), discarding the
+                    # Rust ``version`` for the wire, AND arm recovery in one step so
+                    # _recovery_version == this frame's version (#1817).
+                    version = self._next_version_armed(html)
+                    await self._send_update(
+                        patches=patch_list,
+                        version=version,
+                        event_name=event_name,
+                        source="async",
                     )
-                )(html)
-                # The fallback sends the full render to the client, so the
-                # recovery baseline must track it too (#1636). Consumer-owned
-                # wire version + recovery arm in one step (#1788, #1817).
-                version = self._next_version_armed(html)
-                await self._send_update(
-                    html=html_content,
-                    version=version,
-                    event_name=event_name,
-                    source="async",
-                )
+                else:
+                    # Full HTML fallback
+                    html_stripped, html_content = await sync_to_async(
+                        lambda h: (
+                            view._strip_comments_and_whitespace(h),
+                            view._extract_liveview_content(view._strip_comments_and_whitespace(h)),
+                        )
+                    )(html)
+                    # The fallback sends the full render to the client, so the
+                    # recovery baseline must track it too (#1636). Consumer-owned
+                    # wire version + recovery arm in one step (#1788, #1817).
+                    version = self._next_version_armed(html)
+                    await self._send_update(
+                        html=html_content,
+                        version=version,
+                        event_name=event_name,
+                        source="async",
+                    )
 
-            await self._flush_all_pending()
+                await self._flush_all_pending()
 
         except Exception as e:
             error = e
@@ -1267,37 +1284,60 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
 
                     # Re-render to show error state
-                    if hasattr(view, "_sync_state_to_rust"):
-                        await sync_to_async(view._sync_state_to_rust)()
+                    # Same lock as the success arm, the event path and the tick
+                    # path (#2830). This arm does the SAME render +
+                    # version-allocate + send, so leaving it lock-free kept a
+                    # server-initiated ``source="async"`` frame — the #2829
+                    # enabler — racing an event-path render. Reachable whenever a
+                    # callback raises AND the view defines ``handle_async_result``,
+                    # which is the documented error-state pattern.
+                    #
+                    # Cost, recorded because it is a deliberate trade: this WAITS
+                    # unboundedly, so a slow render holds the lock while the tick
+                    # and broadcast paths — bounded 0.1s wait, SKIP on timeout —
+                    # drop their renders for that window (a stateful tick handler
+                    # loses the work, not just latency). That matches the
+                    # documented contention philosophy (db_notify's note), but it
+                    # is why an async render must not be slow.
+                    async with self._render_lock:
+                        # Identity re-check INSIDE the lock: the guard above ran
+                        # before an UNBOUNDED wait, during which the view can be
+                        # torn down or replaced (#1940). Rendering the stale view
+                        # would bump the connection-wide version and overwrite
+                        # _recovery_html with old-view HTML.
+                        if self.view_instance is not view:
+                            return
+                        if hasattr(view, "_sync_state_to_rust"):
+                            await sync_to_async(view._sync_state_to_rust)()
 
-                    html, patches, version = await sync_to_async(view.render_with_diff)()
+                        html, patches, version = await sync_to_async(view.render_with_diff)()
 
-                    if patches is not None:
-                        patch_list = fast_json_loads(patches) if patches else []
-                        # Render-send: arm recovery so _recovery_version tracks
-                        # this error re-render's version (#1817). ``html`` is the
-                        # pre-strip render from render_with_diff() above.
-                        await self._send_update(
-                            patches=patch_list,
-                            version=self._next_version_armed(html),
-                            event_name=event_name,
-                            source="async",
-                        )
-                    else:
-                        html_stripped, html_content = await sync_to_async(
-                            lambda h: (
-                                view._strip_comments_and_whitespace(h),
-                                view._extract_liveview_content(
-                                    view._strip_comments_and_whitespace(h)
-                                ),
+                        if patches is not None:
+                            patch_list = fast_json_loads(patches) if patches else []
+                            # Render-send: arm recovery so _recovery_version tracks
+                            # this error re-render's version (#1817). ``html`` is the
+                            # pre-strip render from render_with_diff() above.
+                            await self._send_update(
+                                patches=patch_list,
+                                version=self._next_version_armed(html),
+                                event_name=event_name,
+                                source="async",
                             )
-                        )(html)
-                        await self._send_update(
-                            html=html_content,
-                            version=self._next_version_armed(html),
-                            event_name=event_name,
-                            source="async",
-                        )
+                        else:
+                            html_stripped, html_content = await sync_to_async(
+                                lambda h: (
+                                    view._strip_comments_and_whitespace(h),
+                                    view._extract_liveview_content(
+                                        view._strip_comments_and_whitespace(h)
+                                    ),
+                                )
+                            )(html)
+                            await self._send_update(
+                                html=html_content,
+                                version=self._next_version_armed(html),
+                                event_name=event_name,
+                                source="async",
+                            )
 
                 except Exception:
                     logger.exception(
