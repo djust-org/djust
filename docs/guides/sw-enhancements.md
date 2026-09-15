@@ -531,6 +531,6 @@ async function flushBatch() {
 
 ## Related Documentation
 
-- [PWA Guide](pwa.md) — Current PWA setup and configuration
+- [PWA Guide](../website/guides/pwa.md) — Current PWA setup and configuration
 - [Roadmap](../roadmap.md) — Strategic vision
 - [Deployment Guide](DEPLOYMENT.md) — Production deployment considerations
