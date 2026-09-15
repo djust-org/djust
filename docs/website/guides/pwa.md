@@ -173,28 +173,65 @@ Visual offline status banner:
 
 ## Service Worker Configuration
 
+Configuration lives in `DJUST_CONFIG` as **flat `PWA_*` keys** — there is no
+`DJUST_PWA` dict setting:
+
 ```python
 # settings.py
-DJUST_PWA = {
-    'MANIFEST': {
-        'name': 'My Application',
-        'short_name': 'MyApp',
-        'theme_color': '#007bff',
-        'background_color': '#ffffff',
-        'display': 'standalone',
-        'icons': [
-            {'src': '/static/icons/icon-192.png', 'sizes': '192x192', 'type': 'image/png'}
-        ]
-    },
-    'SERVICE_WORKER': {
-        'CACHE_NAME': 'djust-v1',
-        'STRATEGY': 'cache-first',  # or 'network-first'
-        'URLS_TO_CACHE': ['/static/css/app.css', '/static/js/app.js'],
-        'OFFLINE_URL': '/offline/',
-        'EXCLUDE_PATTERNS': [r'/admin/', r'/api/websocket/']
-    }
+DJUST_CONFIG = {
+    # Manifest
+    "PWA_NAME": "My Application",
+    "PWA_SHORT_NAME": "MyApp",
+    "PWA_DESCRIPTION": "A djust-powered app",
+    "PWA_THEME_COLOR": "#007bff",
+    "PWA_BACKGROUND_COLOR": "#ffffff",
+    "PWA_DISPLAY": "standalone",          # fullscreen | standalone | minimal-ui
+    "PWA_ICONS": [
+        {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    ],
+
+    # Service worker
+    "PWA_CACHE_NAME": "djust-v1",
+    "PWA_CACHE_STRATEGY": "cache-first",  # or "network-first"
+    "PWA_PRECACHE_URLS": ["/static/css/app.css", "/static/js/app.js"],
+    "PWA_OFFLINE_PAGE": "/offline/",
+    "PWA_CACHE_DURATION": 86400,
+    "PWA_ENABLE_BACKGROUND_SYNC": False,
+    "PWA_SYNC_ENDPOINT": "/djust/pwa/sync/",
 }
 ```
+
+The template tag arguments (`{% djust_pwa_head name="My App" theme_color="#007bff" %}`)
+override the corresponding keys for one page.
+
+A handful of manifest values can also be set as plain Django settings, which
+the tags fall back to when no argument is passed: `DJUST_PWA_NAME`,
+`DJUST_PWA_SHORT_NAME`, `DJUST_PWA_DESCRIPTION`, `DJUST_PWA_THEME_COLOR`,
+`DJUST_PWA_BACKGROUND_COLOR`.
+
+## Offline Storage
+
+Structured offline data goes through a configurable backend, chosen once for
+the project:
+
+```python
+DJUST_CONFIG = {
+    "PWA_OFFLINE_STORAGE": "indexeddb",  # or "localstorage" / "sessionstorage"
+}
+```
+
+`indexeddb` is the default. What a view sets is **not** a backend selector:
+
+```python
+class TodoView(OfflineMixin, LiveView):
+    offline_storage = "todos"   # a NAMESPACE, not a backend
+```
+
+`offline_storage` is passed through as `storage_name=` — it names the key
+space this view persists under, so two views with different values keep
+separate data **on the same backend**. To change where data is stored, set
+`PWA_OFFLINE_STORAGE`; to change which slice of it a view owns, set
+`offline_storage`.
 
 ## Example: Offline Todo App
 
