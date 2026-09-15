@@ -38,20 +38,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # doc path -> dotted paths of the classes whose surface it documents
+#
+# Only list paths that exist. A path here that is missing from the repo is a
+# hard failure (see the `listed in DOC_CLASSES but missing` return below), so
+# deleting or moving a doc must update this dict in the same change. The
+# legacy `docs/guides/` copies of pwa and multi-tenant used to be listed
+# alongside their `docs/website/` counterparts, documenting the same classes
+# twice; they were removed when those duplicates were merged and deleted.
 DOC_CLASSES: dict[str, tuple[str, ...]] = {
-    "docs/guides/pwa.md": (
-        "djust.pwa.mixins.PWAMixin",
-        "djust.pwa.mixins.OfflineMixin",
-        "djust.pwa.mixins.SyncMixin",
-    ),
     "docs/website/guides/pwa.md": (
         "djust.pwa.mixins.PWAMixin",
         "djust.pwa.mixins.OfflineMixin",
         "djust.pwa.mixins.SyncMixin",
-    ),
-    "docs/guides/multi-tenant.md": (
-        "djust.tenants.mixin.TenantMixin",
-        "djust.tenants.mixin.TenantScopedMixin",
     ),
     "docs/website/guides/multi-tenant.md": (
         "djust.tenants.mixin.TenantMixin",

@@ -7,8 +7,8 @@ This directory contains comprehensive documentation for djust organized by topic
 ### 📚 Getting Started
 - **[Quick Start Guide](guides/QUICKSTART.md)** - Get up and running in 5 minutes
 - **[Authentication & Authorization](guides/authentication.md)** - View-level and handler-level auth with Django permissions
-- **[PWA Guide](guides/pwa.md)** - Build offline-first Progressive Web Apps
-- **[Multi-Tenant Guide](guides/multi-tenant.md)** - SaaS architecture with tenant isolation
+- **[PWA Guide](website/guides/pwa.md)** - Build offline-first Progressive Web Apps
+- **[Multi-Tenant Guide](website/guides/multi-tenant.md)** - SaaS architecture with tenant isolation
 - **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
 - **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
 - **[MCP Server](guides/mcp-server.md)** - AI assistant integration via Model Context Protocol
@@ -30,7 +30,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket
 - **[Hooks](guides/hooks.md)** - Client-side JavaScript lifecycle hooks
 - **[on_mount Hooks](website/guides/on-mount-hooks.md)** - Cross-cutting server-side mount hooks (auth, telemetry, tenant resolution)
-- **[Model Binding](guides/model-binding.md)** - Two-way data binding for form inputs
+- **[Model Binding](website/guides/model-binding.md)** - Two-way data binding for form inputs
 
 ### 🎨 Components
 - **[Component System Overview](components/COMPONENTS.md)** - shadcn-style component philosophy

@@ -147,7 +147,11 @@ The ModelBindingMixin enforces these rules:
 - Attributes starting with `_` cannot be set
 - Fields like `template_name`, `request`, `session`, and other internals are blocked
 - Only attributes that already exist on the view can be updated
-- Use `allowed_model_fields` to restrict bindable fields explicitly
+- `allowed_model_fields` is **fail-closed**: a field is bindable only if it
+  appears as `dj-model` in the rendered template source, or is listed here.
+  Leaving it as `None` means "template-derived only" — never "everything"
+- The blocked set is explicit, not a heuristic: `template_name`, `request`,
+  `session`, `kwargs`, `args`, `use_actors` and `temporary_assigns`
 
 ```python
 class AdminView(LiveView):
@@ -189,6 +193,91 @@ class ProductSearch(LiveView):
         {% if query %}<p>No results for "{{ query }}"</p>{% endif %}
     {% endfor %}
 </div>
+```
+
+## Example: Form with Validation
+
+`dj-model` with the modifiers doing the work — debounced while typing, lazy on
+blur — and validation run in `get_context_data` so it reflects every keystroke:
+
+```python
+class RegistrationForm(LiveView):
+    template_name = "register.html"
+
+    def mount(self, request, **kwargs):
+        self.username = ""
+        self.email = ""
+        self.password = ""
+        self.agree_terms = False
+        self.errors = {}
+
+    def validate(self):
+        self.errors = {}
+        if self.username and len(self.username) < 3:
+            self.errors["username"] = "Must be at least 3 characters"
+        if self.email and "@" not in self.email:
+            self.errors["email"] = "Invalid email address"
+        if self.password and len(self.password) < 8:
+            self.errors["password"] = "Must be at least 8 characters"
+
+    def get_context_data(self, **kwargs):
+        self.validate()
+        return {
+            "username": self.username,
+            "email": self.email,
+            "agree_terms": self.agree_terms,
+            "errors": self.errors,
+        }
+```
+
+```html
+<form dj-submit="register">
+    <label for="u">Username</label>
+    <input id="u" type="text" dj-model.debounce-300="username" value="{{ username }}">
+    {% if errors.username %}<span class="error">{{ errors.username }}</span>{% endif %}
+
+    <label for="e">Email</label>
+    <input id="e" type="email" dj-model.lazy="email" value="{{ email }}">
+    {% if errors.email %}<span class="error">{{ errors.email }}</span>{% endif %}
+
+    <label><input type="checkbox" dj-model="agree_terms"> I agree</label>
+    <button type="submit">Register</button>
+</form>
+```
+
+`debounce-300` waits for a pause in typing before syncing, so validation does
+not fire on every character. `lazy` syncs on blur instead of on input.
+
+## Example: Multi-Select Filter
+
+A `<select multiple>` binds to a list. The list arrives as one value and is
+coerced to the attribute's existing type:
+
+```python
+class FilterView(LiveView):
+    template_name = "filter.html"
+
+    def mount(self, request, **kwargs):
+        self.selected_tags = []
+        self.sort_by = "name"
+
+    def get_context_data(self, **kwargs):
+        items = Item.objects.all()
+        if self.selected_tags:
+            items = items.filter(tags__name__in=self.selected_tags)
+        return {"items": items.order_by(self.sort_by)}
+```
+
+```html
+<select dj-model="selected_tags" multiple>
+    <option value="python">Python</option>
+    <option value="django">Django</option>
+</select>
+
+<select dj-model="sort_by">
+    <option value="name">Name</option>
+    <option value="-created">Newest</option>
+</select>
 ```
 
 ## Combining with Event Handlers

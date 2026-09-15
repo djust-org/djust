@@ -498,4 +498,4 @@ Canonicalized in v0.9.1 retro / Action Tracker #183 / GitHub #1175.
 
 - [Security Guidelines for Contributors](../SECURITY_GUIDELINES.md) — banned patterns, code review checklist, security testing
 - [Event Handlers](../EVENT_HANDLERS.md) — `@event_handler` decorator reference
-- [Multi-Tenant Security](multi-tenant.md) — tenant isolation patterns
+- [Multi-Tenant Security](../website/guides/multi-tenant.md) — tenant isolation patterns
