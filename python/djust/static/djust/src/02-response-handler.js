@@ -25,6 +25,7 @@
 function stripClientOwnedFrameFlags(data) {
     if (data && typeof data === 'object') {
         delete data._deferred;
+        delete data._versionConsumed;
     }
     return data;
 }
@@ -81,14 +82,20 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
-            } else if (data._deferred) {
-                // A frame we deliberately deferred while a user event was in
-                // flight (see _tickBuffer, 03-websocket.js). Its version was
-                // already consumed server-side, so the gap between it and our
-                // cursor is OUR deferral, not a dropped patch — applying it must
-                // not trigger a recovery morph (#2829). Forward only: a flush
-                // runs after later frames have advanced the cursor, so an
-                // unconditional assignment here would walk it backwards.
+            } else if (data._deferred && data._versionConsumed) {
+                // A deferred frame whose version was ALREADY consumed at
+                // receipt (see _tickBuffer, 03-websocket.js): the gap between it
+                // and the cursor is our own deferral, not a dropped patch, so
+                // applying it must not trigger a recovery (#2829). Forward only —
+                // a flush runs after later frames may have advanced the cursor.
+                //
+                // `_versionConsumed` is load-bearing: a deferred frame whose
+                // version was NOT consumed (the buffer site declined it because
+                // it was non-contiguous) must FALL THROUGH to the strict check
+                // below. Advancing for it here would vouch for the versions in
+                // between and swallow the drop permanently — which is exactly
+                // what an unconditional advance did on the noop-close path,
+                // where no strict check runs on the closing frame.
                 clientVdomVersion = Math.max(clientVdomVersion, data.version);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)

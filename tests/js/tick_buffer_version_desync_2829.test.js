@@ -160,6 +160,29 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         ).toBe(1);
     });
 
+    it('a drop inside the window is not vouched for when the window closes with a NOOP', async () => {
+        // A server noop carries NO version (websocket.py sends {"type":"noop"}),
+        // so it closes the pending-event window without a strict check of its
+        // own — the buffered frame is flushed instead. If that flush advances
+        // the cursor unconditionally, the contiguity decision made at buffer
+        // time is discarded and the dropped version is vouched for forever.
+        const { dom, sentMessages, getSeqState } = createDom();
+        const ws = await makeWS(dom);
+
+        ws.sendEvent('click', { n: 1 });
+        const refA = getSeqState().pendingEventRef;
+
+        // v2 is lost; v3 is buffered and DECLINED (non-contiguous).
+        await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
+        // The window closes with a versionless noop.
+        await ws.handleMessage({ type: 'noop', ref: refA });
+
+        expect(
+            requestHtmlCount(sentMessages),
+            'a declined deferred frame must not be flushed as if its version were accounted for',
+        ).toBe(1);
+    });
+
     it('a wire-supplied _deferred flag cannot suppress detection', async () => {
         const { dom, sentMessages, getSeqState } = createDom();
         const ws = await makeWS(dom);
@@ -201,10 +224,19 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
         await ws.handleMessage({ type: 'patch', patches: [], version: 4, source: 'event', ref: refA });
 
+        // ≥1, not exactly 1: with the contiguity guard the gap is now visible
+        // to BOTH the closing frame (strict check) and the flush (the declined
+        // frame no longer vouches for itself). Each detection sends its own
+        // request_html, and recovery converges — so the property under test is
+        // that the drop is SURFACED AT ALL. Asserting exactly 1 here would
+        // re-introduce the vouch-for-the-gap behaviour this case exists to
+        // forbid. (Reducing the double round-trip to one needs a
+        // recovery-in-flight guard on the shared mismatch branch — noted in
+        // review as non-blocking, deliberately not bundled into this fix.)
         expect(
             requestHtmlCount(sentMessages),
             'a patch lost inside the buffered window must still force recovery',
-        ).toBe(1);
+        ).toBeGreaterThanOrEqual(1);
     });
 
 });

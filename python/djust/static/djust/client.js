@@ -308,6 +308,7 @@ function reinitLiveViewForTurboNav() {
 function stripClientOwnedFrameFlags(data) {
     if (data && typeof data === 'object') {
         delete data._deferred;
+        delete data._versionConsumed;
     }
     return data;
 }
@@ -364,14 +365,20 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
-            } else if (data._deferred) {
-                // A frame we deliberately deferred while a user event was in
-                // flight (see _tickBuffer, 03-websocket.js). Its version was
-                // already consumed server-side, so the gap between it and our
-                // cursor is OUR deferral, not a dropped patch — applying it must
-                // not trigger a recovery morph (#2829). Forward only: a flush
-                // runs after later frames have advanced the cursor, so an
-                // unconditional assignment here would walk it backwards.
+            } else if (data._deferred && data._versionConsumed) {
+                // A deferred frame whose version was ALREADY consumed at
+                // receipt (see _tickBuffer, 03-websocket.js): the gap between it
+                // and the cursor is our own deferral, not a dropped patch, so
+                // applying it must not trigger a recovery (#2829). Forward only —
+                // a flush runs after later frames may have advanced the cursor.
+                //
+                // `_versionConsumed` is load-bearing: a deferred frame whose
+                // version was NOT consumed (the buffer site declined it because
+                // it was non-contiguous) must FALL THROUGH to the strict check
+                // below. Advancing for it here would vouch for the versions in
+                // between and swallow the drop permanently — which is exactly
+                // what an unconditional advance did on the noop-close path,
+                // where no strict check runs on the closing frame.
                 clientVdomVersion = Math.max(clientVdomVersion, data.version);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
@@ -1555,7 +1562,16 @@ class LiveViewWebSocket {
                     // check treats the resulting gap as our own deferral rather
                     // than a dropped patch (#2829). The marker is client-side
                     // only and never goes back over the wire.
-                    _tickBuffer.push({ ...data, _deferred: true });
+                    const contiguous = (
+                        clientVdomVersion !== null &&
+                        typeof data.version === 'number' &&
+                        data.version === clientVdomVersion + 1
+                    );
+                    _tickBuffer.push({
+                        ...data,
+                        _deferred: true,
+                        _versionConsumed: contiguous,
+                    });
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -1570,14 +1586,18 @@ class LiveViewWebSocket {
                     // shipped, the drop class `_hotreload_broadcast_suppressed`
                     // exists for (#763/#2215/#2233). Silently accepting those
                     // leaves the client permanently diverged with recovery never
-                    // firing. Leaving the cursor alone lets the EXISTING strict
-                    // check surface the gap on the next frame, so the loss still
-                    // recovers through the normal path.
-                    if (
-                        clientVdomVersion !== null &&
-                        typeof data.version === 'number' &&
-                        data.version === clientVdomVersion + 1
-                    ) {
+                    // firing.
+                    //
+                    // Declining the version is only half of it: the decision has
+                    // to SURVIVE to the flush, or the replay re-vouches for the
+                    // frame (that is what swallowed the drop on the noop-close
+                    // path, where the closing frame runs no strict check). So the
+                    // frame carries `_versionConsumed`, and the replay advances
+                    // the cursor only for frames whose version really was
+                    // consumed. A declined frame falls through to the strict
+                    // check and the loss still surfaces — via the closing frame,
+                    // or via the flush when the window closed with a noop.
+                    if (contiguous) {
                         clientVdomVersion = data.version;
                     }
                     if (globalThis.djustDebug) {

@@ -874,7 +874,16 @@ class LiveViewWebSocket {
                     // check treats the resulting gap as our own deferral rather
                     // than a dropped patch (#2829). The marker is client-side
                     // only and never goes back over the wire.
-                    _tickBuffer.push({ ...data, _deferred: true });
+                    const contiguous = (
+                        clientVdomVersion !== null &&
+                        typeof data.version === 'number' &&
+                        data.version === clientVdomVersion + 1
+                    );
+                    _tickBuffer.push({
+                        ...data,
+                        _deferred: true,
+                        _versionConsumed: contiguous,
+                    });
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -889,14 +898,18 @@ class LiveViewWebSocket {
                     // shipped, the drop class `_hotreload_broadcast_suppressed`
                     // exists for (#763/#2215/#2233). Silently accepting those
                     // leaves the client permanently diverged with recovery never
-                    // firing. Leaving the cursor alone lets the EXISTING strict
-                    // check surface the gap on the next frame, so the loss still
-                    // recovers through the normal path.
-                    if (
-                        clientVdomVersion !== null &&
-                        typeof data.version === 'number' &&
-                        data.version === clientVdomVersion + 1
-                    ) {
+                    // firing.
+                    //
+                    // Declining the version is only half of it: the decision has
+                    // to SURVIVE to the flush, or the replay re-vouches for the
+                    // frame (that is what swallowed the drop on the noop-close
+                    // path, where the closing frame runs no strict check). So the
+                    // frame carries `_versionConsumed`, and the replay advances
+                    // the cursor only for frames whose version really was
+                    // consumed. A declined frame falls through to the strict
+                    // check and the loss still surfaces — via the closing frame,
+                    // or via the flush when the window closed with a noop.
+                    if (contiguous) {
                         clientVdomVersion = data.version;
                     }
                     if (globalThis.djustDebug) {
