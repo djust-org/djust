@@ -58,6 +58,30 @@ class FormMixin:
     success_message: str
     error_message: str
 
+    # Template-visible state this mixin injects at runtime (#2827). The
+    # `djust_typecheck` / T018 static context extraction deliberately skips
+    # framework modules (djust.*) when AST-walking the MRO, so these runtime
+    # `self.x = ...` assignments would otherwise be invisible and every
+    # `{{ form_data }}`-style reference on a FormMixin-based view would
+    # false-positive. Framework mixins declare their injected context keys
+    # here instead; `_extract_context_keys_from_ast` reads the manifest
+    # without needing to AST-walk framework source. Keep in sync with the
+    # assignments in mount()/_init_form_state()/form handlers — pinned by
+    # test_form_mixin_manifest_covers_all_runtime_assignments.
+    _djust_injects_context = frozenset(
+        {
+            "form_data",
+            "form_choices",
+            "form_errors",
+            "field_errors",
+            "is_valid",
+            "success_message",
+            "error_message",
+            "model_pk",
+            "model_label",
+        }
+    )
+
     def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialize form on view mount"""
         super().mount(request, **kwargs)  # type: ignore[misc]  # mixin: LiveView provides mount()

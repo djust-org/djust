@@ -248,6 +248,113 @@ def test_extract_context_keys_from_ast_finds_property_methods():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Framework-mixin context manifests (#2827)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_extract_context_keys_from_ast_reads_form_mixin_manifest():
+    """#2827: ``FormMixin`` sets ``self.form_data``/``self.field_errors``/...
+    at runtime from ``djust.forms`` — a module the AST extraction's
+    framework-skip filter deliberately excludes. Without the
+    ``_djust_injects_context`` manifest those names are invisible, so every
+    ``{{ form_data }}`` reference on a FormMixin-based view false-positives
+    (both ``djust_typecheck`` and the T018 system check)."""
+    from djust.forms import FormMixin
+
+    class _FormView(FormMixin, LiveView):
+        pass
+
+    keys = _extract_context_keys_from_ast(_FormView)
+    assert {
+        "form_data",
+        "form_choices",
+        "form_errors",
+        "field_errors",
+        "is_valid",
+        "success_message",
+        "error_message",
+        "model_pk",
+        "model_label",
+    } <= keys
+
+
+def test_check_view_form_mixin_template_vars_resolve(monkeypatch):
+    """End-to-end through ``_check_view`` (the path both entry points share):
+    a FormMixin-based view whose template references only mixin-injected
+    names must produce NO report."""
+    from djust.forms import FormMixin
+
+    path = _template("<p>{{ form_data }}</p><p>{{ field_errors }}</p>")
+
+    class _MixinFormView(FormMixin, LiveView):
+        template_name = "mixin_form.html"
+
+    monkeypatch.setattr(
+        "djust.management.commands.djust_typecheck._find_template_path",
+        lambda _tn: path,
+    )
+    assert _check_view(_MixinFormView) is None
+
+
+def test_check_view_without_mixin_still_flags_same_names(monkeypatch):
+    """Gate-off pair for the manifest fix (#1468): the SAME template on a
+    view with NO framework mixin must still be flagged — proving the silence
+    above comes from the manifest, not from the names being special-cased."""
+    path = _template("<p>{{ form_data }}</p><p>{{ field_errors }}</p>")
+
+    class _PlainView(LiveView):
+        template_name = "plain_form.html"
+
+    monkeypatch.setattr(
+        "djust.management.commands.djust_typecheck._find_template_path",
+        lambda _tn: path,
+    )
+    report = _check_view(_PlainView)
+    assert report is not None
+    names = {m["name"] for m in report["missing"]}
+    assert {"form_data", "field_errors"} <= names
+
+
+def test_form_mixin_manifest_covers_all_runtime_assignments():
+    """Anti-drift pin (#1125): every public ``self.X = ...`` assignment in
+    FormMixin's source must be covered by the ``_djust_injects_context``
+    manifest. If a future change adds a new runtime-injected attr without
+    updating the manifest, the template checker goes blind to it again —
+    this test fails at that commit instead."""
+    import ast
+    import inspect
+    import textwrap
+
+    from djust.forms import FormMixin
+
+    src = inspect.getsource(FormMixin)
+    tree = ast.parse(textwrap.dedent(src))
+    assigned: set[str] = set()
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and not target.attr.startswith("_")
+            ):
+                assigned.add(target.attr)
+
+    manifest = set(getattr(FormMixin, "_djust_injects_context", ()))
+    assert assigned, "sanity: FormMixin must assign public self attrs at runtime"
+    assert assigned <= manifest, (
+        "FormMixin assigns %r but the _djust_injects_context manifest only "
+        "declares %r — template context extraction will go blind to the "
+        "unlisted names (#2827)." % (sorted(assigned - manifest), sorted(manifest))
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # _check_view integration tests
 # ─────────────────────────────────────────────────────────────────────────────
 

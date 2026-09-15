@@ -1463,9 +1463,13 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
                             # avoid emitting a duplicate V008 (Info) for the same line.
                             if _SERVICE_INSTANCE_KEYWORDS.search(call_name):
                                 continue
-                            # Skip calls to module-level functions whose return
-                            # annotation declares a primitive type (e.g. -> str).
-                            if call_name in primitive_return_funcs:
+                            # Skip calls to same-module functions/methods whose
+                            # return annotation declares a primitive type (e.g.
+                            # -> str). Compare the call's FINAL name segment:
+                            # `_get_call_name` returns dotted names for attribute
+                            # calls (e.g. `game.claim` for a method call), while
+                            # the collected set holds bare names (#2825).
+                            if call_name.rsplit(".", 1)[-1] in primitive_return_funcs:
                                 continue
                             # This is a non-primitive instantiation
                             if not _has_noqa(source_lines, stmt.lineno, "V008"):
@@ -1476,7 +1480,10 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
                                         % (relpath, stmt.lineno, call_name, target.attr),
                                         hint=(
                                             "If '%s' is not serializable, use self._%s instead "
-                                            "or re-initialize in event handlers. "
+                                            "or re-initialize in event handlers. If it comes "
+                                            "from a helper defined in THIS module, annotate the "
+                                            "helper's return type (e.g. `-> str`) and this check "
+                                            "will settle it (imported helpers are not resolved). "
                                             "See: docs/guides/services.md"
                                             % (call_name, target.attr)
                                         ),
@@ -1530,24 +1537,34 @@ _PRIMITIVE_ANNOTATION_NAMES = frozenset(
 
 
 def _build_primitive_return_funcs(tree: ast.Module) -> set[str]:
-    """Return the set of top-level function names whose return annotation is a primitive type.
+    """Return the set of function/method names whose return annotation is a primitive type.
 
-    Only inspects module-level (top-level) function definitions.  If a function
-    is annotated with ``-> str``, ``-> int``, ``-> bool``, ``-> float``,
-    ``-> bytes``, or any of the collection primitives (``list``, ``dict``,
-    ``set``, ``tuple`` and their capitalised aliases), its name is included in
-    the returned set.
+    Inspects module-level (top-level) function definitions AND the methods of
+    top-level classes (#2825) — a ``-> str`` on a method is the ordinary shape
+    for the thing a ``mount()`` calls. If a function or method is annotated
+    with ``-> str``, ``-> int``, ``-> bool``, ``-> float``, ``-> bytes``, or
+    any of the collection primitives (``list``, ``dict``, ``set``, ``tuple``
+    and their capitalised aliases), its name is included in the returned set.
+
+    The set holds BARE names; callers must compare the call's final name
+    segment (``call_name.rsplit(".", 1)[-1]``), since ``_get_call_name``
+    returns dotted names for attribute calls (e.g. ``game.claim``).
+
+    Scope note: only helpers defined in the SAME module as the scanned view
+    are collected — annotations on helpers imported from another module are
+    not resolved.
 
     This is used by the V008 check to avoid false-positive warnings when
     ``mount()`` assigns the result of a helper function that is provably
     primitive because of its return-type annotation.
     """
-    safe_funcs = set()
-    for node in tree.body:
+    safe_funcs: set[str] = set()
+
+    def _collect(node: ast.AST) -> None:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
+            return
         if node.returns is None:
-            continue
+            return
         annotation = node.returns
         ann_name = None
         if isinstance(annotation, ast.Name):
@@ -1557,4 +1574,10 @@ def _build_primitive_return_funcs(tree: ast.Module) -> set[str]:
             ann_name = annotation.value
         if ann_name in _PRIMITIVE_ANNOTATION_NAMES:
             safe_funcs.add(node.name)
+
+    for node in tree.body:
+        _collect(node)
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                _collect(item)
     return safe_funcs

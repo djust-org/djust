@@ -135,9 +135,14 @@ def _extract_context_keys_from_ast(cls: type) -> Set[str]:
        (``mount``, event handlers, helper methods — they all populate
        public state that templates can read).
     3. Properties declared on the class (``@property``-decorated methods).
+    4. The ``_djust_injects_context`` manifest on framework mixins (#2827).
 
     Framework base classes (``djust.*`` / ``djust_*``) are skipped to avoid
-    surfacing internal helpers as user-visible context keys.
+    surfacing internal helpers as user-visible context keys. Framework
+    MIXINS that deliberately inject template-visible state (e.g.
+    ``FormMixin``) declare those names in a ``_djust_injects_context``
+    class attribute, which is read WITHOUT needing to AST-walk framework
+    source — the module-skip filter below does not apply to it.
     """
     keys: Set[str] = set()
     import inspect
@@ -146,6 +151,13 @@ def _extract_context_keys_from_ast(cls: type) -> Set[str]:
     for klass in cls.__mro__:
         if klass is object:
             continue
+        # Framework mixins may declare the context keys they inject via a
+        # manifest (#2827) — read it (only from classes that DECLARE it, so
+        # inherited manifests aren't re-walked) BEFORE the module-skip
+        # filters below.
+        injected = klass.__dict__.get("_djust_injects_context")
+        if injected:
+            keys.update(injected)
         mod = getattr(klass, "__module__", "") or ""
         # Skip framework classes: djust internals, Django, DRF, and builtins.
         # Test / example modules that live under djust.* are kept so our own
