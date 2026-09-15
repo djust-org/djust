@@ -2971,7 +2971,7 @@ class ViewRuntime:
         coerced_params = validation.get("coerced_params", params)
 
         # Snapshot pre-handler assigns for change detection.
-        from .websocket import _compute_changed_keys, _snapshot_assigns
+        from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
         pre_assigns = _snapshot_assigns(view)
         # Identity snapshot for the #700 push_commands-only auto-skip below:
@@ -3058,11 +3058,15 @@ class ViewRuntime:
         ):
             await self._persist_state_after_event(target_view, event_name)
 
-        # Auto-detect unchanged state. Never auto-skip when the view explicitly
-        # requested a full-HTML render (``_force_full_html``) — mirrors the WS
-        # ``force_html`` guard on the skip path (websocket.py:3851-3852). The
-        # render branch consumes + resets the flag (see _render_and_send).
-        skip_render = getattr(view, "_skip_render", False)
+        # Auto-detect unchanged state. _resolve_skip_render owns the skip
+        # decision (#2834) — it consumes an explicit ``_skip_render`` so a
+        # stale True never leaks, and ``_force_full_html`` ALWAYS wins over
+        # it (a handler that explicitly requested a forced full-HTML render
+        # must not be silently dropped, the #1646 hatch-dropped class) — the
+        # same resolution as the WS tick/server_push/db_notify paths. The
+        # render branch consumes + resets the force flag (see
+        # _render_and_send).
+        skip_render = _resolve_skip_render(view)
         force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
@@ -3089,7 +3093,8 @@ class ViewRuntime:
         has_async = getattr(view, "_async_pending", None) is not None
 
         if skip_render:
-            view._skip_render = False
+            # (_skip_render was already consumed by _resolve_skip_render
+            # above — it is the single owner of that reset, #2834.)
             # Drain ALL queued side-effects BEFORE the noop, matching the WS
             # bespoke skip-render path (websocket.py:3941 — ``await
             # self._flush_all_pending()`` then ``_send_noop``). #1907 THE FLIP:

@@ -330,7 +330,17 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
         cwd=ROOT,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": "."},
+        # PREPEND the repo root ("." — so the probe sees this checkout's
+        # tests.corpus_shards plugin) to any AMBIENT PYTHONPATH, never replace
+        # it. Replacing it breaks every linked git worktree (#1810): the venv's
+        # editable djust.pth then wins and the probe's pytest imports `djust`
+        # from the MAIN checkout while importing python/djust/tests/conftest.py
+        # by path from THIS tree — ImportPathMismatchError, shard collection
+        # fails, and the pre-push suite blocks every worktree push.
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(filter(None, [os.environ.get("PYTHONPATH", ""), "."])),
+        },
         timeout=180,
     )
     assert proc.returncode == 0, (
