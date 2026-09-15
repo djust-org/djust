@@ -142,3 +142,60 @@ Generated templates use djust directives:
 3. Include `yourapp.urls` in your root URL conf
 4. Create the model in `yourapp/models.py`
 5. Run `python manage.py makemigrations && python manage.py migrate`
+
+## Project and app scaffolding
+
+Beyond per-model CRUD generation, the `djust` CLI ships three commands for
+bootstrapping whole projects and apps:
+
+```bash
+# Modern entrypoint (recommended) — feature flags select what to wire
+python -m djust new myapp
+
+# Pre-canned feature combos
+python -m djust new myapp --with-auth --with-db --with-presence --with-streaming
+
+# Generate models, admin, migrations and views from a YAML schema
+python -m djust new myapp --from-schema schema.yml
+
+# Legacy entrypoints, mirroring Django's own names
+python -m djust startproject myproject
+python -m djust startapp myapp
+```
+
+### `djust new`
+
+`djust new <name>` creates a full Django project layout pre-configured for
+djust:
+
+| What you get | Default | Toggled by |
+|---|---|---|
+| Django project + initial app | always | — |
+| `LIVEVIEW_CONFIG` settings stub | always | — |
+| WebSocket routing wired into `asgi.py` | always | — |
+| Auth + login/logout LiveViews | off | `--with-auth` |
+| Postgres `LISTEN/NOTIFY` wiring | off | `--with-db` |
+| `PresenceMixin` example | off | `--with-presence` |
+| Stream-friendly base templates | off | `--with-streaming` |
+| Models generated from a schema file | off | `--from-schema schema.yml` |
+
+`--from-schema` reads a small YAML file describing models and fields, then
+generates models, admin, migrations, LiveViews and templates in one step.
+Handy for spikes.
+
+### `startproject` and `startapp`
+
+These mirror Django's `django-admin startproject` / `startapp` but add
+djust's defaults — `LIVEVIEW_CONFIG`, `LIVEVIEW_ALLOWED_MODULES`,
+`LiveSessionMiddleware`, and the WebSocket routing include. Reach for them
+when you want explicit Django parity rather than the curated `djust new`
+experience.
+
+## AI agent discovery
+
+Generated projects include an `AGENTS.md` pointing at the canonical
+[application conventions](../../ai/conventions.md) and the focused API
+references. Add project-specific rules there. Note that `djust new` does not
+rewrite an existing project directory; for an existing application, add the
+pointer to whatever agent entry file it already has. Agents do not
+automatically read a dependency's docs.
