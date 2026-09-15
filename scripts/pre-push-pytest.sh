@@ -68,10 +68,10 @@ STATUS=${PIPESTATUS[0]}
 # A node id is `path::name` or `path::name[params]`, so " - " can only occur
 # inside the brackets. Tracking bracket depth is therefore exact, not a
 # heuristic.
-FAILED_IDS=()
-while IFS= read -r _line; do
-    [ -n "$_line" ] && FAILED_IDS+=("$_line")
-done < <(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | awk '{
+# Node ids from `FAILED <nodeid> - <message>` lines. Shared by the branch run
+# and the base run below, so the two cannot drift in how they read a report.
+_extract_failed() {
+    grep -E '^FAILED ' "$1" | sed 's/^FAILED //' | awk '{
     depth = 0
     n = length($0)
     for (i = 1; i <= n; i++) {
@@ -81,7 +81,13 @@ done < <(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | awk '{
         else if (depth == 0 && substr($0, i, 3) == " - ") { print substr($0, 1, i - 1); next }
     }
     print $0
-}' | sort -u)
+}' | sort -u
+}
+
+FAILED_IDS=()
+while IFS= read -r _line; do
+    [ -n "$_line" ] && FAILED_IDS+=("$_line")
+done < <(_extract_failed "$REPORT")
 
 if [ "${#FAILED_IDS[@]}" -eq 0 ]; then
     echo
@@ -256,6 +262,49 @@ for _id in "${FAILED_IDS[@]}"; do
         *) UNRESOLVED=$((UNRESOLVED + 1)) ;;
     esac
 done
+
+# ORDER-DEPENDENT failures — a per-id re-run cannot see them.
+#
+# Every id above was re-run ALONE at the merge-base. A failure that appears only
+# when the whole suite runs together — test pollution, the class Gate 3's
+# three-clean-runs rule exists for — PASSES in isolation there, and is therefore
+# announced as NEW on this branch. That is the confidently-wrong answer this
+# script keeps meeting, reached from a fifth direction, and it is not rare: on
+# the 1.1 line, 14 `tests/unit` failures were reported as the branch's this way,
+# and every one of them fails identically on a pristine origin/1.1 checkout.
+#
+# Settled with ONE base-suite run over the same paths: an id failing in BOTH
+# runs is pre-existing, whatever the ordering does to it. Skipped when a run is
+# unresolved (that case blocks regardless) or when nothing was called new.
+if [ "${#NEW_IDS[@]}" -gt 0 ] && [ "$UNRESOLVED" -eq 0 ]; then
+    _BASE_REPORT=$(mktemp)
+    echo
+    echo "  Re-checking the ${#NEW_IDS[@]} new failure(s) against a FULL base run:"
+    echo "  a per-id re-run cannot reproduce order-dependent failures."
+    ( cd "$SCRATCH" && PYTHONPATH="$SCRATCH/python:$SCRATCH" \
+        bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q 2>&1 ) > "$_BASE_REPORT" || true
+    _BASE_FAILED=$(_extract_failed "$_BASE_REPORT")
+    _reclassified=0
+    _still_new=()
+    for _id in "${NEW_IDS[@]}"; do
+        if printf '%s\n' "$_BASE_FAILED" | grep -qxF -- "$_id"; then
+            PRE_IDS+=("$_id")
+            _reclassified=$((_reclassified + 1))
+        else
+            _still_new+=("$_id")
+        fi
+    done
+    if [ "${#_still_new[@]}" -gt 0 ]; then
+        NEW_IDS=("${_still_new[@]}")
+    else
+        NEW_IDS=()
+    fi
+    if [ "$_reclassified" -gt 0 ]; then
+        echo "  $_reclassified of them also fail at origin/$BASE when the suite runs"
+        echo "  together, so they are NOT this branch's."
+    fi
+    rm -f "$_BASE_REPORT"
+fi
 
 PRE_COUNT=${#PRE_IDS[@]}
 YOURS=${#NEW_IDS[@]}
