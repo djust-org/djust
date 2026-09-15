@@ -373,6 +373,80 @@ issue or be explicitly closed with a reason.
 | 331 | Audit test reset fixtures for over-broad resets that leak Django global state | Retro v1.1.1-2 | #2234 | Open | Concrete instance fixed in PR #2233: a fixture called `translation.deactivate_all()`, which leaves `get_language()` as None so `get_format` falls back to `global_settings` where `NUMBER_GROUPING` is 0 — grouping silently off for every later test in the worker. `deactivate()` restores the default. A leaky reset fixture is doubly quiet: nobody suspects the cleanup. Sweep for siblings. |
 | 332 | Decide Decimal's wire representation — `Value` variant vs accepted precision limit | Retro v1.1.1-2 | #2214 | Open | The issue's one-line fix (hoist the branch) was MEASURED to regress `{{ p\|floatformat }}` and `{% if p > 10 %}`, because `serialize_python_value`'s output goes back into the TEMPLATE CONTEXT and not only onto the wire. Needs a design call, not a patch; three options are on the issue. PR #2224 shipped the structural guard with a strict xfail that reddens when this is fixed. |
 | 333 | Reproduce the #1882 wire-version pollution flake | Retro v1.1.1-2 | #2215 | Open | Investigated for a session: serial runs across the whole root are clean, so it needs xdist; 25 xdist runs produced zero reproductions. Working `_next_version()` stack instrumentation is recorded on the issue. Two of my own sample-size estimates about this flake have now been wrong in opposite directions — treat any rate claim about it as unestablished. |
+| 334 | `check-changelog-test-counts` miscounts JS tests: prose containing "it (" matches its test regex, so an honest count is rejected | Retro v1.2.0-6 (PR #2838) | #2839 | Open | The repo's own `without_prose` utility is the fix; the hook has no test for prose-only input |
+| 335 | `handle_async_result` runs outside `_render_lock` on both arms of `_run_async_work` | Retro v1.2.0-6 (PR #2837) | #2840 | Open | Survived #2830's fix, which locked the render/version/send sites but not the handler callback |
+| 336 | Embedded-view stamping misses dotted event attributes (`_stamp_view_id` requires `=` right after the bare name) | Retro v1.2.0-6 (PR #2838) | #2841 | Open | Pre-existing on `main`; same "a dot is a legal attr-name character" class as #2831, on the template-parsing side |
+| 337 | Unknown dotted keyboard modifier is silently inert — no warning even in DEBUG (`_normalizeKeyName` falls back to the raw name) | Retro v1.2.0-6 (PR #2838) | #2842 | Open | Verified: `dj-keydown.f1` + F1 fires nothing, 0 warnings. This silent class is what let #2831 survive four review rounds |
+| 338 | `dj-shortcut` / `dj-click-away` keep serving the OLD handler closure when the attribute VALUE changes on a surviving element | Retro v1.2.0-6 (PR #2843) | #2845 | Open | Same drift class #2832 retired for REMOVAL; the bind loops capture the value and skip marked elements (#1646) |
+| 339 | `_dispatch_single_event` still resolves `_skip_render` vs `_force_full_html` the pre-#2834 way — force dropped and the flag leaked | Retro v1.2.0-6 (PR #2846) | #2847 | Open | Fourth render turn the issue never enumerated; also makes `_resolve_skip_render`'s "every render turn … cannot drift" docstring false as written |
+| 340 | Enforce the review-artifact requirement mechanically (a Code Review that never reaches the PR) | Retro v1.2.0-6 (PRs #2837, #2838) | — | OUT-OF-REPO | The gate belongs in pipeline-skills' `pipeline-gates.sh` (repo `johnrtipton/pipeline-skills`), which already implements `changelog-boundary`/`docs-only`/`premerge`; upstream issue not yet filed (no verified access from here). In-repo mitigation is live: the Stage 11 rule in CLAUDE.md's v1.2.0-6 section |
+
+## v1.2.0-6 — transport fidelity, wire versioning, and check coverage (PRs #2835–#2846)
+
+**Date**: 2026-09-15
+**Scope**: Eight issues across the transport/client layer and the static-check machinery — `LiveViewTestClient` WebSocket-path fidelity (#2821, #2823), a buffered tick/async VDOM-version desync (#2829), the async-work render lock on both arms (#2830), dotted `dj-keydown`/`dj-keyup` modifiers (#2831), one eviction predicate for the scoped-listener paths (#2832), a checks batch (#2825, #2827, #2833), and a shared `_skip_render`/`_force_full_html` decision (#2834). Seven PRs: #2835, #2836, #2837, #2838, #2843, #2844, #2846.
+**Tests at close**: 176 JS files / 1846 tests (full `npx vitest run`, at the #2838 merge head); 18,294 Python passed / 270 skipped on the checks scope (`python/djust/checks python/djust/tests/test_djust_typecheck.py python/tests`). Three of the seven PRs were reviewed inline (see finding 3) — their successor measurement is the merge-head suite, not a shard-count.
+
+### What We Learned
+
+**1. A fix to a shared cache, registry, or dispatch must enumerate its callers' invariants before the first edit.**
+#2838 took **four revisions**, and every round's fix broke adjacent behaviour. Round 1 overloaded `dj-key` as a required keyboard key — `dj-key` is the VNode *list-identity* attribute, so `<li dj-key="42" dj-keydown="select">` stopped firing: a regression against `main`, produced by a false changelog premise. Round 2's first-match-wins dispatch dropped an ancestor handler that `main` did fire, and let a bare binding permanently shadow a dotted sibling on the same element. Round 3 dispatched every matching binding (correct) but rebuilt the per-element rate-limit wrapper on every keystroke, defeating `dj-debounce` (3 keystrokes → 3 server events) and leaking one `blur` listener per keystroke. Round 4 keyed the cache by `(element, matched attribute)` and satisfied the morph-stability and debounce invariants at once. Rounds 1–3 each fixed one observable symptom in front of them; only round 4 reasoned about the contract the cache actually has. The same shape recurred in miniature in #2846, where the fix covered the three paths the issue named and left a **fourth** render turn on the old resolution (filed as #2847).
+
+**Action taken**: Added a Stage 5 (Implementation) rule to `CLAUDE.md` — section "Process canonicalizations from the v1.2.0-6 retro arc" (shared-cache/caller-invariant enumeration).
+
+**2. A claim about documented behaviour must be verified in the source before it is written.**
+Finding 1's regression *originated* in a durable artifact: #2838 round 1's changelog asserted `dj-key="Enter"` was "the documented way to restrict an undotted handler". It is not. The false claim was written from memory, and it became the premise for a code change and a test. Three more instances in the same milestone: #2843's PR body stated a test "needs the compiled Rust extension, unavailable in this worktree env" (it runs — 24 tests pass and `import djust._rust` works); #2838's changelog joined a quote spanning **two different docs files** with an ellipsis and credited it to one of them; and a commit message claimed the change moved the client module count when the generated `client-sizes.json` had reported 56 all along. Several of these were caught only because a reviewer or the executor happened to check, not by any gate.
+
+**Action taken**: Added a Stage 11 (Code Review) claims-verification rule to `CLAUDE.md` — section "Process canonicalizations from the v1.2.0-6 retro arc".
+
+**3. The Code Review stage is not complete until the review is POSTED to the PR.**
+#2837 and #2838 both reached merge with **no review artifact at all** — the only comment on either was the `github-actions` security-hotspot bot. #2835 and #2836 did carry review comments, so from outside the repo the gap was invisible; it took the user pointing at it twice. The reviews existed, in the reviewing agent's context and in `.pipeline-state/*.json`, and the pipeline's own gate check already requires `PR has a review comment` — the artifact simply never reached the place the gate (and a human) looks. Relatedly, three of this milestone's PRs (#2843, #2844, #2846) got **inline** reviews instead of fresh-context ones, because the account quota killed their reviewer agents mid-flight; each posted review states that limitation rather than implying the pipeline's normal independence.
+
+**Action taken**: Added a Stage 11 review-artifact rule to `CLAUDE.md` — section "Process canonicalizations from the v1.2.0-6 retro arc".
+
+**4. Parallel worktree pipelines are capped by the shared quota, and their branches go stale against sibling merges.**
+Three worktrees ran concurrently and did progress in parallel — but the account-wide 5-hour quota killed **all three** implementer agents at the same step: immediately before spawning their own Code Review reviewer. Their PRs reached CI-green unreviewed, and the executor finished them by hand. Worktrees remove *checkout* contention; they do not buy quota — three concurrent pipelines roughly triple the burn against one shared cap. Separately, all three branches were cut from `origin/main` before four drain PRs landed, and then conflicted in **generated** artifacts (`client.js`, `client.min.js`, `client-sizes.json`, plus a `CLAUDE.md` size claim) while their source diffs stayed clean — a merge blocker that cost #2843 an entire review round.
+
+**Action taken**: Updated `~/.claude/skills/pipeline-run/SKILL.md` — new subsection "Worktree parallelism: two limits the checkout rule does not cover".
+
+### Insights
+
+- **The milestone's cost was the repairs, not the bugs.** Eight issues closed in seven PRs; one of them (#2838) consumed four revisions. The defects that took the time were overwhelmingly *introduced* by earlier fixes in the same milestone, which is why findings 1 and 2 are about the repair loop rather than about any single bug.
+- **The strongest verification technique with the best return was the four-point gate-off matrix.** Measuring which cases go red on each revision — rather than "does the suite pass" — is what turned "the fix works" into "the fix works and here is the specific defect each case pins". It caught that #2838's finding-4 case pressed a *non-matching* key and so could never fail.
+- **Reviewers were wrong twice and were corrected by evidence, not deference.** #2843's reviewer called a test file fictional (`git ls-tree` showed it exists at `tests/unit/`); #2846's reviewer would have had the executor believe a manifest test was unrunnable. Checking a review's own claims is now part of the loop.
+- **A disclosed behaviour change is worth more than a silent one.** #2838's nested-binding double-fire and #2843's outside-root eviction are both real behaviour changes; both are stated in a headed changelog/PR section. Nothing in `docs/` pins either semantics, which is precisely why they had to be written down.
+- **Every PR in this milestone carried a gate-off table**, and the ones with the paired "skip-only" sibling test (force-wins + skip-only) are materially stronger than force-wins alone — a lone force-wins test passes on a fix that merely stops honouring the flag.
+
+### Review Stats
+
+| Metric | #2835 | #2836 | #2837 | #2838 | #2843 | #2844 | #2846 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|-------|
+| Tests added (cases) | 2 files | 7 | 2 | 15 | 5 | 44 | 6 | 79+ |
+| 🔴 Findings | 3 total findings | 1 | 1 | 2 | 1¹ | 0 | 0 | 5 (+2 self-found) |
+| 🟡 Findings | incl. above | 1 | 3 | 4 | 3 | 3 | 2 | 16 |
+| Findings fixed | 3 | 2 | 4 | all | all | assessed | 1 filed | — |
+| CI failures | 0 | 1² | 0 | 0 | 0 | 0 | 0 | 1 |
+| Findings by pattern class | `parallel-path-drift` | `new` | `new` | `parallel-path-drift`×3, `new`×1 | `new` (process) | `new` | `parallel-path-drift` | — |
+
+¹ #2843's 🔴 was a process defect (stale base), not a code defect.
+² #2836's CI failure (`safe_nav.test.js`, 6 failures) was caused by the executor's cross-module call in an isolated scope sandbox and was invisible locally because those files failed *to collect* — the local comparison was structurally blind. Counts are as recorded in each PR's posted retro; the JS/Python suite figures above are the measured merge-head numbers.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: new section "Process canonicalizations from the v1.2.0-6 retro arc (transport fidelity, wire versioning, check coverage)" with three rules — shared-cache/caller-invariant enumeration (Stage 5), claims verification (Stage 11), and the review-artifact requirement (Stage 11).
+**Pipeline template**: none (`.pipeline-templates/` unchanged).
+**Checklist**: none — but note `docs/PULL_REQUEST_CHECKLIST.md` exists and is a natural future home for the review-artifact rule.
+**Skills**: `~/.claude/skills/pipeline-run/SKILL.md` — new subsection "Worktree parallelism: two limits the checkout rule does not cover" (quota ceiling + worktree base drift, with the `PYTHONPATH` isolation trap).
+
+### Open Items
+
+- [ ] `check-changelog-test-counts` miscounts JS tests on prose containing `it (` — tracked in Action Tracker #334 (GitHub #2839)
+- [ ] `handle_async_result` runs outside `_render_lock` on both arms — tracked in Action Tracker #335 (GitHub #2840)
+- [ ] Embedded-view stamping misses dotted event attributes — tracked in Action Tracker #336 (GitHub #2841)
+- [ ] Unknown dotted keyboard modifier is silently inert (no DEBUG warning) — tracked in Action Tracker #337 (GitHub #2842)
+- [ ] `dj-shortcut`/`dj-click-away` serve the old handler closure on value change — tracked in Action Tracker #338 (GitHub #2845)
+- [ ] `_dispatch_single_event` resolves `_skip_render`/`_force_full_html` the pre-#2834 way — tracked in Action Tracker #339 (GitHub #2847)
+- [ ] Mechanical enforcement of the review-artifact rule — tracked in Action Tracker #340 (OUT-OF-REPO: pipeline-skills)
 
 ## v1.1.1-2 — Django-parity drain: timezone, locale, datetime filters (PRs #2213–#2233)
 
