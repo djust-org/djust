@@ -96,8 +96,34 @@ echo "  $COUNT failing test(s):"
 printf '%s\n' "${FAILED_IDS[@]}" | sed 's/^/    /'
 echo "──────────────────────────────────────────────────────────────────────"
 
-# Which of these were already failing on the merge-base?
-BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+# Which base are these failures attributable to?
+#
+# NOT `origin/HEAD`. That is `main`, and a branch based on a maintenance line
+# (1.1, 1.0) diverges from main where the line was CUT — so every failure the
+# maintenance line has accumulated since then is attributed to this branch.
+# That is the same confidently-wrong answer this script has already fixed three
+# times (the worktree interpreter, the single-invocation parsing, the `head -1`
+# `.so` copy), reached from a fourth direction. Observed on sec/1.1.2-backports:
+# 13 failures that reproduce unchanged on a pristine origin/1.1 checkout, every
+# one of them announced as "new on this branch".
+#
+# The branch's upstream is the base its PR merges into, which is the base this
+# question is actually about. Fall back to the default branch when the branch
+# has no upstream yet (a brand-new local branch).
+# Prefer the branch's OWN base: its upstream, the base its PR merges into.
+# `origin/HEAD` is `main`, and a branch based on a maintenance line (1.1, 1.0)
+# diverges from main where the line was CUT — so every failure the maintenance
+# line has accumulated since then is attributed to this branch. Only an
+# `origin/*` upstream is usable here: BASE must name a branch on `origin` for
+# the merge-base line below to resolve, so anything else falls back to the
+# default branch, which is the previous behaviour.
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+case "$UPSTREAM" in
+    origin/*) BASE="${UPSTREAM#origin/}" ;;
+esac
+if [ -z "${BASE:-}" ]; then
+    BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+fi
 [ -z "$BASE" ] && BASE=main
 MERGE_BASE=$(git merge-base HEAD "origin/$BASE" 2>/dev/null || true)
 
@@ -108,8 +134,9 @@ if [ -z "$MERGE_BASE" ]; then
     exit "$STATUS"
 fi
 if [ "$(git rev-parse HEAD)" = "$MERGE_BASE" ]; then
-    echo "  HEAD is the merge-base, so every failure above is pre-existing."
-    exit "$STATUS"
+    echo "  HEAD is the merge-base, so every failure above is pre-existing —"
+    echo "  and a pre-existing failure is not this push's to fix."
+    exit 0
 fi
 
 # ALL of them, not `head -1`: the tree carries one .so per Python ABI
@@ -161,12 +188,14 @@ PYBIN="$(bash scripts/run-with-venv-python.sh --print 2>/dev/null || true)"
 # one.
 PRE_IDS=()
 NEW_IDS=()
+SKIPPED_IDS=()
 UNRESOLVED=0
 CHECKED=0
 SKIPPED_FOR_CAP=0
 for _id in "${FAILED_IDS[@]}"; do
     if [ "$CHECKED" -ge "$MAX_ATTRIBUTED" ]; then
         SKIPPED_FOR_CAP=$((SKIPPED_FOR_CAP + 1))
+        SKIPPED_IDS+=("$_id")
         continue
     fi
     CHECKED=$((CHECKED + 1))
@@ -281,4 +310,49 @@ if [ "$SKIPPED_FOR_CAP" -gt 0 ]; then
 fi
 echo "──────────────────────────────────────────────────────────────────────"
 
-exit "$STATUS"
+# Block only on what this branch introduced.
+#
+# `exit "$STATUS"` made the attribution above informational: it blocked the
+# push even when every failure was pre-existing, so a branch based on a red line
+# could never be pushed at all — the situation #2139 was written to end. A
+# contributor cannot fix another line's failures from their branch, and telling
+# them to is how `--no-verify` becomes a habit. It also inverts this script's own
+# promise: it goes to real trouble to say WHOSE failures these are, then ignores
+# its own answer.
+if [ "$UNRESOLVED" -gt 0 ]; then
+    echo "  $UNRESOLVED failure(s) could not be checked against origin/$BASE, so"
+    echo "  they are treated as blocking rather than assumed pre-existing."
+    exit 1
+fi
+if [ "$YOURS" -gt 0 ]; then
+    echo "  Blocking: $YOURS failure(s) are new on this branch (origin/$BASE)."
+    exit 1
+fi
+# The cap's rationale is that the first N ids are "entirely representative"
+# because a systemic break produces hundreds of identical failures. A MIXED run
+# falsifies that, and the failure is silent: a test this branch ADDS can sort
+# past the cap, never be checked, and be allowed by omission. Measured with a
+# deliberately-failing probe test whose id sorted last — it was reported as
+# pre-existing by not being looked at. Screened cheaply rather than with
+# $SKIPPED_FOR_CAP more pytest starts: a failure in a file that does not exist
+# at the base is new here, whoever caused it.
+if [ "$SKIPPED_FOR_CAP" -gt 0 ]; then
+    _unchecked_new=0
+    for _id in "${SKIPPED_IDS[@]}"; do
+        _file="${_id%%::*}"
+        git cat-file -e "$MERGE_BASE:$_file" 2>/dev/null || _unchecked_new=$((_unchecked_new + 1))
+    done
+    if [ "$_unchecked_new" -gt 0 ]; then
+        echo "  Blocking: $_unchecked_new of the $SKIPPED_FOR_CAP unchecked"
+        echo "  failure(s) are in file(s) absent at origin/$BASE, so they are new"
+        echo "  on this branch. Raise MAX_ATTRIBUTED=$MAX_ATTRIBUTED to attribute"
+        echo "  them properly."
+        exit 1
+    fi
+    echo "  ($SKIPPED_FOR_CAP failure(s) went unchecked, beyond the cap of"
+    echo "  MAX_ATTRIBUTED=$MAX_ATTRIBUTED; their files all exist at origin/$BASE,"
+    echo "  so they are treated as pre-existing.)"
+fi
+echo "  All $PRE_COUNT checked failure(s) fail at origin/$BASE too — allowing the push."
+echo "  They are not this branch's to fix; they belong to origin/$BASE."
+exit 0
