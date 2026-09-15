@@ -7,6 +7,13 @@ Unreleased and newer untagged sections remain editable. Comparing with one
 snapshot also preserves the historical rolling-RC sections as they stood
 when the latest release shipped.
 
+Also detects *absence* (#2854): the newest release is the top-most
+``## [X.Y.Z]`` section whose tag exists, so a tag with no section at all
+used to be invisible — v1.1.3 shipped to PyPI with no section and its
+fragment unfolded while the gate reported OK against v1.1.2. Every
+release-version tag reachable from HEAD that sorts *above* the anchor must
+therefore have a working-tree section; a missing one fails by name.
+
 Exits 0 on match or when there's nothing to check (no tagged section, or git
 unavailable). Exits 1 with a per-section diff on any mismatch.
 
@@ -31,6 +38,54 @@ DEFAULT_CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 # A section heading: "## [X.Y.Z]" or "## [X.Y.Z] - 2026-06-30" etc. Captures the
 # version token inside the brackets. "[Unreleased]" is intentionally mutable.
 _HEADING_RE = re.compile(r"^## \[(?P<version>[^\]]+)\]")
+
+# A release tag / version token: vX.Y.Z with an optional a/b/rc pre-release
+# suffix (0.2.0a1, 1.2.0rc7). Non-release tags don't demand CHANGELOG sections.
+_RELEASE_TAG_RE = re.compile(
+    r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:(?P<pre>a|b|rc)(?P<prenum>\d+))?$"
+)
+_PRE_PHASE = {"a": 0, "b": 1, "rc": 2}  # final releases rank above all of these
+
+
+def _parse_version(token: str) -> "tuple[int, int, int, int, int] | None":
+    """Sort key for a release tag/version, or ``None`` if not a release.
+
+    Final releases rank above their own pre-releases: ``1.2.0rc7 < 1.2.0``.
+    """
+    m = _RELEASE_TAG_RE.match(token)
+    if not m:
+        return None
+    if m.group("pre"):
+        phase, prenum = _PRE_PHASE[m.group("pre")], int(m.group("prenum"))
+    else:
+        phase, prenum = 3, 0
+    return (int(m.group("major")), int(m.group("minor")), int(m.group("patch")), phase, prenum)
+
+
+def _missing_higher_release_sections(anchor_ver: str, working_versions: "set[str]") -> "list[str]":
+    """Release tags above the anchor whose version has no working section.
+
+    Only tags reachable from HEAD are considered: in a multi-branch repo,
+    ``main`` never carried the ``1.1.x`` maintenance sections and the ``1.1``
+    branch never carried main's ``1.2.0rc*`` sections — demanding both would
+    be a permanent false positive on whichever branch the check runs on.
+    """
+    anchor_key = _parse_version(anchor_ver)
+    if anchor_key is None:
+        return []
+    code, out = _git("tag", "--list", "v*", "--sort=-v:refname", "--merged", "HEAD")
+    if code != 0:
+        return []  # cannot enumerate tags — fail open, like every git path here
+    missing: list[str] = []
+    for tag in out.split():
+        key = _parse_version(tag)
+        if key is None or key <= anchor_key:
+            continue
+        ver = tag[1:]  # the list pattern guarantees the leading 'v'
+        if ver not in working_versions:
+            missing.append(ver)
+    return missing
 
 
 def _split_sections(text: str) -> "list[tuple[str, str]]":
@@ -60,9 +115,7 @@ def _split_sections(text: str) -> "list[tuple[str, str]]":
 
 def _git(*args: str) -> tuple[int, str]:
     try:
-        proc = subprocess.run(
-            ["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True
-        )
+        proc = subprocess.run(["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True)
         return proc.returncode, proc.stdout
     except (OSError, subprocess.SubprocessError):
         return 1, ""
@@ -99,6 +152,11 @@ def check_changelog(changelog_path: Path) -> int:
         return 0  # anchor tag had no CHANGELOG.md — can't pin
     snapshot = dict(_split_sections(snapshot_text))
 
+    # Absence detection (#2854): a tag above the anchor with no section is the
+    # defect itself — the gate's anchor silently fell back to the previous tag
+    # and shipped v1.1.3 sectionless.
+    missing = _missing_higher_release_sections(anchor_ver, {ver for ver, _ in working})
+
     mismatches: list[str] = []
     checked = 0
     # The anchor itself is shipped too. Only newer untagged sections may change.
@@ -124,10 +182,20 @@ def check_changelog(changelog_path: Path) -> int:
                 f"to match v{anchor_ver}.\n{diff}"
             )
 
-    if mismatches:
+    if mismatches or missing:
         print("CHANGELOG shipped-section pin FAILED:", file=sys.stderr)
         for m in mismatches:
             print(m, file=sys.stderr)
+        for ver in missing:
+            print(
+                f"\n✗ Release tag 'v{ver}' exists on this branch's history but "
+                f"CHANGELOG.md has no '## [{ver}]' section.\n"
+                f"  A tagged release must ship with its CHANGELOG section already "
+                f"committed: v1.1.3 went\n  to PyPI with no section and its "
+                f"changelog.d/ fragment unfolded (#2854). Fold the fragment /\n"
+                f"  rename '[Unreleased]' to '[{ver}]', commit, then re-tag.",
+                file=sys.stderr,
+            )
         return 1
 
     if checked:
