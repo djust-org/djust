@@ -3226,7 +3226,7 @@ class ViewRuntime:
         * Exceptions are logged + swallowed so one bad queued event cannot break
           the rest of the drain (the flush also catches, defense-in-depth).
         """
-        from .websocket import _compute_changed_keys, _snapshot_assigns
+        from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
         # --- security / validation (shared with the live path) -------------
         handler = await _validate_event_security(
@@ -3283,7 +3283,15 @@ class ViewRuntime:
         view = self.view_instance
         if view is None:  # pragma: no cover — caller guarantees a mounted view
             return
-        skip_render = getattr(view, "_skip_render", False)
+        # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
+        # resolution as dispatch_event / server_push / db_notify / tick. This
+        # twin previously read the two flags inline and resolved the collision
+        # the pre-#2834 way: with BOTH flags set the noop branch won, silently
+        # dropping the forced full render AND leaking ``_force_full_html``
+        # into a later unrelated turn (the #1646 "hatch dropped" class). The
+        # helper consumes ``_skip_render`` whenever set (a stale True never
+        # leaks) and lets ``_force_full_html`` win.
+        skip_render = _resolve_skip_render(view)
         force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
@@ -3295,7 +3303,8 @@ class ViewRuntime:
         has_async = getattr(view, "_async_pending", None) is not None
 
         if skip_render:
-            view._skip_render = False
+            # (_skip_render was already consumed by _resolve_skip_render —
+            # it is the single owner of that reset, #2834/#2847.)
             self._flush_push_events()
             noop_msg: Dict[str, Any] = {
                 "type": "noop",
@@ -4739,6 +4748,12 @@ class ViewRuntime:
         and emit a ``patch`` / ``html_update`` frame plus a turn-end flush. Any
         callback failure is logged and routed through ``handle_async_result`` so
         the client is never left stuck in a loading state.
+
+        The handler + render half of each arm runs under the consumer's render
+        lock, borrowed via ``transport.event_context`` (#2840/#1646: same
+        serialization as the WS twin ``_run_async_work``, which holds
+        ``_render_lock`` across handler + render — a no-op CM on SSE, which has
+        no concurrent tick/push loop to serialize against).
         """
         view = self.view_instance
         if not view:
@@ -4756,10 +4771,44 @@ class ViewRuntime:
 
             result = await run_async_callback(callback, args, kwargs)
 
-            if hasattr(view, "handle_async_result"):
-                await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)
+            # Teardown identity-guard (#1940 — mirror of the WS twin's
+            # pre-mutation guard): the callback above is the FIRST await in
+            # this detached task; during that window a disconnect (→
+            # ``view_instance = None``) or a re-mount (→ a NEW view) can run.
+            # Writing the stale view — handler state OR render — contaminates
+            # a torn-down / replaced view.
+            if self.view_instance is not view:
+                logger.debug(
+                    "Runtime: async task %s completed after view teardown/re-mount; "
+                    "dropping stale re-render",
+                    task_name,
+                )
+                return
 
-            await self._render_async_result(event_name)
+            # Serialise handler + render on the consumer's render lock via
+            # ``transport.event_context`` (the ADR-022 mechanism): after the
+            # ADR-022 flip THIS helper serves WS events' ``start_async`` work,
+            # so an unlocked handler mutation / render could interleave with a
+            # concurrent tick / server_push / db_notify render — the PyO3
+            # VDOM baseline is not thread-safe (#2830). ``event_context`` also
+            # sets ``_processing_user_event`` (ticks yield during the frame)
+            # and the observability scopes — the same per-event posture a live
+            # event turn gets. Ordering mirrors the WS twin: handler first,
+            # THEN the in-lock identity re-check (a view torn down mid-handler
+            # still gets its user callback — only the stale re-render is
+            # dropped), then the render.
+            async with self.transport.event_context(view):
+                if hasattr(view, "handle_async_result"):
+                    await sync_to_async(view.handle_async_result)(
+                        task_name, result=result, error=None
+                    )
+                # Identity re-check INSIDE the lock (#1940): the handler await
+                # above is an unbounded wait during which the view can be torn
+                # down or replaced. Rendering the stale view would emit a frame
+                # the connection's version/recovery state does not own.
+                if self.view_instance is not view:
+                    return
+                await self._render_async_result(event_name)
 
         except Exception as exc:
             logger.exception(
@@ -4769,8 +4818,17 @@ class ViewRuntime:
             )
             if hasattr(view, "handle_async_result"):
                 try:
-                    await sync_to_async(view.handle_async_result)(task_name, result=None, error=exc)
-                    await self._render_async_result(event_name)
+                    # Same locked shape as the success arm (#2840 twin): the
+                    # error-state mutation + re-render must not interleave with
+                    # a concurrent lock-holding render. Ordering preserved:
+                    # handler → in-lock identity re-check → render.
+                    async with self.transport.event_context(view):
+                        await sync_to_async(view.handle_async_result)(
+                            task_name, result=None, error=exc
+                        )
+                        if self.view_instance is not view:
+                            return
+                        await self._render_async_result(event_name)
                 except Exception:
                     logger.exception(
                         "Runtime: error in handle_async_result for task '%s'", task_name
