@@ -139,9 +139,9 @@ def _build_context(
     app_class = app_name.replace("_", " ").title().replace(" ", "")
     view_class = app_class + "View"
 
-    # Determine view bases. The demo page (not --bare, not --with-db, not
-    # --from-schema) mixes in ThemeMixin for its theme switcher.
-    demo = not bare and not with_db and not schema
+    # Determine view bases. Every non-bare project ships the themed base
+    # template, so its starter view mixes in ThemeMixin for the theme switcher.
+    demo = not bare
     bases = ["ThemeMixin", "LiveView"] if demo else ["LiveView"]
     extra_imports = []
     extra_mount = ""
@@ -355,12 +355,19 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     # For DB-backed views, we construct a custom views.py
     view_bases = ctx["view_bases"]
     content = '"""LiveView for %s."""\n\n' % app_name
+    content += "import djust\n"
     content += "from djust import LiveView\n"
     content += "from djust.decorators import event_handler\n"
+    content += "from djust.theming import ThemeMixin\n"
     if ctx["extra_imports"].strip():
         for line in ctx["extra_imports"].strip().split("\n"):
             content += line + "\n"
     content += "from .models import Item\n"
+    content += "\n"
+    content += "# Presets offered in the theme bar. Any name from djust.theming works here.\n"
+    content += (
+        'DEMO_THEME_PRESETS = ("djust", "catppuccin", "nord", "dracula", "solarized", "rose")\n'
+    )
     content += "\n\n"
     content += "class %s(%s):\n" % (ctx["view_class"], view_bases)
     content += '    template_name = "%s/index.html"\n' % app_name
@@ -371,6 +378,7 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "    login_required = False\n"
     content += "\n"
     content += "    def mount(self, request, **kwargs):\n"
+    content += "        super().mount(request, **kwargs)\n"
     content += '        self.search_query = ""\n'
     if ctx["extra_mount"]:
         content += ctx["extra_mount"]
@@ -396,6 +404,10 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += '            "search_query": self.search_query,\n'
     content += '            "total_count": self.total_count,\n'
     content += '            "done_count": self.done_count,\n'
+    content += '            "theme_presets": [\n'
+    content += '                p for p in self.theme_presets if p["name"] in DEMO_THEME_PRESETS\n'
+    content += "            ],\n"
+    content += '            "djust_version": djust.__version__,\n'
     if ctx["extra_context"]:
         content += ctx["extra_context"]
     content += "        }\n"

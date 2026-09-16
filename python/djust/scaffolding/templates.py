@@ -727,7 +727,7 @@ INDEX_HTML = """\
         <ul style="margin: 0; padding-left: 1.2rem; display: grid; gap: .35rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr))">
             <li><a href="https://docs.djust.org/getting-started/first-liveview/">Your First LiveView</a><span class="muted">&nbsp;— build a counter from scratch</span></li>
             <li><a href="https://docs.djust.org/theming/overview/">Theming</a><span class="muted">&nbsp;— the presets and modes used on this page</span></li>
-            <li><a href="https://docs.djust.org/forms/overview/">Forms</a><span class="muted">&nbsp;— real-time validation with Django forms</span></li>
+            <li><a href="https://docs.djust.org/forms/">Forms</a><span class="muted">&nbsp;— real-time validation with Django forms</span></li>
             <li><a href="https://docs.djust.org/guides/components/">Components</a><span class="muted">&nbsp;— reusable live components</span></li>
             <li><a href="https://docs.djust.org/guides/deployment/">Deployment</a><span class="muted">&nbsp;— static files, hosts, and servers</span></li>
             <li><a href="https://github.com/djust-org/djust">GitHub</a><span class="muted">&nbsp;— source, issues, and releases</span></li>
