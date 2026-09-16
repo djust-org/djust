@@ -48,8 +48,18 @@ class TestCurrentFragmentsResolve:
     the defect, so this going red is correct, not noise."""
 
     def test_all_current_fragments_pass_in_process(self):
+        # The corpus is legitimately EMPTY between a release cut (which folds and
+        # deletes every fragment) and the next PR that adds one — v1.2.0rc5,
+        # rc6 and rc7 all shipped with zero. So the canary must be "the
+        # directory is where we think it is", NOT "fragments exist": asserting a
+        # non-empty corpus makes the normal post-release tree a failure and
+        # blocks the release push itself, which is how this was found.
+        assert (check.FRAGMENT_DIR / "README.md").is_file(), (
+            f"changelog.d/README.md not found under {check.FRAGMENT_DIR} — has the "
+            "fragment directory moved? (this canary exists so that a mislocated "
+            "directory cannot silently make the loop below vacuous)"
+        )
         fragments = sorted(p for p in check.FRAGMENT_DIR.glob("*.md") if p.name != "README.md")
-        assert fragments, "no fragments found — the corpus disappeared?"
         assert check.check_fragments(REPO_ROOT, fragments) == 0
 
     def test_all_current_fragments_pass_as_subprocess(self):
