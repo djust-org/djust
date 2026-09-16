@@ -140,9 +140,9 @@ def _build_context(
     view_class = app_class + "View"
 
     # Determine view bases. Every non-bare project ships the themed base
-    # template, so its starter view mixes in ThemeMixin for the theme switcher.
+    # template and the theme gallery routes.
     demo = not bare
-    bases = ["ThemeMixin", "LiveView"] if demo else ["LiveView"]
+    bases = ["LiveView"]
     extra_imports = []
     extra_mount = ""
     extra_context = ""
@@ -234,6 +234,8 @@ def _build_context(
         "theming_app": T.THEMING_APP_ENTRY if demo else "",
         "theming_context_processor": T.THEMING_CONTEXT_PROCESSOR if demo else "",
         "theming_settings": T.THEMING_SETTINGS if demo else "",
+        "theming_urls": T.THEMING_URLS if demo else "",
+        "urls_import": "include, path" if demo else "path",
         "bare": bare,
         "admin_template_backend": admin_template_backend,
         "admin_url_import": admin_url_import,
@@ -358,16 +360,26 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "import djust\n"
     content += "from djust import LiveView\n"
     content += "from djust.decorators import event_handler\n"
-    content += "from djust.theming import ThemeMixin\n"
+    content += "from djust.theming.theme_packs import get_all_theme_packs\n"
     if ctx["extra_imports"].strip():
         for line in ctx["extra_imports"].strip().split("\n"):
             content += line + "\n"
     content += "from .models import Item\n"
     content += "\n"
-    content += "# Presets offered in the theme bar. Any name from djust.theming works here.\n"
+    content += "# Quick picks shown on the page; the gear menu lists every pack.\n"
     content += (
-        'DEMO_THEME_PRESETS = ("djust", "catppuccin", "nord", "dracula", "solarized", "rose")\n'
+        'QUICK_PACKS = ("paper", "terminal", "corporate", "candy", '
+        '"brutalist", "linear", "natural20", "stripe")\n'
     )
+    content += "\n\n"
+    content += "def quick_packs():\n"
+    content += "    packs = get_all_theme_packs()\n"
+    content += "    return [\n"
+    content += '        {"name": n, "display_name": packs[n].display_name, '
+    content += '"description": packs[n].description}\n'
+    content += "        for n in QUICK_PACKS\n"
+    content += "        if n in packs\n"
+    content += "    ]\n"
     content += "\n\n"
     content += "class %s(%s):\n" % (ctx["view_class"], view_bases)
     content += '    template_name = "%s/index.html"\n' % app_name
@@ -378,7 +390,6 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "    login_required = False\n"
     content += "\n"
     content += "    def mount(self, request, **kwargs):\n"
-    content += "        super().mount(request, **kwargs)\n"
     content += '        self.search_query = ""\n'
     if ctx["extra_mount"]:
         content += ctx["extra_mount"]
@@ -404,9 +415,8 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += '            "search_query": self.search_query,\n'
     content += '            "total_count": self.total_count,\n'
     content += '            "done_count": self.done_count,\n'
-    content += '            "theme_presets": [\n'
-    content += '                p for p in self.theme_presets if p["name"] in DEMO_THEME_PRESETS\n'
-    content += "            ],\n"
+    content += '            "theme_packs": quick_packs(),\n'
+    content += '            "theme_pack_count": len(get_all_theme_packs()),\n'
     content += '            "djust_version": djust.__version__,\n'
     if ctx["extra_context"]:
         content += ctx["extra_context"]
