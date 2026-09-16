@@ -682,10 +682,22 @@
     function bindUploadHandlers() {
         // File inputs with dj-upload
         document.querySelectorAll('[dj-upload]').forEach(input => {
-            if (input._djUploadBound) return;
-            input._djUploadBound = true;
-
             const uploadName = input.getAttribute('dj-upload');
+
+            // #2858 — the change closure captures `uploadName` at bind time,
+            // and an input that survives a morphdom patch keeps BOTH the
+            // listener and the `_djUploadBound` marker, so the marker alone
+            // cannot justify the skip (#2845/#2855 shape): skip only on an
+            // unchanged slot name; evict the old listener and rebuild from
+            // the current slot otherwise. Re-mark unconditionally.
+            if (input._djUploadBound) {
+                if (input._djUploadBoundKey === uploadName) return;
+                if (input._djUploadChangeHandler) {
+                    input.removeEventListener('change', input._djUploadChangeHandler);
+                }
+            }
+            input._djUploadBound = true;
+            input._djUploadBoundKey = uploadName;
 
             // Set accept attribute from config
             // eslint-disable-next-line security/detect-object-injection
@@ -697,29 +709,49 @@
                 input.setAttribute('multiple', '');
             }
 
-            input.addEventListener('change', () => handleFileSelect(input, uploadName));
+            const changeHandler = () => handleFileSelect(input, uploadName);
+            input._djUploadChangeHandler = changeHandler;
+            input.addEventListener('change', changeHandler);
         });
 
         // Drop zones with dj-upload-drop
         document.querySelectorAll('[dj-upload-drop]').forEach(zone => {
-            if (zone._djDropBound) return;
-            zone._djDropBound = true;
-
             const uploadName = zone.getAttribute('dj-upload-drop');
 
-            zone.addEventListener('dragover', (e) => {
+            // #2858 — same rebuild-or-skip rule as the [dj-upload] loop
+            // above. All THREE zone listeners capture `uploadName`, so a
+            // changed slot name evicts all three and rebuilds them from the
+            // current slot; an unchanged one must not re-attach (a second
+            // drop listener would upload every dropped file twice).
+            if (zone._djDropBound) {
+                if (zone._djDropBoundKey === uploadName) return;
+                const stale = zone._djDropHandlers || [];
+                for (const entry of stale) {
+                    zone.removeEventListener(entry[0], entry[1]);
+                }
+            }
+            zone._djDropBound = true;
+            zone._djDropBoundKey = uploadName;
+
+            const handlers = [];
+            const on = (eventType, handler) => {
+                zone.addEventListener(eventType, handler);
+                handlers.push([eventType, handler]);
+            };
+
+            on('dragover', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 zone.classList.add('upload-dragover');
             });
 
-            zone.addEventListener('dragleave', (e) => {
+            on('dragleave', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 zone.classList.remove('upload-dragover');
             });
 
-            zone.addEventListener('drop', async (e) => {
+            on('drop', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 zone.classList.remove('upload-dragover');
@@ -750,6 +782,7 @@
                     }
                 }
             });
+            zone._djDropHandlers = handlers;
         });
     }
 

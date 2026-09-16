@@ -93,10 +93,27 @@ function _sendModelUpdate(field, value) {
  * Bind dj-model to a single element.
  */
 function _bindModel(el) {
-    if (el._djustModelBound) return;
-    el._djustModelBound = true;
-
     const { field, lazy, debounce } = _parseModelAttr(el);
+
+    // #2858 — the handler closure captures field / lazy / debounce parsed
+    // from the attribute NAME + VALUE at bind time, and an element that
+    // survives a morphdom patch keeps BOTH its listener and the
+    // `_djustModelBound` marker, so the marker alone cannot justify the
+    // skip (#2845/#2855 shape): skip only when the whole parsed tuple is
+    // unchanged; evict the old listeners and rebuild from the current
+    // attrs otherwise. Re-mark unconditionally after the eviction branch.
+    const boundKey = (field || '') + '\u0000' + (lazy ? 'lazy' : '') + '\u0000' + debounce;
+    if (el._djustModelBound) {
+        if (el._djustModelBoundKey === boundKey) return;
+        if (el._djustModelHandler) {
+            const staleTypes = el._djustModelEventTypes || [];
+            for (const t of staleTypes) {
+                el.removeEventListener(t, el._djustModelHandler);
+            }
+        }
+    }
+    el._djustModelBound = true;
+    el._djustModelBoundKey = boundKey;
     if (!field) return;
 
     const eventType = lazy ? 'change' : 'input';
@@ -118,11 +135,14 @@ function _bindModel(el) {
         }
     };
 
+    el._djustModelHandler = handler;
+    el._djustModelEventTypes = [eventType];
     el.addEventListener(eventType, handler);
 
     // For checkboxes and radios, also listen on change
     if (el.type === 'checkbox' || el.type === 'radio') {
         el.addEventListener('change', handler);
+        el._djustModelEventTypes.push('change');
     }
 }
 
