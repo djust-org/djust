@@ -228,7 +228,7 @@ def choose_package_action(root: Path, python: Optional[Path], uv_available: bool
     return PackageAction("none", ["pip", "install", *reqs], runnable=False)
 
 
-def _normalize(name: str) -> str:
+def _canonical_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
@@ -239,11 +239,11 @@ def plan_requirements(root: Path) -> Optional[FileChange]:
     for line in old.splitlines():
         match = _REQUIREMENT_NAME_RE.match(line)
         if match:
-            present.add(_normalize(match.group(1)))
+            present.add(_canonical_name(match.group(1)))
     missing = [
         req
         for req in requirements()
-        if _normalize(_REQUIREMENT_NAME_RE.match(req).group(1)) not in present
+        if _canonical_name(_REQUIREMENT_NAME_RE.match(req).group(1)) not in present
     ]
     if not missing:
         return None
