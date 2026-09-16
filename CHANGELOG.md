@@ -7,6 +7,382 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc8] - 2026-09-15
+
+### Added
+
+- **`djust.T018` system check — undefined template variable detection**: `manage.py check` (and `djust_check`) now warns when a LiveView template references a variable that resolves nowhere and silently renders as an empty string. Compares template variable references against the view's statically-determinable context (public class attributes, `self.x = ...` assignments, literal `get_context_data()` dict keys, template-declared loop vars, and framework/Django-injected names), reusing the same extraction `manage.py djust_typecheck` has shipped since v0.5.1. Covers both `template_name` (file) and inline `template = "..."` views. Advisory (WARNING, not ERROR); suppress project-wide with `DJUST_CONFIG = {'suppress_checks': ['T018']}` or per-name with the existing `{# djust_typecheck: noqa name #}` template comment. Known v1 limitation: `{% extends %}` templates are skipped entirely (block-override context is inheritance-scoped and not statically checkable here). Also fixes a pre-existing `djust_typecheck` false positive where a dotted `{% if x.y %}` expression incorrectly reported the attribute tail (`y`) as its own undefined top-level reference.
+- **`LiveComponentTestClient` — test a `LiveComponent` in isolation**: the component counterpart to `LiveViewTestClient`. A component has no view, no `template_name` dispatch and no URL, so it could not be mounted through the view client; testing one previously meant wrapping it in a throwaway parent `LiveView`. `LiveComponentTestClient(MyComponent).mount(**props)` returns the client, `send_event(name, **params)` calls the component's own handler method, `get_state()` returns its public (non-underscore) attributes, and `render()` delegates to `LiveComponent.render`. A missing handler raises `NoHandlerFoundError` rather than silently no-opping, matching `LiveViewTestClient.send_event` (#2823) — a renamed handler should fail loudly, not leave a test passing while the feature is broken. Like the view client it calls handlers directly rather than routing through the WebSocket consumer, so `@event_handler` metadata is not enforced; use `LiveViewTestClient` when the routing contract itself is under test.
+- **`dj-mouseenter` / `dj-mouseleave` are now real directives (#2869).** The
+  attributes were previously stamp-listed by `{% live_render %}` — the
+  framework asserted they existed — but the client never bound them, so a
+  developer writing `<div dj-mouseenter="highlight">` got a stamped
+  attribute, no listener, and no warning. They are now wired as first-class
+  event directives: `mouseenter`/`mouseleave` do not bubble, so the client
+  attaches listeners DIRECTLY to the declaring element through the existing
+  scoped-listener machinery instead of the delegated root-level shape
+  `dj-click` uses. Nesting semantics are the platform's own: moving the
+  pointer from an element into one of its children fires neither the
+  element's `dj-mouseleave` nor a second `dj-mouseenter` (entering a child
+  is not leaving the parent — the reason these event types exist over
+  `mouseover`/`mouseout`). Bind-pass safety follows the house rules: the
+  #2845 skip-on-unchanged-value / evict-and-rebuild rule prevents
+  double-attach across morphs, the #2832 sweep detaches listeners when the
+  template stops declaring the attribute, and the handler closure re-reads
+  the attribute at fire time (#2858) so a value change under a surviving
+  element is honoured. `dj-debounce` / `dj-throttle`, `dj-confirm`,
+  `data-*` params, inline handler args, and `{% live_render %}` embedded
+  routing (`view_id` from the stamp) all work as on sibling directives.
+  Documented in `docs/website/core-concepts/events.md` ("Mouse Enter /
+  Leave") and the template cheatsheet quick-reference card.
+- **Theming: the domain model is now importable, and the request-scoped helpers exist**: `from djust.theming import ThemePack` previously raised `ImportError`. The types (`ThemePack`, `DesignSystem`, `SurfaceTreatment`, `TypographyStyle`, `LayoutStyle`, `SurfaceStyle`, `IconStyle`, `AnimationStyle`, `InteractionStyle`, `PatternStyle`, `IllustrationStyle`) were defined in `theming/_types.py` — a private module holding public types, with its own `__all__` advertising them — but were never re-exported from `djust.theming`, and `register_theme_pack` accepts a `ThemePack`, so the documented model was unusable end to end. The theming documentation also instructs `from djust.theming import get_active_pack, set_active_pack, get_active_mode, set_active_mode, reset_to_defaults, get_theme_css_url`, none of which existed. Those six are now implemented in `theming/api.py` as thin, request-scoped wrappers over `ThemeManager` — theme state is per-request (session-backed, with a cookie fallback for anonymous users), so every one takes `request`, and `get_active_mode` returns the *resolved* mode so a caller on `'system'` learns which one they are actually seeing. Supporting additions: `ThemeManager.set_pack()` (the missing sibling of `set_theme`/`set_preset`/`set_mode`) and `ThemeManager.reset()`, which removes the session entry rather than writing defaults into it so a later change to configured defaults still applies.
+
+### Fixed
+
+- **`LiveViewTestClient.mount()` never took the WebSocket branch, so
+  WS-only setup code gated on `hasattr(self, "_websocket_session_id")` — the
+  pattern djust's own `#1612` presence guard documents — had zero coverage
+  under a green test suite (#2821).** `mount()` now stamps the same identity
+  attributes the real WS/SSE mount path sets on a live connection
+  (`_websocket_session_id`, `_websocket_path`, `_websocket_query_string`,
+  `_djust_mount_view_path`, mirroring `ViewRuntime.dispatch_mount`) by
+  default, making the documented "simulates the WebSocket mount process"
+  claim true. Pass `mount(via_websocket=False)` to instead exercise the
+  HTTP-prerender branch; the branch taken is recorded as `client.via_websocket`
+  so a test can assert it explicitly rather than the branch being implied.
+  Because that branch is now the default, a view's `mount()`-time
+  `track_presence()` really runs under the client — which exposed a degenerate
+  identity: with the default `presence_unique_per_connection = False` the
+  identity is `f"anon_{session_key}"`, and the client's session is
+  deliberately unsaved, so every client collapsed to `anon_None` and two
+  clients counted as ONE presence. A missing `session_key` no longer produces a
+  degenerate identity. 8 regression cases in
+  `python/djust/tests/test_testclient_websocket_fidelity_2821.py`.
+- **Tick path now honors `_skip_render`**: `_tick_once` previously called `_snapshot_assigns()` unconditionally before AND after every `handle_tick()`, even when the handler explicitly set `_skip_render = True` (e.g. a non-host session's tick that early-returns). The tick path now checks `_skip_render` right after `handle_tick()` runs — mirroring the event paths (`server_push`, `db_notify`, `runtime.dispatch_event`) — and skips both the render AND the second (expensive) `_snapshot_assigns()`/`deep_fingerprint` call entirely when set. `_force_full_html` (#1981) still wins over `_skip_render`, so an explicit forced re-render is never silently dropped. Closes #2822.
+- **`LiveViewTestClient.send_event()` returned a `{"success": False, ...}`
+  envelope instead of raising when no handler existed for the event name,
+  so a typo'd or renamed handler could pass silently in a suite that
+  doesn't inspect every return value (#2823).** `send_event()` now raises
+  `djust.testing.NoHandlerFoundError` by default — matching the production
+  WebSocket consumer, where a missing handler is an error frame, not a
+  silent no-op. Pass `send_event(name, raise_on_missing=False)` to opt back
+  into the old envelope-return behavior, e.g. for a test that deliberately
+  probes the error shape. The sibling param-validation-failure branch is
+  unchanged. 4 regression cases in
+  `python/djust/tests/test_testclient_send_event_raises_2823.py`. Existing
+  coverage in `TestLiveViewTestClient` (the testing-utils suite) was updated
+  for the new default, with new cases covering the escape hatch.
+- **V008's return-annotation escape hatch never fired for methods or for
+  dotted calls, so the documented non-`noqa` remedy — annotate the helper
+  `-> str` — silently did nothing (#2825).** The collector only inspected
+  module-level functions and stored bare names, while every attribute call
+  resolves to a dotted name; together the two gaps covered both shapes a
+  real `mount()` call site takes. Methods of module-level classes are now
+  collected and the comparison uses the call's final name segment, so a
+  same-module helper or method annotated `-> str` (or any primitive)
+  settles the check without `# noqa` or suppression. Unannotated helpers
+  still report; annotations on helpers imported from other modules are
+  still unresolved, and the check's hint now says so. 7 regression cases in
+  `python/tests/test_checks_v008_escape_hatch_2825.py`.
+- **T018 / `manage.py djust_typecheck` false-positived on every template
+  reference to a framework mixin's injected state — `{{ form_data }}` /
+  `{{ field_errors }}` on any `FormMixin`-based view reported as resolving
+  to nothing (#2827).** The static context extraction deliberately skips
+  `djust.*` modules when AST-walking the MRO, so the mixin's runtime
+  `self.form_data = ...` assignments were invisible to it. Framework
+  mixins can now declare their injected template-visible keys in a
+  `_djust_injects_context` class manifest that the extractor reads without
+  needing to AST-walk framework source; `FormMixin` ships the manifest,
+  and an anti-drift test pins it to cover every public `self.x = ...`
+  assignment in the mixin so future additions cannot silently go blind
+  again. New cases in `python/djust/tests/test_djust_typecheck.py` cover
+  the manifest read, the end-to-end `_check_view` path, and the pin.
+- **A server-initiated (tick/async) patch arriving while a user event was in
+  flight forced a spurious full-HTML recovery morph (#2829).** The client
+  buffers such a frame while events are pending, and never applied its
+  `version`, so the next event response failed the strict
+  `clientVdomVersion !== data.version - 1` check and logged `VDOM version
+  mismatch! Expected vN, got vN+2` — the recovery storm #1677 fixed for the
+  `push_to_view` self-broadcast path only; the tick and async paths never went
+  through `server_push`. The version is now consumed when the frame is
+  buffered, but ONLY when it is contiguous with the cursor (it has arrived and
+  will be applied), and the deferred replay is marked so it can neither move the
+  cursor backwards nor trigger a recovery. Contiguity is the guard that keeps
+  detection intact: consuming a NON-contiguous version would vouch for versions
+  the server allocated and never shipped — the drop class
+  `_hotreload_broadcast_suppressed` exists for — leaving the client permanently
+  diverged with recovery never firing. A dropped patch, whether outside the
+  buffering window or INSIDE it, still forces recovery — and the decision to
+  decline a version survives to the flush, because a server `noop` carries no
+  version of its own and would otherwise close the window with no strict check
+  at all, letting the replay vouch for the gap. The client-owned flags are
+  stripped by a shared helper each transport calls at its inbound entry
+  (WebSocket, SSE, HTTP fallback), so a wire-supplied flag cannot suppress
+  detection on any of them. 7 regression cases in
+  `tests/js/tick_buffer_version_desync_2829.test.js`, plus a wiring case in the
+  SSE suite (`LiveViewSSE`).
+- **`_run_async_work` rendered without the consumer's `_render_lock` (#2830).**
+  Three of the four render paths — `server_push`, `db_notify` and `_tick_once` —
+  acquire it; the async-work path did not, while calling the same render helper
+  whose docstring states that "the caller MUST already hold
+  `self._render_lock`". That let a background result re-render concurrently with
+  an event-path render on the same PyO3 view, whose VDOM baseline is not
+  thread-safe. It is also the server-side enabler of the client-side version
+  desync fixed in #2829: a lock-free async render is what can put a
+  server-initiated frame in flight mid-event-turn. BOTH render arms of the async
+  path now serialise on the same lock — the success arm and the error arm, which
+  re-renders to display the error state and was missed by the first version of
+  this fix — and unlike the sibling paths they WAIT rather than taking a bounded
+  wait and skipping — a skipped async render is a result the client never
+  receives, whereas a delayed one still lands. 2 regression cases in
+  `python/djust/tests/test_async_work_render_lock_2830.py`.
+- **Dotted `dj-keydown.enter` / `.escape` / `.space` (and `dj-keyup.*`) never fired
+  (#2831).** A dot is a legal attribute-name character, so `dj-keydown.enter` is
+  ONE literal attribute that `closest('[dj-keydown]')` cannot match and
+  `getAttribute('dj-keydown')` cannot read — meaning the modifier-parsing block
+  below it was dead code by construction, and the directive was silently inert.
+  The framework documents the form as legitimate (`_warnUnrecognizedDjModifiers`
+  deliberately does not warn about it) and it is now discovered by attribute
+  NAME, the same prefix-matching scan that warning function uses. The required
+  key comes from the attribute name, mapped through the module's own
+  `_normalizeKeyName`, so the whole key set works instead of a three-entry
+  allowlist — including the bare direction words:
+  `docs/website/guides/tutorials.md` documents `dj-keydown.right`, which fell
+  through the name map to the raw string while `e.key` is `ArrowRight`, so that
+  documented example never fired either.
+- **Keyboard delegation now dispatches every matching binding, not just the
+  nearest one (#2831).** Three defects fell out of the old single-`closest()`
+  dispatch: an element carrying several dotted bindings (`dj-keydown.enter` +
+  `dj-keydown.escape`, documented as a pair in `core-concepts/events.md`,
+  `core-concepts/templates.md`, `guides/template-cheatsheet.md` and
+  `ai/templates.md`) had only the first reachable; a binding whose key did not
+  match returned early and swallowed the event before a container-level handler
+  could see it; and the per-element rate-limit cache was keyed by element alone,
+  so a morph swapping `dj-keydown.enter` for `dj-keydown` on a surviving node
+  kept dispatching the stale binding forever. That same single slot also rebuilt
+  the wrapper on every keystroke for an element carrying two bindings, resetting
+  the timer inside `debounce()` — so `dj-debounce` fired N events for N
+  keystrokes — and, for `dj-debounce="blur"`, leaking one `blur` listener per
+  keystroke, since the deferred form attaches its listener when the wrapper is
+  created and `cancel()` clears timer state only. The cache is now keyed by
+  (element, matched attribute): one persistent wrapper per binding.
+- **Behaviour change: two bindings for the same directive on one path both fire
+  (#2831).** With the old nearest-`closest()` lookup a descendant carrying
+  `dj-keydown` shadowed an ancestor's, so `<div dj-keydown="outer"><input
+  dj-keydown="inner">` fired only `inner`; it now fires both. This matches the
+  scoped `dj-window-keydown` / `dj-document-keydown` delegation, which already
+  dispatches every matching registry entry. No documentation pins the nesting
+  semantics either way, so it is called out rather than changed silently.
+  `dj-key` is deliberately NOT read as a key: it is the VNode list-identity
+  attribute (heading "`dj-key` / `data-key` — Stable List Identity" in
+  `docs/website/advanced/vdom-architecture.md`; the gloss "Analogous to React
+  `key`" is in `docs/website/guides/template-cheatsheet.md` — two different
+  files), and consulting it silenced handlers on keyed list rows. 15 cases in
+  `tests/js/keydown_dotted_modifier_2831.test.js`.
+- **A scoped event listener (`dj-shortcut`, `dj-click-away`) no longer keeps
+  firing after the template stops declaring the directive on an element that
+  survives the VDOM patch (#2832).** The invariant — *a scoped listener is
+  evicted when its element detaches, when the server drops the declaring
+  attribute, or when no LiveView root governs the element anymore* — was
+  implemented twice, once per scoped-listener path, and the #2108 fix landed
+  on only one of the copies (the same parallel-path drift as #1646/#2110).
+  Both paths now evict through one shared predicate, eviction is per
+  declaring attribute (an element may carry several scoped directives and
+  lose only one), and eviction clears the bound-handler marker so a
+  re-declared attribute re-binds with the current value instead of serving
+  the old closure.
+- **T018's `{% extends %}` skip was invisible: `manage.py check` /
+  `djust_check` reported "All djust checks passed!" for an app whose
+  extends-based templates the check never examined — indistinguishable
+  from a run that examined everything and found nothing (#2833).** The
+  skip itself is unchanged (the documented v1 trade-off: block-override
+  context is inheritance-scoped), but a run that skipped one or more views
+  now emits one Info-level `djust.T018` message with the skipped-view
+  count, so a pass is falsifiable. `docs/system-checks.md` also no longer
+  claims the two entry points "can never drift apart" — extraction is
+  shared, but coverage deliberately differs: T018 additionally covers
+  inline `template = "..."` views and skips extends templates, while
+  `manage.py djust_typecheck` covers extends `template_name` templates
+  but not inline ones. 2 regression cases in
+  `python/tests/test_checks_t018_extends_skip_info_2833.py`.
+- **`set_changed_keys()` can no longer be silently dropped by `_skip_render` on any render path**: when a handler set `_skip_render = True` alongside `set_changed_keys()` (the `_force_full_html` hatch, #1981), most render paths resolved the contradiction as "skip" — silently dropping the explicitly requested render and leaking the flag into a later unrelated turn (the #1646 silently-dropped-hatch class) — while the tick path rendered. All render paths (events, broadcasts, DB notifies, ticks) now resolve the two flags through one shared decision where an explicit forced render always wins and both flags are consumed on the turn that serves them. A handler setting only `_skip_render` is unaffected. Closes #2834.
+- **`check-changelog-test-counts` no longer counts prose as JS tests (#2839).**
+  The JS test-function regex was "deliberately loose" — any whitespace/`;`/`{`-preceded
+  `it`/`test` before `(` counted — so a comment sentence like "…block below it
+  (`requiredKey`)…" was counted as a test and a *correct* changelog claim was
+  rejected as drift (the workaround was rewording the prose, which is backwards,
+  #2238); a stray mention could equally inflate a count so a genuinely wrong
+  claim passed. The regex now matches test declarations in statement position
+  (line start, any indentation) and also counts the previously-missed `it.each`
+  / `test.each` declarations (one per declaration, mirroring the Python side's
+  parametrize-as-one convention). Validated against all 178 files in `tests/js/`
+  with per-file ground truth from `vitest run`: the old regex was wrong on 10
+  files (8 prose phantom matches across 6 files, 4 missed `it.each` declarations
+  across 3 files — two files wrong in both ways); the new count is correct
+  everywhere the count is statically knowable. 4 new cases in
+  `tests/test_changelog_test_counts.py` cover the issue's exact prose example,
+  the false-negative direction, the real-corpus comment shapes, and `it.each`
+  counting.
+- **`handle_async_result` now runs under the render lock on both arms of the async-work paths (#2840).** A background-work handler that mutates view state (the documented `self.result` / `self.error` pattern) could previously interleave with a concurrent lock-holding render of the same view. `LiveViewConsumer._run_async_work` awaits the handler inside its existing `_render_lock` region (success + error arms; the error arm's handler → identity re-check → re-render ordering is preserved), and the runtime twin `ViewRuntime._execute_async_task` — which serves WS events' `start_async` work after the ADR-022 flip — borrows the consumer's lock via `transport.event_context()` for its handler + render and gained the missing #1940 teardown identity-guards on both arms. 6 regression cases in `python/djust/tests/test_async_result_render_lock_2840.py`.
+- **Embedded-view stamping missed dotted event attributes (`dj-keydown.enter`
+  was never stamped, #2841).** `{% live_render %}` stamps
+  `data-djust-embedded` on every event-bearing element so the client can
+  route the element's events to the embedded child view, but the compiled
+  matcher required `=` immediately after the bare attribute name — and a dot
+  is a legal attribute-name character (`#2831`, `#1999`), so
+  `dj-keydown.enter="go"` is ONE literal attribute that could not match. An
+  element whose ONLY event attribute was dotted got no stamp, and its events
+  routed to the parent instead of the embedded view; a bare event attribute
+  elsewhere on the same element masked the failure. The matcher now accepts
+  dotted in-name modifiers (`dj-keydown.enter`, the multi-dot
+  `dj-keydown.enter.shift` the runtime reads as `.enter`, and whitespace
+  before `=` per the HTML tokenizer). The scoped family
+  (`dj-window-keydown` / `dj-document-*` for keydown, keyup, click, scroll,
+  resize) was missing from the attribute list entirely — missed dotted AND
+  bare — and is now stamped too; its dispatch path consumes the same
+  `view_id` from `addEventContext`. 8 cases in
+  `TestDottedKeyboardEventStamping` (`tests/unit/test_live_render_tag.py`).
+- **Unknown dotted keyboard modifiers are no longer silently inert — debug
+  warning added (#2842).** `dj-keydown.f1="go"` or `dj-keydown.esc="go"`
+  never fired and never logged anything, even in DEBUG: `_normalizeKeyName`
+  maps a fixed set of names and falls back to the RAW name, so `.f1`
+  resolved to `"f1"` while `e.key` is `"F1"`. The raw fallback stays (it is
+  what lets single characters like `.a` fire), but `_warnUnrecognizedDjModifiers`
+  — the #1999 debug-only warning channel, zero production cost — now also
+  flags any multi-character key modifier on `dj-keydown` / `dj-keyup` /
+  `dj-window-keydown.*` / `dj-document-keydown.*` that is not in the map,
+  naming the attribute and the recognized names. Warning is once per bind,
+  never per keystroke. Notably, HTML parsers lowercase attribute names, so
+  `dj-keydown.PageUp` arrives as `.pageup` and cannot match `"PageUp"`
+  either — casing cannot rescue a multi-character suffix, and `.F1` /
+  `.PageUp`-style spellings warn like every other inert name. The map moved
+  from a local of `_normalizeKeyName` to a module-level `_KEY_NAME_MAP` so
+  the warning pass reads the same source of truth. 11 cases in
+  `tests/js/keydown_key_warning_2842.test.js`.
+- **A stale handler closure kept serving `dj-shortcut` / `dj-click-away`
+  after a re-render changed the attribute VALUE on an element that survives
+  the VDOM patch (#2845).** The bind loops skipped already-marked elements on
+  the `_isHandlerBound` marker alone, and the #2832 eviction predicate judges
+  attribute PRESENCE — so a present-but-changed attribute kept dispatching
+  the old handler name (and, for `dj-shortcut`, the old key bindings and the
+  stale `dj-shortcut-in-input` gate). The skip is now keyed on the value the
+  listener was built from: an unchanged value skips exactly as before, a
+  changed value evicts the old listener and rebuilds the closure from the new
+  value — the sweep path's counterpart of the #2108 registry refresh. 5
+  regression cases in `tests/js/stale-scoped-listeners-2845.test.js`.
+- **Both deferred-activity re-dispatch paths resolved `_skip_render` vs `_force_full_html` the pre-#2834 way (#2847).** With both flags set by the same handler, `ViewRuntime._dispatch_single_event` and the WS consumer's `_dispatch_single_event` sent a `noop` — silently dropping the forced full-HTML render and leaking `_force_full_html` into a later, unrelated turn. Both now resolve through the shared `_resolve_skip_render` helper (force wins; `_skip_render` consumed whenever set), and the helper's docstring no longer falsely claims to own only the four paths #2834 named. New cases in `TestDispatchSingleEventParity2847` (`python/djust/tests/test_skip_render_force_parity_2834.py`).
+- **Release gates: a tagged release can no longer ship without its CHANGELOG
+  section, and fragment path/class claims are now checked (#2854, #2849).**
+  v1.1.3 shipped to PyPI with no `## [1.1.3]` section while the
+  shipped-section pin reported OK against v1.1.2 — the pin's anchor silently
+  fell back to the newest *sectioned* tag. `scripts/check-changelog-tagged-sections.py`
+  now fails for every release tag above that anchor reachable from HEAD whose
+  version has no working-tree section, and `make release` refuses to tag when
+  `CHANGELOG.md` has no section for the target version (the pre-commit hook
+  cannot see this: at the version-bump commit the tag does not exist yet).
+  Separately, a new fragment reference check resolves backtick-quoted file
+  paths and test-class names in pending fragments against the tree, closing
+  the same #2652-shaped gap for fragments; count claims were already covered
+  by `scripts/check-changelog-test-counts.py`.
+- **Three remaining stale-closure sites of the #2845 class now rebuild when
+  the declaring attribute changes on a surviving element (#2858).**
+  `dj-poll` (`09-event-binding.js`), `_bindModel` (`20-model-binding.js`)
+  and `bindUploadHandlers` (`15-uploads.js`) skipped already-bound elements
+  on the bind marker alone, so a morphdom-surviving element kept dispatching
+  the old closure — the old poll handler and cadence, the old model field,
+  the old upload slot. Each site now keys the skip on the value the closure
+  was built from: an unchanged value skips exactly as before (for
+  `dj-poll`, an unchanged value/interval pair does NOT restart the poll
+  phase — the bind loop runs on every patch and a restart would reset the
+  interval timer), a changed value evicts the old listeners and rebuilds,
+  and the poll phase reads its `data-*` params at fire time like
+  `dj-click`/`dj-change` do. 10 regression cases in
+  `tests/js/stale-closures-2858.test.js`.
+- **`dj-shortcut` key names that can never match now warn in debug mode
+  (#2859).** The comma syntax (`pageup:handler`) resolves through the same
+  `_normalizeKeyName` helper as the dotted keyboard directives, and an
+  all-lowercase multi-character name (`pageup`) can never equal a
+  KeyboardEvent.key — the binding was dead on arrival with no warning.
+  Attribute VALUES keep their casing, so the correctly-cased raw spelling
+  (`PageUp:handler`) fires and is deliberately not warned about; each
+  distinct dead name warns at most once per bind pass.
+- **`dj-document-scroll` / `dj-document-resize` now warn in debug mode
+  (#2859).** Both were recognised by `_scanScopedElements` and their entries
+  registered, but the document-level listener was deliberately never
+  installed (`resize` never fires on `document`), so the attributes parsed
+  and did nothing — the same silently-inert class as #2842. The warning
+  points at the documented `dj-window-scroll` / `dj-window-resize` twins.
+- **Deleting an already-shipped `CHANGELOG.md` section no longer passes the
+  shipped-section pin silently (#2862).** The #2028 pin iterated only the
+  sections present in the working tree, so a shipped section *deleted* from
+  the tree was never compared — removing the `## [1.2.0rc6]` section exited 0
+  with `OK: 133 shipped CHANGELOG section(s) match the newest release tag`.
+  The pin now iterates the union of the working tree's sections at or below
+  the anchor and the anchor tag's frozen snapshot, so *deletion* and
+  *rewrite* are two symptoms of one comparison; a deleted section fails by
+  name with a restore instruction, a distinct message from the rewrite diff
+  because the operator's next action differs. The multi-branch scoping from
+  #2861 is preserved — the new demand reads the anchor's snapshot, never the
+  tag list, so a maintenance branch is not failed for main's sections.
+  Covered by synthetic tests in `TestDeletedShippedSection` and a real-tree
+  canary in `tests/test_changelog_tagged_sections.py`.
+- **A full `CHANGELOG.md` wipe passed the shipped-section gate silently
+  (#2865).** `scripts/check-changelog-tagged-sections.py` anchored on the
+  newest tagged section and failed OPEN when it could not select one:
+  deleting one shipped section was caught (#2854 absence, #2862
+  deletion-below-anchor), but deleting EVERY tagged section — the
+  realistic tail of a cross-branch `CHANGELOG.md` merge resolved toward a
+  branch without the shipped history (the v1.1.0rc5 consolidation class) —
+  left the check with no anchor and exited 0. The no-anchor state is now
+  disambiguated by the release tags reachable from `HEAD`, enumerated by
+  the #2861 walk (kept `--merged HEAD`, extracted into one shared helper —
+  no third tag call): with no release tag reachable, the fresh /
+  pre-first-release pass stands; with some, every one of them lacks its
+  section and the check fails naming the newest tag and its restore
+  source (`git show v<newest>:CHANGELOG.md`). New cases in
+  `TestWipedTaggedSections` in `tests/test_changelog_tagged_sections.py`.
+- **`dj-keypress`, `dj-viewport-enter`, and `dj-viewport-leave` removed from
+  the `{% live_render %}` stamp list (#2869).** They sat in
+  `_LIVE_RENDER_EVENT_ATTRS` — the list `{% live_render %}` scans when
+  stamping `view_id` onto embedded elements — but no client module ever
+  bound them: zero mentions in `static/djust/src/`, zero occurrences in the
+  built client. An element carrying one of them inside an embedded child was
+  stamped exactly like a working directive while no listener was ever
+  installed — no error, no warning, no event. `dj-keypress` is also
+  deprecated in the DOM in favour of `keydown` (which djust ships with a
+  full modifier system); there is no `viewportenter` DOM event for the
+  viewport pair to bind at all. `dj-keypress`, `dj-viewport-enter`, and
+  `dj-viewport-leave` were all introduced in the same v0.6.0 stamp-list
+  commit (`e9907c7f`) — the invariant test below caught the viewport pair on
+  its first run. A new invariant test — new cases in
+  `tests/unit/test_live_render_event_attrs_invariant.py` — fails whenever a
+  stamp-list entry has no client-side binding: each entry must appear as a
+  quoted string literal in some `static/djust/src/` module, or belong to the
+  `dj-window-`/`dj-document-` scoped cross product derived from the client's
+  own `scopedPrefixes` × `scopedEventTypes` arrays. Its blind spots (a
+  quoted mention inside a comment, a dead string reference that never
+  dispatches, dynamic names outside the scoped path) are documented in the
+  module docstring.
+- **Template pipeline performance**: Reduce template rendering and reactive update overhead by reusing exact immutable temporal values after protection checks, memoizing filesystem include selection per render, streaming VDOM serialization into one buffer, and reducing lazy tag-binding conversion overhead. Preserve live subclass and custom-timezone behavior, template reloads between renders, and escaped hydrated HTML output.
+- Avoid repeated `dir()` scans for numeric lookups on exact built-in sequences during template rendering, while preserving Django's lookup behavior for custom objects and subclasses.
+
+### Security
+
+- **HTTP POST fallback (`RequestMixin.post()`) enforced none of djust's three
+  authorization layers, so an unauthenticated or under-privileged caller could
+  drive `@event_handler` methods on a `login_required = True` view with a
+  plain POST.** `get()` and every WS/SSE event path already enforced
+  view-level `check_view_auth`, handler-level `check_handler_permission`, and
+  the ADR-017 object-level check; the POST transport now runs all three
+  before dispatch, with the same denial shapes (403 `{"redirect": <login_url>}`
+  for the unauthenticated case, 403 `{"error": "Permission denied"}` for
+  view/handler permission denials, 403 `{"error": "Access denied for this
+  object."}` for object-level denials). Anonymous POSTs to views without auth
+  requirements are unchanged. Also fixes an `UnboundLocalError` in `post()`'s
+  own error path: a body that was not valid JSON raised from the `except`
+  handler itself, masking the real exception as an unlogged 500. 7 regression
+  cases in `python/tests/test_http_post_authz.py`.
+
 ## [1.2.0rc7] - 2026-09-13
 
 ### Added

@@ -136,6 +136,28 @@ literal known at template-author time. (Available since v0.1.7.)
 <input dj-keydown.enter="submit_search" dj-keydown.escape="clear_search" />
 ```
 
+### Mouse Enter / Leave
+
+```html
+<!-- Fires when the pointer enters the element -->
+<div dj-mouseenter="preview">Hover me</div>
+
+<!-- Fires when the pointer leaves the element -->
+<div dj-mouseenter="preview" dj-mouseleave="hide_preview">Hover me</div>
+
+<!-- data-* attributes and inline args work like every other directive -->
+<div dj-mouseenter="preview({{ item.id }})" data-item-id="{{ item.id }}">…</div>
+```
+
+`mouseenter` and `mouseleave` do **not bubble**: moving the pointer from an
+element into one of its children fires neither the element's
+`dj-mouseleave` nor a second `dj-mouseenter` — entering a child is not
+leaving the parent. (This is what distinguishes them from `mouseover` /
+`mouseout`, which fire on every descendant crossing.) Because they do not
+bubble, djust attaches these listeners directly to the declaring element
+rather than delegating on the root; `dj-debounce` / `dj-throttle` and
+`dj-confirm` are honoured as on other directives.
+
 ### Window & Document Events
 
 Bind event listeners on `window` or `document` instead of the element itself. The declaring element provides context (component ID, `dj-value-*` params) but the listener is attached to the global target.

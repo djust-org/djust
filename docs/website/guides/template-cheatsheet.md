@@ -864,6 +864,7 @@ Event attributes:
   dj-poll         dj-patch        dj-navigate     dj-copy
   dj-confirm      dj-model        dj-mounted      dj-auto-recover
   dj-click-away   dj-shortcut     dj-no-recover
+  dj-mouseenter   dj-mouseleave   (non-bubbling mouse enter/leave)
 
 Window/document scoping:
   dj-window-keydown               (keydown on window)
