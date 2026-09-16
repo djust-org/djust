@@ -426,20 +426,69 @@ def test_unknown_tag_without_load_is_refused():
         plain_render("{% unknown_tag2547 %}", CTX)
 
 
-def test_raw_block_consuming_tag_is_refused_loudly():
-    """Per TAG, at parse time, when a template USES it — not at `{% load %}`."""
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", sorted(RENDER))
+def test_wrapper_shaped_raw_block_tag_is_bridged(path):
+    """ADR-030: a raw tag that wraps its body takes the rendered-body route,
+    byte-equal to Django, on every path."""
+    source = "{% load lib2547_rawblock %}{% wrapblock2547 %}x{% endwrapblock2547 %}"
+    assert RENDER[path](source, CTX) == django_render(source, CTX) == "[x]"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", sorted(RENDER))
+def test_bridged_wrapper_body_is_rendered_by_the_rust_engine(path):
+    """The body keeps everything the Rust engine provides: filters, `{% if %}`,
+    a `dj-*` attribute, and a nested same-name block."""
+    source = (
+        "{% load lib2547_rawblock %}"
+        "{% wrapblock2547 %}{% if n %}{{ name|sibling_filter2547 }}{% endif %}"
+        '<button dj-click="go">{% wrapblock2547 %}inner{% endwrapblock2547 %}</button>'
+        "{% endwrapblock2547 %}"
+    )
+    expected = '[[Jack &amp; Jill]<button dj-click="go">[inner]</button>]'
+    assert django_render(source, CTX) == expected
+    assert RENDER[path](source, CTX) == expected
+
+
+def test_a_two_segment_raw_block_tag_is_refused_with_the_reason():
+    """The probe's first check: an intermediate token is not a wrapper."""
     assert plain_render("{% load lib2547_rawblock %}loaded-ok", CTX) == "loaded-ok"
     with pytest.raises(TemplateSyntaxError) as info:
-        plain_render("{% load lib2547_rawblock %}{% wrapblock2547 %}x{% endwrapblock2547 %}", CTX)
+        plain_render(
+            "{% load lib2547_rawblock %}{% twoseg2547 %}a{% sep2547 %}b{% endtwoseg2547 %}", CTX
+        )
     message = str(info.value)
-    assert "'wrapblock2547' from library 'lib2547_rawblock'" in message
-    assert "consumes a block" in message
-    assert "#2558" in message
-    # Django, for the record, renders it — the refusal is the documented gap.
+    assert "'twoseg2547' from library 'lib2547_rawblock'" in message
+    assert "more than one body segment" in message
+    assert "ADR-030" in message
     assert (
-        django_render("{% load lib2547_rawblock %}{% wrapblock2547 %}x{% endwrapblock2547 %}", CTX)
-        == "[x]"
+        django_render(
+            "{% load lib2547_rawblock %}{% twoseg2547 %}a{% sep2547 %}b{% endtwoseg2547 %}", CTX
+        )
+        == "<a|b>"
     )
+
+
+def test_a_raw_block_tag_with_an_optional_branch_is_refused_on_its_stop_set():
+    """A stop set wider than `("end<name>",)` is refused even though the probe
+    body itself would have rendered: the branch token would otherwise reach
+    the Rust engine inside a rendered body."""
+    with pytest.raises(TemplateSyntaxError) as info:
+        plain_render("{% load lib2547_rawblock %}{% optelse2547 %}a{% endoptelse2547 %}", CTX)
+    assert "rather than 'endoptelse2547'" in str(info.value)
+
+
+def test_a_nodelist_introspecting_raw_block_tag_is_refused_with_the_reason():
+    """The probe's second check: a node that keeps only typed children would
+    silently drop a rendered text body, so it must be refused, not bridged."""
+    with pytest.raises(TemplateSyntaxError) as info:
+        plain_render(
+            "{% load lib2547_rawblock %}{% introspect2547 %}"
+            "{% wrapblock2547 %}x{% endwrapblock2547 %}{% endintrospect2547 %}",
+            CTX,
+        )
+    assert "does not render its body as-is" in str(info.value)
 
 
 @pytest.mark.django_db
@@ -450,8 +499,10 @@ def test_a_library_with_one_raw_block_tag_still_bridges_its_other_entries(path):
     source = "{% load lib2547_rawblock %}{% sibling2547 %}|{{ name|sibling_filter2547 }}"
     assert RENDER[path](source, CTX) == django_render(source, CTX)
     assert django_render(source, CTX) == "sibling - Expected result|[Jack &amp; Jill]"
-    with pytest.raises(TemplateSyntaxError, match="wrapblock2547"):
-        RENDER[path]("{% load lib2547_rawblock %}{% wrapblock2547 %}y{% endwrapblock2547 %}", CTX)
+    with pytest.raises(TemplateSyntaxError, match="twoseg2547"):
+        RENDER[path](
+            "{% load lib2547_rawblock %}{% twoseg2547 %}y{% sep2547 %}z{% endtwoseg2547 %}", CTX
+        )
 
 
 def test_djangos_own_libraries_are_all_bridged_now():
