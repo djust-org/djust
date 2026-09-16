@@ -60,9 +60,11 @@ the command `djust new` prints instead:
 `@latest` is intentional: it requests the current published release instead
 of reusing an older globally installed or cached CLI; see
 [uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
-You do not need djust installed globally. If you scaffold projects often,
-`uv tool install djust` gives you a plain `djust` command; run
-`uv tool upgrade djust` before creating a project so it uses the current release.
+You do not need djust installed globally. If you prefer a plain `djust`
+command, `uv tool install djust` provides one, and then `djust new myproject`
+replaces `uvx djust@latest new myproject` everywhere below. A global install
+does not update itself, so run `uv tool upgrade djust` before creating a
+project; an outdated CLI generates outdated files (see Troubleshooting).
 Choose a new directory name in a parent folder such as `~/projects`; do not
 run it inside another project or its Python package.
 
