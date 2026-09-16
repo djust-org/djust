@@ -227,7 +227,7 @@ ADMIN_URL_ENTRY = '    path("admin/", admin.site.urls),\n'
 
 ASGI_PY = """\
 \"\"\"
-ASGI config for %(app_name)s project.
+ASGI config for %(project_name)s project.
 
 Wraps the HTTP handler with ``ASGIStaticFilesHandler`` so static files
 (client.js, CSS, etc.) are served correctly under an ASGI server like
@@ -238,7 +238,7 @@ import os
 
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "%(app_name)s.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "%(settings_module)s")
 
 # Initialize Django's app registry BEFORE importing anything that touches
 # models / consumers (channels, djust.websocket). ``get_asgi_application()``
@@ -268,6 +268,39 @@ application = ProtocolTypeRouter(
         ),
     }
 )
+"""
+
+# ---------------------------------------------------------------------------
+# settings block appended by ``djust init``
+# ---------------------------------------------------------------------------
+#
+# The conditions run inside the user's settings module, so the block is
+# correct for list or tuple settings, apps listed by label or AppConfig path,
+# and projects that configure their own channel layer, without parsing the
+# user's code. TEMPLATES is deliberately untouched: LiveViews read their
+# template source directly, and putting DjustTemplateBackend ahead of the
+# project's engine breaks the admin's inclusion tags (#2872).
+
+SETTINGS_BLOCK = """\
+# --- djust (added by djust init) ---
+# Reruns of `djust init` detect this block and leave settings unchanged.
+INSTALLED_APPS = [
+    *INSTALLED_APPS,
+    *[
+        app
+        for app in ("channels", "djust")
+        if not any(entry == app or entry.startswith(app + ".") for entry in INSTALLED_APPS)
+    ],
+]
+
+ASGI_APPLICATION = "%(asgi_module)s.application"
+
+# In-memory layer: suitable for one local development process.
+if "CHANNEL_LAYERS" not in globals():
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
+# --- end djust ---
 """
 
 # ---------------------------------------------------------------------------
@@ -529,25 +562,29 @@ INDEX_HTML = """\
 # ---------------------------------------------------------------------------
 
 MAKEFILE = """\
-.PHONY: dev test migrate check install
+.PHONY: dev test migrate check install collectstatic
+
+# The project's own environment, so no activation is needed. An exported
+# PYTHON variable does not override this; `make dev PYTHON=python` does.
+PYTHON = .venv/bin/python
 
 dev:
-\tuvicorn %(app_name)s.asgi:application --host 127.0.0.1 --port 8000 --reload
+\t$(PYTHON) -m uvicorn %(app_name)s.asgi:application --host 127.0.0.1 --port 8000 --reload
 
 test:
-\tpython manage.py test
+\t$(PYTHON) manage.py test
 
 migrate:
-\tpython manage.py migrate
+\t$(PYTHON) manage.py migrate
 
 check:
-\tpython manage.py djust_check
+\t$(PYTHON) manage.py djust_check
 
 install:
-\tuv pip install -r requirements.txt
+\tuv pip install --python .venv -r requirements.txt
 
 collectstatic:
-\tpython manage.py collectstatic --noinput
+\t$(PYTHON) manage.py collectstatic --noinput
 """
 
 # ---------------------------------------------------------------------------
@@ -556,7 +593,7 @@ collectstatic:
 
 REQUIREMENTS_TXT = """\
 django>=5.1
-djust>=0.3.0
+%(djust_requirement)s
 channels>=4.0
 uvicorn[standard]>=0.30
 """

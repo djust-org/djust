@@ -11,6 +11,8 @@ description: "Generate a complete CRUD LiveView from a model name and field defi
 
 Generate a complete CRUD LiveView from a model name and field definitions.
 
+For a new Django project, start with [Installation](../getting-started/installation.md#create-a-new-project). The commands below run inside an existing project with djust installed.
+
 ## Quick Start
 
 ```bash
@@ -149,14 +151,17 @@ Beyond per-model CRUD generation, the `djust` CLI ships three commands for
 bootstrapping whole projects and apps:
 
 ```bash
-# Modern entrypoint (recommended) — feature flags select what to wire
-python -m djust new myapp
+# Use the latest published CLI, even if an older tool is installed
+uvx djust@latest new myapp
 
 # Pre-canned feature combos
-python -m djust new myapp --with-auth --with-db --with-presence --with-streaming
+uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming
 
-# Generate models, admin, migrations and views from a YAML schema
-python -m djust new myapp --from-schema schema.yml
+# Generate models, admin, migrations and views from a JSON schema
+uvx djust@latest new myapp --from-schema schema.json
+
+# Add djust to an existing Django project (run beside manage.py)
+uvx djust@latest init
 
 # Legacy entrypoints, mirroring Django's own names
 python -m djust startproject myproject
@@ -171,25 +176,59 @@ djust:
 | What you get | Default | Toggled by |
 |---|---|---|
 | Django project + initial app | always | — |
-| `LIVEVIEW_CONFIG` settings stub | always | — |
+| Template backend and `LIVEVIEW_ALLOWED_MODULES` | always | — |
 | WebSocket routing wired into `asgi.py` | always | — |
 | Auth + login/logout LiveViews | off | `--with-auth` |
-| Postgres `LISTEN/NOTIFY` wiring | off | `--with-db` |
+| Django models, admin, and database-backed views | off | `--with-db` |
 | `PresenceMixin` example | off | `--with-presence` |
 | Stream-friendly base templates | off | `--with-streaming` |
-| Models generated from a schema file | off | `--from-schema schema.yml` |
+| Models generated from a JSON schema | off | `--from-schema schema.json` |
+| Create `.venv`, install dependencies, migrate, and check | on | Skip with `--no-setup` |
 
-`--from-schema` reads a small YAML file describing models and fields, then
+`--from-schema` reads a small JSON file describing models and fields, then
 generates models, admin, migrations, LiveViews and templates in one step.
 Handy for spikes.
 
+Setup installs only into the new project's `.venv`, even when another
+environment is active, and stops at the first failed step. Afterwards, start
+the server with:
+
+```bash
+cd myapp
+make dev
+```
+
+The generated `Makefile` runs the project's `.venv` interpreter, so no
+activation is needed. With `--no-setup`, `djust new` prints the setup commands
+to run before `make dev`.
+
+### `djust init`
+
+`djust init` adds djust to the Django project in the current directory: a
+marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
+not change `TEMPLATES`), a djust `asgi.py` (only when the existing one is
+Django's default for the same settings module), the `djust`, `channels`, and
+`uvicorn[standard]` packages, and a final `manage.py check`.
+
+| Option | Effect |
+|---|---|
+| `--dry-run` | Print the diff and the install command without changing anything |
+| `--no-install` | Edit files only; skip installing packages and the check |
+| `--force` | Edit files even if they have uncommitted changes in git |
+| `--settings MODULE` | Settings module to edit when `manage.py` does not name it |
+
+Exit status is `0` on success, `1` when `init` refused before writing, and
+`2` when files were written but a step needs attention (a customized
+`asgi.py`, a failed install, or a failed check). The
+[installation guide](../getting-started/installation.md#add-djust-to-an-existing-project)
+describes each change.
+
 ### `startproject` and `startapp`
 
-These mirror Django's `django-admin startproject` / `startapp` but add
-djust's defaults — `LIVEVIEW_CONFIG`, `LIVEVIEW_ALLOWED_MODULES`,
-`LiveSessionMiddleware`, and the WebSocket routing include. Reach for them
-when you want explicit Django parity rather than the curated `djust new`
-experience.
+`python -m djust startproject` is a deprecated alias for `djust new`.
+Use `djust new` for a complete project. `python -m djust startapp myapp`
+generates an app with a starter view and template inside an existing project;
+you still need to register the app and include its URLs.
 
 ## AI agent discovery
 

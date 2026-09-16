@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -335,7 +336,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 def cmd_new(args: argparse.Namespace) -> None:
     """Create a new djust project with optional features."""
-    from djust.scaffolding.generator import generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
 
     try:
         generate_project(
@@ -347,7 +348,7 @@ def cmd_new(args: argparse.Namespace) -> None:
             from_schema=getattr(args, "from_schema", None),
             auto_setup=not getattr(args, "no_setup", False),
         )
-    except ValueError as e:
+    except (ValueError, ScaffoldSetupError) as e:
         print("Error: %s" % e)
         sys.exit(1)
 
@@ -367,9 +368,9 @@ def cmd_new(args: argparse.Namespace) -> None:
     if features:
         print("  Features: %s" % ", ".join(features))
     print("\nNext steps:")
-    print("  cd %s" % args.name)
-    print("  make dev")
-    print()
+    for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
+        print("  %s" % step)
+    print("\nThen open http://127.0.0.1:8000/\n")
 
 
 def cmd_startproject(args: argparse.Namespace) -> None:
@@ -388,7 +389,7 @@ def cmd_startproject(args: argparse.Namespace) -> None:
     ``djust new``, producing a working, warning-clean project. New projects
     should call ``djust new <name>`` directly.
     """
-    from djust.scaffolding.generator import generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
 
     print(
         "Note: `djust startproject` is deprecated — use `djust new` instead.\n"
@@ -400,15 +401,35 @@ def cmd_startproject(args: argparse.Namespace) -> None:
             app_name=args.name,
             auto_setup=not getattr(args, "no_setup", False),
         )
-    except ValueError as e:
+    except (ValueError, ScaffoldSetupError) as e:
         print("Error: %s" % e)
         sys.exit(1)
 
     print("\nCreated djust project '%s'" % args.name)
     print("\nNext steps:")
-    print("  cd %s" % args.name)
-    print("  make dev")
-    print()
+    for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
+        print("  %s" % step)
+    print("\nThen open http://127.0.0.1:8000/\n")
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Add djust to the Django project in the current directory."""
+    from djust.scaffolding.init_project import InitError, format_result, init_project
+
+    root = Path.cwd()
+    try:
+        result = init_project(
+            root,
+            settings_module=args.settings,
+            dry_run=args.dry_run,
+            install=not args.no_install,
+            force=args.force,
+        )
+    except InitError as e:
+        print("Error: %s" % e)
+        return 1
+    print(format_result(result, root))
+    return result.exit_code
 
 
 def cmd_startapp(args: argparse.Namespace) -> None:
@@ -992,6 +1013,20 @@ def main() -> None:
         help="Skip automatic venv/install/migrate setup",
     )
 
+    init_parser = subparsers.add_parser(
+        "init", help="Add djust to the Django project in the current directory"
+    )
+    init_parser.add_argument("--settings", help="Settings module (default: read from manage.py)")
+    init_parser.add_argument(
+        "--dry-run", action="store_true", dest="dry_run", help="Show the changes without writing"
+    )
+    init_parser.add_argument(
+        "--no-install", action="store_true", dest="no_install", help="Skip installing packages"
+    )
+    init_parser.add_argument(
+        "--force", action="store_true", help="Edit files even if they have uncommitted changes"
+    )
+
     # startproject command (legacy)
     sp_parser = subparsers.add_parser("startproject", help="Create a new djust project (legacy)")
     sp_parser.add_argument("name", help="Project name")
@@ -1073,6 +1108,7 @@ def main() -> None:
     # Execute command
     commands = {
         "new": cmd_new,
+        "init": cmd_init,
         "startproject": cmd_startproject,
         "startapp": cmd_startapp,
         "stats": cmd_stats,
