@@ -35,7 +35,7 @@ def test_setup_targets_new_environment_with_another_environment_active(tmp_path,
     assert os.environ["VIRTUAL_ENV"] == str(parent_env)
 
 
-@pytest.mark.parametrize("failed_step", range(4))
+@pytest.mark.parametrize("failed_step", range(5))
 def test_setup_stops_at_first_failed_command(tmp_path, capsys, failed_step):
     calls = []
 
@@ -98,3 +98,60 @@ def test_management_command_reports_setup_failure():
             with_streaming=False,
             no_setup=False,
         )
+
+
+def test_generated_project_runs_without_activation(tmp_path):
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    makefile = (project / "Makefile").read_text()
+    assert "PYTHON ?= .venv/bin/python" in makefile
+    assert "\t$(PYTHON) -m uvicorn child.asgi:application" in makefile
+    assert "\tuvicorn " not in makefile
+    assert "\tpython manage.py" not in makefile
+
+
+def test_requirements_floor_is_generating_version(tmp_path):
+    from djust import __version__
+
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    requirements = (project / "requirements.txt").read_text().splitlines()
+    assert "djust>=%s" % __version__.split("+")[0] in requirements
+
+
+def test_generated_asgi_uses_project_settings(tmp_path):
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    asgi = (project / "child" / "asgi.py").read_text()
+    assert '"DJANGO_SETTINGS_MODULE", "child.settings"' in asgi
+
+
+def test_setup_pins_python_and_runs_check_last(tmp_path):
+    commands = []
+    with (
+        patch.object(generator.shutil, "which", return_value="uv"),
+        patch.object(generator, "_run_cmd", side_effect=lambda cmd, cwd: commands.append(cmd)),
+    ):
+        generator._run_auto_setup(tmp_path)
+    assert commands[0][:4] == ["uv", "venv", "--python", ">=3.10"]
+    assert commands[-1][1:] == ["manage.py", "check"]
+
+
+def test_next_steps_after_setup(monkeypatch):
+    monkeypatch.setattr(generator.os, "name", "posix")
+    assert generator.next_steps("child", setup_ran=True) == ["cd child", "make dev"]
+
+
+def test_next_steps_without_setup_target_project_environment(monkeypatch):
+    monkeypatch.setattr(generator.os, "name", "posix")
+    steps = generator.next_steps("child", setup_ran=False)
+    assert steps[0] == "cd child"
+    assert "uv pip install --python .venv -r requirements.txt" in steps
+    assert ".venv/bin/python manage.py migrate" in steps
+    assert steps[-1] == "make dev"
+
+
+def test_cli_success_prints_next_steps(capsys, monkeypatch):
+    monkeypatch.setattr(generator.os, "name", "posix")
+    with patch.object(generator, "generate_project"):
+        cli.cmd_new(argparse.Namespace(name="child", no_setup=False))
+    output = capsys.readouterr().out
+    assert "  cd child\n  make dev\n" in output
+    assert "http://127.0.0.1:8000/" in output

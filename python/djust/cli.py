@@ -335,7 +335,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 def cmd_new(args: argparse.Namespace) -> None:
     """Create a new djust project with optional features."""
-    from djust.scaffolding.generator import ScaffoldSetupError, generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
 
     try:
         generate_project(
@@ -367,9 +367,9 @@ def cmd_new(args: argparse.Namespace) -> None:
     if features:
         print("  Features: %s" % ", ".join(features))
     print("\nNext steps:")
-    print("  cd %s" % args.name)
-    print("  make dev")
-    print()
+    for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
+        print("  %s" % step)
+    print("\nThen open http://127.0.0.1:8000/\n")
 
 
 def cmd_startproject(args: argparse.Namespace) -> None:
@@ -388,7 +388,7 @@ def cmd_startproject(args: argparse.Namespace) -> None:
     ``djust new``, producing a working, warning-clean project. New projects
     should call ``djust new <name>`` directly.
     """
-    from djust.scaffolding.generator import ScaffoldSetupError, generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
 
     print(
         "Note: `djust startproject` is deprecated — use `djust new` instead.\n"
@@ -406,9 +406,9 @@ def cmd_startproject(args: argparse.Namespace) -> None:
 
     print("\nCreated djust project '%s'" % args.name)
     print("\nNext steps:")
-    print("  cd %s" % args.name)
-    print("  make dev")
-    print()
+    for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
+        print("  %s" % step)
+    print("\nThen open http://127.0.0.1:8000/\n")
 
 
 def cmd_startapp(args: argparse.Namespace) -> None:

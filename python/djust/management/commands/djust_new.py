@@ -73,7 +73,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        from djust.scaffolding.generator import ScaffoldSetupError, generate_project
+        from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
 
         app_name = options["app_name"]
 
@@ -110,6 +110,8 @@ class Command(BaseCommand):
             self.stdout.write("  Features: %s" % ", ".join(features))
         self.stdout.write("")
         self.stdout.write("  Next steps:")
-        self.stdout.write("    cd %s" % app_name)
-        self.stdout.write("    make dev")
+        for step in next_steps(app_name, setup_ran=not options["no_setup"]):
+            self.stdout.write("    %s" % step)
+        self.stdout.write("")
+        self.stdout.write("  Then open http://127.0.0.1:8000/")
         self.stdout.write("")

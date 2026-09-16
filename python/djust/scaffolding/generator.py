@@ -25,6 +25,32 @@ class ScaffoldSetupError(RuntimeError):
     """A generated project could not complete environment setup or migrations."""
 
 
+def djust_requirement() -> str:
+    """Requirement line pinning djust to at least the running version."""
+    from djust import __version__
+
+    return "djust>=%s" % __version__.split("+", 1)[0]
+
+
+def next_steps(app_name: str, setup_ran: bool) -> List[str]:
+    """Commands a user runs after ``djust new`` to start the dev server."""
+    windows = os.name == "nt"
+    python = r".venv\Scripts\python" if windows else ".venv/bin/python"
+    steps = ["cd %s" % app_name]
+    if not setup_ran:
+        steps += [
+            'uv venv --python ">=3.10" .venv',
+            "uv pip install --python .venv -r requirements.txt",
+            "%s manage.py makemigrations" % python,
+            "%s manage.py migrate" % python,
+        ]
+    if windows:
+        steps.append("%s -m uvicorn %s.asgi:application --reload" % (python, app_name))
+    else:
+        steps.append("make dev")
+    return steps
+
+
 def generate_project(
     app_name: str,
     target_dir: Optional[str] = None,
@@ -181,6 +207,9 @@ def _build_context(
 
     ctx = {
         "app_name": app_name,
+        "project_name": app_name,
+        "settings_module": "%s.settings" % app_name,
+        "djust_requirement": djust_requirement(),
         "app_class": app_class,
         "display_name": display_name,
         "view_class": view_class,
@@ -245,7 +274,7 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
     _write(project_dir / "Makefile", T.MAKEFILE % ctx)
 
     # requirements.txt
-    _write(project_dir / "requirements.txt", T.REQUIREMENTS_TXT)
+    _write(project_dir / "requirements.txt", T.REQUIREMENTS_TXT % ctx)
 
     # .gitignore
     _write(project_dir / ".gitignore", T.GITIGNORE)
@@ -695,7 +724,7 @@ def _run_auto_setup(project_dir: Path) -> None:
     # Create virtualenv
     if uv_available:
         print("Creating virtualenv (uv)...")
-        _run_cmd(["uv", "venv", str(venv_dir)], cwd=project_dir)
+        _run_cmd(["uv", "venv", "--python", ">=3.10", str(venv_dir)], cwd=project_dir)
     else:
         print("Creating virtualenv (python -m venv)...")
         _run_cmd([sys.executable, "-m", "venv", str(venv_dir)], cwd=project_dir)
@@ -725,6 +754,9 @@ def _run_auto_setup(project_dir: Path) -> None:
     print("Running migrations...")
     _run_cmd([venv_python, "manage.py", "makemigrations"], cwd=project_dir)
     _run_cmd([venv_python, "manage.py", "migrate", "--run-syncdb"], cwd=project_dir)
+
+    print("Checking project...")
+    _run_cmd([venv_python, "manage.py", "check"], cwd=project_dir)
 
     print("\nDone!")
 
