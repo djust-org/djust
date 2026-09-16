@@ -1486,28 +1486,56 @@ function bindLiveViewEvents(scope) {
     const pollElements = root.querySelectorAll(pollSelector);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
-        if (pollHandler && !_isHandlerBound(element, 'poll')) {
-            _markHandlerBound(element, 'poll');
-            const parsed = parseEventHandler(pollHandler);
-            const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
-            const pollParams = extractTypedParams(element);
+        if (!pollHandler) return;
 
-            const intervalId = setInterval(() => {
-                if (document.hidden) return;
-                handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
-            }, interval);
-
-            element._djustPollIntervalId = intervalId;
-
-            // Pause/resume on visibility change
-            const visHandler = () => {
-                if (!document.hidden) {
-                    handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
-                }
-            };
-            document.addEventListener('visibilitychange', visHandler);
-            element._djustPollVisibilityHandler = visHandler;
+        // #2858 — the interval closure is built from the attribute VALUE and
+        // the interval, and a surviving element keeps both its interval and
+        // its _boundHandlers marker across a morph, so the marker alone
+        // cannot justify the skip: only an UNCHANGED (value, interval) pair
+        // can. This loop carries one invariant the #2855 rebuild rule does
+        // not: an unchanged pair must NOT restart the poll phase — the bind
+        // loop runs on every patch, and restarting would reset the interval
+        // timer on every morph, so a poll would never fire on schedule. A
+        // changed pair evicts the old phase (clearInterval + visibilitychange
+        // teardown — the same teardown the element-removal paths in
+        // 01-dom-helpers-turbo.js / 12-vdom-patch.js perform) and rebuilds.
+        const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
+        const boundKey = pollHandler + '\u0000' + interval;
+        if (_isHandlerBound(element, 'poll')) {
+            if (element._djustPollBoundKey === boundKey) return;
+            if (element._djustPollIntervalId) {
+                clearInterval(element._djustPollIntervalId);
+                element._djustPollIntervalId = null;
+            }
+            if (element._djustPollVisibilityHandler) {
+                document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+                element._djustPollVisibilityHandler = null;
+            }
+            _unmarkHandlerBound(element, 'poll');
         }
+        _markHandlerBound(element, 'poll');
+        element._djustPollBoundKey = boundKey;
+
+        const parsed = parseEventHandler(pollHandler);
+
+        // Params are read at FIRE time, not bind time — dj-click / dj-change
+        // read their element at fire time for the same reason: data-*
+        // attributes can change under a surviving element too, and a
+        // bind-time snapshot would keep dispatching the old ones (#2858).
+        const firePoll = () => {
+            if (document.hidden) return;
+            handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
+        };
+
+        const intervalId = setInterval(firePoll, interval);
+        element._djustPollIntervalId = intervalId;
+
+        // Pause/resume on visibility change
+        const visHandler = () => {
+            if (!document.hidden) firePoll();
+        };
+        document.addEventListener('visibilitychange', visHandler);
+        element._djustPollVisibilityHandler = visHandler;
     });
 
     // ================================================================
@@ -1683,6 +1711,48 @@ function bindLiveViewEvents(scope) {
 }
 
 /**
+ * #2859: the dj-shortcut VALUE resolves key names through the same
+ * `_normalizeKeyName` helper as the dotted keyboard directives, but through
+ * the comma syntax (`pageup:handler`) rather than the attribute name. A
+ * mapped name (`escape`) or a single character (`k`) fires; an all-lowercase
+ * multi-character name (`pageup`) can never match — every multi-character
+ * KeyboardEvent.key is UpperCamelCase (`PageUp`), and no KeyboardEvent.key
+ * is all-lowercase. Unlike attribute NAMES, attribute VALUES are NOT
+ * lowercased by the HTML parser, so the correctly-cased raw spelling
+ * (`PageUp:handler`) DOES match via the raw-name fallback — the warning
+ * points at that spelling. Debug mode only; deduplicated per bind pass so
+ * the same dead key name (within one value or across elements) warns once.
+ * @param {string} attrValue - The dj-shortcut attribute value
+ * @param {Set<string>} warned - Per-pass set of already-warned key names
+ */
+function _warnInertShortcutKeyNames(attrValue, warned) {
+    const bindings = attrValue.split(',');
+    for (const binding of bindings) {
+        const parts = binding.trim().split(':');
+        const comboParts = parts[0].trim().split('+');
+        const key = comboParts[comboParts.length - 1].trim();
+        if (!key || key.length === 1) continue; // single chars fire via the raw fallback
+        if (_KEY_NAME_MAP[key.toLowerCase()]) continue; // mapped name — normalizes to a real key
+        if (key !== key.toLowerCase()) continue; // correctly-cased raw key (PageUp) — matches e.key
+        if (warned.has(key)) continue;
+        warned.add(key);
+        console.warn(
+            '[LiveView] Unrecognized keyboard name in dj-shortcut value "' +
+                attrValue +
+                '": the key name "' +
+                key +
+                '" never matches a KeyboardEvent.key, so this shortcut will ' +
+                'never fire. Unlike attribute names, attribute values keep ' +
+                'their casing, so spell named keys with their DOM casing — ' +
+                'e.g. "PageUp:handler", not "pageup:handler" — or use a mapped ' +
+                'name: escape, enter, tab, space, backspace, delete, arrowup, ' +
+                'arrowdown, arrowleft, arrowright, up, down, left, right — or ' +
+                'any single character (k:handler).'
+        );
+    }
+}
+
+/**
  * #1999: Warn (debug-mode only) when the `.lazy` / `.debounce-N` in-name
  * modifier — which ONLY `dj-model` understands — is mis-applied to another
  * directive.
@@ -1712,6 +1782,18 @@ function bindLiveViewEvents(scope) {
  * all-lowercase. The handler is silently inert forever. Single characters
  * (`.a`) DO fire via the raw fallback and are deliberately NOT warned about.
  *
+ * A THIRD pass (#2859) warns when a `dj-shortcut` VALUE spells a key name
+ * that can never match — the same inertness, reached through the comma
+ * syntax (`pageup:handler`) instead of the attribute name; see
+ * `_warnInertShortcutKeyNames`. Attribute VALUES keep their casing, so the
+ * correctly-cased raw spelling (`PageUp:handler`) works and is NOT warned.
+ *
+ * A FOURTH pass (#2859) warns that `dj-document-scroll` /
+ * `dj-document-resize` are parsed but never installed — `_scanScopedElements`
+ * registers their entries while `_installScopedDelegation` deliberately skips
+ * the document-level scroll/resize listeners (`resize` never fires on
+ * `document`) — and points at the documented `dj-window-*` twins.
+ *
  * Skipped entirely outside debug mode (zero production cost).
  *
  * @param {ParentNode} scope - Root to scan (defaults to document).
@@ -1725,6 +1807,9 @@ function _warnUnrecognizedDjModifiers(scope) {
     const MODEL_MODIFIER = /^(dj-[a-z][\w-]*)\.(lazy|debounce)/;
     const root = scope || document;
     const els = root.querySelectorAll('*');
+    // #2859 — per-pass dedup for the dj-shortcut key-name warning: one bind
+    // pass warns about each distinct dead key name at most once.
+    const warnedShortcutKeys = new Set();
     for (let i = 0; i < els.length; i++) {
         // eslint-disable-next-line security/detect-object-injection
         const attrs = els[i].attributes;
@@ -1746,6 +1831,34 @@ function _warnUnrecognizedDjModifiers(scope) {
                         '`, use the standalone form instead — e.g. `' +
                         base +
                         '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+                );
+                continue;
+            }
+
+            // #2859: inert dj-shortcut key NAME in the attribute VALUE.
+            if (name === 'dj-shortcut') {
+                // eslint-disable-next-line security/detect-object-injection
+                _warnInertShortcutKeyNames(attrs[j].value, warnedShortcutKeys);
+                continue;
+            }
+
+            // #2859: dj-document-scroll / dj-document-resize are recognised
+            // by _scanScopedElements and their entries ARE registered, but
+            // _installScopedDelegation deliberately skips the document-level
+            // listeners for scroll/resize (`resize` never fires on
+            // `document`), so these attributes parsed and did nothing. The
+            // documented spelling for both events is the dj-window-* twin.
+            if (name === 'dj-document-scroll' || name === 'dj-document-resize' ||
+                name.startsWith('dj-document-scroll.') || name.startsWith('dj-document-resize.')) {
+                const winTwin = name.startsWith('dj-document-scroll') ? 'dj-window-scroll' : 'dj-window-resize';
+                console.warn(
+                    '[LiveView] Unsupported directive on attribute "' +
+                        name +
+                        '": dj-document-scroll / dj-document-resize are parsed ' +
+                        'but the document-level listener is never installed, so ' +
+                        'this handler will never fire (a resize event never ' +
+                        'targets `document`). Use the supported window-level ' +
+                        'spelling instead: ' + winTwin + '="handler".'
                 );
                 continue;
             }
