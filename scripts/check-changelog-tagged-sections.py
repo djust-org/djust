@@ -23,10 +23,18 @@ present in the working tree; a missing one fails by name (a distinct
 message from a rewritten body, because the operator's next action differs:
 restore the section vs. revert the edit).
 
-Exits 0 on match or when there's nothing to check (no tagged section, or git
-unavailable). Exits 1 with a per-section diff on any mismatch (deleted
-sections are named without a diff — there is no working copy to diff
-against).
+Also detects the *wipe* (#2865): with every tagged section gone the tree
+yields no anchor at all, and that used to exit 0 — indistinguishable from a
+fresh, pre-first-release repo, which must keep passing. Release tags
+reachable from HEAD disambiguate the two: with none reachable, the fresh /
+pre-first-release pass stands; with some, every one of them lacks its
+section (the wipe), and the check fails naming the newest tag — the restore
+source.
+
+Exits 0 on match or when there's nothing to check (no tagged section and no
+release tag reachable from HEAD, or git unavailable). Exits 1 with a
+per-section diff on any mismatch (deleted sections are named without a
+diff — there is no working copy to diff against).
 
 Usage::
 
@@ -74,27 +82,37 @@ def _parse_version(token: str) -> "tuple[int, int, int, int, int] | None":
     return (int(m.group("major")), int(m.group("minor")), int(m.group("patch")), phase, prenum)
 
 
-def _missing_higher_release_sections(anchor_ver: str, working_versions: "set[str]") -> "list[str]":
-    """Release tags above the anchor whose version has no working section.
+def _release_tags_reachable_from_head() -> "list[str] | None":
+    """Release tags reachable from HEAD, newest first by this script's own
+    version order (a final release ranks above its own rcs), or ``None`` if
+    git failed.
 
-    Only tags reachable from HEAD are considered: in a multi-branch repo,
-    ``main`` never carried the ``1.1.x`` maintenance sections and the ``1.1``
-    branch never carried main's ``1.2.0rc*`` sections — demanding both would
-    be a permanent false positive on whichever branch the check runs on.
+    The script's single tag walk: the absence check (#2861) filters it to
+    tags above the anchor; the wipe check (#2865) uses it whole. Enumeration
+    must stay ``--merged HEAD``: in a multi-branch repo, ``main`` never
+    carried the ``1.1.x`` maintenance sections and the ``1.1`` branch never
+    carried main's ``1.2.0rc*`` sections — demanding both would be a
+    permanent false positive on whichever branch the check runs on.
     """
+    code, out = _git("tag", "--list", "v*", "--sort=-v:refname", "--merged", "HEAD")
+    if code != 0:
+        return None  # cannot enumerate tags — fail open, like every git path here
+    tags = [tag for tag in out.split() if _parse_version(tag) is not None]
+    return sorted(tags, key=_parse_version, reverse=True)
+
+
+def _missing_higher_release_sections(anchor_ver: str, working_versions: "set[str]") -> "list[str]":
+    """Release tags above the anchor whose version has no working section."""
     anchor_key = _parse_version(anchor_ver)
     if anchor_key is None:
         return []
-    code, out = _git("tag", "--list", "v*", "--sort=-v:refname", "--merged", "HEAD")
-    if code != 0:
+    tags = _release_tags_reachable_from_head()
+    if tags is None:
         return []  # cannot enumerate tags — fail open, like every git path here
     missing: list[str] = []
-    for tag in out.split():
-        key = _parse_version(tag)
-        if key is None or key <= anchor_key:
-            continue
-        ver = tag[1:]  # the list pattern guarantees the leading 'v'
-        if ver not in working_versions:
+    for tag in tags:
+        ver = tag[1:]  # the v* list pattern guarantees the leading 'v'
+        if _parse_version(tag) > anchor_key and ver not in working_versions:
             missing.append(ver)
     return missing
 
@@ -156,7 +174,32 @@ def check_changelog(changelog_path: Path) -> int:
             anchor_index = i
             break
     if anchor_ver is None:
-        return 0  # no shipped section yet — nothing frozen to pin
+        # #2865: no tagged section in the tree is ambiguous — a fresh,
+        # pre-first-release repo (keep passing) or a wiped CHANGELOG (must
+        # fail). Release tags reachable from HEAD disambiguate the two; the
+        # enumeration stays --merged HEAD so another release line's tags
+        # cannot red a branch that never carried their sections.
+        tags = _release_tags_reachable_from_head()
+        if tags is None:
+            return 0  # cannot enumerate tags — fail open, like every git path here
+        if not tags:
+            return 0  # no release tag reachable from HEAD — nothing shipped to pin
+        newest = tags[0][1:]  # the v* list pattern guarantees the leading 'v'
+        shown = ", ".join(tags[:5])  # real tag names, newest first
+        if len(tags) > 5:
+            shown += f" … ({len(tags)} release tag(s) total)"
+        print("CHANGELOG shipped-section pin FAILED:", file=sys.stderr)
+        print(
+            f"\n✗ Release tag(s) reachable from HEAD ({shown}) have no "
+            f"'## [...]' section in CHANGELOG.md —\n  not even '[{newest}]', "
+            f"the newest, so there is no anchor to pin against. The shipped\n"
+            f"  CHANGELOG history was wiped (see #2028/#2865; the realistic "
+            f"route is a\n  cross-branch CHANGELOG merge resolved toward a "
+            f"branch without the shipped\n  sections).\n  Restore the shipped "
+            f"history verbatim: 'git show v{newest}:CHANGELOG.md'.",
+            file=sys.stderr,
+        )
+        return 1
 
     code, snapshot_text = _git("show", f"v{anchor_ver}:CHANGELOG.md")
     if code != 0:
