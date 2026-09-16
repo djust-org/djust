@@ -205,9 +205,10 @@ to run before `make dev`.
 ### `djust init`
 
 `djust init` adds djust to the Django project in the current directory: a
-marked settings block, a djust `asgi.py` (only when the existing one is
-Django's default), the `djust`, `channels`, and `uvicorn[standard]` packages,
-and a final `manage.py check`.
+marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
+not change `TEMPLATES`), a djust `asgi.py` (only when the existing one is
+Django's default for the same settings module), the `djust`, `channels`, and
+`uvicorn[standard]` packages, and a final `manage.py check`.
 
 | Option | Effect |
 |---|---|

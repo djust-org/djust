@@ -56,8 +56,11 @@ myproject/
 ├── manage.py
 ├── requirements.txt
 ├── Makefile
+├── AGENTS.md
 ├── .env
+├── .env.example
 ├── .venv/
+├── templates/
 └── myproject/
     ├── settings.py
     ├── asgi.py
@@ -105,8 +108,8 @@ To see the changes first without writing anything, add `--dry-run`.
 
 | Part | What `djust init` does |
 | --- | --- |
-| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS`, puts the djust template backend ahead of your existing backends, sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. Running `init` again leaves it unchanged. |
-| `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py` is left alone; `init` prints the code to merge instead. |
+| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. `TEMPLATES` is left alone: LiveViews render their templates with djust's engine regardless, and everything else keeps rendering as before. Running `init` again leaves the file unchanged. |
+| `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py`, or a default one pointing at a different settings module, is left alone; `init` prints the code to merge instead. |
 | Packages | Adds `djust`, `channels`, and `uvicorn[standard]`: with `uv add` in a uv project, or by adding missing lines to `requirements.txt` and installing into the project's `.venv`. For Poetry, or a project with neither, it prints the command to run. |
 | Check | Runs `manage.py check` once the packages are installed. |
 
@@ -123,7 +126,8 @@ A few things `init` refuses to guess:
   into an active environment located inside the project. Otherwise `init`
   prints the install command and skips the check.
 - **Settings packages.** When settings live in a package such as
-  `mysite/settings/`, `init` prints the block to add to the module you load.
+  `mysite/settings/` or `config/settings/local.py`, `init` prints the block to
+  add to the module you load.
   If `manage.py` does not name the settings module, pass `--settings mysite.settings`.
 
 `init` exits with status `0` when everything is done, `1` when it refused
@@ -215,8 +219,12 @@ CHANNEL_LAYERS = {
 }
 ```
 
-Register djust's template backend **before** the existing Django backend.
-Keeping Django's backend also supports the Django admin:
+Optionally, render your other templates with djust's engine too by
+registering its backend **before** the existing Django backend. LiveViews do
+not need this step: they render with djust's engine either way, and
+`djust init` skips it. If the project uses the Django admin, skip it for now:
+with this order the admin's list and edit pages fail
+([#2872](https://github.com/djust-org/djust/issues/2872)).
 
 ```python
 TEMPLATES.insert(0, {

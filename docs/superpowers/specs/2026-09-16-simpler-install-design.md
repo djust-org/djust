@@ -116,6 +116,17 @@ if "CHANNEL_LAYERS" not in globals():
 # --- end djust ---
 ```
 
+**Revised after review (2026-09-16):** the block no longer adds
+`DjustTemplateBackend` to `TEMPLATES`. With djust's backend first and
+`APP_DIRS: True`, the admin changelist and change pages raise
+`AttributeError: 'DjustTemplateBackend' object has no attribute
+'select_template'` (#2872, also affecting `djust new --with-db`). LiveViews
+read their template source through `loader.get_template(...).template.source`
+and render it in Rust whichever engine found the file, so they do not need the
+backend; verified with the Your First LiveView counter in a browser. The
+`INSTALLED_APPS` condition also matches AppConfig paths
+(`channels.apps.ChannelsConfig`). The block below shows the original design.
+
 The conditions run inside settings, so the block is correct whether
 `INSTALLED_APPS`/`TEMPLATES` are lists or tuples, whether apps are already
 listed, and whether the project configures its own channel layer. Django's
