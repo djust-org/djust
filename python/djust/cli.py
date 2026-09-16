@@ -334,9 +334,23 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print(f"\nAnalyzed {len(files_to_check)} file(s)")
 
 
+def _print_update_notice() -> None:
+    """One line about a newer release or an advisory, before scaffolding."""
+    from djust import updates
+
+    if not updates.should_check(isatty=sys.stdout.isatty()):
+        return
+    status = updates.check()
+    message = status.message(updates.cli_install_hint()) if status else None
+    if message:
+        print(message + "\n")
+
+
 def cmd_new(args: argparse.Namespace) -> None:
     """Create a new djust project with optional features."""
     from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
+
+    _print_update_notice()
 
     try:
         generate_project(
@@ -417,6 +431,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     """Add djust to the Django project in the current directory."""
     from djust.scaffolding.init_project import InitError, format_result, init_project
 
+    _print_update_notice()
     root = Path.cwd()
     try:
         result = init_project(

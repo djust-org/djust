@@ -109,6 +109,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.checks.quality",
         "djust.checks.security",
         "djust.checks.templates",
+        "djust.checks.updates",
         "djust.checks.utils",
         "djust.config",
         "djust.observability",
@@ -125,10 +126,12 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 59
+assert len(ALLOWLIST_SETUP) == 60
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
+# The once-a-day update notice (``djust.updates``) is imported only inside a
+# development-server process (``apps._is_serving_process``), never here.
 ALLOWLIST_SETUP_DEBUG = ALLOWLIST_SETUP | {"djust.dev_server"}
 
 # Each asserted absent by name so the failure names the leak (#1104).
