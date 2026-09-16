@@ -197,13 +197,9 @@ ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
 
 # ``djust.theming`` powers the starter page's theme switcher. Omitted with
 # ``--bare``. The context processor is required by djust_theming.E001.
-# The shipped presets currently fail their own WCAG contrast check
-# (djust_theming.W001; djust-org/djust#2874), so a fresh `manage.py check`
-# would print six warnings. Silenced until the presets are fixed.
-THEMING_SETTINGS = """\
-
-SILENCED_SYSTEM_CHECKS = ["djust_theming.W001"]
-"""
+# (#2874) No SILENCED_SYSTEM_CHECKS here: the shipped presets are
+# warning-clean under djust_theming.W001 as of the #2874 reconciliation.
+THEMING_SETTINGS = ""
 # theme.css plus the theme gallery (/theme/gallery/, DEBUG or staff only).
 THEMING_URLS = '    path("theme/", include("djust.theming.urls")),\n'
 THEMING_APP_ENTRY = '    "djust.theming",\n'

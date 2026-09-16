@@ -8,24 +8,15 @@ from django.core.checks import CheckMessage, Error, Warning, register, Tags
 from ._config import get_theme_config
 from .accessibility import AccessibilityValidator
 from ._registry_accessor import get_registry
+from .a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS
 
 
-# Foreground/background pairs to check (attr_fg, attr_bg, label)
-CONTRAST_PAIRS = [
-    ("foreground", "background", "text on background"),
-    ("card_foreground", "card", "text on card"),
-    ("primary_foreground", "primary", "text on primary"),
-    ("secondary_foreground", "secondary", "text on secondary"),
-    ("muted_foreground", "muted", "text on muted"),
-    ("accent_foreground", "accent", "text on accent"),
-    ("destructive_foreground", "destructive", "text on destructive"),
-    ("success_foreground", "success", "text on success"),
-    ("warning_foreground", "warning", "text on warning"),
-    ("info_foreground", "info", "text on info"),
-    ("popover_foreground", "popover", "text on popover"),
-    ("code_foreground", "code", "text on code"),
-    ("brand_foreground", "brand", "text on brand"),
-]
+# Foreground/background pairs to check — the canonical matrix defined in
+# ``a11y_exemptions`` and re-exported here under the historical name for
+# backwards compatibility with existing imports (#2874: previously a private
+# 13-pair copy that had drifted from the pytest gate's 6-pair matrix; one
+# shared list is the #1646 cure).
+# Each entry is (attr_fg, attr_bg, minimum_ratio, label).
 
 
 def _contrast_check_scope() -> str:
@@ -80,6 +71,13 @@ def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     #1005 — scoped by default to the active preset only. Set
     ``DJUST_THEMING = {"contrast_check_scope": "all"}`` to validate
     every registered preset (theme-pack-authoring mode).
+
+    #2874 — pairs documented in
+    ``djust.theming.a11y_exemptions.A11Y_EXEMPTIONS`` (the same
+    reason-carrying, anti-rot-gated list the all-presets pytest gate
+    enforces) are skipped, so the shipped legacy palettes do not turn
+    every ``manage.py check`` into noise. The check stays fully armed
+    for user-authored presets, whose names have no exemption entries.
     """
     warnings = []
     validator = AccessibilityValidator()
@@ -87,17 +85,19 @@ def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     for preset_name, preset in _presets_to_check():
         for mode_name in ("light", "dark"):
             tokens = getattr(preset, mode_name)
-            for fg_attr, bg_attr, label in CONTRAST_PAIRS:
+            for fg_attr, bg_attr, minimum, label in CONTRAST_PAIRS:
+                if (preset_name, mode_name, fg_attr, bg_attr) in A11Y_EXEMPTIONS:
+                    continue  # documented legacy-palette debt (#2060/#2874)
                 fg = getattr(tokens, fg_attr)
                 bg = getattr(tokens, bg_attr)
                 ratio = validator.calculate_contrast_ratio(fg, bg)
-                if ratio < validator.AA_NORMAL:
+                if ratio < minimum:
                     warnings.append(
                         Warning(
                             f'Preset "{preset_name}" {mode_name} mode: {label} '
-                            f"contrast ratio {ratio:.2f}:1 < {validator.AA_NORMAL}:1 (WCAG AA)",
+                            f"contrast ratio {ratio:.2f}:1 < {minimum}:1 (WCAG AA)",
                             hint=f"Adjust {fg_attr} or {bg_attr} to achieve at least "
-                            f"{validator.AA_NORMAL}:1 contrast.",
+                            f"{minimum}:1 contrast.",
                             id="djust_theming.W001",
                         )
                     )
