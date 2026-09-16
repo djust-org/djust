@@ -1,3 +1,12 @@
+---
+title: "Best Practices"
+slug: BEST_PRACTICES
+section: guides
+order: 24
+level: intermediate
+description: "The conventions that keep a djust project maintainable."
+---
+
 # djust Best Practices
 
 > **`@optimistic` is INERT.** It records handler metadata that nothing in the
@@ -762,7 +771,7 @@ class MyView(LiveView):  # NavigationMixin is built into LiveView — don't inhe
             self.active_tab = tab
 ```
 
-System check `djust.T010` will warn if you use `dj-click` with `data-tab` attributes (and other navigation-related patterns) to help catch cases where URL navigation would be more appropriate. See the [Navigation & URL State](../website/guides/navigation.md) guide for a full walkthrough.
+System check `djust.T010` will warn if you use `dj-click` with `data-tab` attributes (and other navigation-related patterns) to help catch cases where URL navigation would be more appropriate. See the [Navigation & URL State](navigation.md) guide for a full walkthrough.
 
 ### Toast notifications
 
@@ -953,7 +962,7 @@ For in-view navigation (tabs, filters, pagination), use `dj-patch` instead of `d
 | `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
 | `dj-navigate` | Full page navigation to a different LiveView |
 
-System check `djust.T010` detects `dj-click` used for navigation and suggests `dj-patch`. For a complete walkthrough with examples, see the [Navigation & URL State](../website/guides/navigation.md) guide.
+System check `djust.T010` detects `dj-click` used for navigation and suggests `dj-patch`. For a complete walkthrough with examples, see the [Navigation & URL State](navigation.md) guide.
 
 ---
 
@@ -1384,7 +1393,7 @@ def mount(self, request, **kwargs):
     self._api_secret = settings.SECRET_KEY  # Private
 ```
 
-See the [Security Guide](security.md) for more details.
+See the [Security Guide](../advanced/security.md) for more details.
 
 ---
 

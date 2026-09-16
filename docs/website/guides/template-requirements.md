@@ -1,3 +1,12 @@
+---
+title: "Template Requirements"
+slug: template-requirements
+section: guides
+order: 16
+level: beginner
+description: "What djust needs from your templates — dj-root, dj-view, and the attributes djust reads."
+---
+
 # Template Requirements
 
 Every djust LiveView template needs the `dj-view` attribute to identify the LiveView class. The VDOM root is automatically inferred from the `dj-view` element in most cases.
@@ -256,6 +265,6 @@ Each LiveView needs its own root element with `dj-view`:
 
 ## See Also
 
-- [Quick Start Guide](QUICKSTART.md) -- Getting started with djust
+- [Quick Start Guide](../getting-started/installation.md) -- Getting started with djust
 - [Error Codes](error-codes.md) -- DJE-053 and T002 details
 - [Best Practices](BEST_PRACTICES.md) -- State management and lifecycle patterns

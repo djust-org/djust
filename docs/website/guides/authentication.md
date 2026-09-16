@@ -1,3 +1,12 @@
+---
+title: "Authentication & Permissions"
+slug: authentication
+section: guides
+order: 17
+level: intermediate
+description: "Requiring login, checking permissions, and auditing what each view requires."
+---
+
 # Authentication & Authorization
 
 djust provides opinionated, framework-enforced authentication and authorization for LiveViews. Auth checks run server-side before `mount()` and before individual event handlers — no client-side bypass is possible.

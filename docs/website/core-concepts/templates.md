@@ -231,7 +231,7 @@ Some older setups used `dj-view` and `dj-root` differently. The pattern is:
 - `dj-root` on the reactive region — the one attribute you write; djust stamps `dj-view` onto it server-side
 - `dj-view="myapp.views.MyView"` only when you need to name a specific view (embedded/sticky, or a shared template); a literal dotted path, never `{{ dj_view_id }}`
 
-See [error codes](../../guides/error-codes.md) if you get a `T002`- or
+See [error codes](../guides/error-codes.md) if you get a `T002`- or
 `T012`-family system-check warning about missing template attributes. (`T001`
 is a different check — the deprecated `@click` syntax.)
 

@@ -1,3 +1,12 @@
+---
+title: "`djust_audit` — Security Audit"
+slug: djust-audit
+section: guides
+order: 20
+level: reference
+description: "The security audit command: what it checks and how to read its output."
+---
+
 # `djust_audit` — Security Audit Command
 
 `djust_audit` is djust's all-in-one security and configuration audit tool.
@@ -325,5 +334,5 @@ jobs:
 
 - [Error Code Reference](error-codes.md) — every check ID with fixes
 - [Declarative Permissions Document](permissions-document.md) — permissions.yaml schema
-- [Security Guide](security.md) — LiveView-level security best practices
+- [Security Guide](../advanced/security.md) — LiveView-level security best practices
 - [Best Practices](BEST_PRACTICES.md) — architectural recommendations

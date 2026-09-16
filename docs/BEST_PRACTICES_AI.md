@@ -717,7 +717,7 @@ Add `data-key` to list items when items can be sorted, filtered, removed from th
 
 **Skip keys** for append-only lists, small static lists (<10 items), or lists that always replace entirely.
 
-See [List Reordering Performance Guide](guides/LIST_REORDERING_PERFORMANCE.md) for benchmark data and detailed examples.
+See [List Reordering Performance Guide](website/guides/keyed-lists-performance.md) for benchmark data and detailed examples.
 
 ### Payload Optimization
 

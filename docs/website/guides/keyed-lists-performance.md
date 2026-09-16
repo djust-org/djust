@@ -1,3 +1,12 @@
+---
+title: "Keyed vs Unkeyed Lists"
+slug: keyed-lists-performance
+section: guides
+order: 26
+level: advanced
+description: "Why dj-key matters: what the diff does when a list reorders without one."
+---
+
 # List Reordering Performance: Keyed vs Unkeyed Lists
 
 ## The Problem
@@ -98,6 +107,6 @@ diffing and reduce patch count.
 
 ## Further Reading
 
-- [VDOM Tracing Guide](../VDOM_TRACING.md) — Full tracing documentation
-- [VDOM Torture Test Report](../VDOM_TORTURE_TEST_REPORT.md) — Benchmark data
-- [VDOM Architecture Comparison](../VDOM_ARCHITECTURE_COMPARISON.md) — How djust's diff compares to other frameworks
+- [VDOM Tracing Guide](../../VDOM_TRACING.md) — Full tracing documentation
+- [VDOM Torture Test Report](../../VDOM_TORTURE_TEST_REPORT.md) — Benchmark data
+- [VDOM Architecture Comparison](../../VDOM_ARCHITECTURE_COMPARISON.md) — How djust's diff compares to other frameworks
