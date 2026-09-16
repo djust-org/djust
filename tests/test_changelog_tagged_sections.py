@@ -14,6 +14,13 @@ sections the working tree still has, so a shipped section deleted from the
 tree was never compared and its removal exited 0. The fix iterates the union
 of the tree's sections and the anchor snapshot's sections.
 
+#2865 extends it with *wipe* detection: with every tagged section gone the
+tree yields no anchor and the check used to exit 0 — indistinguishable from
+a fresh, pre-first-release repo, which must keep passing. Release tags
+reachable from HEAD disambiguate: some reachable + no anchored section is a
+wipe (fail, naming the newest tag as the restore source); none reachable
+stays the fresh-repo pass.
+
 Some tests run against the REAL repo + tags (the check reads git tags from the
 repo root), so the empirical canary (#1459) is a permanent regression: injecting
 spurious content into a shipped section MUST make the check fail, and the
@@ -373,3 +380,78 @@ class TestDeletedShippedSection:
         repo._git("add", "-A")
         repo._git("commit", "-q", "--allow-empty", "-m", "changelog")
         assert repo.run_check().returncode == 0
+
+
+class TestWipedTaggedSections:
+    """#2865 — a tree with no tagged section at all is ambiguous: a fresh,
+    pre-first-release repo (must keep passing) or a wiped CHANGELOG (must
+    fail). Release tags reachable from HEAD disambiguate the two. The
+    enumeration stays ``--merged HEAD`` (#2861): another release line's tags
+    must not red a branch that never carried their sections."""
+
+    def test_wiping_every_tagged_section_fails(self, tmp_path):
+        # The terminal case of the class: keep [Unreleased], drop every
+        # shipped section. Before the fix this exited 0 silently — the exact
+        # tail of the v1.1.0rc5 cross-branch merge failure mode.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.set_sections([])  # the wipe: [Unreleased] only
+        result = repo.run_check()
+        assert result.returncode == 1
+        assert "v1.1.2" in result.stderr  # newest tag named
+        assert "v1.1.1" in result.stderr  # the wiped set, not just the newest
+        assert "no '## [...]'" in result.stderr  # no anchor to pin against
+        assert "git show v1.1.2:CHANGELOG.md" in result.stderr  # restore source
+
+    def test_unreleased_only_tree_without_release_tags_passes(self, tmp_path):
+        # Direction (b): a genuinely fresh / pre-first-release tree — only
+        # [Unreleased], no release tag reachable from HEAD — must NOT go
+        # red. A naive "fail whenever there's no anchor" would break it.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections([])  # init already leaves exactly this; spelled out
+        assert repo.run_check().returncode == 0
+
+    def test_unwiped_tree_with_the_same_tags_passes(self, tmp_path):
+        # Non-tautology guard: the SAME fixture without the wipe passes, so
+        # it is the wipe — not the tag set — that trips the new check.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        assert repo.run_check().returncode == 0
+
+    def test_side_branch_tags_still_do_not_demand_sections(self, tmp_path):
+        # #2861 scoping must survive the wipe check: a tag on a side branch
+        # (not reachable from HEAD) leaves the [Unreleased]-only tree green.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.tag_on_side_branch("v1.1.3")
+        assert repo.run_check().returncode == 0
+
+    def test_non_release_tags_alone_do_not_demand_sections(self, tmp_path):
+        # Only non-release tags reachable = still the fresh-repo case.
+        repo = _TempRepo(tmp_path / "repo")
+        repo._git("tag", "-a", "vnot-a-version", "-m", "x")
+        assert repo.run_check().returncode == 0
+
+
+@requires_shipped
+def test_real_repo_full_wipe_is_caught(tmp_path):
+    """#2865 empirical canary (#1459) on the real repo + tags: strip every
+    tagged section from a COPY (real tags still back the enumeration) —
+    before the fix this exited 0; now it must fail naming the newest tag."""
+    sections = check._split_sections(CHANGELOG.read_text(encoding="utf-8"))
+    anchor = next(ver for ver, _ in sections if check._tag_exists(f"v{ver}"))
+    text = CHANGELOG.read_text(encoding="utf-8")
+    wiped = text[: text.index(f"## [{anchor}]")]  # keep [Unreleased] prefix only
+    copy = tmp_path / "CHANGELOG.md"
+    copy.write_text(wiped, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(copy)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert f"v{anchor}" in result.stderr
+    assert "git show v" in result.stderr  # names the restore source
