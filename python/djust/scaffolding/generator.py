@@ -235,6 +235,7 @@ def _build_context(
         "theming_context_processor": T.THEMING_CONTEXT_PROCESSOR if demo else "",
         "theming_settings": T.THEMING_SETTINGS if demo else "",
         "theming_urls": T.THEMING_URLS if demo else "",
+        "urls_import": "include, path" if demo else "path",
         "bare": bare,
         "admin_template_backend": admin_template_backend,
         "admin_url_import": admin_url_import,

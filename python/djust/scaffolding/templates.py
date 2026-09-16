@@ -340,7 +340,7 @@ application = get_wsgi_application()
 URLS_PY = """\
 \"\"\"URL configuration for %(app_name)s project.\"\"\"
 
-%(admin_url_import)sfrom django.urls import include, path
+%(admin_url_import)sfrom django.urls import %(urls_import)s
 
 from .views import %(view_class)s
 
@@ -556,8 +556,16 @@ BASE_HTML = """\
         .muted { color: hsl(var(--muted-foreground)); }
         .pack-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
         .pack-chips .tp-select-list { display: contents; }
-        .pack-chips .tp-select-option { width: auto; }
-        .pack-chips .tp-select-option.active { outline: 2px solid hsl(var(--ring)); }
+        /* components.css styles .tp-select-option as a dropdown row; these
+           two-class rules win and draw the chips as secondary buttons. */
+        .pack-chips .tp-select-option {
+            display: inline-flex; width: auto; cursor: pointer;
+            padding: .4rem .85rem; font: inherit; font-size: .85rem;
+            border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
+            background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground));
+        }
+        .pack-chips .tp-select-option:hover { filter: brightness(1.05); }
+        .pack-chips .tp-select-option.active { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
         .site-footer { border-top: 1px solid hsl(var(--border)); padding: 1.25rem 0; font-size: .85rem; }
     </style>
     {%% load static %%}
@@ -618,7 +626,7 @@ INDEX_HTML = """\
                 <div class="tp-select-list">
                     {%% for pack in theme_packs %%}
                     <button type="button"
-                            class="btn btn-secondary btn-sm tp-select-option{%% if pack.name == theme_pack %%} active{%% endif %%}"
+                            class="tp-select-option{%% if pack.name == theme_pack %%} active{%% endif %%}"
                             data-value="{{ pack.name }}"
                             title="{{ pack.description }}">{{ pack.display_name }}</button>
                     {%% endfor %%}
@@ -640,7 +648,7 @@ INDEX_HTML = """\
             <h3 class="card-title">Try it: a live list</h3>
             <span class="badge badge-secondary">{{ total_count }} items &middot; {{ done_count }} done</span>
         </div>
-        <div class="card-body stack" style="--stack: 1rem">
+        <div class="card-body">
             <div class="row" style="align-items: stretch">
                 <input type="text" class="input" style="flex: 1 1 14rem"
                        dj-input="search" name="value" value="{{ search_query }}"

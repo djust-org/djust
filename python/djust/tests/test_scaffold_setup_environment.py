@@ -198,6 +198,7 @@ def test_default_demo_switches_themes_and_links_to_docs(tmp_path):
     # Quick picks use the container/option classes theme.js listens for.
     assert 'data-tp-select="pack"' in index and "tp-select-option" in index
     assert 'class="card"' in index and "btn btn-primary" in index
+    assert "from django.urls import include, path" in urls
     assert "cdn.tailwindcss.com" not in base
     assert "docs.djust.org/getting-started/first-liveview" in index
     assert "docs.djust.org/theming" in index
@@ -217,6 +218,7 @@ def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
     assert "class ChildView(LiveView)" in views
     assert "theme_packs" not in views
     assert "add_item" not in views
+    assert "from django.urls import path\n" in (project / "child" / "urls.py").read_text()
     assert 'dj-click="ping"' in index
     assert "theme_head" not in base
     assert "djust.theming" not in (project / "child" / "settings.py").read_text()

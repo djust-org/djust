@@ -45,9 +45,9 @@ make dev
 ```
 
 Open **http://127.0.0.1:8000/**. The starter page has a live list and a
-theme switcher: add an item, then change the theme, and check that both
-update without a page reload. Pass `--bare` for a one-button placeholder page
-instead.
+theme picker: add an item and check that it appears without a page reload,
+then pick a theme pack and watch the whole page restyle. Pass `--bare` for a
+one-button placeholder page instead.
 
 `djust new` creates `myproject/`, makes a `.venv` inside it, installs the
 project's requirements into that environment, runs migrations, and finishes
