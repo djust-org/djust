@@ -1307,6 +1307,11 @@ _LIVE_RENDER_EVENT_ATTRS = (
     "dj-blur",
     "dj-hook",
     "dj-mounted",
+    # Mouse directives (#2869): bound client-side by direct per-element
+    # listeners (09-event-binding.js) — mouseenter/mouseleave do not bubble,
+    # so the delegated shape used by dj-click cannot serve them.
+    "dj-mouseenter",
+    "dj-mouseleave",
     # Scoped / window-level directives (#2841). These dispatch through
     # ``addEventContext`` like every other event attribute, so an element
     # carrying one inside an embedded child needs the stamp for its events

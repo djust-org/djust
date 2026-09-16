@@ -678,6 +678,10 @@ const _changeRateLimitState = new WeakMap();
 const _clickRateLimitState = new WeakMap();
 const _keydownRateLimitState = new WeakMap();
 const _keyupRateLimitState = new WeakMap();
+// dj-mouseenter / dj-mouseleave (#2869) — same (element, matched-attribute)
+// wrapper-cache invariant as the keyboard paths (#2831): one persistent
+// wrapper per binding so dj-debounce/dj-throttle timers survive morphs.
+const _mouseRateLimitState = new WeakMap();
 
 // Helper: Extract field name from element attributes
 // Priority: data-field (explicit) > name (standard) > id (fallback)
@@ -1674,6 +1678,63 @@ function bindLiveViewEvents(scope) {
         };
 
         _addScopedListener(element, document, 'keydown', shortcutHandler, false, 'dj-shortcut', 'shortcut', boundKey);
+    });
+
+    // --- Feature 4: dj-mouseenter / dj-mouseleave (#2869) ---
+    // These two events DO NOT BUBBLE: a document/root-level delegated
+    // listener never fires for them (mouseleave fires only for the document
+    // itself), so the delegation shape dj-click uses cannot serve them and
+    // mouseover/mouseout would have to re-derive enter/leave containment
+    // that the platform already provides. Instead, attach DIRECTLY to the
+    // declaring element via the scoped-listener machinery — its target is a
+    // parameter, so the attach / #2845 value-rebuild / #2832 sweep lifecycle
+    // applies unchanged. Nesting semantics are inherited from the event
+    // types themselves: the browser fires mouseenter/mouseleave only on the
+    // element actually entered/left, so moving from a parent into its child
+    // fires neither the parent's leave nor its enter — the entire reason
+    // these directives use these event types rather than mouseover/mouseout.
+    document.querySelectorAll('[dj-mouseenter], [dj-mouseleave]').forEach(element => {
+        for (let mi = 0; mi < 2; mi++) {
+            const attrName = mi === 0 ? 'dj-mouseenter' : 'dj-mouseleave';
+            const attrValue = element.getAttribute(attrName);
+            if (attrValue === null) continue;
+            const evtType = attrName.slice(3); // 'mouseenter' / 'mouseleave'
+
+            // #2845 — the marker alone cannot justify the skip on a
+            // surviving element: skip only when the registered boundValue
+            // matches the CURRENT attribute value; a changed value evicts
+            // and rebuilds. The closure below re-reads the value at FIRE
+            // time, so a rebuild is cheap bookkeeping, never a capture of
+            // the old handler (#2858).
+            if (_isHandlerBound(element, evtType)) {
+                if (_scopedBoundValue(element, evtType) === attrValue) continue;
+                _removeScopedListeners(element, evtType);
+            }
+            _markHandlerBound(element, evtType);
+
+            const rawHandler = async function() {
+                if (!document.contains(element)) return;
+                // Fire-time reads: the attribute value can change under a
+                // surviving element (#2858), and the element can be removed
+                // between scheduling and firing.
+                const raw = element.getAttribute(attrName);
+                if (raw === null) return;
+                if (!checkDjConfirm(element)) return;
+                const parsed = parseEventHandler(raw);
+                const params = extractTypedParams(element);
+                if (parsed.args.length > 0) {
+                    params._args = parsed.args;
+                }
+                addEventContext(params, element);
+                await handleEvent(parsed.name, params);
+            };
+            const wrapped = _getOrCreateRateLimitedHandler(
+                _mouseRateLimitState, element, evtType, rawHandler, attrName
+            );
+
+            // Target is the ELEMENT ITSELF — the non-bubbling constraint.
+            _addScopedListener(element, element, evtType, wrapped, false, attrName, evtType, attrValue);
+        }
     });
 
     // Sweep orphaned scoped listeners (click-away, shortcut) AFTER the bind

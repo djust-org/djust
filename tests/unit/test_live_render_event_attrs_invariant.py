@@ -9,10 +9,18 @@ bound: they were stamped like working directives but installed no listener,
 so a developer writing ``dj-mouseenter="highlight"`` got silence — no error,
 no warning, no event. This test converts that audit finding into a
 maintenance invariant: an entry with no client-side binding fails the moment
-it is added, not at the next audit. (On its first run the test caught two
-further never-bound entries — ``dj-viewport-enter`` / ``dj-viewport-leave``,
-added in the same v0.6.0 commit as the cited three — which are pruned here
-as well.)
+it is added, not at the next audit.
+
+Resolution (#2869, as decided by the maintainer): ``dj-keypress`` was pruned
+(DOM-deprecated in favour of ``keydown``, which the framework already ships
+with a full modifier system). ``dj-mouseenter`` / ``dj-mouseleave`` were
+WIRED instead of pruned — direct per-element listeners in
+``09-event-binding.js`` (they do not bubble, so the delegated shape cannot
+serve them) — making the stamp-list promise true. On the invariant's first
+run it also caught two further never-bound entries,
+``dj-viewport-enter`` / ``dj-viewport-leave`` (same v0.6.0 commit as the
+cited three, zero references anywhere); there is no ``viewportenter`` DOM
+event to wire them to, so they were pruned as the ``dj-keypress`` class.
 
 How detection works
 -------------------
