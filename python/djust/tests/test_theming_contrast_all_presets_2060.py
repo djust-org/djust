@@ -31,19 +31,16 @@ parametrized case red (see PR body for the manual verification transcript).
 
 import pytest
 
-from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS
+from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS
 from djust.theming.accessibility import AccessibilityValidator
 from djust.theming.presets import THEME_PRESETS
 
-# Mirrors TestContrast.PAIRS in test_theming_new_themes_v11.py exactly.
-PAIRS = [
-    ("foreground", "background", 4.5),
-    ("card_foreground", "card", 4.5),
-    ("primary_foreground", "primary", 4.5),
-    ("destructive_foreground", "destructive", 4.5),
-    ("accent_foreground", "accent", 4.5),
-    ("muted_foreground", "background", 4.5),
-]
+# The canonical 14-pair matrix (#2874). Originally this file copied the
+# 6-pair TestContrast.PAIRS matrix from test_theming_new_themes_v11.py;
+# the copies drifted (W001 checked a different 13), so both now import the
+# one shared definition from a11y_exemptions (#1646). v11's TestContrast
+# keeps gating its own 6-pair subset strictly for the 5 newest themes.
+PAIRS = CONTRAST_PAIRS
 
 MODES = ["light", "dark"]
 
@@ -57,7 +54,7 @@ _ALL_CASES = [
     (preset_name, mode, fg_name, bg_name, minimum)
     for preset_name in ALL_PRESET_NAMES
     for mode in MODES
-    for fg_name, bg_name, minimum in PAIRS
+    for fg_name, bg_name, minimum, _label in PAIRS
 ]
 
 
@@ -122,7 +119,7 @@ class TestExemptionsStillNeeded:
         # The pair itself must exist in PAIRS — an exemption for a pair the
         # gate no longer checks is meaningless.
         minimum = next(
-            (m for fg, bg, m in PAIRS if fg == fg_name and bg == bg_name),
+            (m for fg, bg, m, _label in PAIRS if fg == fg_name and bg == bg_name),
             None,
         )
         assert minimum is not None, (
@@ -140,5 +137,11 @@ class TestExemptionsStillNeeded:
 
     def test_exemption_count_is_reasonable(self):
         """Loose upper bound so a bulk future addition to A11Y_EXEMPTIONS
-        (rather than a real palette fix) doesn't slip through unnoticed."""
-        assert 0 < len(A11Y_EXEMPTIONS) <= 250
+        (rather than a real palette fix) doesn't slip through unnoticed.
+
+        Raised 197 -> 508 by the #2874 W001 reconciliation: the W001 matrix
+        checks 14 pairs while the original #2060 gate covered 6, so the
+        8 previously-ungated pairs' legacy failures were grandfathered in
+        one documented bulk import (134 of them catastrophic <3.0 — the
+        branded-palette remediation follow-up owns fixing them)."""
+        assert 0 < len(A11Y_EXEMPTIONS) <= 600

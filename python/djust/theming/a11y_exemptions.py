@@ -1,23 +1,37 @@
-"""Documented WCAG AA contrast exemptions for built-in theme presets.
+"""The a11y contract for built-in theme presets: the canonical WCAG AA
+text-contrast matrix plus documented, reason-carrying exemptions.
 
-``python/djust/tests/test_theming_contrast_all_presets_2060.py`` gates every
-registered preset in ``djust.theming.presets.THEME_PRESETS`` against the same
-6-pair x 2-mode WCAG AA matrix that
-``test_theming_new_themes_v11.py::TestContrast`` already gates strictly for
-the 5 newest themes (sakura, obsidian, dune, mission_control, art_nouveau —
-no exemptions permitted there, by design).
+Two consumers enforce the same contract from this one module (#1646: one
+shared definition — the matrix was previously copy-pasted and had drifted
+between three sites):
 
-Scope discipline (#1079): this module does NOT redesign any shipped legacy
-palette. Every (preset, mode, fg_token, bg_token) pair that failed AA when
-the all-presets gate was introduced is listed here as a documented,
-reason-carrying exemption rather than silently left ungated or force-fixed.
-Fixing these palettes is out of scope for #2060; see the PR body for the
-catastrophic-ratio (<3.0) candidates flagged as a follow-up.
+1. ``python/djust/tests/test_theming_contrast_all_presets_2060.py`` gates
+   every registered preset in ``djust.theming.presets.THEME_PRESETS``
+   against ``CONTRAST_PAIRS`` (14 pairs x 2 modes; the 5 newest themes are
+   gated strictly, with no exemptions permitted, in
+   ``test_theming_new_themes_v11.py::TestContrast``).
+2. ``djust.theming.checks.check_preset_contrast`` (``djust_theming.W001``)
+   skips pairs listed here so that ``manage.py check`` stays warning-clean
+   on shipped presets while user-authored presets get full validation
+   (#2874: W001 previously had no exemption mechanism, so every shipped
+   preset warned on every run and the ``djust new`` scaffold silenced the
+   check outright).
 
-Entries were auto-generated from
-``scripts/report_theme_contrast.py --python-dict`` (2026-07, #2060) — do
-not hand-edit ratios; regenerate the affected entry by re-running the report
-if a palette changes.
+Scope discipline (#1079): the 63 legacy palettes listed here are NOT
+redesigned. Every (preset, mode, fg_token, bg_token) pair that failed AA
+when its gate was introduced is documented here rather than silently left
+ungated or force-fixed — recolouring brand palettes (dracula, catppuccin,
+nord, solarized, ...) to satisfy a ratio would erase their identity. The
+``default``/``blue``/``shadcn``/``slate`` status-label fixes (#2874) are
+the exception that proves the rule: those palettes were fixed, and their
+now-stale entries removed. 134 of the entries imported at the #2874 W001
+reconciliation are catastrophic (<3.0) — tracked in the branded-palette
+remediation follow-up.
+
+Entries were auto-generated from ``scripts/report_theme_contrast.py
+--python-dict`` (2026-07, #2060; 2026-09, #2874) — do not hand-edit
+ratios; regenerate the affected entry by re-running the report if a
+palette changes.
 
 **Load-bearing invariant (#1859):** every entry here must still be NEEDED.
 ``test_theming_contrast_all_presets_2060.py`` asserts that any exemption
@@ -28,7 +42,7 @@ that already passes is decorative, not documentation.
 
 To grandfather a NEW deliberate exception (e.g. a newly authored legacy-
 matching palette), add an entry here with a specific reason (not the
-generic "grandfathered..." string used for the bulk 2026-07 import) citing
+generic "grandfathered..." string used for the bulk imports) citing
 why the ratio is acceptable (brand identity, large-text-only usage, etc.)
 and the tracking issue.
 """
@@ -36,9 +50,44 @@ and the tracking issue.
 from __future__ import annotations
 
 # Keyed by (preset_name, mode, foreground_token, background_token) ->
-# human-readable reason. Mirrors the PAIRS list in
-# test_theming_new_themes_v11.py::TestContrast and
-# test_theming_contrast_all_presets_2060.py.
+# human-readable reason, one entry per failing (preset, mode, pair) in the
+# canonical CONTRAST_PAIRS matrix below.
+# ---------------------------------------------------------------------------
+# Canonical WCAG AA text-contrast matrix (#2874, supersedes the three
+# copy-pasted 6-pair matrices that previously drifted in
+# test_theming_contrast_all_presets_2060.py, scripts/report_theme_contrast.py
+# and theming/checks.py — #1646: one shared definition, not N copies).
+#
+# Every pair is a REAL rendered text surface in the generated component CSS
+# (python/djust/theming/static/djust_theming/css/components.css): badges and
+# buttons render *_foreground as 14px/semibold or 16px text, which is WCAG
+# *normal* text — so AA normal-text 4.5:1 applies to every pair (the 3:1
+# large-text carve-out does not: WCAG large text is >=24px regular or
+# >=18.66px bold; ``.status-badge`` is 14px/600). ``muted_foreground`` is
+# checked against BOTH ``muted`` (the .avatar surface) and ``background``
+# (dimmed prose text).
+#
+# Consumers:
+#   - ``djust.theming.checks.check_preset_contrast`` (djust_theming.W001)
+#   - ``python/djust/tests/test_theming_contrast_all_presets_2060.py``
+#   - ``scripts/report_theme_contrast.py``
+CONTRAST_PAIRS: list[tuple[str, str, float, str]] = [
+    ("foreground", "background", 4.5, "text on background"),
+    ("card_foreground", "card", 4.5, "text on card"),
+    ("popover_foreground", "popover", 4.5, "text on popover"),
+    ("code_foreground", "code", 4.5, "text on code"),
+    ("primary_foreground", "primary", 4.5, "text on primary"),
+    ("secondary_foreground", "secondary", 4.5, "text on secondary"),
+    ("muted_foreground", "muted", 4.5, "text on muted"),
+    ("muted_foreground", "background", 4.5, "muted text on background"),
+    ("accent_foreground", "accent", 4.5, "text on accent"),
+    ("destructive_foreground", "destructive", 4.5, "text on destructive"),
+    ("success_foreground", "success", 4.5, "text on success"),
+    ("warning_foreground", "warning", 4.5, "text on warning"),
+    ("info_foreground", "info", 4.5, "text on info"),
+    ("brand_foreground", "brand", 4.5, "text on brand"),
+]
+
 A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
     (
         "adaptive",
@@ -130,12 +179,6 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "muted_foreground",
         "background",
     ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.70",
-    (
-        "blue",
-        "light",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.62",
     (
         "candy",
         "light",
@@ -256,12 +299,6 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "destructive_foreground",
         "destructive",
     ): "grandfathered at gate introduction (2026-07, #2060); ratio 4.42",
-    (
-        "default",
-        "light",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.62",
     (
         "djust",
         "light",
@@ -977,24 +1014,6 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "destructive",
     ): "grandfathered at gate introduction (2026-07, #2060); ratio 2.91",
     (
-        "shadcn",
-        "light",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.62",
-    (
-        "slate",
-        "light",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.78",
-    (
-        "slate",
-        "dark",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.78",
-    (
         "solarized",
         "light",
         "card_foreground",
@@ -1222,6 +1241,1907 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "destructive_foreground",
         "destructive",
     ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.96",
+    # --- Bulk grandfathering: W001 matrix reconciliation (2026-09, #2874) ---
+    # The W001 matrix checks 13 token pairs; pairs outside the original
+    # #2060 six had never been gated, so their legacy failures surface
+    # here as documented debt (134 of these are catastrophic <3.0 —
+    # tracked in the #2874 follow-up for branded-palette remediation).
+    (
+        "adaptive",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.21",
+    (
+        "adaptive",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.20",
+    (
+        "adaptive",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.29",
+    (
+        "adaptive",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.31",
+    (
+        "adaptive",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.26",
+    (
+        "adaptive",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.42",
+    (
+        "amber",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.75",
+    (
+        "amber",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "amber",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "art_deco",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.93",
+    (
+        "art_deco",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.04",
+    (
+        "art_nouveau",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.30",
+    (
+        "art_nouveau",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.21",
+    (
+        "aurora",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.67",
+    (
+        "aurora",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.14",
+    (
+        "aurora",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "aurora",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "aurora",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.52",
+    (
+        "aurora",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.52",
+    (
+        "ayu",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.41",
+    (
+        "ayu",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.95",
+    (
+        "ayu",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.60",
+    (
+        "candy",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.05",
+    (
+        "candy",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.33",
+    (
+        "candy",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.87",
+    (
+        "candy",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.07",
+    (
+        "candy",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.92",
+    (
+        "candy",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.09",
+    (
+        "candy",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.36",
+    (
+        "catppuccin",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.19",
+    (
+        "cyberdeck",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.18",
+    (
+        "cyberdeck",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.70",
+    (
+        "cyberdeck",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.85",
+    (
+        "cyberdeck",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.45",
+    (
+        "cyberdeck",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.85",
+    (
+        "cyberdeck",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.97",
+    (
+        "cyberpunk",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.32",
+    (
+        "cyberpunk",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.25",
+    (
+        "cyberpunk",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.14",
+    (
+        "cyberpunk",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.25",
+    (
+        "cyberpunk",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.14",
+    (
+        "dashboard",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.12",
+    (
+        "dashboard",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.24",
+    (
+        "dashboard",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.62",
+    (
+        "dashboard",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.27",
+    (
+        "dashboard",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.02",
+    (
+        "dashboard",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.02",
+    (
+        "djust",
+        "light",
+        "secondary_foreground",
+        "secondary",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.80",
+    (
+        "djust",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.22",
+    (
+        "djust",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "djust",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.13",
+    (
+        "djust",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
+    (
+        "djust",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.78",
+    (
+        "djust",
+        "dark",
+        "secondary_foreground",
+        "secondary",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.25",
+    (
+        "djust",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "djust",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.13",
+    (
+        "djust",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
+    (
+        "djust",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.66",
+    (
+        "docs",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.41",
+    (
+        "docs",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.03",
+    (
+        "docs",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.67",
+    (
+        "docs",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.16",
+    (
+        "docs",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.89",
+    (
+        "docs",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.10",
+    (
+        "docs",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.17",
+    (
+        "docs",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.54",
+    (
+        "dracula",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.40",
+    (
+        "dracula",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.46",
+    (
+        "dracula",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "dracula",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.92",
+    (
+        "dune",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.21",
+    (
+        "ember",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.74",
+    (
+        "ember",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.75",
+    (
+        "ember",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.85",
+    (
+        "ember",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.53",
+    (
+        "ember",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.15",
+    (
+        "everforest",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.53",
+    (
+        "everforest",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.40",
+    (
+        "forest",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.73",
+    (
+        "forest",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "forest",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.92",
+    (
+        "forest",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "forest",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "forest",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.92",
+    (
+        "forest",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "forest_floor",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.89",
+    (
+        "forest_floor",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.97",
+    (
+        "forest_floor",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.77",
+    (
+        "forest_floor",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.26",
+    (
+        "forest_floor",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.81",
+    (
+        "forest_floor",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "forest_floor",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.03",
+    (
+        "forest_floor",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.56",
+    (
+        "github",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.46",
+    (
+        "github",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.05",
+    (
+        "github",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.36",
+    (
+        "github",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.65",
+    (
+        "github",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.94",
+    (
+        "green",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.19",
+    (
+        "green",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.04",
+    (
+        "green",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "green",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.20",
+    (
+        "green",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.15",
+    (
+        "green",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.11",
+    (
+        "gruvbox",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.79",
+    (
+        "gruvbox",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.78",
+    (
+        "gruvbox",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.76",
+    (
+        "gruvbox",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.43",
+    (
+        "gruvbox",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.38",
+    (
+        "gruvbox",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.34",
+    (
+        "handcraft",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.41",
+    (
+        "handcraft",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.96",
+    (
+        "handcraft",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.59",
+    (
+        "handcraft",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.96",
+    (
+        "handcraft",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.81",
+    (
+        "handcraft",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.87",
+    (
+        "handcraft",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "ink",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.09",
+    (
+        "ink",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.80",
+    (
+        "ink",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.72",
+    (
+        "kanagawa",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.28",
+    (
+        "kanagawa",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.35",
+    (
+        "kanagawa",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.35",
+    (
+        "kanagawa",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.50",
+    (
+        "kanagawa",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.13",
+    (
+        "kanagawa",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.50",
+    (
+        "legal",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.28",
+    (
+        "legal",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.33",
+    (
+        "legal",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.82",
+    (
+        "legal",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.20",
+    (
+        "linear",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.79",
+    (
+        "linear",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.26",
+    (
+        "linear",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.42",
+    (
+        "linear",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.14",
+    (
+        "linear",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.67",
+    (
+        "linear",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.67",
+    (
+        "linear",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.21",
+    (
+        "magazine",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.95",
+    (
+        "magazine",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.19",
+    (
+        "magazine",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.50",
+    (
+        "magazine",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.53",
+    (
+        "magazine",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.20",
+    (
+        "magazine",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.19",
+    (
+        "medical",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.05",
+    (
+        "medical",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.24",
+    (
+        "medical",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.04",
+    (
+        "medical",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.76",
+    (
+        "medical",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.58",
+    (
+        "medical",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.27",
+    (
+        "medical",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.52",
+    (
+        "medical",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.17",
+    (
+        "midnight",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.92",
+    (
+        "midnight",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.10",
+    (
+        "midnight",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.84",
+    (
+        "midnight",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.16",
+    (
+        "midnight",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.07",
+    (
+        "midnight",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.89",
+    (
+        "midnight",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.72",
+    (
+        "mission_control",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.49",
+    (
+        "mission_control",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.83",
+    (
+        "mono",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.05",
+    (
+        "monokai",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.95",
+    (
+        "monokai",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.99",
+    (
+        "natural20",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.27",
+    (
+        "natural20",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.33",
+    (
+        "natural20",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.63",
+    (
+        "natural20",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.63",
+    (
+        "natural20",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "natural20",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.63",
+    (
+        "natural20",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.63",
+    (
+        "nebula",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.30",
+    (
+        "nebula",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "nebula",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.41",
+    (
+        "nebula",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.41",
+    (
+        "nebula",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.30",
+    (
+        "nebula",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.41",
+    (
+        "nebula",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.41",
+    (
+        "neon_noir",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.15",
+    (
+        "neon_noir",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.91",
+    (
+        "neon_noir",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.52",
+    (
+        "neon_noir",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.51",
+    (
+        "neon_noir",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.40",
+    (
+        "neon_noir",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.71",
+    (
+        "neon_noir",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.40",
+    (
+        "nord",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.30",
+    (
+        "nord",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.69",
+    (
+        "nord",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.99",
+    (
+        "nord",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.69",
+    (
+        "notion",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.90",
+    (
+        "notion",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.66",
+    (
+        "notion",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.74",
+    (
+        "notion",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.92",
+    (
+        "notion",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.58",
+    (
+        "notion",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "notion",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.18",
+    (
+        "notion",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.45",
+    (
+        "obsidian",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
+    (
+        "ocean_deep",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.40",
+    (
+        "ocean_deep",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.75",
+    (
+        "ocean_deep",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "ocean_deep",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.51",
+    (
+        "ocean_deep",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.51",
+    (
+        "one_dark",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.11",
+    (
+        "one_dark",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "one_dark",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.94",
+    (
+        "one_dark",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.03",
+    (
+        "one_dark",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.94",
+    (
+        "orange",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.19",
+    (
+        "orange",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.04",
+    (
+        "orange",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "orange",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "orange",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.15",
+    (
+        "orange",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.11",
+    (
+        "outrun",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "outrun",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "outrun",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "outrun",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "paper",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.84",
+    (
+        "paper",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.06",
+    (
+        "paper",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.83",
+    (
+        "poimandres",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.35",
+    (
+        "poimandres",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.74",
+    (
+        "poimandres",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.44",
+    (
+        "poimandres",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.32",
+    (
+        "poimandres",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.44",
+    (
+        "purple",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.19",
+    (
+        "purple",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.04",
+    (
+        "purple",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "purple",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.15",
+    (
+        "purple",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.11",
+    (
+        "purple",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
+    (
+        "raycast",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.00",
+    (
+        "raycast",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.33",
+    (
+        "raycast",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.99",
+    (
+        "raycast",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.87",
+    (
+        "raycast",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.19",
+    (
+        "raycast",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.19",
+    (
+        "retro_computing",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.23",
+    (
+        "retro_computing",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.18",
+    (
+        "retro_computing",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.05",
+    (
+        "retro_computing",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.52",
+    (
+        "retro_computing",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.30",
+    (
+        "retro_computing",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.94",
+    (
+        "rose",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.19",
+    (
+        "rose",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.04",
+    (
+        "rose",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "rose",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.36",
+    (
+        "rose",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.15",
+    (
+        "rose",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.11",
+    (
+        "rose",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.48",
+    (
+        "rose_pine",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.77",
+    (
+        "rose_pine",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.09",
+    (
+        "rose_pine",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.74",
+    (
+        "rose_pine",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.09",
+    (
+        "sakura",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.47",
+    (
+        "solarized",
+        "light",
+        "popover_foreground",
+        "popover",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.36",
+    (
+        "solarized",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.56",
+    (
+        "solarized",
+        "light",
+        "secondary_foreground",
+        "secondary",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.36",
+    (
+        "solarized",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.61",
+    (
+        "solarized",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.97",
+    (
+        "solarized",
+        "light",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.62",
+    (
+        "solarized",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "solarized",
+        "dark",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.69",
+    (
+        "solarized",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.37",
+    (
+        "solarized",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.97",
+    (
+        "solarized",
+        "dark",
+        "warning_foreground",
+        "warning",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.40",
+    (
+        "solarized",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "solarpunk",
+        "light",
+        "code_foreground",
+        "code",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.31",
+    (
+        "solarpunk",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.04",
+    (
+        "solarpunk",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.84",
+    (
+        "solarpunk",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.18",
+    (
+        "solarpunk",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.84",
+    (
+        "solarpunk",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.11",
+    (
+        "stripe",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.81",
+    (
+        "stripe",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.87",
+    (
+        "stripe",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.57",
+    (
+        "stripe",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.39",
+    (
+        "stripe",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.21",
+    (
+        "sunrise",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.43",
+    (
+        "sunrise",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.90",
+    (
+        "sunrise",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.54",
+    (
+        "sunrise",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.93",
+    (
+        "sunrise",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.37",
+    (
+        "sunrise",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.01",
+    (
+        "supabase",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.87",
+    (
+        "supabase",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "supabase",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.99",
+    (
+        "supabase",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "supabase",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.04",
+    (
+        "supabase",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "supabase",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "swiss",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.18",
+    (
+        "swiss",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.62",
+    (
+        "swiss",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.51",
+    (
+        "swiss",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.88",
+    (
+        "synthwave",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "synthwave",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.85",
+    (
+        "synthwave",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.74",
+    (
+        "tailwind",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.06",
+    (
+        "tailwind",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "tailwind",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
+    (
+        "tailwind",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
+    (
+        "tailwind",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.49",
+    (
+        "tailwind",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
+    (
+        "tailwind",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
+    (
+        "terminal",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.42",
+    (
+        "terminal",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.20",
+    (
+        "terminal",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.42",
+    (
+        "terminal",
+        "dark",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.64",
+    (
+        "tokyo_night",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.50",
+    (
+        "vercel",
+        "light",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.32",
+    (
+        "vercel",
+        "light",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
+    (
+        "vercel",
+        "light",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
+    (
+        "vercel",
+        "dark",
+        "success_foreground",
+        "success",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.87",
+    (
+        "vercel",
+        "dark",
+        "info_foreground",
+        "info",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
+    (
+        "vercel",
+        "dark",
+        "brand_foreground",
+        "brand",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.44",
 }
 
 
