@@ -152,21 +152,44 @@ def _build_context(
     if with_presence:
         bases.insert(0, "PresenceMixin")
         extra_imports.append("from djust.presence import PresenceMixin")
-        extra_context += '            "presence_list": self.presence_list,\n'
-        extra_context += '            "presence_count": len(self.presence_list),\n'
+        extra_mount += (
+            "        # Registers this visitor on the WebSocket; no-ops on a plain\n"
+            "        # HTTP mount (presence only tracks live WebSocket sessions).\n"
+            "        self.track_presence(\n"
+            '            meta={"name": getattr(request.user, "username", "") or "Guest"}\n'
+            "        )\n"
+        )
+        # PresenceMixin's API is methods (list_presences / presence_count), not
+        # attributes — the old self.presence_list raised AttributeError on the
+        # first render (#2876). These context values are substituted verbatim
+        # into the views template, so they carry single-% / single-brace syntax
+        # (%% escaping belongs only in the % -format template strings).
+        extra_context += '            "presence_list": self.list_presences(),\n'
+        extra_context += '            "presence_count": self.presence_count(),\n'
 
     if with_streaming:
-        bases.insert(0, "StreamingMixin")
-        extra_imports.append("from djust.streaming import StreamingMixin")
+        # NOTE: StreamingMixin must NOT be added to the generated view's
+        # bases — LiveView already includes it (live_view.py), and re-listing
+        # it here is a C3 MRO TypeError, which hid behind the #2876
+        # SyntaxError until that was fixed. The example code below uses the
+        # sync StreamsMixin.stream() API that LiveView already carries.
+        extra_mount += (
+            "        # LiveView ships StreamsMixin/StreamingMixin; this stream backs the\n"
+        )
+        extra_mount += "        # live-feed section of the template below.\n"
         extra_mount += "        self.stream('feed', [])\n"
+        # Substituted verbatim into views.py: single % here. (Escaping % as %%
+        # is only correct in the % -format template strings themselves — in a
+        # substituted value it survives into the generated file, where `"x" %%
+        # (...)` is a SyntaxError (#2876).)
         extra_methods += """
     @event_handler()
     def send_message(self, message: str = "", **kwargs):
         \"\"\"Push a message to the live feed stream.\"\"\"
         if message.strip():
             import datetime
-            ts = datetime.datetime.now().strftime("%%H:%%M:%%S")
-            self.stream_insert("feed", "[%%s] %%s" %% (ts, message.strip()))
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            self.stream("feed", ["%s] %s" % (ts, message.strip())])
 """
 
     view_bases = ", ".join(bases)
@@ -536,16 +559,19 @@ def _create_schema_files(
         handler_methods += "        self.search_query = value\n"
         handler_methods += "        self._compute()\n\n"
 
-        # Create handler
+        # Create handler. A model may have no text-like fields at all (e.g. a
+        # numeric counter), in which case the signature must not grow an empty
+        # slot — `def create(self, , **kwargs):` is a SyntaxError (#2876).
         create_params = ", ".join(
             "%s: str = ''" % f["name"]
             for f in fields
             if f.get("type", "string").lower() in ("string", "text", "email", "url")
         )
-        if not create_params:
-            create_params = ""
         handler_methods += "    @event_handler()\n"
-        handler_methods += "    def create(self, %s, **kwargs):\n" % create_params
+        if create_params:
+            handler_methods += "    def create(self, %s, **kwargs):\n" % create_params
+        else:
+            handler_methods += "    def create(self, **kwargs):\n"
         handler_methods += '        """Create a new %s."""\n' % model_display_singular.lower()
         # Build create kwargs
         create_fields = [
@@ -584,26 +610,30 @@ def _create_schema_files(
             }
         )
 
-        # Template for this model
+        # Template for this model. Field markup is styled by the scaffold's
+        # base stylesheet (input[type=...] rules + .muted labels) — the old
+        # Tailwind utility classes here had no stylesheet behind them (#2875).
         form_fields_html = ""
         for f in fields:
             ftype = f.get("type", "string").lower()
             if ftype in ("string", "text", "email", "url"):
                 input_type = "email" if ftype == "email" else "url" if ftype == "url" else "text"
-                form_fields_html += "        <div>\n"
-                form_fields_html += '            <input type="%s" name="%s" placeholder="%s"\n' % (
+                form_fields_html += '        <div style="margin-bottom: .75rem">\n'
+                form_fields_html += (
+                    '            <label class="muted"'
+                    ' style="display: block; margin-bottom: .25rem; font-size: .875rem"'
+                    ' for="id_%s">%s</label>\n' % (f["name"], f["name"].replace("_", " ").title())
+                )
+                form_fields_html += '            <input type="%s" name="%s" id="id_%s"\n' % (
                     input_type,
                     f["name"],
-                    f["name"].replace("_", " ").title(),
+                    f["name"],
                 )
-                form_fields_html += '                   class="w-full px-3 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">\n'
-                form_fields_html += "        </div>\n"
+                form_fields_html += '                   style="width: 100%%">\n'
 
         list_item_fields = ""
         for f in fields[:4]:  # Show first 4 fields
-            list_item_fields += (
-                '                <span class="text-gray-200">{{ item.%s }}</span>\n' % f["name"]
-            )
+            list_item_fields += "                <span>{{ item.%s }}</span>\n" % f["name"]
 
         _write(
             tpl_dir / template_name,
@@ -665,6 +695,12 @@ def _create_schema_files(
     for pat in urls_patterns:
         urls_content += pat + "\n"
     urls_content += "]\n"
+    # The schema writer overwrites the URLconf wholesale, so the auth routes
+    # the standard path splices in via URLS_PY's %(extra_urls)s must be
+    # re-spliced here — the --with-auth nav references {% url 'login' %} /
+    # {% url 'logout' %}, which raise NoReverseMatch without them (#2876).
+    if ctx.get("with_auth"):
+        urls_content += T.AUTH_URLS_EXTRA % {"app_name": app_name}
     _write(pkg_dir / "urls.py", urls_content)
 
     # Update LIVEVIEW_ALLOWED_MODULES (already handled by settings template)
