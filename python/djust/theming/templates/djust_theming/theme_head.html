@@ -1,16 +1,33 @@
 {# Theme head block: anti-FOUC script, CSS, and optional JS include #}
 {# Safety: autoescape off is safe here — all variables (css_block, direction, etc.) #}
 {# are framework-generated in theme_tags.py, not user input. #}
-{# cookie_prefix_js is a JSON-encoded string ("" or "<ns>_"), framework-generated. #}
+{# cookie_prefix_js and resolved_mode_js are JSON-encoded strings, framework-generated. #}
 {% load static %}
 {% autoescape off %}
 <script>
 (function() {
     window.__djust_theme_cookie_prefix = {{ cookie_prefix_js }};
+    /* Single source of truth for the default mode, read by BOTH this script and
+       theme.js (via getMode()). theme.js loads `defer`, so it runs after this
+       one and re-applies the mode — when it resolved its own fallback the two
+       could disagree, and the later one won. */
+    window.__djust_theme_default_mode = {{ resolved_mode_js|default:'"system"' }};
     {% if loading_class %}document.documentElement.classList.add('loading');
     {% endif %}var storageKey = 'djust-theme-mode';
-    var storedMode = localStorage.getItem(storageKey);
-    var mode = storedMode || 'system';
+    var storedMode = null;
+    try {
+        storedMode = localStorage.getItem(storageKey);
+    } catch (e) {
+        /* Storage can throw outright (private windows, blocked site data).
+           An explicit visitor choice is a nicety; the theme itself is not,
+           so fall through to the server-resolved mode rather than aborting
+           the script and leaving the page unstyled. */
+    }
+    /* Fallback is the mode the SERVER resolved — config default, session, or
+       cookie — not a hardcoded 'system'. A project configuring
+       default_mode: 'dark' used to come up light on any machine whose OS
+       preferred light. */
+    var mode = storedMode || window.__djust_theme_default_mode || 'system';
     var resolvedMode = mode;
     if (mode === 'system') {
         resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';

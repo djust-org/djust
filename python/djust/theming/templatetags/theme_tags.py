@@ -59,7 +59,7 @@ def build_theme_head_context(
     Single source of truth for the ``theme_head`` render context. Both the
     ``{% theme_head %}`` simple tag and ``ThemeMixin._setup_theme_context()``
     call this so the two render paths cannot drift (#1531 — the #1452 drift,
-    repeated for the ThemeMixin path). ``theme_head.html`` consumes eight
+    repeated for the ThemeMixin path). ``theme_head.html`` consumes nine
     variables; a hand-built sub-dict silently drops the rest.
 
     Args:
@@ -81,8 +81,10 @@ def build_theme_head_context(
     Returns:
         A dict with keys: ``loading_class``, ``css_block``,
         ``deferred_css_block``, ``component_css_block``,
-        ``include_component_link``, ``include_js``, ``direction``,
-        ``cookie_prefix_js`` — exactly the variables ``theme_head.html``
+        ``include_component_link``, ``include_components_app_link``,
+        ``include_js``, ``direction``,
+        ``cookie_prefix_js``, ``resolved_mode_js`` — exactly the variables
+        ``theme_head.html``
         consumes.
     """
     # Get current theme state
@@ -183,6 +185,14 @@ def build_theme_head_context(
         "include_js": include_js,
         "direction": direction,
         "cookie_prefix_js": cookie_prefix_js,
+        # The mode the *server* resolved — config default, session, or cookie.
+        # The anti-FOUC script used to hardcode `'system'` as its fallback, so
+        # a project that configured `default_mode: "dark"` still rendered in
+        # whatever the OS preferred until the user clicked a toggle. Handing
+        # the resolved mode to the script is what makes the configured default
+        # actually the default. JSON-encoded like cookie_prefix_js, since it
+        # is interpolated into a <script> literal.
+        "resolved_mode_js": json.dumps(state.mode),
     }
 
 

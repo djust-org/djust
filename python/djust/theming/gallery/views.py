@@ -31,6 +31,37 @@ from djust.theming.css_generator import ThemeCSSGenerator as ColorCSSGenerator
 _VALID_TOKEN_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
+def _initial_preset(request: HttpRequest) -> str:
+    """The preset the gallery should open with.
+
+    ``?preset=`` wins — that is the visitor asking for a specific one. With no
+    query parameter the default is the preset the PROJECT configured, not a
+    hardcoded ``"default"``.
+
+    The gallery is a theme browser. Opening it on a site that has configured a
+    preset (directly, or through a theme pack that implies one) and being shown
+    a different palette misrepresents the site's own theme — which is the one
+    thing the page exists to show. Falls back to ``"default"`` only when the
+    project has not configured anything or the resolved preset is not one the
+    registry knows.
+    """
+    from djust.theming._registry_accessor import get_registry
+    from djust.theming.manager import get_theme_manager
+
+    requested = request.GET.get("preset")
+    if requested and get_registry().has_preset(requested):
+        return str(requested)
+
+    try:
+        configured = get_theme_manager(request).get_state().preset
+    except Exception:  # noqa: BLE001 — never fail the gallery over a preset name
+        configured = None
+
+    if configured and get_registry().has_preset(configured):
+        return configured
+    return "default"
+
+
 @xframe_options_sameorigin
 def gallery_view(request: HttpRequest) -> HttpResponse:
     """Render the theme component gallery page.
@@ -47,14 +78,8 @@ def gallery_view(request: HttpRequest) -> HttpResponse:
     if denied:
         return denied
 
-    # Read preset from query param
-    preset_name = request.GET.get("preset", "default")
-
-    # Validate and normalise preset name
-    from djust.theming._registry_accessor import get_registry
-
-    if not get_registry().has_preset(preset_name):
-        preset_name = "default"
+    # Preset: ?preset= wins, else the project's configured one.
+    preset_name = _initial_preset(request)
 
     # Generate unlayered preset override CSS for the gallery.
     # Using generate_variables_only() emits bare :root {} / .dark {} blocks without
@@ -91,7 +116,7 @@ def editor_view(request: HttpRequest) -> HttpResponse:
     if denied:
         return denied
 
-    preset_name = request.GET.get("preset", "default")
+    preset_name = _initial_preset(request)
 
     ctx = build_gallery_context(preset_name=preset_name)
     ctx["request"] = request
