@@ -151,14 +151,14 @@ Beyond per-model CRUD generation, the `djust` CLI ships three commands for
 bootstrapping whole projects and apps:
 
 ```bash
-# Modern entrypoint (recommended) — feature flags select what to wire
-python -m djust new myapp
+# Use the latest published CLI, even if an older tool is installed
+uvx djust@latest new myapp
 
 # Pre-canned feature combos
-python -m djust new myapp --with-auth --with-db --with-presence --with-streaming
+uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming
 
 # Generate models, admin, migrations and views from a JSON schema
-python -m djust new myapp --from-schema schema.json
+uvx djust@latest new myapp --from-schema schema.json
 
 # Legacy entrypoints, mirroring Django's own names
 python -m djust startproject myproject

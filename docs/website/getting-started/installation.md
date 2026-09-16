@@ -28,12 +28,17 @@ environment with `.venv\Scripts\Activate.ps1` instead of
 Run this from the **parent directory** where you want the new project:
 
 ```bash
-uvx --from djust djust new myproject
+uvx djust@latest new myproject
 cd myproject
 source .venv/bin/activate
 python manage.py check
 python -m uvicorn myproject.asgi:application --reload
 ```
+
+`@latest` is intentional: it requests the current published release instead
+of reusing an older globally installed or cached CLI. Plain `uvx djust` can
+reuse an installed tool even when the generated project's dependencies are
+newer; see [uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
 
 `uvx` runs the djust CLI without installing it globally. `djust new` creates
 `myproject/`, creates its own `.venv`, installs the generated requirements,
@@ -54,13 +59,14 @@ myproject/
 ├── Makefile
 ├── .env
 ├── .venv/
-├── templates/base.html
 └── myproject/
     ├── settings.py
     ├── asgi.py
     ├── urls.py
     ├── views.py
     └── templates/myproject/
+        ├── base.html
+        └── index.html
 ```
 
 The generated package contains both project configuration and the starter
@@ -71,7 +77,7 @@ initial database; the default starter's list lives in LiveView state.
 ### Choose features at creation time
 
 ```bash
-uvx --from djust djust new myproject --with-auth --with-db
+uvx djust@latest new myproject --with-auth --with-db
 ```
 
 | Flag | Adds |
@@ -96,13 +102,40 @@ python manage.py check
 python -m uvicorn myproject.asgi:application --reload
 ```
 
-Already have djust in an active environment? `python -m djust new myproject`
-runs the same generator. For model-by-model CRUD generation and schema
+Already have an up-to-date djust in an active environment?
+`python -m djust new myproject` runs that environment's generator. For model-by-model CRUD generation and schema
 options, see [Scaffolding Generator](../guides/scaffolding.md).
 
 You can now edit the generated `myproject/views.py`, or follow
 [Your First LiveView](./first-liveview.md) to create a separate counter app.
 You do not need the manual setup below for a scaffolded project.
+
+### Recover from an older scaffold
+
+If setup reports `admin.E403`, a production `SECRET_KEY` error, or
+`No module named uvicorn`, check which CLI created the project. An older
+installed CLI can emit outdated files even though its automatic install puts
+a newer djust into the project's `.venv`.
+
+Updating the dependency alone does not rewrite those generated files. For a
+starter you have not customized, keep the old directory and generate a fresh
+one from its parent:
+
+```bash
+uvx djust@latest new myproject_fixed
+cd myproject_fixed
+source .venv/bin/activate
+python manage.py check
+python -m uvicorn myproject_fixed.asgi:application --reload
+```
+
+For an app you have customized, use the manual configuration below to update
+its settings and ASGI entry point, and install `"uvicorn[standard]"`. Fix any
+reported migration errors before starting the server; a final `Done!` message
+from an older generator does not mean all setup steps succeeded.
+
+If checks report only `djust.C401` about the optional development file watcher,
+install it with `uv pip install watchdog` to enable hot view replacement.
 
 ## Create a Django project manually
 
