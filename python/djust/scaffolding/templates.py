@@ -271,6 +271,53 @@ application = ProtocolTypeRouter(
 """
 
 # ---------------------------------------------------------------------------
+# settings block appended by ``djust init``
+# ---------------------------------------------------------------------------
+#
+# The conditions run inside the user's settings module, so the block is
+# correct for list or tuple settings, already-listed apps, and projects that
+# configure their own channel layer — without parsing the user's code.
+
+SETTINGS_BLOCK = """\
+# --- djust (added by djust init) ---
+# Reruns of `djust init` detect this block and leave settings unchanged.
+INSTALLED_APPS = [
+    *INSTALLED_APPS,
+    *[app for app in ("channels", "djust") if app not in INSTALLED_APPS],
+]
+
+ASGI_APPLICATION = "%(asgi_module)s.application"
+
+if not any(
+    backend.get("BACKEND") == "djust.template_backend.DjustTemplateBackend"
+    for backend in TEMPLATES
+):
+    TEMPLATES = [
+        {
+            "NAME": "djust",
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": list(TEMPLATES[0].get("DIRS", [])) if TEMPLATES else [],
+            "APP_DIRS": True,
+            "OPTIONS": {
+                "context_processors": [
+                    "django.template.context_processors.request",
+                    "django.contrib.auth.context_processors.auth",
+                    "django.contrib.messages.context_processors.messages",
+                ],
+            },
+        },
+        *TEMPLATES,
+    ]
+
+# In-memory layer: suitable for one local development process.
+if "CHANNEL_LAYERS" not in globals():
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
+# --- end djust ---
+"""
+
+# ---------------------------------------------------------------------------
 # wsgi.py
 # ---------------------------------------------------------------------------
 
