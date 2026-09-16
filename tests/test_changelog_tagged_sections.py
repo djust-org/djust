@@ -31,6 +31,7 @@ run in throwaway git repos with the script installed under ``scripts/``.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -76,6 +77,26 @@ requires_shipped = pytest.mark.skipif(
 )
 
 
+def _heading_pos(text: str, ver: str) -> int:
+    """Offset of the ``## [<ver>]`` HEADING — anchored to the line start.
+
+    A plain ``text.index(f"## [{ver}]")`` also matches a heading *quoted
+    inside another section's prose*: a changelog fragment legitimately cites
+    a version heading as an example (the #2862 fragment writes "removing the
+    ``## [1.2.0rc6]`` section exited 0"). That mention lives in the new
+    release section, ABOVE the real heading, so the naive lookup silently
+    retargets the mutation at the wrong section — and the test then passes
+    vacuously, because a newer untagged section is legitimately not pinned.
+
+    Anchoring to the line start is exactly what the checker does
+    (``_HEADING_RE.match``), so the tests locate the heading the checker
+    would.
+    """
+    m = re.search(rf"^## \[{re.escape(ver)}\]", text, re.MULTILINE)
+    assert m, f"no '## [{ver}]' heading found at line start"
+    return m.start()
+
+
 def _first_superseded_section() -> str:
     """The version of the first section BELOW the anchor that the anchor's
     snapshot contains — a genuinely-frozen section to mutate for the canary."""
@@ -109,8 +130,7 @@ class TestChangelogTaggedSectionPin:
         # section in a COPY (real tags still back the comparison) → must fail.
         ver = _first_superseded_section()
         text = CHANGELOG.read_text(encoding="utf-8")
-        heading = f"## [{ver}]"
-        i = text.index(heading)
+        i = _heading_pos(text, ver)
         nl = text.index("\n", i) + 1
         tampered = (
             text[:nl]
@@ -140,7 +160,7 @@ def test_newest_shipped_section_is_frozen(tmp_path, target):
     if target == "heading":
         text = text.replace(heading, heading + " CORRUPTED", 1)
     else:
-        pos = text.index("\n", text.index(heading)) + 1
+        pos = text.index("\n", _heading_pos(text, newest)) + 1
         text = text[:pos] + "\n- CORRUPTED shipped content.\n" + text[pos:]
     copy = tmp_path / "CHANGELOG.md"
     copy.write_text(text, encoding="utf-8")
@@ -161,7 +181,7 @@ def test_missing_newest_section_is_caught(tmp_path):
     sections = check._split_sections(CHANGELOG.read_text(encoding="utf-8"))
     anchor = next(ver for ver, _ in sections if check._tag_exists(f"v{ver}"))
     text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index(f"## [{anchor}]")
+    start = _heading_pos(text, anchor)
     end = text.find("## [", start + 1)
     text = text[:start] + (text[end:] if end != -1 else "")
     copy = tmp_path / "CHANGELOG.md"
@@ -184,7 +204,7 @@ def test_deleting_a_superseded_section_is_caught(tmp_path):
     Now it must fail naming the section as missing."""
     ver = _first_superseded_section()
     text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index(f"## [{ver}]")
+    start = _heading_pos(text, ver)
     end = text.find("## [", start + 1)
     deleted = text[:start] + (text[end:] if end != -1 else "")
     copy = tmp_path / "CHANGELOG.md"
@@ -444,7 +464,7 @@ def test_real_repo_full_wipe_is_caught(tmp_path):
     sections = check._split_sections(CHANGELOG.read_text(encoding="utf-8"))
     anchor = next(ver for ver, _ in sections if check._tag_exists(f"v{ver}"))
     text = CHANGELOG.read_text(encoding="utf-8")
-    wiped = text[: text.index(f"## [{anchor}]")]  # keep [Unreleased] prefix only
+    wiped = text[: _heading_pos(text, anchor)]  # keep the prefix above the anchor
     copy = tmp_path / "CHANGELOG.md"
     copy.write_text(wiped, encoding="utf-8")
     result = subprocess.run(
