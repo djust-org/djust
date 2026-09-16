@@ -335,7 +335,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 def cmd_new(args: argparse.Namespace) -> None:
     """Create a new djust project with optional features."""
-    from djust.scaffolding.generator import generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project
 
     try:
         generate_project(
@@ -347,7 +347,7 @@ def cmd_new(args: argparse.Namespace) -> None:
             from_schema=getattr(args, "from_schema", None),
             auto_setup=not getattr(args, "no_setup", False),
         )
-    except ValueError as e:
+    except (ValueError, ScaffoldSetupError) as e:
         print("Error: %s" % e)
         sys.exit(1)
 
@@ -388,7 +388,7 @@ def cmd_startproject(args: argparse.Namespace) -> None:
     ``djust new``, producing a working, warning-clean project. New projects
     should call ``djust new <name>`` directly.
     """
-    from djust.scaffolding.generator import generate_project
+    from djust.scaffolding.generator import ScaffoldSetupError, generate_project
 
     print(
         "Note: `djust startproject` is deprecated — use `djust new` instead.\n"
@@ -400,7 +400,7 @@ def cmd_startproject(args: argparse.Namespace) -> None:
             app_name=args.name,
             auto_setup=not getattr(args, "no_setup", False),
         )
-    except ValueError as e:
+    except (ValueError, ScaffoldSetupError) as e:
         print("Error: %s" % e)
         sys.exit(1)
 

@@ -28,9 +28,13 @@ environment with `.venv\Scripts\Activate.ps1` instead of
 Run this from the **parent directory** where you want the new project:
 
 ```bash
-uvx djust@latest new myproject
+uvx djust@latest new myproject --no-setup
 cd myproject
+uv venv --python 3.12 .venv
+uv pip install --python .venv -r requirements.txt
 source .venv/bin/activate
+python manage.py makemigrations
+python manage.py migrate
 python manage.py check
 python -m uvicorn myproject.asgi:application --reload
 ```
@@ -41,9 +45,14 @@ reuse an installed tool even when the generated project's dependencies are
 newer; see [uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
 
 `uvx` runs the djust CLI without installing it globally. `djust new` creates
-`myproject/`, creates its own `.venv`, installs the generated requirements,
-and runs migrations. Choose a new directory name; it does not modify an
-existing project.
+`myproject/`. Choose a new directory name in a parent folder such as
+`~/projects`; do not run it inside another project or its Python package.
+
+The explicit setup above is intentional. Currently published generators can
+install dependencies into an already-active parent environment during automatic
+setup. `--no-setup` skips that path, and `--python .venv` directs installation
+to the new project's environment. Run every step through `migrate` successfully
+before starting the server. Migrations create Django's session and auth tables.
 
 Open **http://127.0.0.1:8000/**. The starter includes an interactive list:
 add an item and check that it appears without a page reload. With the project
@@ -77,7 +86,7 @@ initial database; the default starter's list lives in LiveView state.
 ### Choose features at creation time
 
 ```bash
-uvx djust@latest new myproject --with-auth --with-db
+uvx djust@latest new myproject --with-auth --with-db --no-setup
 ```
 
 | Flag | Adds |
@@ -95,7 +104,7 @@ from the generated directory:
 ```bash
 uv venv --python 3.12
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install --python .venv -r requirements.txt
 python manage.py makemigrations
 python manage.py migrate
 python manage.py check
@@ -103,7 +112,8 @@ python -m uvicorn myproject.asgi:application --reload
 ```
 
 Already have an up-to-date djust in an active environment?
-`python -m djust new myproject` runs that environment's generator. For model-by-model CRUD generation and schema
+`python -m djust new myproject` runs that environment's generator. Add `--no-setup` and use the explicit setup
+commands above until your installed release includes the environment-targeting fix. For model-by-model CRUD generation and schema
 options, see [Scaffolding Generator](../guides/scaffolding.md).
 
 You can now edit the generated `myproject/views.py`, or follow
@@ -122,9 +132,13 @@ starter you have not customized, keep the old directory and generate a fresh
 one from its parent:
 
 ```bash
-uvx djust@latest new myproject_fixed
+uvx djust@latest new myproject_fixed --no-setup
 cd myproject_fixed
+uv venv --python 3.12 .venv
+uv pip install --python .venv -r requirements.txt
 source .venv/bin/activate
+python manage.py makemigrations
+python manage.py migrate
 python manage.py check
 python -m uvicorn myproject_fixed.asgi:application --reload
 ```
@@ -136,6 +150,26 @@ from an older generator does not mean all setup steps succeeded.
 
 If checks report only `djust.C401` about the optional development file watcher,
 install it with `uv pip install watchdog` to enable hot view replacement.
+
+### Missing Django, Uvicorn, or session tables
+
+If generation left an empty `.venv`, repair it from the directory containing
+that project's `manage.py`. There is no need to regenerate the project:
+
+```bash
+uv pip install --python .venv -r requirements.txt
+source .venv/bin/activate
+python manage.py makemigrations
+python manage.py migrate
+python manage.py showmigrations sessions
+python manage.py check
+```
+
+`showmigrations sessions` must include `[X] 0001_initial`. An error such as
+`no such table: django_session` means the server's database has not had the
+session migration applied. Run migrations with the same project settings and
+database environment variables as the server; `manage.py check` alone does
+not create tables. Restart the server after completing setup.
 
 ## Create a Django project manually
 
@@ -150,7 +184,7 @@ mkdir myproject
 cd myproject
 uv venv --python 3.12
 source .venv/bin/activate
-uv pip install "Django>=5.2,<5.3" djust "uvicorn[standard]"
+uv pip install --python .venv "Django>=5.2,<5.3" djust "uvicorn[standard]"
 ```
 
 ### 2. Create the project and app

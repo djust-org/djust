@@ -73,7 +73,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        from djust.scaffolding.generator import generate_project
+        from djust.scaffolding.generator import ScaffoldSetupError, generate_project
 
         app_name = options["app_name"]
 
@@ -88,8 +88,8 @@ class Command(BaseCommand):
                 from_schema=options.get("from_schema"),
                 auto_setup=not options["no_setup"],
             )
-        except ValueError as e:
-            raise CommandError(str(e))
+        except (ValueError, ScaffoldSetupError) as e:
+            raise CommandError(str(e)) from e
 
         # Print success message
         features = []

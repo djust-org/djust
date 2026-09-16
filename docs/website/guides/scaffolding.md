@@ -152,13 +152,13 @@ bootstrapping whole projects and apps:
 
 ```bash
 # Use the latest published CLI, even if an older tool is installed
-uvx djust@latest new myapp
+uvx djust@latest new myapp --no-setup
 
 # Pre-canned feature combos
-uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming
+uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming --no-setup
 
 # Generate models, admin, migrations and views from a JSON schema
-uvx djust@latest new myapp --from-schema schema.json
+uvx djust@latest new myapp --from-schema schema.json --no-setup
 
 # Legacy entrypoints, mirroring Django's own names
 python -m djust startproject myproject
@@ -194,11 +194,17 @@ generates an app with a starter view and template inside an existing project;
 you still need to register the app and include its URLs.
 
 After `djust new`, enter the generated directory and activate its environment
-before running `make dev`:
+and finish setup before running `make dev`. Explicitly targeting `.venv`
+avoids a published generator bug when another environment is active:
 
 ```bash
 cd myapp
+uv venv --python 3.12 .venv
+uv pip install --python .venv -r requirements.txt
 source .venv/bin/activate
+python manage.py makemigrations
+python manage.py migrate
+python manage.py check
 make dev
 ```
 

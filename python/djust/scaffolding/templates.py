@@ -544,7 +544,7 @@ check:
 \tpython manage.py djust_check
 
 install:
-\tuv pip install -r requirements.txt
+\tuv pip install --python .venv -r requirements.txt
 
 collectstatic:
 \tpython manage.py collectstatic --noinput

@@ -21,6 +21,10 @@ from . import templates as T
 logger = logging.getLogger(__name__)
 
 
+class ScaffoldSetupError(RuntimeError):
+    """A generated project could not complete environment setup or migrations."""
+
+
 def generate_project(
     app_name: str,
     target_dir: Optional[str] = None,
@@ -49,6 +53,7 @@ def generate_project(
 
     Raises:
         ValueError: If app_name is invalid or directory already exists.
+        ScaffoldSetupError: If environment setup or migrations fail.
     """
     # Validate app_name
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", app_name):
@@ -679,6 +684,9 @@ def _load_schema(schema_path: str) -> Dict[str, Any]:
 
 def _run_auto_setup(project_dir: Path) -> None:
     """Create venv, install deps, and run migrate in the generated project."""
+    venv_dir = project_dir.resolve() / ".venv"
+    venv_python = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+
     # Check for uv
     uv_available = shutil.which("uv") is not None
 
@@ -687,19 +695,23 @@ def _run_auto_setup(project_dir: Path) -> None:
     # Create virtualenv
     if uv_available:
         print("Creating virtualenv (uv)...")
-        _run_cmd(["uv", "venv"], cwd=project_dir)
+        _run_cmd(["uv", "venv", str(venv_dir)], cwd=project_dir)
     else:
         print("Creating virtualenv (python -m venv)...")
-        _run_cmd([sys.executable, "-m", "venv", ".venv"], cwd=project_dir)
+        _run_cmd([sys.executable, "-m", "venv", str(venv_dir)], cwd=project_dir)
 
     # Install dependencies
     if uv_available:
         print("Installing dependencies (uv)...")
-        _run_cmd(["uv", "pip", "install", "-r", "requirements.txt"], cwd=project_dir)
+        # uv otherwise prefers an inherited VIRTUAL_ENV over cwd/.venv.
+        # Every setup step must target the environment we just created.
+        _run_cmd(
+            ["uv", "pip", "install", "--python", venv_python, "-r", "requirements.txt"],
+            cwd=project_dir,
+        )
     else:
-        venv_pip = str(project_dir / ".venv" / "bin" / "pip")
         print("Installing dependencies (pip)...")
-        _run_cmd([venv_pip, "install", "-r", "requirements.txt"], cwd=project_dir)
+        _run_cmd([venv_python, "-m", "pip", "install", "-r", "requirements.txt"], cwd=project_dir)
 
     # Make + run migrations.
     #
@@ -710,7 +722,6 @@ def _run_auto_setup(project_dir: Path) -> None:
     # runs `migrate` WITHOUT `--run-syncdb`, so the app's tables were never
     # created and the first query 500s. `--run-syncdb` is kept on the migrate as
     # belt-and-suspenders for any migration-less third-party app.
-    venv_python = str(project_dir / ".venv" / "bin" / "python")
     print("Running migrations...")
     _run_cmd([venv_python, "manage.py", "makemigrations"], cwd=project_dir)
     _run_cmd([venv_python, "manage.py", "migrate", "--run-syncdb"], cwd=project_dir)
@@ -719,7 +730,7 @@ def _run_auto_setup(project_dir: Path) -> None:
 
 
 def _run_cmd(cmd: List[str], cwd: Path) -> None:
-    """Run a subprocess command, printing output on failure."""
+    """Run a required setup step; never continue after an incomplete step."""
     try:
         subprocess.run(
             cmd,
@@ -729,15 +740,20 @@ def _run_cmd(cmd: List[str], cwd: Path) -> None:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        logger.warning(
+        logger.error(
             "Command failed: %s\nstdout: %s\nstderr: %s",
             " ".join(cmd),
             e.stdout,
             e.stderr,
         )
-        print("  Warning: '%s' failed (non-fatal)" % " ".join(cmd[:3]))
-    except FileNotFoundError:
-        print("  Warning: '%s' not found (skipping)" % cmd[0])
+        raise ScaffoldSetupError(
+            "Setup failed while running '%s'. Generated files remain in %s; "
+            "resolve the error above before continuing setup." % (" ".join(cmd), cwd)
+        ) from e
+    except FileNotFoundError as e:
+        raise ScaffoldSetupError(
+            "Setup executable '%s' was not found. Generated files remain in %s." % (cmd[0], cwd)
+        ) from e
 
 
 def _write(filepath: Path, content: str) -> None:
