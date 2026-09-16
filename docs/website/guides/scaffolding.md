@@ -11,7 +11,7 @@ description: "Generate a complete CRUD LiveView from a model name and field defi
 
 Generate a complete CRUD LiveView from a model name and field definitions.
 
-For a new Django project, start with [Installation](../getting-started/installation.md#scaffold-a-project-recommended). The commands below run inside an existing project with djust installed.
+For a new Django project, start with [Installation](../getting-started/installation.md#create-a-new-project). The commands below run inside an existing project with djust installed.
 
 ## Quick Start
 
@@ -152,13 +152,16 @@ bootstrapping whole projects and apps:
 
 ```bash
 # Use the latest published CLI, even if an older tool is installed
-uvx djust@latest new myapp --no-setup
+uvx djust@latest new myapp
 
 # Pre-canned feature combos
-uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming --no-setup
+uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streaming
 
 # Generate models, admin, migrations and views from a JSON schema
-uvx djust@latest new myapp --from-schema schema.json --no-setup
+uvx djust@latest new myapp --from-schema schema.json
+
+# Add djust to an existing Django project (run beside manage.py)
+uvx djust@latest init
 
 # Legacy entrypoints, mirroring Django's own names
 python -m djust startproject myproject
@@ -180,11 +183,44 @@ djust:
 | `PresenceMixin` example | off | `--with-presence` |
 | Stream-friendly base templates | off | `--with-streaming` |
 | Models generated from a JSON schema | off | `--from-schema schema.json` |
-| Create `.venv`, install dependencies, and migrate | on | Skip with `--no-setup` |
+| Create `.venv`, install dependencies, migrate, and check | on | Skip with `--no-setup` |
 
 `--from-schema` reads a small JSON file describing models and fields, then
 generates models, admin, migrations, LiveViews and templates in one step.
 Handy for spikes.
+
+Setup installs only into the new project's `.venv`, even when another
+environment is active, and stops at the first failed step. Afterwards, start
+the server with:
+
+```bash
+cd myapp
+make dev
+```
+
+The generated `Makefile` runs the project's `.venv` interpreter, so no
+activation is needed. With `--no-setup`, `djust new` prints the setup commands
+to run before `make dev`.
+
+### `djust init`
+
+`djust init` adds djust to the Django project in the current directory: a
+marked settings block, a djust `asgi.py` (only when the existing one is
+Django's default), the `djust`, `channels`, and `uvicorn[standard]` packages,
+and a final `manage.py check`.
+
+| Option | Effect |
+|---|---|
+| `--dry-run` | Print the diff and the install command without changing anything |
+| `--no-install` | Edit files only; skip installing packages and the check |
+| `--force` | Edit files even if they have uncommitted changes in git |
+| `--settings MODULE` | Settings module to edit when `manage.py` does not name it |
+
+Exit status is `0` on success, `1` when `init` refused before writing, and
+`2` when files were written but a step needs attention (a customized
+`asgi.py`, a failed install, or a failed check). The
+[installation guide](../getting-started/installation.md#add-djust-to-an-existing-project)
+describes each change.
 
 ### `startproject` and `startapp`
 
@@ -192,24 +228,6 @@ Handy for spikes.
 Use `djust new` for a complete project. `python -m djust startapp myapp`
 generates an app with a starter view and template inside an existing project;
 you still need to register the app and include its URLs.
-
-After `djust new`, enter the generated directory and activate its environment
-and finish setup before running `make dev`. Explicitly targeting `.venv`
-avoids a published generator bug when another environment is active:
-
-```bash
-cd myapp
-uv venv --python 3.12 .venv
-uv pip install --python .venv -r requirements.txt
-source .venv/bin/activate
-python manage.py makemigrations
-python manage.py migrate
-python manage.py check
-make dev
-```
-
-The [installation guide](../getting-started/installation.md) covers manual
-setup, Windows activation, and completing setup after `--no-setup`.
 
 ## AI agent discovery
 

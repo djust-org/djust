@@ -1,0 +1,1 @@
+- Add `djust init`, which adds djust to an existing Django project: it appends a marked settings block, replaces a stock `asgi.py` with WebSocket routing, installs `djust`, `channels`, and `uvicorn[standard]` with the project's own tooling, and runs `manage.py check`. `--dry-run` shows the diff; files with uncommitted changes are left alone unless `--force` is passed.

@@ -1,0 +1,1 @@
+- `djust new` projects now start with `cd <name> && make dev`: the generated `Makefile` uses the project's `.venv` interpreter so no activation is needed, setup finishes with `manage.py check`, and `requirements.txt` requires at least the djust version that generated the project instead of `djust>=0.3.0`.

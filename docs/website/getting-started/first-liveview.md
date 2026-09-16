@@ -9,7 +9,8 @@ A counter with increment/decrement buttons that updates instantly via WebSocket.
 ## Before you start
 
 Complete [Installation](./installation.md) first. Run commands below from
-the directory containing `manage.py`, with the project environment activated.
+the directory containing `manage.py`, with the project environment activated
+(or prefix them with `.venv/bin/` or `uv run`).
 
 The manual installation path already creates and registers `myapp`. If you
 used `djust new myproject`, the generated starter app is named `myproject`;
@@ -19,8 +20,9 @@ create a separate app for this tutorial:
 python manage.py startapp myapp
 ```
 
-Add `"myapp"` to `INSTALLED_APPS` and `"myapp.views"` to
-`LIVEVIEW_ALLOWED_MODULES` in your project's settings. Keep the existing
+Add `"myapp"` to `INSTALLED_APPS` in your project's settings, and add
+`"myapp.views"` to `LIVEVIEW_ALLOWED_MODULES` if your settings define it
+(`djust init` does not; without the setting, installed apps are allowed). Keep the existing
 entries. The URL step below connects this app to the site.
 
 ## 1. Create the View

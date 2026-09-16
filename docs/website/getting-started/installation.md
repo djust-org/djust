@@ -1,63 +1,53 @@
 # Installation
 
-Start with a new project or add djust to Django code you already have.
-The scaffolder creates the Django project for you; the manual path shows each
-piece and uses the same names as [Your First LiveView](./first-liveview.md).
+Create a new project with one command, or add djust to a Django project you
+already have with another. Both paths set up the pieces described in
+[Configure by hand](#configure-by-hand), and use the same names as
+[Your First LiveView](./first-liveview.md).
 
 | Starting point | Follow this path |
 | --- | --- |
-| New project, ready to build | [Scaffold a project](#scaffold-a-project-recommended) |
-| Learn the Django setup step by step | [Create a Django project manually](#create-a-django-project-manually) |
+| New project | [Create a new project](#create-a-new-project) |
 | Existing Django project | [Add djust to an existing project](#add-djust-to-an-existing-project) |
+| Set up each piece yourself | [Configure by hand](#configure-by-hand) |
 
 ## Requirements
 
-- Python 3.10 or newer. Python 3.12 is a good starting point for these examples.
+- Python 3.10 or newer.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) for environment and package management.
 - Django and Channels are installed with djust; you do not need to install
-  Django globally first. The manual example uses Django 5.2.
+  Django globally first.
 - Rust is only needed when building djust from source. Published wheels avoid
   a local Rust build on supported platforms.
 
-Shell examples use macOS/Linux. In Windows PowerShell, activate a virtual
-environment with `.venv\Scripts\Activate.ps1` instead of
-`source .venv/bin/activate`.
+Shell examples use macOS/Linux. Windows differences are noted where they apply.
 
-## Scaffold a project (recommended)
+## Create a new project
 
 Run this from the **parent directory** where you want the new project:
 
 ```bash
-uvx djust@latest new myproject --no-setup
+uvx djust@latest new myproject
 cd myproject
-uv venv --python 3.12 .venv
-uv pip install --python .venv -r requirements.txt
-source .venv/bin/activate
-python manage.py makemigrations
-python manage.py migrate
-python manage.py check
-python -m uvicorn myproject.asgi:application --reload
+make dev
 ```
 
-`@latest` is intentional: it requests the current published release instead
-of reusing an older globally installed or cached CLI. Plain `uvx djust` can
-reuse an installed tool even when the generated project's dependencies are
-newer; see [uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
-
-`uvx` runs the djust CLI without installing it globally. `djust new` creates
-`myproject/`. Choose a new directory name in a parent folder such as
-`~/projects`; do not run it inside another project or its Python package.
-
-The explicit setup above is intentional. Currently published generators can
-install dependencies into an already-active parent environment during automatic
-setup. `--no-setup` skips that path, and `--python .venv` directs installation
-to the new project's environment. Run every step through `migrate` successfully
-before starting the server. Migrations create Django's session and auth tables.
-
 Open **http://127.0.0.1:8000/**. The starter includes an interactive list:
-add an item and check that it appears without a page reload. With the project
-virtual environment activated, `make dev` is an alternative to the Uvicorn
-command above.
+add an item and check that it appears without a page reload.
+
+`djust new` creates `myproject/`, makes a `.venv` inside it, installs the
+project's requirements into that environment, runs migrations, and finishes
+with `manage.py check`. If any step fails, it stops and reports the error
+instead of printing next steps. `make dev` runs Uvicorn with the project's
+`.venv`, so there is nothing to activate. On Windows, which has no `make`, run
+the command `djust new` prints instead:
+`.venv\Scripts\python -m uvicorn myproject.asgi:application --reload`.
+
+`@latest` is intentional: it requests the current published release instead
+of reusing an older globally installed or cached CLI; see
+[uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
+Choose a new directory name in a parent folder such as `~/projects`; do not
+run it inside another project or its Python package.
 
 ### What the scaffolder sets up
 
@@ -86,7 +76,7 @@ initial database; the default starter's list lives in LiveView state.
 ### Choose features at creation time
 
 ```bash
-uvx djust@latest new myproject --with-auth --with-db --no-setup
+uvx djust@latest new myproject --with-auth --with-db
 ```
 
 | Flag | Adds |
@@ -96,82 +86,67 @@ uvx djust@latest new myproject --with-auth --with-db --no-setup
 | `--with-presence` | Online-user presence example |
 | `--with-streaming` | Live-feed streaming example |
 | `--from-schema schema.json` | Models and views from a JSON schema; implies `--with-db` |
-| `--no-setup` | Generate files without creating an environment, installing packages, or migrating |
-
-If automatic setup reports a failure, or you chose `--no-setup`, complete it
-from the generated directory:
-
-```bash
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip install --python .venv -r requirements.txt
-python manage.py makemigrations
-python manage.py migrate
-python manage.py check
-python -m uvicorn myproject.asgi:application --reload
-```
-
-Already have an up-to-date djust in an active environment?
-`python -m djust new myproject` runs that environment's generator. Add `--no-setup` and use the explicit setup
-commands above until your installed release includes the environment-targeting fix. For model-by-model CRUD generation and schema
-options, see [Scaffolding Generator](../guides/scaffolding.md).
+| `--no-setup` | Generate files only; the command prints the setup steps to run yourself |
 
 You can now edit the generated `myproject/views.py`, or follow
 [Your First LiveView](./first-liveview.md) to create a separate counter app.
-You do not need the manual setup below for a scaffolded project.
+For model-by-model CRUD generation and schema options, see
+[Scaffolding Generator](../guides/scaffolding.md).
 
-### Recover from an older scaffold
+## Add djust to an existing project
 
-If setup reports `admin.E403`, a production `SECRET_KEY` error, or
-`No module named uvicorn`, check which CLI created the project. An older
-installed CLI can emit outdated files even though its automatic install puts
-a newer djust into the project's `.venv`.
-
-Updating the dependency alone does not rewrite those generated files. For a
-starter you have not customized, keep the old directory and generate a fresh
-one from its parent:
+Run this from the directory containing `manage.py`:
 
 ```bash
-uvx djust@latest new myproject_fixed --no-setup
-cd myproject_fixed
-uv venv --python 3.12 .venv
-uv pip install --python .venv -r requirements.txt
-source .venv/bin/activate
-python manage.py makemigrations
-python manage.py migrate
-python manage.py check
-python -m uvicorn myproject_fixed.asgi:application --reload
+uvx djust@latest init
 ```
 
-For an app you have customized, use the manual configuration below to update
-its settings and ASGI entry point, and install `"uvicorn[standard]"`. Fix any
-reported migration errors before starting the server; a final `Done!` message
-from an older generator does not mean all setup steps succeeded.
+To see the changes first without writing anything, add `--dry-run`.
 
-If checks report only `djust.C401` about the optional development file watcher,
-install it with `uv pip install watchdog` to enable hot view replacement.
+| Part | What `djust init` does |
+| --- | --- |
+| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS`, puts the djust template backend ahead of your existing backends, sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. Running `init` again leaves it unchanged. |
+| `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py` is left alone; `init` prints the code to merge instead. |
+| Packages | Adds `djust`, `channels`, and `uvicorn[standard]`: with `uv add` in a uv project, or by adding missing lines to `requirements.txt` and installing into the project's `.venv`. For Poetry, or a project with neither, it prints the command to run. |
+| Check | Runs `manage.py check` once the packages are installed. |
 
-### Missing Django, Uvicorn, or session tables
+When it finishes, `init` prints the command that starts the server, such as
+`uv run uvicorn mysite.asgi:application --reload`. The project has no
+LiveViews yet, so continue with [Your First LiveView](./first-liveview.md).
 
-If generation left an empty `.venv`, repair it from the directory containing
-that project's `manage.py`. There is no need to regenerate the project:
+A few things `init` refuses to guess:
+
+- **Uncommitted changes.** In a git repository, `init` will not edit a file
+  that has uncommitted changes, so its edit is easy to review. Commit first,
+  or pass `--force`.
+- **Where to install.** Packages go only into the project's own `.venv`, or
+  into an active environment located inside the project. Otherwise `init`
+  prints the install command and skips the check.
+- **Settings packages.** When settings live in a package such as
+  `mysite/settings/`, `init` prints the block to add to the module you load.
+  If `manage.py` does not name the settings module, pass `--settings mysite.settings`.
+
+`init` exits with status `0` when everything is done, `1` when it refused
+before writing anything, and `2` when it wrote files but something needs your
+attention, such as a customized `asgi.py` or a failed check.
+
+To start from nothing with Django's own layout, create the project with uv
+and then run `init`:
 
 ```bash
-uv pip install --python .venv -r requirements.txt
-source .venv/bin/activate
-python manage.py makemigrations
-python manage.py migrate
-python manage.py showmigrations sessions
-python manage.py check
+mkdir mysite
+cd mysite
+uv init --bare
+uv add django
+uv run django-admin startproject mysite .
+uvx djust@latest init
 ```
 
-`showmigrations sessions` must include `[X] 0001_initial`. An error such as
-`no such table: django_session` means the server's database has not had the
-session migration applied. Run migrations with the same project settings and
-database environment variables as the server; `manage.py check` alone does
-not create tables. Restart the server after completing setup.
+## Configure by hand
 
-## Create a Django project manually
+This is what `djust new` and `djust init` do, one piece at a time. Follow it
+to see how the parts fit together, or when your project layout is one
+`djust init` does not edit, such as a settings package.
 
 A **project** contains site settings and root URLs. An **app** contains a
 feature's views, models, and templates. Here the project is `myproject` and
@@ -187,6 +162,9 @@ source .venv/bin/activate
 uv pip install --python .venv "Django>=5.2,<5.3" djust "uvicorn[standard]"
 ```
 
+In Windows PowerShell, activate the environment with
+`.venv\Scripts\Activate.ps1` instead of `source .venv/bin/activate`.
+
 ### 2. Create the project and app
 
 Run these in that same directory. The trailing `.` puts `manage.py` in the
@@ -201,18 +179,11 @@ You now have `manage.py`, `myproject/settings.py`, and `myapp/views.py`.
 Continue with the configuration below. For a fuller introduction to Django's
 project/app distinction, see the [Django tutorial](https://docs.djangoproject.com/en/5.2/intro/tutorial01/).
 
-## Add djust to an existing project
+### Existing projects
 
-If you followed the manual steps above, the environment and app are ready.
-For an existing project, activate its environment and install the packages
-using its dependency manager. For a uv-managed project:
-
-```bash
-uv add djust "uvicorn[standard]"
-```
-
-Use your existing project and app names in place of `myproject` and `myapp`.
-If you need a new app, run `python manage.py startapp myapp` beside `manage.py`.
+Skip steps 1 and 2. Install the packages with the project's dependency
+manager, for example `uv add djust "uvicorn[standard]"`, and use your own
+project and app names in place of `myproject` and `myapp` below.
 
 ### 3. Configure Django
 
@@ -337,6 +308,55 @@ Use an ASGI server for live updates. Django's stock `runserver` is WSGI;
 Daphne can provide an ASGI replacement when explicitly configured, as the
 [Channels installation guide](https://channels.readthedocs.io/en/stable/installation.html)
 explains. The Uvicorn commands here work without that override.
+
+## Troubleshooting
+
+### A project from an older CLI
+
+If setup reports `admin.E403`, a production `SECRET_KEY` error, or
+`No module named uvicorn`, check which CLI created the project. An older
+installed CLI can emit outdated files even though its automatic install puts
+a newer djust into the project's `.venv`, and older generators could print a
+final `Done!` message after a failed step.
+
+Updating the dependency alone does not rewrite those generated files. For a
+starter you have not customized, keep the old directory and generate a fresh
+one from its parent:
+
+```bash
+uvx djust@latest new myproject_fixed
+cd myproject_fixed
+make dev
+```
+
+For an app you have customized, run `uvx djust@latest init` in it, or follow
+[Configure by hand](#configure-by-hand) to update its settings and ASGI entry
+point.
+
+### Missing Django, Uvicorn, or session tables
+
+If generation left an empty `.venv`, repair it from the directory containing
+that project's `manage.py`. There is no need to regenerate the project:
+
+```bash
+uv pip install --python .venv -r requirements.txt
+.venv/bin/python manage.py makemigrations
+.venv/bin/python manage.py migrate
+.venv/bin/python manage.py showmigrations sessions
+.venv/bin/python manage.py check
+```
+
+`showmigrations sessions` must include `[X] 0001_initial`. An error such as
+`no such table: django_session` means the server's database has not had the
+session migration applied. Run migrations with the same project settings and
+database environment variables as the server; `manage.py check` alone does
+not create tables. Restart the server after completing setup.
+
+### The development file watcher
+
+If checks report only `djust.C401` about the optional development file
+watcher, install it with `uv pip install --python .venv watchdog` to enable hot
+view replacement.
 
 ## Building from source
 
