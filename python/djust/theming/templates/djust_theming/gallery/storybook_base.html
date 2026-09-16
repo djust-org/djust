@@ -242,8 +242,7 @@
   <div class="sb-topbar">
     <a href="/" class="sb-topbar-brand">djust-theming</a>
     <span class="sb-topbar-sep">|</span>
-    <a href="/">Demo Home</a>
-    <a href="/components/">Components</a>
+    {% if components_gallery_url %}<a href="{{ components_gallery_url }}">Components</a>{% endif %}
     <span class="sb-topbar-sep">|</span>
     <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
     <a href="{% url 'djust_theming:storybook' %}" class="{% if current_component is None %}active{% endif %}">Storybook</a>

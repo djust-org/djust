@@ -23,6 +23,14 @@ from .manager import (
 logger = logging.getLogger(__name__)
 
 # Anti-FOUC script — static; defined at module load (NOT per-request).
+#
+# SUPERSEDED — do not fix this copy. `theme_head_html` built from this constant
+# is discarded by `theme_context` (see `_theme_head_only_unused` below): the
+# canonical anti-FOUC script lives in `djust_theming/theme_head.html` and is
+# rendered by the `{% theme_head %}` tag. This copy also hardcodes the
+# `'system'` fallback the tag no longer uses, so editing it would silently
+# change nothing. It is kept only because `theme_switcher` is still rendered
+# from this function; delete the constant when that moves too.
 _ANTI_FOUC_SCRIPT = """<script>
 (function() {
     var storageKey = 'djust-theme-mode';
@@ -103,6 +111,23 @@ def clear_theme_context_cache() -> None:
     between assertions. Cheap; the cache rebuilds lazily.
     """
     _render_theme_outputs.cache_clear()
+
+
+def _components_gallery_url() -> str:
+    """URL of the component gallery, or ``""`` when it is not available.
+
+    ``djust/theming/urls.py`` registers the route only when the optional
+    ``djust.components`` app is installed, so ``reverse`` can legitimately
+    fail. Returning ``""`` lets a template omit the link instead of rendering
+    a dead one — the topbar used to hardcode ``/components/``, a path that
+    belongs to whichever project hosted the gallery and 404s everywhere else.
+    """
+    try:
+        from django.urls import reverse
+
+        return str(reverse("djust_theming:gallery-index"))
+    except Exception:  # noqa: BLE001 — an absent optional app is not an error
+        return ""
 
 
 def theme_context(request: HttpRequest) -> dict:
@@ -255,6 +280,8 @@ def theme_context(request: HttpRequest) -> dict:
         "theme_resolved_mode": state.resolved_mode,
         "theme_pack": state.pack,
         "theme_presets": presets,
+        # "" when the optional component gallery app is absent or unrouted.
+        "components_gallery_url": _components_gallery_url(),
     }
 
 

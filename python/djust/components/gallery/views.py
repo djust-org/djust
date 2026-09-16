@@ -7,10 +7,10 @@ Provides three views:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from django.http import HttpRequest, HttpResponse, Http404
-from django.template import Template, Context
+from django.template.backends.base import BaseEngine
 from django.templatetags.static import static
 from django.utils.html import escape
 
@@ -23,11 +23,21 @@ logger = logging.getLogger(__name__)
 
 
 def _get_theme_css(
-    preset: str = "default", design_system: str = "material", mode: str = "light"
+    preset: str = "default",
+    design_system: str = "material",
+    mode: Literal["light", "dark", "system"] = "light",
 ) -> str:
-    """Generate theme CSS from djust-theming, or return empty string if unavailable."""
+    """Generate theme CSS from the theming package, or return "" if unavailable.
+
+    The import path here was ``djust_theming``, which is not a Python package —
+    ``djust_theming`` is only the *static* namespace (``static/djust_theming/``).
+    The real package is ``djust.theming``. Every call therefore raised
+    ModuleNotFoundError, which the bare ``except`` below swallowed, so the
+    gallery rendered with **no theme CSS at all**: no design tokens, and
+    consequently every component in it unstyled.
+    """
     try:
-        from djust_theming.manager import ThemeState, generate_css_for_state
+        from djust.theming.manager import ThemeState, generate_css_for_state
 
         state = ThemeState(
             theme=design_system,
@@ -38,19 +48,28 @@ def _get_theme_css(
         css: str = generate_css_for_state(state)
         return css
     except Exception:
+        # Keep the gallery renderable, but do not do it silently — a silent
+        # fallback here is indistinguishable from "this theme has no CSS".
+        logger.exception(
+            "component gallery could not generate theme CSS for %s/%s/%s",
+            design_system,
+            preset,
+            mode,
+        )
         return ""
 
 
 def _get_theme_options() -> Tuple[List[str], List[str]]:
-    """Get available presets and design systems from djust-theming."""
+    """Get available presets and design systems from the theming package."""
     try:
-        from djust_theming.presets import THEME_PRESETS
-        from djust_theming.theme_packs import DESIGN_SYSTEMS
+        from djust.theming.presets import THEME_PRESETS
+        from djust.theming.theme_packs import DESIGN_SYSTEMS
 
         presets = sorted(THEME_PRESETS.keys())
         systems = sorted(DESIGN_SYSTEMS.keys())
         return presets, systems
     except Exception:
+        logger.exception("component gallery could not enumerate theme options")
         return ["default"], ["material"]
 
 
@@ -68,7 +87,11 @@ def _resolve_theme(request: HttpRequest) -> Tuple[str, str, str, str]:
     preset = _preset_raw if _preset_raw in presets else "default"
 
     _mode_raw = request.COOKIES.get("gallery_mode", "light")
-    mode = _mode_raw if _mode_raw in ("light", "dark") else "light"
+    # Narrowed to the Literal ThemeState accepts: the cookie is untyped, and
+    # the membership test is what actually constrains it.
+    mode: Literal["light", "dark"] = (
+        cast(Literal["light", "dark"], _mode_raw) if _mode_raw in ("light", "dark") else "light"
+    )
 
     theme_css = _get_theme_css(preset=preset, design_system=design_system, mode=mode)
 
@@ -561,6 +584,45 @@ def _render_scripts() -> str:
     </script>"""
 
 
+def _gallery_template_backend() -> BaseEngine:
+    """The template backend used to compile gallery snippets.
+
+    The gallery used ``django.template.base.Template``, which compiles through
+    ``Engine.get_default()`` and therefore REQUIRES a ``DjangoTemplates`` entry
+    in ``TEMPLATES``. A project scaffolded by ``djust new`` — and djust's own
+    demo — configures only ``djust.template_backend.DjustTemplateBackend``, so
+    every snippet raised ``ImproperlyConfigured: No DjangoTemplates backend is
+    configured`` and every component in the gallery rendered as the red
+    "Render error" placeholder rather than the component.
+
+    Both are Django template backends exposing the same
+    ``from_string()`` / ``render()`` pair, so resolution prefers a
+    ``DjangoTemplates`` backend when the project has one (it is the one that
+    guarantees the widest tag support for an arbitrary snippet) and otherwise
+    uses whatever the project configured first.
+
+    The alias is read from ``EngineHandler.templates`` rather than assumed:
+    Django derives it from the entry's ``NAME``, or from the backend path when
+    ``NAME`` is absent — a lone ``DjustTemplateBackend`` registers as
+    ``template_backend``, so indexing a hardcoded ``engines["django"]`` would
+    raise ``KeyError`` and land right back at the "Render error" placeholder.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    from django.template import engines
+
+    django_backend = "django.template.backends.django.DjangoTemplates"
+    configured = list(getattr(engines, "templates", {}).items())
+
+    for alias, params in configured:
+        if params.get("BACKEND") == django_backend:
+            return cast(BaseEngine, engines[alias])
+
+    if configured:
+        return cast(BaseEngine, engines[configured[0][0]])
+
+    raise ImproperlyConfigured("the component gallery needs at least one usable entry in TEMPLATES")
+
+
 def _render_component_cards(
     components: List[Dict[str, Any]], extra_context: Optional[Dict[str, Any]] = None
 ) -> str:
@@ -590,11 +652,15 @@ def _render_component_cards(
             if comp["type"] == "tag":
                 try:
                     tpl_str = variant["template"]
-                    t = Template("{% load djust_components %}" + tpl_str)
+                    # Compiled through the project's own backend — see
+                    # _gallery_template_backend for why not `Template(...)`.
+                    t = _gallery_template_backend().from_string(
+                        "{% load djust_components %}" + tpl_str
+                    )
                     ctx = dict(variant.get("context", {}))
                     if extra_context:
                         ctx.update(extra_context)
-                    rendered = t.render(Context(ctx))
+                    rendered = t.render(ctx)
                 except Exception:
                     logger.exception(
                         "gallery template render failed for variant %s",

@@ -535,6 +535,10 @@ class TestThemeMixinThemeHead:
             "include_js",
             "direction",
             "cookie_prefix_js",
+            # The server-resolved theme mode, published to the client so the
+            # anti-FOUC script and theme.js share one fallback instead of each
+            # hardcoding 'system'.
+            "resolved_mode_js",
         }
         assert set(ctx.keys()) == expected, (
             "build_theme_head_context() key set drifted from the variables "

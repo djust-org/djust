@@ -1,8 +1,26 @@
 """URL patterns for the component gallery.
 
-Include in your project's urls.py::
+This app is OPTIONAL and is not pulled in by ``djust`` itself. Two steps are
+required, and omitting either one fails in a way that is hard to read:
 
-    path("gallery/", include("djust_components.gallery.urls")),
+1. Add ``"djust.components"`` to ``INSTALLED_APPS``. The gallery's LiveView
+   routes render templates under ``djust_components/gallery/``, which live in
+   *this* app's ``templates/`` directory — and Django only scans an app's
+   templates when the app is installed. Without it every ``/lv/`` route raises
+   ``TemplateDoesNotExist: djust_components/gallery/index.html``, which reads
+   like a packaging bug rather than a missing ``INSTALLED_APPS`` entry.
+
+2. Include these patterns in your project's ``urls.py``::
+
+       path("components/", include("djust.components.gallery.urls")),
+
+   The module path is ``djust.components.gallery.urls``. Earlier revisions of
+   this docstring said ``djust_components.gallery.urls``, which has never
+   existed — ``djust_components`` is the *template* namespace, not a Python
+   package.
+
+For a one-off look without touching project URLs, ``manage.py
+component_gallery`` serves the same gallery standalone on port 8765.
 """
 
 from django.urls import path
