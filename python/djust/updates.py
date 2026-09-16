@@ -84,7 +84,14 @@ def advisories_for(version: str, advisories: Iterable[Advisory]) -> List[Advisor
         installed = Version(version)
     except InvalidVersion:
         return []
-    return [a for a in advisories if SpecifierSet(a.range).contains(installed, prereleases=True)]
+    matched = []
+    for a in advisories:
+        try:
+            if SpecifierSet(a.range).contains(installed, prereleases=True):
+                matched.append(a)
+        except (InvalidSpecifier, TypeError):
+            continue
+    return matched
 
 
 def is_newer(installed: str, latest: str) -> bool:
@@ -180,7 +187,10 @@ def save_cache(data: dict, environ: Optional[Mapping[str, str]] = None) -> None:
     try:
         path = cache_path(environ)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data))
+        # Write-then-rename so a concurrent reader never sees a partial file.
+        tmp = path.with_name("%s.%d.tmp" % (path.name, os.getpid()))
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
     except OSError:
         logger.debug("update-check cache is not writable", exc_info=True)
 
@@ -237,13 +247,17 @@ def fetch_advisories() -> List[Advisory]:
     return parse_advisories(response.json())
 
 
+def _recent(stamp: Any, now: float, ttl: float) -> bool:
+    return isinstance(stamp, (int, float)) and now - stamp < ttl
+
+
 def refresh(now: Optional[float] = None, environ: Optional[Mapping[str, str]] = None) -> dict:
     """Return cached data, fetching when stale; a failure backs off for an hour."""
     now = time.time() if now is None else now
     cached = load_cache(environ)
-    if "checked_at" in cached and now - cached["checked_at"] < CACHE_TTL:
+    if _recent(cached.get("checked_at"), now, CACHE_TTL):
         return cached
-    if "failed_at" in cached and now - cached["failed_at"] < FAILURE_BACKOFF:
+    if _recent(cached.get("failed_at"), now, FAILURE_BACKOFF):
         return cached
     try:
         data = {
@@ -265,17 +279,38 @@ def check(
     installed: Optional[str] = None,
 ) -> Optional[UpdateStatus]:
     """The status for the installed version, or None when nothing is known."""
+    try:
+        return _check(now, fetch, environ, installed)
+    except Exception:  # noqa: BLE001 — a hostile cache file must never break a caller
+        logger.debug("update check failed", exc_info=True)
+        return None
+
+
+def _check(
+    now: Optional[float],
+    fetch: bool,
+    environ: Optional[Mapping[str, str]],
+    installed: Optional[str],
+) -> Optional[UpdateStatus]:
     from djust import __version__
 
     installed = installed or __version__
     data = refresh(now, environ) if fetch else load_cache(environ)
-    if "checked_at" not in data:
+    if not isinstance(data.get("checked_at"), (int, float)):
         return None
-    try:
-        advisories = [Advisory.from_dict(a) for a in data.get("advisories", [])]
-    except (KeyError, TypeError):
-        advisories = []
-    return UpdateStatus(installed, data.get("latest"), advisories_for(installed, advisories))
+    advisories = []
+    entries = data.get("advisories")
+    for entry in entries if isinstance(entries, list) else []:
+        try:
+            advisory = Advisory.from_dict(entry)
+        except (KeyError, TypeError):
+            continue
+        if all(isinstance(v, str) for v in (advisory.ghsa_id, advisory.range, advisory.patched)):
+            advisories.append(advisory)
+    latest = data.get("latest")
+    if not isinstance(latest, str):
+        latest = None
+    return UpdateStatus(installed, latest, advisories_for(installed, advisories))
 
 
 def check_in_background(callback: Callable[[UpdateStatus], None]) -> threading.Thread:
@@ -294,10 +329,19 @@ def check_in_background(callback: Callable[[UpdateStatus], None]) -> threading.T
     return thread
 
 
-def cli_install_hint(argv0: Optional[str] = None) -> str:
-    """How to upgrade the CLI the user is running."""
-    argv0 = sys.argv[0] if argv0 is None else argv0
-    normalized = argv0.replace("\\", "/")
-    if "/tools/djust/" in normalized or "/tool/djust/" in normalized:
-        return "uv tool upgrade djust"
+def cli_install_hint(argv0: Optional[str] = None, executable: Optional[str] = None) -> str:
+    """How to upgrade the CLI the user is running.
+
+    A ``uv tool install`` puts a shim on PATH whose interpreter lives under
+    ``.../uv/tools/djust/``, so the interpreter path is the reliable signal.
+    """
+    candidates = [
+        sys.argv[0] if argv0 is None else argv0,
+        sys.executable if executable is None else executable,
+        sys.prefix if executable is None else "",
+    ]
+    for candidate in candidates:
+        normalized = (candidate or "").replace("\\", "/")
+        if "/tools/djust/" in normalized or "/tool/djust/" in normalized:
+            return "uv tool upgrade djust"
     return "uvx djust@latest"

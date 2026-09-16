@@ -239,6 +239,7 @@ def test_ready_starts_the_background_check_only_when_allowed(settings, monkeypat
     started = []
     monkeypatch.setattr(updates, "check_in_background", lambda cb: started.append(cb))
     monkeypatch.setattr(updates, "should_check", lambda **kw: kw.get("debug") is True)
+    monkeypatch.setattr(apps, "_is_serving_process", lambda: True)
     apps._start_update_notice()
     assert len(started) == 1
     settings.DEBUG = False
@@ -251,8 +252,9 @@ def test_ready_logs_the_message(settings, monkeypatch, caplog):
 
     settings.DEBUG = True
     monkeypatch.setattr(updates, "should_check", lambda **kw: True)
+    monkeypatch.setattr(apps, "_is_serving_process", lambda: True)
     monkeypatch.setattr(updates, "check_in_background", lambda cb: cb(_status()))
-    with caplog.at_level("INFO", logger="djust.updates"):
+    with caplog.at_level("INFO", logger="django.djust.updates"):
         apps._start_update_notice()
     assert "djust 1.2.1 is available (you have 1.1.1): uv pip install -U djust" in caplog.text
 
@@ -294,3 +296,109 @@ def test_system_check_respects_the_gate_and_empty_cache(monkeypatch):
     monkeypatch.setattr(updates, "should_check", lambda **kw: True)
     monkeypatch.setattr(updates, "check", lambda **kw: None)
     assert check_module.check_updates(None) == []
+
+
+# --- review follow-ups -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cache",
+    [
+        {
+            "checked_at": 10**12,
+            "latest": "9.9",
+            "advisories": [{"ghsa_id": "G", "severity": "h", "range": "!!!", "patched": "1"}],
+        },
+        {"checked_at": "abc", "latest": "9.9", "advisories": []},
+        {"checked_at": None},
+        {"checked_at": 10**12, "latest": 123, "advisories": []},
+        {
+            "checked_at": 10**12,
+            "latest": "9.9",
+            "advisories": [{"ghsa_id": None, "severity": "h", "range": None, "patched": 5}],
+        },
+        {"checked_at": 10**12, "latest": "9.9", "advisories": "nope"},
+    ],
+)
+def test_hostile_cache_never_raises(env, cache):
+    updates.save_cache(cache, env)
+    with patch.object(updates, "fetch_latest", side_effect=OSError("offline")):
+        status = updates.check(now=10**12, environ=env, installed="1.1.3")
+    assert status is None or isinstance(status, updates.UpdateStatus)
+
+
+def test_cache_writes_are_atomic(env, tmp_path):
+    with patch.object(updates.os, "replace", side_effect=OSError("disk full")):
+        updates.save_cache({"checked_at": 1}, env)
+    assert not (tmp_path / "updates.json").exists()
+    updates.save_cache({"checked_at": 2}, env)
+    assert updates.load_cache(env) == {"checked_at": 2}
+    assert [p.name for p in tmp_path.iterdir()] == ["updates.json"]
+
+
+def test_uv_tool_shim_is_recognised_by_its_interpreter():
+    hint = updates.cli_install_hint(
+        "/Users/x/.local/bin/djust", executable="/Users/x/.local/share/uv/tools/djust/bin/python"
+    )
+    assert hint == "uv tool upgrade djust"
+    assert (
+        updates.cli_install_hint("/x/bin/djust", executable="/x/.venv/bin/python")
+        == "uvx djust@latest"
+    )
+
+
+def test_system_check_is_quiet_with_debug_off(settings, monkeypatch):
+    from djust.checks import updates as check_module
+
+    settings.DEBUG = False
+    monkeypatch.setattr(updates, "check", lambda **kw: _status(advisories=True))
+    monkeypatch.setattr(updates, "should_check", updates.should_check)  # real gate
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    assert check_module.check_updates(None) == []
+    settings.DEBUG = True
+    assert len(check_module.check_updates(None)) == 1
+
+
+@pytest.mark.parametrize(
+    "argv, environ, serving",
+    [
+        (["manage.py", "check"], {}, False),
+        (["manage.py", "migrate"], {}, False),
+        (["manage.py", "runserver"], {}, False),  # autoreloader parent
+        (["manage.py", "runserver"], {"RUN_MAIN": "true"}, True),
+        (["manage.py", "runserver", "--noreload"], {}, True),
+        (["/v/bin/uvicorn", "mysite.asgi:application", "--reload"], {}, True),
+        (["/v/bin/python", "-m", "uvicorn", "mysite.asgi:application"], {}, True),
+        (["/v/bin/daphne", "mysite.asgi:application"], {}, True),
+    ],
+)
+def test_only_a_dev_server_starts_the_notice(argv, environ, serving):
+    from djust import apps
+
+    assert apps._is_serving_process(argv, environ) is serving
+
+
+def test_ready_skips_management_commands(settings, monkeypatch):
+    from djust import apps
+
+    settings.DEBUG = True
+    started = []
+    monkeypatch.setattr(updates, "check_in_background", lambda cb: started.append(cb))
+    monkeypatch.setattr(updates, "should_check", lambda **kw: True)
+    monkeypatch.setattr(apps, "_is_serving_process", lambda: False)
+    apps._start_update_notice()
+    assert started == []
+
+
+def test_ready_logs_advisories_as_warnings_under_the_django_tree(settings, monkeypatch, caplog):
+    from djust import apps
+
+    settings.DEBUG = True
+    monkeypatch.setattr(updates, "should_check", lambda **kw: True)
+    monkeypatch.setattr(apps, "_is_serving_process", lambda: True)
+    monkeypatch.setattr(updates, "check_in_background", lambda cb: cb(_status(advisories=True)))
+    with caplog.at_level("INFO", logger="django.djust.updates"):
+        apps._start_update_notice()
+    (record,) = [r for r in caplog.records if r.name == "django.djust.updates"]
+    assert record.levelname == "WARNING" and record.getMessage().startswith("SECURITY")

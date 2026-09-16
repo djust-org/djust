@@ -130,9 +130,9 @@ assert len(ALLOWLIST_SETUP) == 60
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
-# ``DEBUG=True`` also starts the once-a-day update notice (``djust.updates``);
-# ``requests`` inside it is imported lazily, on the fetch thread only.
-ALLOWLIST_SETUP_DEBUG = ALLOWLIST_SETUP | {"djust.dev_server", "djust.updates"}
+# The once-a-day update notice (``djust.updates``) is imported only inside a
+# development-server process (``apps._is_serving_process``), never here.
+ALLOWLIST_SETUP_DEBUG = ALLOWLIST_SETUP | {"djust.dev_server"}
 
 # Each asserted absent by name so the failure names the leak (#1104).
 FORBIDDEN = (

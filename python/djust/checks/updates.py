@@ -22,7 +22,7 @@ def check_updates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     if _is_check_suppressed("djust.U001"):
         return []
     config = getattr(settings, "DJUST_CONFIG", None) or {}
-    if not updates.should_check(config=config):
+    if not updates.should_check(debug=bool(settings.DEBUG), config=config):
         return []
     status = updates.check(fetch=False)
     if status is None:

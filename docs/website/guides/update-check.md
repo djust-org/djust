@@ -17,17 +17,17 @@ SECURITY: djust 1.1.1 has 1 published advisory (GHSA-xjw9-38cr-6372): upgrade to
 | Entry point | Behaviour |
 | --- | --- |
 | `djust new`, `djust init` | Checked before any work, with a 2-second cap. The hint is `uv tool upgrade djust` for a `uv tool` install, otherwise `uvx djust@latest`. |
-| Development server start | Checked on a background thread; the line is logged at `INFO` on the `djust.updates` logger. |
-| `manage.py check` | Reported as `djust.U001`: a warning for an advisory, an informational message for a release. Uses the cached result only and never fetches. |
+| Development server start | Checked on a background thread; the line is logged on the `django.djust.updates` logger (warning for an advisory, info for a release), which Django's default logging shows on the console. |
+| `manage.py check` | Reported as `djust.U001`: a warning for an advisory, an informational message for a release. The check reads the cached result and never fetches; only a running development server refreshes the cache. |
 
 ## What it sends
 
-Two requests, each with the header `User-Agent: djust/<installed version>`
-and nothing else:
+Two requests, carrying only `User-Agent: djust/<installed version>` and
+`Accept: application/json`:
 
 - `https://pypi.org/pypi/djust/json` for the latest release.
-- `https://api.github.com/repos/djust-org/djust/security-advisories` for
-  published advisories and their version ranges.
+- `https://api.github.com/repos/djust-org/djust/security-advisories?state=published&per_page=100`
+  for published advisories and their version ranges.
 
 The result is cached for 24 hours in `~/.cache/djust/updates.json`
 (`$XDG_CACHE_HOME/djust`, or `%LOCALAPPDATA%\djust` on Windows; override with
@@ -37,7 +37,9 @@ The result is cached for 24 hours in `~/.cache/djust/updates.json`
 
 - `DEBUG = False` (the dev server and `manage.py check` never check in production).
 - The `CI` environment variable is set.
-- Standard output is not a terminal (CLI and dev server).
+- Standard output is not a terminal (`djust new` and `djust init`).
+- The process is not a development server: `manage.py migrate`, `check` and
+  other management commands never fetch.
 - Any network error, timeout, or unexpected response.
 - Under pytest.
 

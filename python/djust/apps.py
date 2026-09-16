@@ -1,4 +1,6 @@
 import logging
+import os
+from typing import Mapping, Sequence
 
 from django.apps import AppConfig
 
@@ -177,6 +179,30 @@ class DjustConfig(AppConfig):
             return False
 
 
+_SERVER_TOKENS = ("runserver", "uvicorn", "daphne", "hypercorn", "granian", "gunicorn")
+
+
+def _is_serving_process(
+    argv: "Sequence[str] | None" = None, environ: "Mapping[str, str] | None" = None
+) -> bool:
+    """Only a development server should start the update notice.
+
+    ``ready()`` runs for every management command too (``check``,
+    ``migrate``...), which must not fetch. ``runserver``'s autoreloader parent
+    process is skipped as well: Django sets ``RUN_MAIN`` in the child.
+    """
+    import sys
+
+    args: "Sequence[str]" = sys.argv if argv is None else argv
+    env: "Mapping[str, str]" = os.environ if environ is None else environ
+    joined = " ".join(args)
+    if not any(token in joined for token in _SERVER_TOKENS):
+        return False
+    if "runserver" in joined and "--noreload" not in joined and env.get("RUN_MAIN") != "true":
+        return False
+    return True
+
+
 def _start_update_notice() -> None:
     """Log one line about a newer release or advisory, from a daemon thread.
 
@@ -188,7 +214,7 @@ def _start_update_notice() -> None:
 
         # DEBUG=False never checks, and production keeps its import footprint
         # (test_lazy_package_init_2559): decide before importing the module.
-        if not settings.DEBUG:
+        if not settings.DEBUG or not _is_serving_process():
             return
         from djust import updates
 
@@ -198,8 +224,13 @@ def _start_update_notice() -> None:
 
         def announce(status: "updates.UpdateStatus") -> None:
             message = status.message("uv pip install -U djust")
-            if message:
-                logging.getLogger("djust.updates").info("%s", message)
+            if not message:
+                return
+            # Under the ``django`` logger tree: Django's default LOGGING only
+            # attaches its console handler there, so the line is visible in a
+            # project with no LOGGING of its own. Advisories warn; releases inform.
+            log = logging.getLogger("django.djust.updates")
+            (log.warning if status.advisories else log.info)("%s", message)
 
         updates.check_in_background(announce)
     except Exception:  # noqa: BLE001 - never let the notice break startup
