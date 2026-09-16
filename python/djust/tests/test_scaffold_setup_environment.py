@@ -189,14 +189,16 @@ def test_default_demo_switches_themes_and_links_to_docs(tmp_path):
     base = (project / "child" / "templates" / "child" / "base.html").read_text()
     index = (project / "child" / "templates" / "child" / "index.html").read_text()
     settings = (project / "child" / "settings.py").read_text()
-    assert "class ChildView(ThemeMixin, LiveView)" in views
-    assert "{% theme_head %}" in base
-    # Inside dj-root: djust binds dj-* events only within the LiveView root.
-    root = index.split("<div dj-root", 1)[1]
-    assert 'dj-click="toggle_theme_mode"' in root
-    assert 'dj-click="set_theme_preset"' in root
+    urls = (project / "child" / "urls.py").read_text()
+    assert "class ChildView(LiveView)" in views
+    assert "QUICK_PACKS" in views and "get_all_theme_packs" in views
+    assert "{% theme_head %}" in base and "{% theme_panel %}" in base
+    assert 'href="/theme/gallery/"' in base
+    assert 'path("theme/", include("djust.theming.urls"))' in urls
+    # Quick picks use the container/option classes theme.js listens for.
+    assert 'data-tp-select="pack"' in index and "tp-select-option" in index
+    assert 'class="card"' in index and "btn btn-primary" in index
     assert "cdn.tailwindcss.com" not in base
-    assert "var(--background)" in base
     assert "docs.djust.org/getting-started/first-liveview" in index
     assert "docs.djust.org/theming" in index
     assert "djust.theming" in settings
@@ -213,7 +215,7 @@ def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
     index = (project / "child" / "templates" / "child" / "index.html").read_text()
     base = (project / "child" / "templates" / "child" / "base.html").read_text()
     assert "class ChildView(LiveView)" in views
-    assert "ThemeMixin" not in views
+    assert "theme_packs" not in views
     assert "add_item" not in views
     assert 'dj-click="ping"' in index
     assert "theme_head" not in base
@@ -238,7 +240,7 @@ from django.core.management import call_command
 call_command("migrate", run_syncdb=True, verbosity=0)
 from django.test import Client
 html = Client().get("/").content.decode()
-print("<!DOCTYPE html>" in html, "toggle_theme_mode" in html, "--background" in html)
+print("<!DOCTYPE html>" in html, 'data-tp-select="pack"' in html, "--background" in html)
 """
 
 
@@ -248,7 +250,7 @@ def test_with_db_project_renders_the_full_themed_page(tmp_path):
     project = generator.generate_project(
         "child", target_dir=str(tmp_path), auto_setup=False, with_db=True
     )
-    assert "ThemeMixin" in (project / "child" / "views.py").read_text()
+    assert "quick_packs()" in (project / "child" / "views.py").read_text()
     assert "djust.theming" in (project / "child" / "settings.py").read_text()
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="child.settings")
     env["PYTHONPATH"] = os.pathsep.join([str(project), env.get("PYTHONPATH", "")])
