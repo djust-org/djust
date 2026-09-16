@@ -21,6 +21,7 @@ looked plausibly like a gallery that simply had nothing to show.
 import re
 
 import pytest
+from django.test import override_settings
 
 from djust.components.gallery.views import (
     _gallery_template_backend,
@@ -136,3 +137,56 @@ def test_form_category_renders_without_placeholder_errors(rf):
 
     failures = re.findall(r"variant-label\">([^<]+)<.*?Render error", body, re.DOTALL)
     assert not failures, f"components fell back to 'Render error': {failures[:5]}"
+
+
+# ---------------------------------------------------------------------------
+# 4. The gallery adopts the PROJECT's theme, not a hardcoded one
+# ---------------------------------------------------------------------------
+
+
+@override_settings(LIVEVIEW_CONFIG={"theme": {"preset": "dracula", "default_mode": "dark"}})
+def test_gallery_adopts_the_configured_preset_and_mode(rf):
+    """A themed project must see its own theme in its own component gallery.
+
+    Both were hardcoded — preset `default`, mode `light` — so a project
+    configuring a dark mode got a light gallery.
+    """
+    from djust.components.gallery.views import _resolve_theme
+
+    mode, _css, _ds, _presets = _resolve_theme(rf.get("/components/form/"))
+
+    assert mode == "dark"
+
+
+def test_explicit_gallery_choice_beats_the_project_default(rf):
+    """A cookie is the user choosing in the gallery toolbar; it wins."""
+    from djust.components.gallery.views import _resolve_theme
+
+    request = rf.get("/components/form/")
+    request.COOKIES["gallery_mode"] = "light"
+
+    mode, *_ = _resolve_theme(request)
+
+    assert mode == "light"
+
+
+def test_gallery_chrome_tokens_are_aliased_to_the_theme():
+    """The chrome's `--color-*` names must map onto the theming tokens.
+
+    The layout CSS uses `--color-bg` / `--color-text` / etc. None exist in the
+    theming system, so every declaration was dropped: correct-looking in light
+    mode by accident, and white-on-white in dark mode.
+    """
+    from djust.components.gallery.views import _render_head
+
+    head = _render_head("dark", "", "test")
+
+    for alias, token in (
+        ("--color-bg", "--background"),
+        ("--color-text", "--foreground"),
+        ("--color-border", "--border"),
+        ("--color-primary", "--primary"),
+    ):
+        assert re.search(rf"{re.escape(alias)}:\s*hsl\(var\({re.escape(token)}", head), (
+            f"{alias} is not aliased to {token}; the chrome will render unthemed"
+        )

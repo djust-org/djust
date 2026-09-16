@@ -73,20 +73,50 @@ def _get_theme_options() -> Tuple[List[str], List[str]]:
         return ["default"], ["material"]
 
 
+def _project_theme_defaults(request: HttpRequest) -> Tuple[str, str, str]:
+    """The project's configured (preset, design system, mode).
+
+    The gallery used to hardcode these to ``default`` / ``material`` / ``light``,
+    so a project that configured a preset or ``default_mode: "dark"`` still got
+    a light, default-palette component gallery — the one place a developer goes
+    to see what their own theme actually looks like.
+
+    These are defaults only: an in-gallery selection (a cookie) still wins.
+    """
+    try:
+        from djust.theming.manager import get_theme_manager
+
+        state = get_theme_manager(request).get_state()
+        return state.preset, state.theme, state.resolved_mode
+    except Exception:
+        # Keep the gallery renderable, but not silently — the fallback is
+        # indistinguishable from "this project has no theme configured".
+        logger.exception("component gallery could not resolve the project theme")
+        return "default", "material", "light"
+
+
 def _resolve_theme(request: HttpRequest) -> Tuple[str, str, str, str]:
     """Read theme cookies, validate against allowlists, generate CSS.
 
     Returns (mode, theme_css, ds_options, preset_options).
     """
     presets, systems = _get_theme_options()
+    default_preset, default_ds, default_mode = _project_theme_defaults(request)
 
-    _ds_raw = request.COOKIES.get("gallery_ds", "material")
-    design_system = _ds_raw if _ds_raw in systems else "material"
+    # A cookie is an explicit choice made in the gallery's own toolbar; with no
+    # cookie, fall back to what the project configured rather than a hardcoded
+    # default.
+    _ds_raw = request.COOKIES.get("gallery_ds", default_ds)
+    design_system = _ds_raw if _ds_raw in systems else default_ds
+    if design_system not in systems:
+        design_system = "material"
 
-    _preset_raw = request.COOKIES.get("gallery_preset", "default")
-    preset = _preset_raw if _preset_raw in presets else "default"
+    _preset_raw = request.COOKIES.get("gallery_preset", default_preset)
+    preset = _preset_raw if _preset_raw in presets else default_preset
+    if preset not in presets:
+        preset = "default"
 
-    _mode_raw = request.COOKIES.get("gallery_mode", "light")
+    _mode_raw = request.COOKIES.get("gallery_mode", default_mode)
     # Narrowed to the Literal ThemeState accepts: the cookie is untyped, and
     # the membership test is what actually constrains it.
     mode: Literal["light", "dark"] = (
@@ -135,6 +165,30 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
     <link rel="stylesheet" href="{static("djust_components/components.css")}">
     <link rel="stylesheet" href="{static("djust_components/components-classes.css")}">
     <style>
+        /* ── Token aliases ──
+           The layout rules below reference `--color-bg`, `--color-text`,
+           `--color-border`, `--color-text-secondary`, `--color-bg-subtle` and
+           `--color-primary`. NONE of those names exist in the theming system,
+           which emits the semantic set (`--background`, `--foreground`,
+           `--border`, `--muted`, `--primary`) plus `--color-brand-*`.
+
+           So the gallery's own chrome has never actually been themed: every
+           `var(--color-*)` was undefined and the declarations were dropped,
+           which happens to look correct in light mode (browser default is
+           dark-on-light) and is unreadable in dark mode — the header and
+           section headings rendered white on white.
+
+           Aliased rather than renamed so the mapping is one place, and so a
+           theme pack can override any of them individually. */
+        :root {{
+            --color-bg: hsl(var(--background, 0 0% 100%));
+            --color-text: hsl(var(--foreground, 240 10% 4%));
+            --color-text-secondary: hsl(var(--muted-foreground, 240 4% 46%));
+            --color-border: hsl(var(--border, 240 6% 90%));
+            --color-bg-subtle: hsl(var(--muted, 240 5% 96%));
+            --color-primary: hsl(var(--primary, 240 6% 10%));
+        }}
+
         /* ── Reset — scoped to gallery layout only, not component internals ── */
         *, *::before, *::after {{ box-sizing: border-box; }}
         body {{ margin: 0; }}

@@ -6,3 +6,16 @@
 - Fix gallery modal and tooltip trigger buttons rendering as browser defaults; they are now styled via a `.gallery-trigger` class.
 - Fix the component gallery's routes raising `TemplateDoesNotExist` for anyone following its own documentation. The gallery needs `"djust.components"` in `INSTALLED_APPS` — Django only scans an app's `templates/` directory when the app is installed — and `components/gallery/urls.py` additionally told developers to include `djust_components.gallery.urls`, a module that has never existed. Both are now documented.
 - Fix the theming gallery's topbar linking to a hardcoded `/components/`, a path belonging to whichever project hosted the gallery, which 404s everywhere else. The theming app now routes the component gallery at `/theme/components/` when `djust.components` is installed, and the topbar links to it via `components_gallery_url` — omitted entirely rather than dead when the app is absent.
+- Fix the component gallery ignoring the project's theme: it hardcoded its
+  preset to `default`, its design system to `material` and its mode to
+  `light`, so a project configuring a preset or `default_mode: "dark"`
+  still got a light, default-palette gallery. A selection made in the
+  gallery's own toolbar still wins.
+- Fix the component gallery's chrome rendering unthemed. Its layout CSS uses
+  `--color-bg`, `--color-text`, `--color-border`, `--color-text-secondary`,
+  `--color-bg-subtle` and `--color-primary`; none of those names exist in
+  the theming system, which emits the semantic set plus `--color-brand-*`.
+  Every declaration was therefore dropped — which looks correct in light
+  mode by accident (the browser default is dark-on-light) and rendered the
+  header and section headings white on white in dark mode. The six are now
+  aliased to the theming tokens.
