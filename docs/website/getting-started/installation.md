@@ -131,16 +131,22 @@ before writing anything, and `2` when it wrote files but something needs your
 attention, such as a customized `asgi.py` or a failed check.
 
 To start from nothing with Django's own layout, create the project with uv
-and then run `init`:
+and then run `init`. djust supports Django versions below 6, so pin the range
+when adding Django:
 
 ```bash
 mkdir mysite
 cd mysite
 uv init --bare
-uv add django
+uv add "django>=5.2,<6"
 uv run django-admin startproject mysite .
+uv run python manage.py migrate
 uvx djust@latest init
 ```
+
+`migrate` creates the session tables LiveViews use. `init` does not run
+migrations, because in an existing project that would change whichever
+database the environment points at.
 
 ## Configure by hand
 
