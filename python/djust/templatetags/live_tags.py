@@ -1290,6 +1290,12 @@ def do_dj_activity(parser: Parser, token: Token) -> "DjActivityNode":
 # stamps ``view_id`` on embedded elements, it scans for these — a no-op
 # on static markup, but every event-bearing element gets a scoped id so
 # the consumer's event-dispatch path (``websocket.py``) routes per-view.
+#
+# Membership is pinned by
+# ``tests/unit/test_live_render_event_attrs_invariant.py``: every entry
+# must have a client-side binding in ``static/djust/src/`` — the list is
+# the framework asserting "this directive exists", so a name the client
+# never binds must not appear here (#2869).
 _LIVE_RENDER_EVENT_ATTRS = (
     "dj-click",
     "dj-submit",
@@ -1297,15 +1303,10 @@ _LIVE_RENDER_EVENT_ATTRS = (
     "dj-change",
     "dj-keydown",
     "dj-keyup",
-    "dj-keypress",
     "dj-focus",
     "dj-blur",
     "dj-hook",
     "dj-mounted",
-    "dj-viewport-enter",
-    "dj-viewport-leave",
-    "dj-mouseenter",
-    "dj-mouseleave",
     # Scoped / window-level directives (#2841). These dispatch through
     # ``addEventContext`` like every other event attribute, so an element
     # carrying one inside an embedded child needs the stamp for its events

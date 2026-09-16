@@ -44,9 +44,10 @@ _DJ_VIEW_RE = re.compile(r"dj-view")
 # Template checks (T0xx)
 # ---------------------------------------------------------------------------
 
-_DEPRECATED_ATTR_RE = re.compile(
-    r"@(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
-)
+# Only directives the client actually binds — mouseenter/mouseleave were
+# removed with the dead stamp-list entries (#2869); suggesting
+# ``dj-mouseenter=`` as a migration target pointed users at a no-op.
+_DEPRECATED_ATTR_RE = re.compile(r"@(click|input|change|submit|blur|focus|keydown|keyup)=")
 # A070 / A071 — ``{% dj_activity %}`` block tag scanner (v0.7.0).
 # Captures the raw argument list after the tag name so we can inspect it
 # for a ``name=`` / first-positional string and detect missing / duplicate
@@ -116,7 +117,7 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
 )
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 _DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
+    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
 # T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
