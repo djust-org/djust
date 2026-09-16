@@ -187,3 +187,36 @@ class DjustTemplateBackend(BaseEngine):
             tried=tried,
             backend=self,
         )
+
+    def select_template(self, template_name_list: List[str]) -> DjustTemplate:
+        """
+        Load and return the first template in ``template_name_list`` that exists.
+
+        Mirrors ``django.template.engine.Engine.select_template``. Django calls
+        this on ``context.template.engine`` for an admin inclusion tag
+        (``InclusionAdminNode`` — the whole changelist/change-form surface),
+        an ``inclusion_tag`` registered with a LIST of template names
+        (``django/template/library.py``), and ``{% include [...] %}``
+        (``django/template/loader_tags.py``). Inside a djust render that
+        engine is ``template_libraries._StubEngine``, which hands the call to
+        the active backend — so with the ``djust new --with-db`` shape
+        (this backend first, ``APP_DIRS: True``) every admin page beyond the
+        login and index used to 500 with ``AttributeError: no attribute
+        'select_template'`` (#2872).
+
+        There is no fallback engine to delegate to: cross-engine selection
+        belongs to ``django.template.loader`` (which loops name x engine over
+        ``get_template`` and never calls ``engine.select_template``), so this
+        method searches only this backend's directories, as ``Engine``'s own
+        does.
+        """
+        if not template_name_list:
+            raise TemplateDoesNotExist("No template names provided")
+        not_found = []
+        for template_name in template_name_list:
+            try:
+                return self.get_template(template_name)
+            except TemplateDoesNotExist as exc:
+                if exc.args[0] not in not_found:
+                    not_found.append(exc.args[0])
+        raise TemplateDoesNotExist(", ".join(not_found))
