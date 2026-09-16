@@ -322,7 +322,7 @@ class ProjectView(LiveView):
   per-view auth still gates). `djust.V005` flags views outside a non-empty list
   but cannot warn about an unset one. See `docs/audits/websocket-auth-2026-06.md` (T4).
 
-For the full guide, see **[Authentication & Authorization Guide](guides/authentication.md)**.
+For the full guide, see **[Authentication & Authorization Guide](website/guides/authentication.md)**.
 
 ---
 

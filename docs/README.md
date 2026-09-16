@@ -5,30 +5,30 @@ This directory contains comprehensive documentation for djust organized by topic
 ## Quick Navigation
 
 ### 📚 Getting Started
-- **[Quick Start Guide](guides/QUICKSTART.md)** - Get up and running in 5 minutes
-- **[Authentication & Authorization](guides/authentication.md)** - View-level and handler-level auth with Django permissions
+- **[Quick Start Guide](website/getting-started/installation.md)** - Get up and running in 5 minutes
+- **[Authentication & Authorization](website/guides/authentication.md)** - View-level and handler-level auth with Django permissions
 - **[PWA Guide](website/guides/pwa.md)** - Build offline-first Progressive Web Apps
 - **[Multi-Tenant Guide](website/guides/multi-tenant.md)** - SaaS architecture with tenant isolation
-- **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
-- **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
-- **[MCP Server](guides/mcp-server.md)** - AI assistant integration via Model Context Protocol
-- **[Template Requirements](guides/template-requirements.md)** - Required template attributes (dj-view, dj-root)
-- **[Working with External Services](guides/services.md)** - AWS, REST APIs, Redis integration patterns
-- **[Error Code Reference](guides/error-codes.md)** - Complete error code guide with fixes
+- **[Deployment Guide](website/guides/deployment.md)** - Deploy djust to production
+- **[HTTP Mode Example](website/guides/http-only-mode.md)** - Use djust without WebSockets
+- **[MCP Server](website/guides/mcp-server.md)** - AI assistant integration via Model Context Protocol
+- **[Template Requirements](website/guides/template-requirements.md)** - Required template attributes (dj-view, dj-root)
+- **[Working with External Services](website/guides/services.md)** - AWS, REST APIs, Redis integration patterns
+- **[Error Code Reference](website/guides/error-codes.md)** - Complete error code guide with fixes
 - **[System Checks Reference](system-checks.md)** - Check IDs across the C/V/S/T/Q/Y categories, severities, suppression patterns, and false positives
 - **[API Stability & Deprecation Policy](API_STABILITY.md)** - What the djust 1.0 SemVer commitment covers, the deprecation process, and the support window
 - **[Upgrading to djust 1.0](website/guides/upgrade-to-1.0.md)** - What the 1.0 SemVer commitment means for a 0.9.x app, the deprecated symbols, and the new accessibility checks
 - **[Accessibility (ARIA / WCAG)](website/guides/accessibility.md)** - Built-in component ARIA, the `Y` accessibility system checks, and theming color-contrast WCAG validation
-- **[Scaffolding Generator](guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
+- **[Scaffolding Generator](website/guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
 
 ### 🔌 Real-Time Features
 - **[Declarative Audio](website/guides/audio.md)** - Opt-in short sound effects, playback controls, and delivery limits (unreleased)
-- **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
+- **[Navigation](website/guides/navigation.md)** - URL state management with live_patch and live_redirect
 - **[Flash Messages](website/guides/flash-messages.md)** - Transient notifications with put_flash (Phoenix-style)
-- **[Presence](guides/presence.md)** - Real-time user presence tracking and live cursors
-- **[Streaming](guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
-- **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket
-- **[Hooks](guides/hooks.md)** - Client-side JavaScript lifecycle hooks
+- **[Presence](website/guides/presence.md)** - Real-time user presence tracking and live cursors
+- **[Streaming](website/guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
+- **[Uploads](website/guides/uploads.md)** - Chunked binary file uploads via WebSocket
+- **[Hooks](website/guides/hooks.md)** - Client-side JavaScript lifecycle hooks
 - **[on_mount Hooks](website/guides/on-mount-hooks.md)** - Cross-cutting server-side mount hooks (auth, telemetry, tenant resolution)
 - **[Model Binding](website/guides/model-binding.md)** - Two-way data binding for form inputs
 

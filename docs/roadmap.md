@@ -28,7 +28,7 @@ To provide a "Unibody" architecture that combines Django's simplicity with Rust'
     *   Prefetch on hover for near-instant navigation.
     *   App Shell pattern for instant page loads.
     *   WebSocket reconnection bridge with event buffering.
-    *   See [SW Enhancements Guide](guides/sw-enhancements.md) for full details.
+    *   See [SW Enhancements Guide](website/guides/service-worker.md) for full details.
 *   **Zero-JS File Uploads**:
     *   Chunked uploads over WebSockets.
     *   Server-driven progress bars without client-side `FormData` complexity.

@@ -1,3 +1,12 @@
+---
+title: "`{% live_input %}`"
+slug: live-input
+section: guides
+order: 19
+level: intermediate
+description: "Standalone state-bound inputs, without a surrounding form."
+---
+
 # `{% live_input %}` — Standalone State-Bound Form Fields
 
 djust's `FormMixin` and `WizardMixin` render form fields with proper CSS

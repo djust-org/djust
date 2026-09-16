@@ -1,9 +1,18 @@
+---
+title: "TurboNav Integration"
+slug: turbonav-integration
+section: guides
+order: 23
+level: advanced
+description: "Running djust alongside TurboNav's page-swapping navigation."
+---
+
 # TurboNav Integration Guide
 
 This guide covers integrating djust LiveViews with TurboNav for SPA-style navigation in Django projects.
 
 > **Native navigation is djust's canonical SPA model (ADR-021).** For SPA
-> navigation, prefer djust's built-in [`dj-navigate` / `auto_navigate`](../website/guides/navigation.md):
+> navigation, prefer djust's built-in [`dj-navigate` / `auto_navigate`](navigation.md):
 > they navigate over the **existing** WebSocket (no socket teardown, no
 > reconnect, LiveView state preserved) and need zero wiring. **TurboNav is
 > supported as interop** — useful when you're already invested in Turbo or need

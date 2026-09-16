@@ -1,3 +1,12 @@
+---
+title: "Error Code Reference"
+slug: error-codes
+section: guides
+order: 21
+level: reference
+description: "Every diagnostic code djust emits, with its cause and fix."
+---
+
 # Error Code Reference
 
 djust uses structured error codes to help you diagnose problems quickly. This guide covers every error code, what causes it, and how to fix it.
@@ -809,11 +818,15 @@ application = ProtocolTypeRouter({
 Or wrap manually if you're using `channels.auth.AuthMiddlewareStack`:
 
 ```python
+from channels.auth import AuthMiddlewareStack
+from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 
-"websocket": AllowedHostsOriginValidator(
-    AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
-),
+application = ProtocolTypeRouter({
+    "websocket": AllowedHostsOriginValidator(
+        AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
+    ),
+})
 ```
 
 **Prerequisite**: `settings.ALLOWED_HOSTS` must not contain `"*"`.
@@ -884,6 +897,9 @@ Then set `DJANGO_SECRET_KEY` in your deployment environment.
 
 **Fix**: Subclass `django.contrib.auth.views.LoginView` and override `get_success_url()`:
 
+<!-- The import is correct Django; the checker's minimal tests.settings
+     cannot load django.contrib.auth.views. -->
+<!-- doc-snippet-check: skip -->
 ```python
 from django.contrib.auth.views import LoginView
 from django.urls import reverse
@@ -1611,13 +1627,13 @@ These errors appear in server logs during WebSocket communication and VDOM diffi
 
 **Fix**: Ensure every `data-key` within the same parent is unique:
 
-```python
-# WRONG: duplicate IDs possible if items have same id
+```html
+<!-- WRONG: duplicate IDs possible if items have same id -->
 {% for item in items %}
 <li data-key="{{ item.name }}">{{ item.name }}</li>
 {% endfor %}
 
-# CORRECT: use unique identifier
+<!-- CORRECT: use unique identifier -->
 {% for item in items %}
 <li data-key="{{ item.id }}">{{ item.name }}</li>
 {% endfor %}
@@ -1643,7 +1659,7 @@ These errors appear in server logs during WebSocket communication and VDOM diffi
 </ul>
 ```
 
-**Related**: [List Reordering Performance](LIST_REORDERING_PERFORMANCE.md)
+**Related**: [List Reordering Performance](keyed-lists-performance.md)
 
 ---
 
@@ -1746,5 +1762,5 @@ some_code()  # noqa: Q001,S003
 
 - [Template Requirements](template-requirements.md) -- Required template attributes
 - [Working with External Services](services.md) -- Avoiding serialization errors
-- [Security Guide](security.md) -- Authentication and authorization
+- [Security Guide](../advanced/security.md) -- Authentication and authorization
 - [Best Practices](BEST_PRACTICES.md) -- State management patterns

@@ -243,6 +243,148 @@ npm audit --audit-level=high
 detect-secrets scan
 ```
 
+## How Data Flows in djust
+
+When a user interacts with a LiveView, here's what happens:
+
+```
+1. Client sends event:     {"event": "search", "params": {"value": "foo"}}
+2. Server calls handler:   self.query = params["value"]
+3. Server builds context:  get_context_data() → {"query": "foo", "results": [...]}
+4. Server renders template: template + context → HTML
+5. Server diffs HTML:       old VDOM vs new VDOM → patches
+6. Client receives:         [{"type": "replace", "path": "/1/3", "value": "<td>...</td>"}]
+```
+
+**The context dict never leaves the server.** Only rendered HTML fragments (VDOM patches) are sent over the WebSocket. The client cannot request raw state, inspect variable values, or access fields that aren't in the template.
+
+## What Reaches the Client
+
+### Always sent (by design)
+
+| Channel | What's sent | Notes |
+|---------|------------|-------|
+| VDOM patches | HTML fragment diffs | Only structural changes to the rendered template |
+| Full HTML update | Complete rendered HTML | Fallback when VDOM diffing isn't possible |
+| `push_event()` payload | Developer-specified data | You control what goes in the payload |
+
+### Never sent (in production)
+
+| Data | Why it's safe |
+|------|--------------|
+| Context dict | Used server-side for rendering only, never serialized to the client |
+| Private attributes (`_name`) | Excluded from `get_context_data()` by convention |
+| Unreferenced model fields | JIT serialization only processes fields the template actually uses |
+| Handler return values | Return values are discarded; only the re-rendered HTML matters |
+
+### DEBUG mode only
+
+When `DEBUG=True`, djust injects debug information into the page:
+
+```javascript
+window.DJUST_DEBUG_INFO = {
+  "variables": {"count": {"type": "int", "value": "42"}},
+  "handlers": {"increment": {"params": [...]}},
+  ...
+}
+```
+
+This exposes variable names, types, and truncated `repr()` values. **Never run `DEBUG=True` in production.**
+
+## JIT Serialization: Privacy by Default
+
+djust's JIT (Just-In-Time) serialization inspects your template and only serializes the model fields that the template actually references:
+
+```python
+class ContactDetailView(LiveView):
+    template_name = "contact_detail.html"
+
+    def mount(self, request, pk):
+        self.contact = Contact.objects.get(pk=pk)
+```
+
+If `contact_detail.html` contains:
+
+```html
+<h1>{{ contact.name }}</h1>
+<p>{{ contact.email }}</p>
+```
+
+Then only `name` and `email` are serialized for the VDOM. Fields like `ssn`, `salary`, or `internal_notes` are never processed — even if they exist on the model. This provides defense-in-depth: even if you accidentally include a full model object in context, only the fields the template renders will appear in the HTML sent to the client.
+
+## Private State
+
+Use the `_` prefix convention to keep state completely out of the template context:
+
+```python
+class DashboardView(LiveView):
+    template_name = "dashboard.html"
+
+    def mount(self, request):
+        self.metrics = calculate_metrics()       # Available in template
+        self._api_key = get_api_key()            # Hidden from context
+        self._internal_cache = {}                # Hidden from context
+```
+
+`get_context_data()` automatically excludes attributes starting with `_`. These values exist only on the server, are never serialized, and cannot be reached through any client-side mechanism.
+
+## Content Security Policy (CSP) with nonces
+
+djust emits a small number of inline `<script>` and `<style>` tags during
+render — the handler metadata bootstrap, the `live_session` route map, and
+the PWA template tags (`djust_sw_register`, `djust_offline_indicator`,
+`djust_offline_styles`). Until #655 these required `'unsafe-inline'` in
+`CSP_SCRIPT_SRC` and `CSP_STYLE_SRC`, which negates most of CSP's XSS
+defense. As of v0.4.1 every djust-emitted inline tag picks up
+`request.csp_nonce` when one is available and renders a `nonce="..."`
+attribute, so apps can switch to strict nonce-based CSP.
+
+### Setup
+
+1. Install [django-csp](https://django-csp.readthedocs.io/) 4.0 or later:
+   ```bash
+   pip install 'django-csp>=4.0'
+   ```
+
+2. Add `csp.middleware.CSPMiddleware` to `MIDDLEWARE` in `settings.py`.
+
+3. Configure `CSP_INCLUDE_NONCE_IN` to cover the directives djust uses for
+   inline content:
+   ```python
+   # settings.py
+   CSP_INCLUDE_NONCE_IN = (
+       "script-src",
+       "script-src-elem",
+       "style-src",
+       "style-src-elem",
+   )
+
+   # Drop 'unsafe-inline' — nonces cover what djust emits:
+   CSP_SCRIPT_SRC = ("'self'",)
+   CSP_SCRIPT_SRC_ELEM = ("'self'",)
+   CSP_STYLE_SRC = ("'self'",)
+   CSP_STYLE_SRC_ELEM = ("'self'",)
+   ```
+
+4. Make sure you're rendering templates with a `RequestContext` (Django's
+   default via `render()` / `TemplateResponse` — no changes needed unless
+   you construct a bare `Context` manually). The djust PWA template tags
+   and the handler metadata injector both read `request.csp_nonce` from
+   the active request, which django-csp populates automatically.
+
+### Caveats
+
+- **VDOM patches** (the incremental updates sent over the WebSocket after
+  initial page load) do not currently carry nonces. If your app injects
+  fresh `<script>` or `<style>` blocks via VDOM patches — uncommon, since
+  most dynamic content is attribute and text updates — those will still
+  need `'unsafe-inline'`. This is tracked as a follow-up to #655.
+- **Third-party JS that djust doesn't emit** (Google Analytics, Stripe,
+  etc.) is outside djust's scope. Add their domains or hashes to your
+  CSP directly.
+- **User-generated inline content** (e.g. rich-text editors that allow
+  `style=` attributes) is application responsibility, not framework.
+
 ## Reporting Vulnerabilities
 
 If you discover a security issue in djust:

@@ -1,3 +1,12 @@
+---
+title: "HTTP-Only Mode"
+slug: http-only-mode
+section: guides
+order: 25
+level: intermediate
+description: "Run djust without WebSockets: HTTP polling for environments where WS is blocked."
+---
+
 # HTTP-Only Mode (Without WebSocket)
 
 djust supports running in HTTP-only mode, which uses standard HTTP POST requests instead of WebSocket for event handling. This is useful for:
@@ -103,6 +112,9 @@ class CounterView(LiveView):
 ## Testing HTTP Mode
 
 1. **Set the configuration**:
+<!-- Normal markdown: the fence sits inside a numbered list, so it is
+     indented. The checker does not dedent before parsing. -->
+<!-- doc-snippet-check: skip -->
    ```python
    # settings.py
    LIVEVIEW_CONFIG = {

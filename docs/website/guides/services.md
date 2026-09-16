@@ -1,3 +1,12 @@
+---
+title: "Working with External Services"
+slug: services
+section: guides
+order: 22
+level: intermediate
+description: "Calling REST APIs, Redis, and AWS from a LiveView without blocking the render."
+---
+
 # Working with External Services
 
 How to integrate AWS, REST APIs, Redis, and other external services with djust LiveViews.
@@ -34,6 +43,8 @@ Or, if you have the `djust.V006` system check enabled, it will catch this at sta
 
 Create a private helper method that instantiates the service on demand. Since private methods (prefixed with `_`) are not serialized, this avoids the problem entirely.
 
+<!-- boto3 is an optional dependency (djust[s3]); not installed here. -->
+<!-- doc-snippet-check: skip -->
 ```python
 import boto3
 from djust import LiveView, state
@@ -133,7 +144,7 @@ class ProductCatalogView(LiveView):
         return super().get_context_data(**kwargs)
 ```
 
-This pattern combines the [JIT serialization pattern](../JIT_SERIALIZATION_PATTERN.md) with unmanaged models for a clean separation.
+This pattern combines the [JIT serialization pattern](../../JIT_SERIALIZATION_PATTERN.md) with unmanaged models for a clean separation.
 
 ---
 
@@ -141,6 +152,8 @@ This pattern combines the [JIT serialization pattern](../JIT_SERIALIZATION_PATTE
 
 Pass services via `mount()` kwargs from your URL configuration. This is useful when you want to test views with mock services.
 
+<!-- `myapp.services` is the reader's own module, not one djust ships. -->
+<!-- doc-snippet-check: skip -->
 ```python
 # views.py
 from djust import LiveView, state
@@ -375,5 +388,5 @@ class LeaderboardView(LiveView):
 ## See Also
 
 - [Best Practices](BEST_PRACTICES.md) -- State management conventions
-- [JIT Serialization Pattern](../JIT_SERIALIZATION_PATTERN.md) -- Private/public variable pattern
+- [JIT Serialization Pattern](../../JIT_SERIALIZATION_PATTERN.md) -- Private/public variable pattern
 - [Error Codes](error-codes.md) -- V006 and other check details

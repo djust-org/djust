@@ -1,3 +1,12 @@
+---
+title: "Declarative Permissions Document"
+slug: permissions-document
+section: guides
+order: 18
+level: intermediate
+description: "Validate every view's auth config against a committed YAML document, so the permission model is an auditable artifact."
+---
+
 # Declarative Permissions Document
 
 The `djust_audit --permissions permissions.yaml` flag validates every LiveView
