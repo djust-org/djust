@@ -1,6 +1,9 @@
 """`djust init` adds djust to an existing Django project."""
 
+import subprocess
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -134,3 +137,212 @@ def test_configured_asgi_is_unchanged(tmp_path):
     )
     change, step, snippet = init.plan_asgi(project)
     assert (change, step.status, snippet) == (None, init.UNCHANGED, None)
+
+
+def test_requirements_include_running_djust():
+    from djust.scaffolding.generator import djust_requirement
+
+    assert init.requirements() == [djust_requirement(), "channels>=4.0", "uvicorn[standard]>=0.30"]
+
+
+def test_project_python_prefers_local_venv(tmp_path):
+    python = tmp_path / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    assert init.find_project_python(tmp_path, {"VIRTUAL_ENV": "/elsewhere"}) == python
+
+
+def test_project_python_ignores_environment_outside_project(tmp_path):
+    outside = tmp_path / "other-env"
+    (outside / "bin").mkdir(parents=True)
+    (outside / "bin" / "python").write_text("")
+    project = tmp_path / "project"
+    project.mkdir()
+    assert init.find_project_python(project, {"VIRTUAL_ENV": str(outside)}) is None
+
+
+def test_project_python_accepts_active_environment_inside_project(tmp_path):
+    env = tmp_path / "env"
+    (env / "bin").mkdir(parents=True)
+    (env / "bin" / "python").write_text("")
+    assert init.find_project_python(tmp_path, {"VIRTUAL_ENV": str(env)}) == env / "bin" / "python"
+
+
+@pytest.mark.parametrize(
+    "files, kind, runnable",
+    [
+        ({"uv.lock": ""}, "uv", True),
+        ({"pyproject.toml": "[tool.uv]\n"}, "uv", True),
+        ({"poetry.lock": ""}, "poetry", False),
+        ({"requirements.txt": "django\n"}, "requirements", True),
+        ({}, "none", False),
+    ],
+)
+def test_package_action_matches_project_tooling(tmp_path, files, kind, runnable):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    action = init.choose_package_action(tmp_path, tmp_path / ".venv/bin/python", uv_available=True)
+    assert (action.kind, action.runnable) == (kind, runnable)
+
+
+def test_requirements_install_targets_project_python(tmp_path):
+    (tmp_path / "requirements.txt").write_text("django\n")
+    python = tmp_path / ".venv/bin/python"
+    action = init.choose_package_action(tmp_path, python, uv_available=True)
+    assert action.command == [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        str(python),
+        "-r",
+        "requirements.txt",
+    ]
+    action = init.choose_package_action(tmp_path, python, uv_available=False)
+    assert action.command == [str(python), "-m", "pip", "install", "-r", "requirements.txt"]
+
+
+def test_requirements_without_environment_is_not_runnable(tmp_path):
+    (tmp_path / "requirements.txt").write_text("django\n")
+    assert init.choose_package_action(tmp_path, None, uv_available=True).runnable is False
+
+
+def test_requirements_appended_only_when_missing(tmp_path):
+    (tmp_path / "requirements.txt").write_text("Django>=5.2\n# comment\nUvicorn[standard]==0.35\n")
+    change = init.plan_requirements(tmp_path)
+    added = change.new[len(change.old) :].splitlines()
+    assert [line.split(">=")[0] for line in added] == ["djust", "channels"]
+    (tmp_path / "requirements.txt").write_text(change.new)
+    assert init.plan_requirements(tmp_path) is None
+
+
+def git(root, *args):
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def test_uncommitted_target_files_are_refused(tmp_path):
+    make_project(tmp_path)
+    git(tmp_path, "init", "-q")
+    with pytest.raises(init.InitError, match="--force"):
+        init.init_project(tmp_path, install=False)
+    assert init.SETTINGS_MARKER not in (tmp_path / "mysite/settings.py").read_text()
+    result = init.init_project(tmp_path, install=False, force=True)
+    assert result.exit_code == 0
+    assert init.SETTINGS_MARKER in (tmp_path / "mysite/settings.py").read_text()
+
+
+def test_committed_project_is_edited(tmp_path):
+    make_project(tmp_path)
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
+    assert init.init_project(tmp_path, install=False).exit_code == 0
+
+
+def test_dry_run_writes_nothing(tmp_path):
+    make_project(tmp_path)
+    before = (tmp_path / "mysite/settings.py").read_text()
+    result = init.init_project(tmp_path, dry_run=True)
+    assert (tmp_path / "mysite/settings.py").read_text() == before
+    output = init.format_result(result, tmp_path)
+    assert "+++ b/mysite/settings.py" in output
+    assert "Dry run" in output
+
+
+def test_install_and_check_run_with_project_python(tmp_path, monkeypatch):
+    make_project(tmp_path)
+    (tmp_path / "requirements.txt").write_text("django\n")
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    monkeypatch.setenv("VIRTUAL_ENV", "/elsewhere")
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("env", {})))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(init.shutil, "which", return_value=None),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    commands = [cmd for cmd, _ in calls if cmd[0] != "git"]
+    assert commands == [
+        [str(python), "-m", "pip", "install", "-r", "requirements.txt"],
+        [str(python), "manage.py", "check"],
+    ]
+    assert all("VIRTUAL_ENV" not in env for cmd, env in calls if cmd[0] != "git")
+    assert result.exit_code == 0
+    assert result.run_command == ".venv/bin/python -m uvicorn mysite.asgi:application --reload"
+
+
+def test_failed_check_needs_attention(tmp_path):
+    make_project(tmp_path)
+    (tmp_path / "uv.lock").write_text("")
+
+    def run(cmd, **kwargs):
+        code = 1 if "check" in cmd else 0
+        return subprocess.CompletedProcess(cmd, code, "", "SystemCheckError: boom")
+
+    with (
+        patch.object(init.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    assert result.exit_code == 2
+    assert any("boom" in note for note in result.notes)
+    assert result.run_command == "uv run uvicorn mysite.asgi:application --reload"
+
+
+def test_cli_init_reports_refusal(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    from djust import cli
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(settings=None, dry_run=False, no_install=True, force=False)
+    assert cli.cmd_init(args) == 1
+    assert "manage.py" in capsys.readouterr().out
+
+
+def test_init_on_startproject_passes_django_check(tmp_path):
+    import os
+
+    subprocess.run(
+        [sys.executable, "-m", "django", "startproject", "mysite", str(tmp_path)],
+        check=True,
+        capture_output=True,
+    )
+    result = init.init_project(tmp_path, install=False)
+    assert result.exit_code == 0
+    env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
+    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), *sys.path])
+    check = subprocess.run(
+        [sys.executable, "manage.py", "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, check.stdout + check.stderr
+    asgi = subprocess.run(
+        [sys.executable, "-c", "import mysite.asgi as a; print(type(a.application).__name__)"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert asgi.stdout.strip() == "ProtocolTypeRouter", asgi.stderr
+
+
+def test_djust_init_command_is_registered(tmp_path, monkeypatch, capsys):
+    from djust import cli
+
+    make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["djust", "init", "--dry-run"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    assert "Dry run" in capsys.readouterr().out

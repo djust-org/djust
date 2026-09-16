@@ -7,10 +7,13 @@ new file contents without touching disk, so ``--dry-run`` shows exactly what
 
 import ast
 import difflib
+import os
 import re
-from dataclasses import dataclass
+import shutil
+import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 from . import templates as T
 
@@ -171,3 +174,228 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
         change = FileChange(project.asgi_path, old, new)
         return change, Step(name, DONE, "replaced Django's default"), None
     return None, Step(name, ATTENTION, "customized; merge the djust ASGI app by hand"), new
+
+
+_REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
+
+
+def requirements() -> List[str]:
+    from .generator import djust_requirement
+
+    return [djust_requirement(), "channels>=4.0", "uvicorn[standard]>=0.30"]
+
+
+def _interpreter(env_dir: Path) -> Path:
+    return env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def find_project_python(root: Path, environ: Mapping[str, str]) -> Optional[Path]:
+    """The project's own interpreter; never an environment from outside the project."""
+    local = _interpreter(root / ".venv")
+    if local.exists():
+        return local
+    active = environ.get("VIRTUAL_ENV")
+    if active:
+        env_dir = Path(active).resolve()
+        if env_dir.is_relative_to(root.resolve()) and _interpreter(env_dir).exists():
+            return _interpreter(env_dir)
+    return None
+
+
+@dataclass
+class PackageAction:
+    kind: str  # "uv", "poetry", "requirements", or "none"
+    command: List[str]
+    runnable: bool
+
+
+def choose_package_action(root: Path, python: Optional[Path], uv_available: bool) -> PackageAction:
+    reqs = requirements()
+    pyproject = root / "pyproject.toml"
+    if (root / "uv.lock").exists() or (pyproject.exists() and "[tool.uv]" in pyproject.read_text()):
+        return PackageAction("uv", ["uv", "add", *reqs], runnable=uv_available)
+    if (root / "poetry.lock").exists():
+        return PackageAction("poetry", ["poetry", "add", *reqs], runnable=False)
+    if (root / "requirements.txt").exists():
+        if python is None:
+            command = ["pip", "install", "-r", "requirements.txt"]
+        elif uv_available:
+            command = ["uv", "pip", "install", "--python", str(python), "-r", "requirements.txt"]
+        else:
+            command = [str(python), "-m", "pip", "install", "-r", "requirements.txt"]
+        return PackageAction("requirements", command, runnable=python is not None)
+    return PackageAction("none", ["pip", "install", *reqs], runnable=False)
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def plan_requirements(root: Path) -> Optional[FileChange]:
+    path = root / "requirements.txt"
+    old = path.read_text()
+    present = set()
+    for line in old.splitlines():
+        match = _REQUIREMENT_NAME_RE.match(line)
+        if match:
+            present.add(_normalize(match.group(1)))
+    missing = [
+        req
+        for req in requirements()
+        if _normalize(_REQUIREMENT_NAME_RE.match(req).group(1)) not in present
+    ]
+    if not missing:
+        return None
+    prefix = old if not old or old.endswith("\n") else old + "\n"
+    return FileChange(path, old, prefix + "".join("%s\n" % req for req in missing))
+
+
+def dirty_files(root: Path, paths: List[Path]) -> List[str]:
+    """Target files with uncommitted changes; empty outside a git work tree."""
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    existing = [str(p) for p in paths if p.exists()]
+    if inside.returncode != 0 or inside.stdout.strip() != "true" or not existing:
+        return []
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *existing],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line[3:] for line in status.stdout.splitlines() if line.strip()]
+
+
+def apply_changes(changes: List[FileChange]) -> None:
+    for change in changes:
+        change.path.write_text(change.new)
+
+
+def _run(cmd: List[str], root: Path) -> subprocess.CompletedProcess:
+    # Drop an inherited VIRTUAL_ENV so no tool can fall back to an environment
+    # from outside this project.
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    try:
+        return subprocess.run(
+            cmd, cwd=str(root), env=env, capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", "%s: command not found" % cmd[0])
+
+
+@dataclass
+class InitResult:
+    steps: List[Step] = field(default_factory=list)
+    changes: List[FileChange] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
+    run_command: str = ""
+    dry_run: bool = False
+
+    @property
+    def exit_code(self) -> int:
+        return 2 if any(step.status == ATTENTION for step in self.steps) else 0
+
+
+def init_project(
+    root: Path,
+    settings_module: Optional[str] = None,
+    dry_run: bool = False,
+    install: bool = True,
+    force: bool = False,
+) -> InitResult:
+    project = detect_project(root, settings_module)
+    python = find_project_python(root, os.environ)
+    action = choose_package_action(root, python, uv_available=shutil.which("uv") is not None)
+    result = InitResult(dry_run=dry_run)
+
+    settings_change, step = plan_settings(project)
+    result.steps.append(step)
+    asgi_change, step, snippet = plan_asgi(project)
+    result.steps.append(step)
+    if snippet:
+        result.notes.append("%s is customized. Merge in:\n\n%s" % (step.name, snippet))
+    requirements_change = (
+        plan_requirements(root) if install and action.kind == "requirements" else None
+    )
+    result.changes = [c for c in (settings_change, asgi_change, requirements_change) if c]
+
+    if action.kind == "uv":
+        result.run_command = "uv run uvicorn %s:application --reload" % project.asgi_module
+    else:
+        runner = str(python.relative_to(root)) if python else "python"
+        result.run_command = "%s -m uvicorn %s:application --reload" % (runner, project.asgi_module)
+
+    command = " ".join(action.command)
+    if dry_run:
+        result.steps.append(
+            Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")
+        )
+        return result
+
+    if result.changes and not force:
+        dirty = dirty_files(root, [c.path for c in result.changes])
+        if dirty:
+            raise InitError(
+                "Uncommitted changes in %s. Commit them first so the edit is easy to "
+                "review, or rerun with --force." % ", ".join(dirty)
+            )
+    apply_changes(result.changes)
+
+    if not install:
+        result.steps.append(Step("packages", SKIPPED, "--no-install"))
+        result.steps.append(Step("check", SKIPPED, "install packages, then run manage.py check"))
+        return result
+    if not action.runnable:
+        result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
+        result.steps.append(Step("check", SKIPPED, "run manage.py check after installing"))
+        return result
+
+    installed = _run(action.command, root)
+    if installed.returncode != 0:
+        result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
+        result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
+        result.steps.append(Step("check", SKIPPED, "packages did not install"))
+        return result
+    result.steps.append(Step("packages", DONE, command))
+
+    if action.kind == "uv":
+        check_cmd = ["uv", "run", "python", "manage.py", "check"]
+    else:
+        check_cmd = [str(python), "manage.py", "check"]
+    checked = _run(check_cmd, root)
+    if checked.returncode != 0:
+        result.steps.append(Step("check", ATTENTION, "manage.py check failed"))
+        result.notes.append("manage.py check\n%s" % (checked.stdout + checked.stderr).strip())
+    else:
+        result.steps.append(Step("check", DONE, "no issues"))
+    return result
+
+
+_STATUS_LABELS = {DONE: "done", UNCHANGED: "unchanged", SKIPPED: "skipped", ATTENTION: "ATTENTION"}
+
+
+def format_result(result: InitResult, root: Path) -> str:
+    lines = []
+    if result.dry_run:
+        lines += [change.diff(root) for change in result.changes]
+        lines.append("Dry run: nothing was written or installed.\n")
+    width = max(len(step.name) for step in result.steps)
+    for step in result.steps:
+        lines.append(
+            "  %s  %-9s  %s" % (step.name.ljust(width), _STATUS_LABELS[step.status], step.detail)
+        )
+    for note in result.notes:
+        lines.append("\n%s" % note)
+    lines.append("\nRun:  %s" % result.run_command)
+    lines.append("Next: %s" % FIRST_LIVEVIEW_URL)
+    return "\n".join(lines)
