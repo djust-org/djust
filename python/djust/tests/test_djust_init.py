@@ -23,6 +23,24 @@ application = get_asgi_application()
 '''
 
 
+ADMIN_PROBE = """
+import os, django
+os.environ["DJANGO_SETTINGS_MODULE"] = "mysite.settings"
+django.setup()
+from django.conf import settings
+settings.ALLOWED_HOSTS = ["*"]
+from django.core.management import call_command
+call_command("migrate", verbosity=0)
+from django.contrib.auth.models import User
+from django.test import Client
+user = User.objects.create_superuser("admin", "admin@example.com", "pw")
+client = Client()
+client.force_login(user)
+for url in ("/admin/", "/admin/auth/user/", "/admin/auth/user/%d/change/" % user.pk):
+    print(client.get(url).status_code)
+"""
+
+
 def make_project(root: Path, name: str = "mysite", asgi: str = STOCK_ASGI) -> Path:
     (root / name).mkdir(parents=True)
     (root / "manage.py").write_text(
@@ -86,27 +104,40 @@ def run_block(**settings):
 
 
 @pytest.mark.parametrize("container", [list, tuple])
-def test_settings_block_adds_apps_and_backend(container):
+def test_settings_block_adds_apps_and_asgi(container):
     django_backend = {"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": ["t"]}
     ns = run_block(
         INSTALLED_APPS=container(["django.contrib.auth", "channels"]),
         TEMPLATES=container([django_backend]),
     )
     assert ns["INSTALLED_APPS"] == ["django.contrib.auth", "channels", "djust"]
-    assert ns["TEMPLATES"][0]["BACKEND"] == "djust.template_backend.DjustTemplateBackend"
-    assert ns["TEMPLATES"][0]["DIRS"] == ["t"]
-    assert ns["TEMPLATES"][1] == django_backend
     assert ns["ASGI_APPLICATION"] == "mysite.asgi.application"
     assert ns["CHANNEL_LAYERS"]["default"]["BACKEND"] == "channels.layers.InMemoryChannelLayer"
 
 
+def test_settings_block_leaves_templates_alone():
+    """LiveViews read their template source directly, so the project's template
+    engines keep rendering everything else, including the admin (#2872)."""
+    templates = [{"BACKEND": "django.template.backends.django.DjangoTemplates"}]
+    assert run_block(INSTALLED_APPS=[], TEMPLATES=templates)["TEMPLATES"] is templates
+    assert "TEMPLATES" not in init.render_settings_block("mysite.asgi")
+
+
 def test_settings_block_respects_existing_configuration():
-    djust_backend = {"BACKEND": "djust.template_backend.DjustTemplateBackend"}
     redis = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer"}}
-    ns = run_block(INSTALLED_APPS=["djust"], TEMPLATES=[djust_backend], CHANNEL_LAYERS=redis)
+    ns = run_block(INSTALLED_APPS=["djust"], CHANNEL_LAYERS=redis)
     assert ns["INSTALLED_APPS"] == ["djust", "channels"]
-    assert ns["TEMPLATES"] == [djust_backend]
     assert ns["CHANNEL_LAYERS"] is redis
+
+
+def test_settings_block_recognizes_app_config_paths():
+    apps = ["channels.apps.ChannelsConfig", "djust.apps.DjustConfig"]
+    assert run_block(INSTALLED_APPS=apps)["INSTALLED_APPS"] == apps
+
+
+def test_settings_block_keeps_similarly_named_apps_distinct():
+    ns = run_block(INSTALLED_APPS=["djust_components", "channels_redis"])
+    assert ns["INSTALLED_APPS"] == ["djust_components", "channels_redis", "channels", "djust"]
 
 
 @pytest.mark.parametrize(
@@ -129,6 +160,46 @@ def test_customized_asgi_is_left_alone(tmp_path):
     assert change is None
     assert step.status == init.ATTENTION
     assert "LiveViewConsumer" in snippet
+
+
+def test_stock_asgi_for_another_settings_module_is_left_alone(tmp_path):
+    source = STOCK_ASGI.replace("mysite.settings", "mysite.settings_prod")
+    project = init.detect_project(make_project(tmp_path, asgi=source))
+    change, step, snippet = init.plan_asgi(project)
+    assert change is None
+    assert step.status == init.ATTENTION
+    assert "mysite.settings_prod" in step.detail
+
+
+def test_non_string_leading_expression_is_not_a_docstring(tmp_path):
+    source = "1\n" + STOCK_ASGI.split('"""\n', 2)[2]
+    project = init.detect_project(make_project(tmp_path, asgi=source))
+    assert init.plan_asgi(project)[1].status == init.ATTENTION
+
+
+def test_nested_settings_package_is_refused(tmp_path):
+    (tmp_path / "config" / "settings").mkdir(parents=True)
+    (tmp_path / "manage.py").write_text(
+        "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.local')\n"
+    )
+    (tmp_path / "config" / "__init__.py").write_text("")
+    (tmp_path / "config" / "settings" / "__init__.py").write_text("")
+    (tmp_path / "config" / "settings" / "local.py").write_text("INSTALLED_APPS = []\n")
+    (tmp_path / "config" / "asgi.py").write_text(STOCK_ASGI)
+    with pytest.raises(init.InitError, match="package"):
+        init.detect_project(tmp_path)
+
+
+def test_crlf_settings_keep_their_line_endings(tmp_path):
+    make_project(tmp_path)
+    settings = tmp_path / "mysite" / "settings.py"
+    settings.write_bytes(b"INSTALLED_APPS = []\r\nTEMPLATES = []\r\n")
+    project = init.detect_project(tmp_path)
+    change, _ = init.plan_settings(project)
+    init.apply_changes([change])
+    data = settings.read_bytes()
+    assert data.startswith(b"INSTALLED_APPS = []\r\nTEMPLATES = []\r\n")
+    assert b"\n" not in data.replace(b"\r\n", b"")
 
 
 def test_configured_asgi_is_unchanged(tmp_path):
@@ -214,6 +285,59 @@ def test_requirements_appended_only_when_missing(tmp_path):
     assert [line.split(">=")[0] for line in added] == ["djust", "channels"]
     (tmp_path / "requirements.txt").write_text(change.new)
     assert init.plan_requirements(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "-e ../djust",
+        "-e git+https://github.com/djust-org/djust.git#egg=djust",
+        "https://example.com/djust-1.0.tar.gz",
+        "djust @ git+https://github.com/djust-org/djust.git",
+        "DJust==1.1",
+    ],
+)
+def test_requirements_recognize_djust_in_any_form(tmp_path, line):
+    (tmp_path / "requirements.txt").write_text("channels\nuvicorn\n%s\n" % line)
+    assert init.plan_requirements(tmp_path) is None
+
+
+def test_requirements_follow_included_files(tmp_path):
+    (tmp_path / "base.txt").write_text("djust\nchannels\nuvicorn[standard]\n")
+    (tmp_path / "requirements.txt").write_text("--requirement base.txt\n-r missing.txt\n")
+    assert init.plan_requirements(tmp_path) is None
+
+
+def test_similarly_named_packages_do_not_count(tmp_path):
+    (tmp_path / "requirements.txt").write_text("djust-components\ndjango-channels\nuvicorn\n")
+    change = init.plan_requirements(tmp_path)
+    added = change.new[len(change.old) :].splitlines()
+    assert [line.split(">=")[0] for line in added] == ["djust", "channels"]
+
+
+def test_printed_commands_are_shell_quoted(tmp_path):
+    make_project(tmp_path)
+    result = init.init_project(tmp_path, dry_run=True)
+    detail = next(step.detail for step in result.steps if step.name == "packages")
+    assert "'djust>=" in detail
+    assert "'uvicorn[standard]>=0.30'" in detail
+
+
+def test_dry_run_exits_zero_even_when_asgi_needs_attention(tmp_path):
+    make_project(tmp_path, asgi=STOCK_ASGI + "\napplication = Wrapper(application)\n")
+    result = init.init_project(tmp_path, dry_run=True, install=False)
+    assert any(step.status == init.ATTENTION for step in result.steps)
+    assert result.exit_code == 0
+
+
+def test_dirty_paths_are_reported_unquoted(tmp_path):
+    root = tmp_path / "sub dir"
+    make_project(root)
+    git(tmp_path, "init", "-q")
+    with pytest.raises(init.InitError) as exc:
+        init.init_project(root, install=False)
+    assert "sub dir/mysite/settings.py" in str(exc.value)
+    assert '"' not in str(exc.value).split("Uncommitted changes in ", 1)[1].split(".", 1)[0]
 
 
 def git(root, *args):
@@ -326,6 +450,10 @@ def test_init_on_startproject_passes_django_check(tmp_path):
         text=True,
     )
     assert check.returncode == 0, check.stdout + check.stderr
+    admin = subprocess.run(
+        [sys.executable, "-c", ADMIN_PROBE], cwd=tmp_path, env=env, capture_output=True, text=True
+    )
+    assert admin.stdout.split() == ["200", "200", "200"], admin.stdout + admin.stderr
     asgi = subprocess.run(
         [sys.executable, "-c", "import mysite.asgi as a; print(type(a.application).__name__)"],
         cwd=tmp_path,

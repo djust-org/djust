@@ -103,10 +103,23 @@ def test_management_command_reports_setup_failure():
 def test_generated_project_runs_without_activation(tmp_path):
     project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
     makefile = (project / "Makefile").read_text()
-    assert "PYTHON ?= .venv/bin/python" in makefile
+    assert "PYTHON = .venv/bin/python" in makefile
     assert "\t$(PYTHON) -m uvicorn child.asgi:application" in makefile
     assert "\tuvicorn " not in makefile
     assert "\tpython manage.py" not in makefile
+
+
+def test_exported_python_variable_does_not_escape_the_project_environment(tmp_path):
+    import shutil
+
+    if shutil.which("make") is None:
+        pytest.skip("make is not installed")
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    env = dict(os.environ, PYTHON="/usr/bin/python3")
+    dry = subprocess.run(
+        ["make", "-n", "dev"], cwd=project, env=env, capture_output=True, text=True
+    ).stdout
+    assert dry.startswith(".venv/bin/python -m uvicorn")
 
 
 def test_requirements_floor_is_generating_version(tmp_path):

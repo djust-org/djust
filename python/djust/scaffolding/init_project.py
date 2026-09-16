@@ -9,6 +9,7 @@ import ast
 import difflib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -81,6 +82,17 @@ class Step:
     detail: str
 
 
+def _read(path: Path) -> str:
+    # newline="" keeps CRLF files byte-identical outside the lines we add.
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def _write(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
 def render_settings_block(asgi_module: str) -> str:
     return T.SETTINGS_BLOCK % {"asgi_module": asgi_module}
 
@@ -115,15 +127,31 @@ def detect_project(root: Path, settings_module: Optional[str] = None) -> Project
         raise InitError(
             "Settings file %s not found. Pass --settings with the right module." % settings_path
         )
+    if (settings_path.parent / "__init__.py").is_file() and (
+        settings_path.parent.parent / "__init__.py"
+    ).is_file():
+        # e.g. config.settings.local: the settings live in a package, and
+        # asgi.py sits a level up, not beside this file.
+        raise InitError(
+            "%s lives in the settings package %s; `djust init` only edits a single "
+            "settings file. Add this block to the module your environment loads:\n\n%s"
+            % (
+                settings_module,
+                package,
+                render_settings_block("%s.asgi" % package.rpartition(".")[0]),
+            )
+        )
     return Project(root, settings_module, settings_path, settings_path.with_name("asgi.py"))
 
 
 def plan_settings(project: Project) -> Tuple[Optional[FileChange], Step]:
     name = str(project.settings_path.relative_to(project.root))
-    old = project.settings_path.read_text()
+    old = _read(project.settings_path)
     if SETTINGS_MARKER in old:
         return None, Step(name, UNCHANGED, "djust block already present")
-    new = old.rstrip("\n") + "\n\n\n" + render_settings_block(project.asgi_module)
+    newline = "\r\n" if "\r\n" in old else "\n"
+    block = render_settings_block(project.asgi_module).replace("\n", newline)
+    new = old.rstrip("\r\n") + newline * 3 + block
     return FileChange(project.settings_path, old, new), Step(name, DONE, "djust block appended")
 
 
@@ -134,32 +162,40 @@ def render_asgi(project: Project) -> str:
     }
 
 
-def _is_stock_asgi(source: str) -> bool:
-    """True when the file is Django's ``startproject`` asgi.py, in any formatting."""
+def _stock_asgi_settings(source: str) -> Optional[str]:
+    """The settings module named by Django's ``startproject`` asgi.py, in any
+    formatting; None when the file is anything else."""
     try:
         body = ast.parse(source).body
     except SyntaxError:
-        return False
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        return None
+    first = body[0] if body else None
+    if (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
         body = body[1:]  # module docstring
     if len(body) != len(_STOCK_ASGI):
-        return False
+        return None
+    settings_module = None
     for got, want in zip(body, _STOCK_ASGI):
         if isinstance(want, ast.Expr):
             # The settings module string differs per project; compare the call shape.
             call = got.value if isinstance(got, ast.Expr) else None
             if not isinstance(call, ast.Call) or ast.dump(call.func) != ast.dump(want.value.func):
-                return False
+                return None
             args = call.args
             if len(args) != 2 or call.keywords:
-                return False
+                return None
             if not all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in args):
-                return False
+                return None
             if args[0].value != "DJANGO_SETTINGS_MODULE":
-                return False
+                return None
+            settings_module = args[1].value
         elif ast.dump(got) != ast.dump(want):
-            return False
-    return True
+            return None
+    return settings_module
 
 
 def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[str]]:
@@ -167,16 +203,24 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
     new = render_asgi(project)
     if not project.asgi_path.exists():
         return FileChange(project.asgi_path, None, new), Step(name, DONE, "created"), None
-    old = project.asgi_path.read_text()
+    old = _read(project.asgi_path)
     if "LiveViewConsumer" in old:
         return None, Step(name, UNCHANGED, "already routes LiveView WebSockets"), None
-    if _is_stock_asgi(old):
+    stock_settings = _stock_asgi_settings(old)
+    if stock_settings == project.settings_module:
         change = FileChange(project.asgi_path, old, new)
         return change, Step(name, DONE, "replaced Django's default"), None
+    if stock_settings is not None:
+        detail = "uses %s, not %s; merge the djust ASGI app by hand" % (
+            stock_settings,
+            project.settings_module,
+        )
+        return None, Step(name, ATTENTION, detail), new
     return None, Step(name, ATTENTION, "customized; merge the djust ASGI app by hand"), new
 
 
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
 
 
@@ -232,23 +276,52 @@ def _canonical_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+def _requirement_lines(path: Path, seen: Optional[set] = None) -> List[str]:
+    """Non-comment lines of a requirements file and the files it includes."""
+    seen = set() if seen is None else seen
+    if path in seen or not path.is_file():
+        return []
+    seen.add(path)
+    lines: List[str] = []
+    for line in _read(path).splitlines():
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        include = _INCLUDE_RE.match(line)
+        if include:
+            lines += _requirement_lines(path.parent / include.group(1), seen)
+        else:
+            lines.append(line)
+    return lines
+
+
+def _mentions(line: str, name: str) -> bool:
+    """Whether a requirement line installs ``name``: a plain specifier, an
+    editable path, a VCS or archive URL, or a ``name @ url`` reference."""
+    wanted = _canonical_name(name)
+    tokens = re.split(r"[^A-Za-z0-9._-]+", line)
+    for token in tokens:
+        # Archive and wheel names carry a version: djust-1.0.tar.gz
+        base = re.split(r"-\d", token, maxsplit=1)[0]
+        if _canonical_name(token) == wanted or _canonical_name(base) == wanted:
+            return True
+    return False
+
+
 def plan_requirements(root: Path) -> Optional[FileChange]:
     path = root / "requirements.txt"
-    old = path.read_text()
-    present = set()
-    for line in old.splitlines():
-        match = _REQUIREMENT_NAME_RE.match(line)
-        if match:
-            present.add(_canonical_name(match.group(1)))
+    old = _read(path)
+    lines = _requirement_lines(path)
     missing = [
         req
         for req in requirements()
-        if _canonical_name(_REQUIREMENT_NAME_RE.match(req).group(1)) not in present
+        if not any(_mentions(line, _REQUIREMENT_NAME_RE.match(req).group(1)) for line in lines)
     ]
     if not missing:
         return None
-    prefix = old if not old or old.endswith("\n") else old + "\n"
-    return FileChange(path, old, prefix + "".join("%s\n" % req for req in missing))
+    newline = "\r\n" if "\r\n" in old else "\n"
+    prefix = old if not old or old.endswith("\n") else old + newline
+    return FileChange(path, old, prefix + "".join(req + newline for req in missing))
 
 
 def dirty_files(root: Path, paths: List[Path]) -> List[str]:
@@ -267,18 +340,29 @@ def dirty_files(root: Path, paths: List[Path]) -> List[str]:
     if inside.returncode != 0 or inside.stdout.strip() != "true" or not existing:
         return []
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--", *existing],
+        ["git", "status", "--porcelain", "-z", "--", *existing],
         cwd=str(root),
         capture_output=True,
         text=True,
         check=False,
     )
-    return [line[3:] for line in status.stdout.splitlines() if line.strip()]
+    # -z prints raw paths (no quoting); a rename adds its source as an extra entry.
+    entries = status.stdout.split("\0")
+    dirty = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) > 3:
+            dirty.append(entry[3:])
+            if entry[0] in "RC":
+                index += 1
+    return dirty
 
 
 def apply_changes(changes: List[FileChange]) -> None:
     for change in changes:
-        change.path.write_text(change.new)
+        _write(change.path, change.new)
 
 
 def _run(cmd: List[str], root: Path) -> subprocess.CompletedProcess:
@@ -303,6 +387,8 @@ class InitResult:
 
     @property
     def exit_code(self) -> int:
+        if self.dry_run:
+            return 0
         return 2 if any(step.status == ATTENTION for step in self.steps) else 0
 
 
@@ -335,7 +421,7 @@ def init_project(
         runner = str(python.relative_to(root)) if python else "python"
         result.run_command = "%s -m uvicorn %s:application --reload" % (runner, project.asgi_module)
 
-    command = " ".join(action.command)
+    command = shlex.join(action.command)
     if dry_run:
         result.steps.append(
             Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")

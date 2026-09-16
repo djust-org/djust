@@ -275,39 +275,25 @@ application = ProtocolTypeRouter(
 # ---------------------------------------------------------------------------
 #
 # The conditions run inside the user's settings module, so the block is
-# correct for list or tuple settings, already-listed apps, and projects that
-# configure their own channel layer — without parsing the user's code.
+# correct for list or tuple settings, apps listed by label or AppConfig path,
+# and projects that configure their own channel layer, without parsing the
+# user's code. TEMPLATES is deliberately untouched: LiveViews read their
+# template source directly, and putting DjustTemplateBackend ahead of the
+# project's engine breaks the admin's inclusion tags (#2872).
 
 SETTINGS_BLOCK = """\
 # --- djust (added by djust init) ---
 # Reruns of `djust init` detect this block and leave settings unchanged.
 INSTALLED_APPS = [
     *INSTALLED_APPS,
-    *[app for app in ("channels", "djust") if app not in INSTALLED_APPS],
+    *[
+        app
+        for app in ("channels", "djust")
+        if not any(entry == app or entry.startswith(app + ".") for entry in INSTALLED_APPS)
+    ],
 ]
 
 ASGI_APPLICATION = "%(asgi_module)s.application"
-
-if not any(
-    backend.get("BACKEND") == "djust.template_backend.DjustTemplateBackend"
-    for backend in TEMPLATES
-):
-    TEMPLATES = [
-        {
-            "NAME": "djust",
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
-            "DIRS": list(TEMPLATES[0].get("DIRS", [])) if TEMPLATES else [],
-            "APP_DIRS": True,
-            "OPTIONS": {
-                "context_processors": [
-                    "django.template.context_processors.request",
-                    "django.contrib.auth.context_processors.auth",
-                    "django.contrib.messages.context_processors.messages",
-                ],
-            },
-        },
-        *TEMPLATES,
-    ]
 
 # In-memory layer: suitable for one local development process.
 if "CHANNEL_LAYERS" not in globals():
@@ -578,9 +564,9 @@ INDEX_HTML = """\
 MAKEFILE = """\
 .PHONY: dev test migrate check install collectstatic
 
-# The project's own environment, so no activation is needed. Override with
-# `make dev PYTHON=python` to use whichever interpreter is on PATH.
-PYTHON ?= .venv/bin/python
+# The project's own environment, so no activation is needed. An exported
+# PYTHON variable does not override this; `make dev PYTHON=python` does.
+PYTHON = .venv/bin/python
 
 dev:
 \t$(PYTHON) -m uvicorn %(app_name)s.asgi:application --host 127.0.0.1 --port 8000 --reload
