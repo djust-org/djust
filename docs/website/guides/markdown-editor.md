@@ -9,15 +9,21 @@ description: "Add optional Visual and Markdown editing to native Django form fie
 
 # Markdown editor
 
-The MarkdownEditor hook adds selection-aware formatting to a native textarea.
-The optional Visual mode uses Tiptap to edit formatted content while storing
-Markdown. There is no frontend application, API endpoint or application event
-handler to implement. FormMixin still binds, validates and submits the field.
-Server preview and published content must use a server-side Markdown sanitizer.
+The `MarkdownEditor` hook adds formatting controls to a native textarea.
+Enable Visual mode to edit formatted content with Tiptap while storing Markdown.
+
+`FormMixin` still binds, validates and submits the field. The native form
+integration needs no additional frontend application, API endpoint or application
+event handler.
+
+> **Render safely.** Server previews and published content must use a
+> server-side Markdown sanitizer.
 
 ## Native forms
 
-Use ordinary Django fields and native `as_live()` / `as_live_field()` rendering:
+Use ordinary Django fields and native `as_live()` or `as_live_field()` rendering.
+
+**1. Configure the field.** Enable the editor through the textarea's attributes:
 
 ```python
 from django import forms
@@ -30,7 +36,8 @@ class PostForm(forms.Form):
     }))
 ```
 
-Beside the native rendered fields, place the stable controls host:
+**2. Add the controls.** Place the stable controls host beside the native
+rendered fields:
 
 ```django
 {% include "djust_components/markdown_controls.html" with field="body" mode="visual" %}
@@ -41,8 +48,8 @@ CSRF token and `dj-submit="submit_form"`. Put body last when rendering an entire
 form so its label and controls are adjacent. To choose a different placement,
 use native `as_live_field()` rendering in the template layout.
 
-Load these optional static assets before djust mounts hooks (the usual deferred
-client or framework-injected client works):
+**3. Load the assets.** Include these optional files before djust mounts hooks.
+The usual deferred client or framework-injected client works:
 
 ```django
 {% load static %}
@@ -57,35 +64,66 @@ shipped prebuilt: application users do not need Node, npm or a bundler.
 
 ## Existing component
 
-`MarkdownEditor(name="body", value=source, mode="visual", event="update_body")`
-and `{% markdown_editor name="body" value=source mode="visual" event="update_body" %}`
-use the same hook. Update `value` in the bound native event to refresh the
-sanitized server preview. `preview=False` omits that preview. `toolbar=False`
-keeps the plain textarea. All three renderers (Python, Django tag and Rust tag
-handler) use `djust.markdown.render_markdown(..., provisional=False)`.
+The Python component and the template tag use the same editor hook.
+Choose the version that fits your view.
+
+**Python component**
+
+```python
+MarkdownEditor(
+    name="body",
+    value=source,
+    mode="visual",
+    event="update_body",
+)
+```
+
+**Template tag**
+
+```django
+{% markdown_editor name="body" value=source mode="visual" event="update_body" %}
+```
+
+**Preview and toolbar options**
+
+| Option | Behavior |
+| --- | --- |
+| `value` | Update this in the bound native event to refresh the sanitized server preview. |
+| `preview=False` | Omit the server preview. |
+| `toolbar=False` | Keep the plain textarea. |
+
+All three renderers — the Python component, Django tag and Rust tag handler —
+use the same Markdown sanitizer:
+
+```python
+djust.markdown.render_markdown(..., provisional=False)
+```
 
 ## Editing contract
 
-- Switching modes alone leaves the original Markdown bytes untouched. An edit
-  may normalize Markdown spelling or whitespace while retaining supported content.
-- Visual mode supports emphasis, headings, links, nested lists, quotes, task
-  lists, tables, images and fenced code. The toolbar exposes the common actions;
+- **Source preservation.** Switching modes alone leaves the original Markdown
+  bytes untouched. An edit may normalize Markdown spelling or whitespace while
+  retaining supported content.
+- **Supported content.** Visual mode supports emphasis, headings, links, nested
+  lists, quotes, task lists, tables, images and fenced code. The toolbar exposes the common actions;
   tables and images already in Markdown can be edited in place.
-- Unsupported HTML, footnotes, directives and unsafe/unrecognized URLs stay in
-  Markdown mode with an explanation. Raw source is never silently replaced just
+- **Unsupported content.** Unsupported HTML, footnotes, directives and
+  unsafe/unrecognized URLs stay in Markdown mode with an explanation.
+  Raw source is never silently replaced just
   to enter Visual mode. This is a conservative guard, not a claim of universal
   Markdown compatibility; Tiptap's Markdown extension is still beta.
-- Visual undo/redo uses the editor transaction history. Source mode uses native
-  textarea editing; toolbar insertions preserve native undo where `insertText`
+- **Undo and redo.** Visual mode uses the editor transaction history. Source mode
+  uses native textarea editing; toolbar insertions preserve native undo where `insertText`
   is supported, with a `setRangeText` fallback. Editing the source then reopening
   Visual begins a new document load; cross-mode undo is not promised.
-- Only the native textarea has a form name. Each visual edit updates it and emits
-  its normal input event (or change for change-only bindings). No shadow hidden
+- **Form events.** Only the native textarea has a form name. Each visual edit
+  updates it and emits its normal input event (or change for change-only bindings). No shadow hidden
   form, autosave endpoint, reconnect buffer or duplicate submit handler is added.
-- While the visual surface has focus its current draft wins over stale field
-  patches, matching native focused-input behavior. Unfocused server resets are
+- **Server updates.** While the visual surface has focus its current draft wins
+  over stale field patches, matching native focused-input behavior. Unfocused server resets are
   reflected in the editor. This is not collaborative document editing.
-- Native required-field validation reveals and focuses the textarea if needed.
+- **Validation and read-only fields.** Native required-field validation reveals
+  and focuses the textarea if needed.
   Read-only/disabled fields keep inspection and mode switching available while
   editing controls are disabled.
 
@@ -101,11 +139,20 @@ image policy and sanitization remain application/framework responsibilities.
 
 ## Theme and contribution development
 
-`markdown-editor.css` exposes `--dj-md-editor-bg`, `--dj-md-editor-text`,
-`--dj-md-editor-border`, `--dj-md-editor-muted`, `--dj-md-editor-accent`,
-`--dj-md-editor-code-bg`, `--dj-md-editor-radius`, `--dj-md-editor-height`
-and `--dj-font-mono`. Theme these variables rather than
-copying rendering code.
+Theme the variables exposed by `markdown-editor.css` rather than copying
+rendering code.
+
+| Variable | Controls |
+| --- | --- |
+| `--dj-md-editor-bg` | Editor background |
+| `--dj-md-editor-text` | Editor text |
+| `--dj-md-editor-border` | Borders |
+| `--dj-md-editor-muted` | Secondary text |
+| `--dj-md-editor-accent` | Accent color |
+| `--dj-md-editor-code-bg` | Code background |
+| `--dj-md-editor-radius` | Corner radius |
+| `--dj-md-editor-height` | Editor height |
+| `--dj-font-mono` | Monospace font |
 
 The optional visual bundle is approximately 155 KiB gzip and does not enter the
 core djust client. Its pinned MIT dependencies and license notices live with the
