@@ -279,8 +279,11 @@ The robust pattern is therefore:
 
 ### `TENANT_REQUIRED` runs *before* `mount()`
 
-`TenantMixin` resolves the tenant in `dispatch()` / `get()` / `post()`, **before**
-`mount()` runs. When the tenant cannot be resolved and it is required
+`TenantMixin` resolves the tenant **before** `mount()` runs, on every
+transport. Over HTTP that happens in `dispatch()` / `get()` / `post()`; on the
+WebSocket path it is step 3 of the shared pre-mount sequence
+(`run_pre_mount_auth`, `auth/core.py`), which the WebSocket consumer calls
+before `mount()` because the HTTP dispatch chain is not entered. When the tenant cannot be resolved and it is required
 (`tenant_required = True` on the view, or `DJUST_CONFIG['TENANT_REQUIRED']`,
 which defaults to `True`), the mixin raises `Http404` — so the view **404s
 before `mount()` is ever called**. That means `mount()` cannot resolve a default
@@ -376,13 +379,26 @@ Tenant info is automatically available in templates:
 - **Validate URL access** to prevent cross-tenant data access:
 
 ```python
-class TenantPermissionMixin:
-    def dispatch(self, request, *args, **kwargs):
-        if 'tenant_slug' in kwargs:
-            if kwargs['tenant_slug'] != request.tenant.id:
-                raise PermissionDenied("Access denied")
-        return super().dispatch(request, *args, **kwargs)
+class TenantAccessMixin:
+    """Deny a URL whose tenant is not the active one."""
+
+    def check_permissions(self, request):
+        tenant_slug = self.kwargs.get("tenant_slug")
+        if tenant_slug is None:
+            return True
+        tenant = getattr(self, "_tenant", None)
+        if tenant is None or tenant.id != tenant_slug:
+            raise PermissionDenied("Access denied")
+        return True
 ```
+
+**Use `check_permissions()`, not a `dispatch()` override.** It runs inside the
+shared pre-mount sequence (`run_pre_mount_auth`, `auth/core.py`) that every
+mount path calls — WebSocket, the runtime dispatch, and SSE. The WebSocket path
+calls `mount()` directly and never enters Django's HTTP `dispatch()` chain, so
+a `dispatch`-based check **silently does not run for a LiveView** — the page
+loads unprotected and nothing raises. `login_required` and
+`permission_required` are applied at the same point for the same reason.
 
 ## Testing
 
@@ -407,7 +423,7 @@ def test_view_with_tenant():
     request.tenant = TenantInfo(tenant_id='test', name='Test Org')
     view = DashboardView()
     view.setup(request)
-    view.tenant = request.tenant  # mixin populates this from request.tenant in dispatch
+    view.tenant = request.tenant  # TenantMixin reads this off the request
     assert view.tenant.id == 'test'
 ```
 
