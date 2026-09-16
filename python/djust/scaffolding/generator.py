@@ -60,6 +60,7 @@ def generate_project(
     with_streaming: bool = False,
     from_schema: Optional[str] = None,
     auto_setup: bool = True,
+    bare: bool = False,
 ) -> Path:
     """
     Generate a complete djust project.
@@ -73,6 +74,7 @@ def generate_project(
         with_streaming: Include StreamingMixin for live feed updates.
         from_schema: Path to a JSON schema file describing models.
         auto_setup: Run venv creation, install, and migrate after generation.
+        bare: Generate a placeholder page instead of the themed demo.
 
     Returns:
         Path to the generated project directory.
@@ -110,6 +112,7 @@ def generate_project(
         with_presence=with_presence,
         with_streaming=with_streaming,
         schema=schema,
+        bare=bare,
     )
 
     # Create project structure
@@ -129,14 +132,17 @@ def _build_context(
     with_presence: bool = False,
     with_streaming: bool = False,
     schema: Optional[Dict[str, Any]] = None,
+    bare: bool = False,
 ) -> Dict[str, Any]:
     """Build the template rendering context from feature flags."""
     display_name = app_name.replace("_", " ").replace("-", " ").title()
     app_class = app_name.replace("_", " ").title().replace(" ", "")
     view_class = app_class + "View"
 
-    # Determine view bases
-    bases = ["LiveView"]
+    # Determine view bases. Every non-bare project ships the themed base
+    # template, so its starter view mixes in ThemeMixin for the theme switcher.
+    demo = not bare
+    bases = ["ThemeMixin", "LiveView"] if demo else ["LiveView"]
     extra_imports = []
     extra_mount = ""
     extra_context = ""
@@ -225,6 +231,10 @@ def _build_context(
         "nav_extra": nav_extra,
         "template_extra": template_extra,
         "admin_app": admin_app,
+        "theming_app": T.THEMING_APP_ENTRY if demo else "",
+        "theming_context_processor": T.THEMING_CONTEXT_PROCESSOR if demo else "",
+        "theming_settings": T.THEMING_SETTINGS if demo else "",
+        "bare": bare,
         "admin_template_backend": admin_template_backend,
         "admin_url_import": admin_url_import,
         "admin_url": admin_url,
@@ -296,14 +306,17 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
     # gitignored so secrets never get committed.
     _write(project_dir / ".env", T.ENV_EXAMPLE % ctx)
 
-    # base.html
-    _write(tpl_dir / "base.html", T.BASE_HTML % ctx)
-
-    # Decide views/templates based on --from-schema vs feature flags
+    # Decide views/templates based on --bare / --from-schema / feature flags
     schema = ctx.get("schema")
-    if schema:
+    if ctx["bare"]:
+        _write(tpl_dir / "base.html", T.BARE_BASE_HTML % ctx)
+        _write(pkg_dir / "views.py", T.BARE_VIEWS_PY % ctx)
+        _write(tpl_dir / "index.html", T.BARE_INDEX_HTML % ctx)
+    elif schema:
+        _write(tpl_dir / "base.html", T.BASE_HTML % ctx)
         _create_schema_files(project_dir, pkg_dir, tpl_dir, app_name, ctx, schema)
     else:
+        _write(tpl_dir / "base.html", T.BASE_HTML % ctx)
         # Standard views.py
         if ctx["with_db"]:
             _create_db_views(pkg_dir, tpl_dir, app_name, ctx)
@@ -342,12 +355,19 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     # For DB-backed views, we construct a custom views.py
     view_bases = ctx["view_bases"]
     content = '"""LiveView for %s."""\n\n' % app_name
+    content += "import djust\n"
     content += "from djust import LiveView\n"
     content += "from djust.decorators import event_handler\n"
+    content += "from djust.theming import ThemeMixin\n"
     if ctx["extra_imports"].strip():
         for line in ctx["extra_imports"].strip().split("\n"):
             content += line + "\n"
     content += "from .models import Item\n"
+    content += "\n"
+    content += "# Presets offered in the theme bar. Any name from djust.theming works here.\n"
+    content += (
+        'DEMO_THEME_PRESETS = ("djust", "catppuccin", "nord", "dracula", "solarized", "rose")\n'
+    )
     content += "\n\n"
     content += "class %s(%s):\n" % (ctx["view_class"], view_bases)
     content += '    template_name = "%s/index.html"\n' % app_name
@@ -358,6 +378,7 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "    login_required = False\n"
     content += "\n"
     content += "    def mount(self, request, **kwargs):\n"
+    content += "        super().mount(request, **kwargs)\n"
     content += '        self.search_query = ""\n'
     if ctx["extra_mount"]:
         content += ctx["extra_mount"]
@@ -383,6 +404,10 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += '            "search_query": self.search_query,\n'
     content += '            "total_count": self.total_count,\n'
     content += '            "done_count": self.done_count,\n'
+    content += '            "theme_presets": [\n'
+    content += '                p for p in self.theme_presets if p["name"] in DEMO_THEME_PRESETS\n'
+    content += "            ],\n"
+    content += '            "djust_version": djust.__version__,\n'
     if ctx["extra_context"]:
         content += ctx["extra_context"]
     content += "        }\n"

@@ -115,7 +115,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "djust",
-    "%(app_name)s",
+%(theming_app)s    "%(app_name)s",
 ]
 
 MIDDLEWARE = [
@@ -141,7 +141,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
-            ],
+%(theming_context_processor)s            ],
         },
     },
 %(admin_template_backend)s]
@@ -178,7 +178,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LIVEVIEW_ALLOWED_MODULES = [
     "%(app_name)s.views",
 ]
-%(extra_settings)s"""
+%(theming_settings)s%(extra_settings)s"""
 
 # ---------------------------------------------------------------------------
 # Admin opt-in fragments (only emitted when the project ships models)
@@ -194,6 +194,18 @@ LIVEVIEW_ALLOWED_MODULES = [
 
 # INSTALLED_APPS entry (with trailing newline so it slots cleanly).
 ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
+
+# ``djust.theming`` powers the starter page's theme switcher. Omitted with
+# ``--bare``. The context processor is required by djust_theming.E001.
+# The shipped presets currently fail their own WCAG contrast check
+# (djust_theming.W001; djust-org/djust#2874), so a fresh `manage.py check`
+# would print six warnings. Silenced until the presets are fixed.
+THEMING_SETTINGS = """\
+
+SILENCED_SYSTEM_CHECKS = ["djust_theming.W001"]
+"""
+THEMING_APP_ENTRY = '    "djust.theming",\n'
+THEMING_CONTEXT_PROCESSOR = '                "djust.theming.context_processors.theme_context",\n'
 
 # Second TEMPLATES backend — django.contrib.admin requires a DjangoTemplates
 # backend (admin.E403). APP_DIRS=False so it doesn't shadow app templates
@@ -342,9 +354,13 @@ urlpatterns = [
 VIEWS_PY_BASE = """\
 \"\"\"LiveView for %(app_name)s.\"\"\"
 
+import djust
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.theming import ThemeMixin
 %(extra_imports)s
+# Presets offered in the top bar. Any name from djust.theming works here.
+DEMO_THEME_PRESETS = ("djust", "catppuccin", "nord", "dracula", "solarized", "rose")
 
 %(extra_data)s
 class %(view_class)s(%(view_bases)s):
@@ -357,6 +373,7 @@ class %(view_class)s(%(view_bases)s):
     login_required = False
 
     def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
         self.items = [
             {"id": 1, "name": "First item", "done": False},
             {"id": 2, "name": "Second item", "done": False},
@@ -417,15 +434,88 @@ class %(view_class)s(%(view_bases)s):
             "search_query": self.search_query,
             "total_count": self.total_count,
             "done_count": self.done_count,
+            "theme_presets": [
+                p for p in self.theme_presets if p["name"] in DEMO_THEME_PRESETS
+            ],
+            "djust_version": djust.__version__,
 %(extra_context)s        }
 %(extra_methods)s"""
+
+# ---------------------------------------------------------------------------
+# --bare: a placeholder page with one live button and no demo code
+# ---------------------------------------------------------------------------
+
+BARE_VIEWS_PY = """\
+\"\"\"LiveView for %(app_name)s.\"\"\"
+
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class %(view_class)s(LiveView):
+    template_name = "%(app_name)s/index.html"
+
+    # Nothing user-specific here yet, so the page is public (djust.S005).
+    login_required = False
+
+    def mount(self, request, **kwargs):
+        self.pings = 0
+
+    @event_handler()
+    def ping(self, **kwargs):
+        self.pings += 1
+
+    def get_context_data(self, **kwargs):
+        return {"pings": self.pings}
+"""
+
+BARE_BASE_HTML = """\
+{%% load live_tags %%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Emits djust's client config; client.js itself is injected automatically. #}
+    {%% djust_client_config %%}
+    <title>{%% block title %%}%(display_name)s{%% endblock %%}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.55; }
+        button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    {%% block content %%}{%% endblock %%}
+</body>
+</html>
+"""
+
+BARE_INDEX_HTML = """\
+{%% extends "%(app_name)s/base.html" %%}
+
+{%% block content %%}
+{%% csrf_token %%}
+<div dj-root dj-view="%(app_name)s.views.%(view_class)s">
+    <h1>%(display_name)s</h1>
+    <p>Your djust project is running. Replace this page in
+       <code>%(app_name)s/templates/%(app_name)s/index.html</code> and
+       <code>%(app_name)s/views.py</code>.</p>
+    <p>
+        <button dj-click="ping">Ping the server</button>
+        <span>{{ pings }} round trip{{ pings|pluralize }} over the WebSocket</span>
+    </p>
+    <p><a href="https://docs.djust.org/getting-started/first-liveview/">Your First LiveView</a>
+       walks through building a view like this one.</p>
+</div>
+{%% endblock %%}
+"""
 
 # ---------------------------------------------------------------------------
 # base.html
 # ---------------------------------------------------------------------------
 
 BASE_HTML = """\
-{%% load live_tags %%}
+{%% load live_tags theme_tags %%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -437,35 +527,90 @@ BASE_HTML = """\
     {# a manual <script src=".../client.js"> tag (avoids double-load races,   #}
     {# djust.C012). Place this inside <head> BEFORE the client script loads.  #}
     {%% djust_client_config %%}
+    {# Theme tokens (CSS variables), the anti-flash script, and theme.js.     #}
+    {# Switching a preset or mode pushes new tokens over the WebSocket.       #}
+    {%% theme_head %%}
     <title>{%% block title %%}%(display_name)s{%% endblock %%}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        surface: { 700: '#2a2a3e', 800: '#1e1e2e', 900: '#11111b', 950: '#0a0a14' }
-                    }
-                }
-            }
-        }
-    </script>
     <style>
-        body { background: #0a0a14; }
-        .glass { background: rgba(30,30,46,0.6); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
+        /* Every color below is a theme token, so switching presets restyles
+           the whole page. Tokens are HSL triplets: hsl(var(--name)). */
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: var(--font-sans, system-ui, sans-serif);
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            line-height: 1.55;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: hsl(var(--link, var(--primary))); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
+        nav {
+            border-bottom: 1px solid hsl(var(--border));
+            background: hsl(var(--card));
+        }
+        nav .wrap {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 1rem; padding-top: .75rem; padding-bottom: .75rem; flex-wrap: wrap;
+        }
+        .brand { font-weight: 700; font-size: 1.1rem; }
+        .controls { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+        .btn {
+            font: inherit; font-size: .9rem; cursor: pointer;
+            padding: .45rem .9rem; border-radius: var(--radius, .5rem);
+            border: 1px solid hsl(var(--border));
+            background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground));
+        }
+        .btn:hover { filter: brightness(1.05); }
+        .btn-primary {
+            background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
+            border-color: hsl(var(--primary));
+        }
+        .btn-ghost { background: transparent; border-color: transparent; color: hsl(var(--muted-foreground)); }
+        .btn-ghost:hover { color: hsl(var(--destructive)); }
+        .btn[disabled] { opacity: .5; cursor: wait; }
+        .swatch {
+            width: 1.6rem; height: 1.6rem; padding: 0; border-radius: 999px;
+            border: 2px solid hsl(var(--border));
+        }
+        .swatch[aria-pressed="true"] { border-color: hsl(var(--foreground)); box-shadow: 0 0 0 2px hsl(var(--background)) inset; }
+        main { padding: 2.5rem 0 4rem; }
+        .card {
+            background: hsl(var(--card)); color: hsl(var(--card-foreground));
+            border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
+            padding: 1.25rem 1.5rem;
+        }
+        .muted { color: hsl(var(--muted-foreground)); }
+        input[type="text"] {
+            font: inherit; width: 100%%; padding: .55rem .8rem;
+            border-radius: var(--radius, .5rem); border: 1px solid hsl(var(--input));
+            background: hsl(var(--background)); color: hsl(var(--foreground));
+        }
+        input[type="text"]:focus { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
+        code { font-family: var(--font-mono, ui-monospace, monospace); font-size: .9em;
+               background: hsl(var(--muted)); padding: .1em .35em; border-radius: .3em; }
+        footer { border-top: 1px solid hsl(var(--border)); padding: 1.25rem 0; font-size: .85rem; }
     </style>
     {%% load static %%}
 </head>
-<body class="text-gray-200 antialiased min-h-screen">
-    <nav class="border-b border-white/5 bg-surface-950">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-            <span class="text-white font-bold text-lg">%(display_name)s</span>
+<body>
+    <nav>
+        <div class="wrap">
+            <span class="brand">%(display_name)s</span>
+            <div class="controls">
 %(nav_extra)s\
+            </div>
         </div>
     </nav>
-    <main class="max-w-7xl mx-auto px-4 py-8">
+    <main class="wrap">
         {%% block content %%}{%% endblock %%}
     </main>
+    <footer class="wrap muted">
+        djust {{ djust_version }} &middot;
+        <a href="https://docs.djust.org/">Documentation</a> &middot;
+        <a href="https://github.com/djust-org/djust">GitHub</a>
+    </footer>
     {# djust injects the client.js <script> automatically (see <head> note). #}
 </body>
 </html>
@@ -482,75 +627,112 @@ INDEX_HTML = """\
 {%% csrf_token %%}
 <div dj-root dj-view="%(app_name)s.views.%(view_class)s">
 
-    <!-- Stats bar -->
-    <div class="flex items-center gap-4 mb-6">
-        <span class="text-sm text-gray-400">{{ total_count }} total</span>
-        <span class="text-sm text-emerald-400">{{ done_count }} done</span>
-    </div>
-
-    <!-- Search + Add -->
-    <div class="flex gap-3 mb-6">
-        <input type="text"
-               dj-input="search"
-               name="value"
-               value="{{ search_query }}"
-               placeholder="Search items..."
-               aria-label="Search items"
-               class="flex-1 px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">
-        <form dj-submit="add_item" class="flex gap-2">
-            <input type="text"
-                   name="name"
-                   placeholder="New item..."
-                   aria-label="New item name"
-                   class="px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">
-            <button type="submit"
-                    class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition"
-                    dj-loading.class="opacity-50"
-                    dj-loading.disable>
-                Add
-            </button>
-        </form>
-    </div>
-
-    <!-- Item list -->
-    <div class="space-y-2">
-        {%% for item in items %%}
-        <div class="glass rounded-lg px-4 py-3 flex items-center justify-between group">
-            <div class="flex items-center gap-3">
-                <button dj-click="toggle_item"
-                        data-item_id:int="{{ item.id }}"
-                        aria-label="Toggle done"
-                        class="w-5 h-5 rounded border {%% if item.done %%}bg-emerald-500 border-emerald-500{%% else %%}border-gray-500{%% endif %%} flex items-center justify-center transition">
-                    {%% if item.done %%}
-                    <svg class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    {%% endif %%}
-                </button>
-                <span class="{%% if item.done %%}line-through text-gray-500{%% else %%}text-gray-200{%% endif %%}">
-                    {{ item.name }}
-                </span>
-            </div>
-            <button dj-click="delete_item"
-                    data-item_id:int="{{ item.id }}"
-                    dj-confirm="Delete this item?"
-                    aria-label="Delete item"
-                    class="text-red-400 opacity-0 group-hover:opacity-100 hover:text-red-300 transition">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-            </button>
-        </div>
-        {%% empty %%}
-        <div class="text-center text-gray-500 py-12">
-            {%% if search_query %%}
-                No items match "{{ search_query }}"
-            {%% else %%}
-                No items yet. Add one above!
-            {%% endif %%}
-        </div>
+    {# Theme controls live inside dj-root: djust binds dj-* events only here. #}
+    <div class="controls" style="justify-content: flex-end; margin-bottom: 1.5rem" aria-label="Theme">
+        <span class="muted" style="font-size: .85rem">Theme</span>
+        {%% for preset in theme_presets %%}
+        <button class="swatch"
+                dj-click="set_theme_preset"
+                dj-value-preset="{{ preset.name }}"
+                title="{{ preset.display_name }}"
+                aria-label="Theme: {{ preset.display_name }}"
+                aria-pressed="{%% if preset.is_active %%}true{%% else %%}false{%% endif %%}"
+                style="background: hsl({{ preset.primary_hsl }})"></button>
         {%% endfor %%}
+        <button class="btn" dj-click="toggle_theme_mode" aria-label="Switch between light and dark mode">
+            Light / dark
+        </button>
     </div>
+
+    <section style="margin-bottom: 2.5rem">
+        <h1 style="font-size: 2rem; margin: 0 0 .5rem">Your djust app is running.</h1>
+        <p class="muted" style="margin: 0; font-size: 1.05rem">
+            This page is one Python class and one template. Every button below is
+            handled on the server over a WebSocket, and only the changed parts of
+            the page are updated. No JavaScript was written.
+        </p>
+    </section>
+
+    <section class="card" style="margin-bottom: 2.5rem">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap">
+            <h2 style="margin: 0; font-size: 1.15rem">Try it: a live list</h2>
+            <span class="muted" style="font-size: .9rem">{{ total_count }} items &middot; {{ done_count }} done</span>
+        </div>
+        <p class="muted" style="margin: .25rem 0 1rem; font-size: .9rem">
+            Add an item, tick it off, or search. Then try the theme buttons in the top bar.
+        </p>
+
+        <div style="display: grid; grid-template-columns: 1fr auto; gap: .75rem; margin-bottom: 1rem">
+            <input type="text"
+                   dj-input="search"
+                   name="value"
+                   value="{{ search_query }}"
+                   placeholder="Search items..."
+                   aria-label="Search items">
+            <form dj-submit="add_item" style="display: flex; gap: .5rem; margin: 0">
+                <input type="text" name="name" placeholder="New item..." aria-label="New item name" style="width: 12rem">
+                <button type="submit" class="btn btn-primary" dj-loading.disable>Add</button>
+            </form>
+        </div>
+
+        <ul style="list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem">
+            {%% for item in items %%}
+            <li style="display: flex; align-items: center; gap: .75rem; padding: .6rem .75rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem)">
+                <input type="checkbox"
+                       dj-click="toggle_item"
+                       dj-value-item_id="{{ item.id }}"
+                       aria-label="Toggle done"
+                       {%% if item.done %%}checked{%% endif %%}>
+                <span style="flex: 1; {%% if item.done %%}text-decoration: line-through; opacity: .6{%% endif %%}">{{ item.name }}</span>
+                <button class="btn btn-ghost"
+                        dj-click="delete_item"
+                        dj-value-item_id="{{ item.id }}"
+                        dj-confirm="Delete this item?"
+                        aria-label="Delete item">Delete</button>
+            </li>
+            {%% empty %%}
+            <li class="muted" style="text-align: center; padding: 2rem 0">
+                {%% if search_query %%}No items match "{{ search_query }}".{%% else %%}No items yet. Add one above.{%% endif %%}
+            </li>
+            {%% endfor %%}
+        </ul>
+    </section>
+
+    <section style="display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin-bottom: 2.5rem">
+        <div class="card">
+            <h3 style="margin: 0 0 .4rem; font-size: 1rem">The view</h3>
+            <p class="muted" style="margin: 0; font-size: .9rem">
+                <code>%(app_name)s/views.py</code> holds the state and one method per
+                button. Edit it and this page hot-reloads.
+            </p>
+        </div>
+        <div class="card">
+            <h3 style="margin: 0 0 .4rem; font-size: 1rem">The template</h3>
+            <p class="muted" style="margin: 0; font-size: .9rem">
+                <code>%(app_name)s/templates/%(app_name)s/index.html</code> is plain
+                Django markup. <code>dj-click</code> names the method to call.
+            </p>
+        </div>
+        <div class="card">
+            <h3 style="margin: 0 0 .4rem; font-size: 1rem">The transport</h3>
+            <p class="muted" style="margin: 0; font-size: .9rem">
+                djust keeps a WebSocket open, diffs the rendered HTML in Rust, and
+                patches only what changed. Reconnection is handled for you.
+            </p>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2 style="margin: 0 0 .75rem; font-size: 1.15rem">Next steps</h2>
+        <ul style="margin: 0; padding-left: 1.2rem; display: grid; gap: .35rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr))">
+            <li><a href="https://docs.djust.org/getting-started/first-liveview/">Your First LiveView</a><span class="muted">&nbsp;— build a counter from scratch</span></li>
+            <li><a href="https://docs.djust.org/theming/overview/">Theming</a><span class="muted">&nbsp;— the presets and modes used on this page</span></li>
+            <li><a href="https://docs.djust.org/forms/">Forms</a><span class="muted">&nbsp;— real-time validation with Django forms</span></li>
+            <li><a href="https://docs.djust.org/guides/components/">Components</a><span class="muted">&nbsp;— reusable live components</span></li>
+            <li><a href="https://docs.djust.org/guides/deployment/">Deployment</a><span class="muted">&nbsp;— static files, hosts, and servers</span></li>
+            <li><a href="https://github.com/djust-org/djust">GitHub</a><span class="muted">&nbsp;— source, issues, and releases</span></li>
+        </ul>
+    </section>
 
 %(template_extra)s\
 </div>

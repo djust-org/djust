@@ -1,5 +1,17 @@
 # Installation
 
+**tl;dr**
+
+```bash
+# New project
+uvx djust@latest new myproject && cd myproject && make dev
+
+# Existing Django project (run beside manage.py)
+uvx djust@latest init
+```
+
+Then open **http://127.0.0.1:8000/**.
+
 Create a new project with one command, or add djust to a Django project you
 already have with another. Both paths set up the pieces described in
 [Configure by hand](#configure-by-hand), and use the same names as
@@ -32,8 +44,10 @@ cd myproject
 make dev
 ```
 
-Open **http://127.0.0.1:8000/**. The starter includes an interactive list:
-add an item and check that it appears without a page reload.
+Open **http://127.0.0.1:8000/**. The starter page has a live list and a
+theme switcher: add an item, then change the theme, and check that both
+update without a page reload. Pass `--bare` for a one-button placeholder page
+instead.
 
 `djust new` creates `myproject/`, makes a `.venv` inside it, installs the
 project's requirements into that environment, runs migrations, and finishes
@@ -46,6 +60,11 @@ the command `djust new` prints instead:
 `@latest` is intentional: it requests the current published release instead
 of reusing an older globally installed or cached CLI; see
 [uv's tool-version behavior](https://docs.astral.sh/uv/concepts/tools/#tool-versions).
+You do not need djust installed globally. If you prefer a plain `djust`
+command, `uv tool install djust` provides one, and then `djust new myproject`
+replaces `uvx djust@latest new myproject` everywhere below. A global install
+does not update itself, so run `uv tool upgrade djust` before creating a
+project; an outdated CLI generates outdated files (see Troubleshooting).
 Choose a new directory name in a parent folder such as `~/projects`; do not
 run it inside another project or its Python package.
 
@@ -89,6 +108,7 @@ uvx djust@latest new myproject --with-auth --with-db
 | `--with-presence` | Online-user presence example |
 | `--with-streaming` | Live-feed streaming example |
 | `--from-schema schema.json` | Models and views from a JSON schema; implies `--with-db` |
+| `--bare` | A placeholder page with one live button instead of the themed demo |
 | `--no-setup` | Generate files only; the command prints the setup steps to run yourself |
 
 You can now edit the generated `myproject/views.py`, or follow

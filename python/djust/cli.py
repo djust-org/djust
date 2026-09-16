@@ -347,6 +347,7 @@ def cmd_new(args: argparse.Namespace) -> None:
             with_streaming=getattr(args, "with_streaming", False),
             from_schema=getattr(args, "from_schema", None),
             auto_setup=not getattr(args, "no_setup", False),
+            bare=getattr(args, "bare", False),
         )
     except (ValueError, ScaffoldSetupError) as e:
         print("Error: %s" % e)
@@ -1005,6 +1006,11 @@ def main() -> None:
         dest="from_schema",
         metavar="SCHEMA_FILE",
         help="Path to a JSON schema file describing models",
+    )
+    new_parser.add_argument(
+        "--bare",
+        action="store_true",
+        help="Placeholder page instead of the themed demo",
     )
     new_parser.add_argument(
         "--no-setup",
