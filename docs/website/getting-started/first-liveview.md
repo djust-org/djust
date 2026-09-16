@@ -6,6 +6,23 @@ Build a live counter — no page refreshes, no JavaScript to write.
 
 A counter with increment/decrement buttons that updates instantly via WebSocket. The entire feature is Python.
 
+## Before you start
+
+Complete [Installation](./installation.md) first. Run commands below from
+the directory containing `manage.py`, with the project environment activated.
+
+The manual installation path already creates and registers `myapp`. If you
+used `djust new myproject`, the generated starter app is named `myproject`;
+create a separate app for this tutorial:
+
+```bash
+python manage.py startapp myapp
+```
+
+Add `"myapp"` to `INSTALLED_APPS` and `"myapp.views"` to
+`LIVEVIEW_ALLOWED_MODULES` in your project's settings. Keep the existing
+entries. The URL step below connects this app to the site.
+
 ## 1. Create the View
 
 Create `myapp/views.py`:
@@ -85,10 +102,22 @@ urlpatterns = [
 ]
 ```
 
+In the project's `myproject/urls.py`, import `include` and add the app's
+routes to the existing `urlpatterns` if they are not already included:
+
+```python
+from django.urls import include, path
+
+urlpatterns += [path("", include("myapp.urls"))]
+```
+
+A scaffolded project can keep its starter homepage. The new counter is at
+`/counter/`.
+
 ## 4. Run It
 
 ```bash
-uvicorn myproject.asgi:application --reload
+python -m uvicorn myproject.asgi:application --reload
 ```
 
 Visit **http://localhost:8000/counter/** and click the buttons — the count updates instantly without a page reload.
