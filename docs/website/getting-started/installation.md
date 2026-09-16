@@ -386,6 +386,14 @@ session migration applied. Run migrations with the same project settings and
 database environment variables as the server; `manage.py check` alone does
 not create tables. Restart the server after completing setup.
 
+### Keeping djust current
+
+djust prints one line when a newer release or a security advisory applies to
+your installed version, at `djust new`/`init`, on dev-server start, and in
+`manage.py check`. It is cached daily and silent on failure; the
+[update and security notices](../guides/update-check.md) guide explains what
+it sends and how to turn it off.
+
 ### The development file watcher
 
 If checks report only `djust.C401` about the optional development file
