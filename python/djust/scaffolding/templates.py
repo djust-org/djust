@@ -582,12 +582,16 @@ BASE_HTML = """\
             padding: 1.25rem 1.5rem;
         }
         .muted { color: hsl(var(--muted-foreground)); }
-        input[type="text"] {
+        input[type="text"], input[type="email"], input[type="url"],
+        input[type="password"], input[type="number"], input[type="date"] {
             font: inherit; width: 100%%; padding: .55rem .8rem;
             border-radius: var(--radius, .5rem); border: 1px solid hsl(var(--input));
             background: hsl(var(--background)); color: hsl(var(--foreground));
         }
-        input[type="text"]:focus { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
+        input[type="text"]:focus, input[type="email"]:focus, input[type="url"]:focus,
+        input[type="password"]:focus, input[type="number"]:focus, input[type="date"]:focus {
+            outline: 2px solid hsl(var(--ring)); outline-offset: 1px;
+        }
         code { font-family: var(--font-mono, ui-monospace, monospace); font-size: .9em;
                background: hsl(var(--muted)); padding: .1em .35em; border-radius: .3em; }
         footer { border-top: 1px solid hsl(var(--border)); padding: 1.25rem 0; font-size: .85rem; }
@@ -848,31 +852,28 @@ LOGIN_HTML = """\
 {%% block title %%}Login - %(display_name)s{%% endblock %%}
 
 {%% block content %%}
-<div class="max-w-md mx-auto mt-16">
-    <div class="glass rounded-xl p-8">
-        <h2 class="text-2xl font-bold text-white mb-6 text-center">Sign In</h2>
+<div style="max-width: 24rem; margin: 3rem auto 0">
+    <div class="card">
+        <h2 style="margin: 0 0 1.5rem; font-size: 1.35rem; text-align: center">Sign In</h2>
         <form method="post" action="{%% url 'login' %%}">
             {%% csrf_token %%}
             <input type="hidden" name="next" value="{{ next }}">
             {%% if form.errors %%}
-            <div class="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+            <p class="muted" style="margin: 0 0 1rem; color: hsl(var(--destructive))">
                 Invalid username or password.
-            </div>
+            </p>
             {%% endif %%}
-            <div class="mb-4">
-                <label class="block text-sm text-gray-400 mb-1">Username</label>
-                <input type="text" name="username" autofocus
-                       class="w-full px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 focus:outline-none focus:border-indigo-500">
+            <div style="margin-bottom: 1rem">
+                <label class="muted" for="id_username"
+                       style="display: block; margin-bottom: .25rem; font-size: .875rem">Username</label>
+                <input type="text" name="username" id="id_username" autofocus>
             </div>
-            <div class="mb-6">
-                <label class="block text-sm text-gray-400 mb-1">Password</label>
-                <input type="password" name="password"
-                       class="w-full px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 focus:outline-none focus:border-indigo-500">
+            <div style="margin-bottom: 1.5rem">
+                <label class="muted" for="id_password"
+                       style="display: block; margin-bottom: .25rem; font-size: .875rem">Password</label>
+                <input type="password" name="password" id="id_password">
             </div>
-            <button type="submit"
-                    class="w-full py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition font-medium">
-                Sign In
-            </button>
+            <button type="submit" class="btn btn-primary" style="width: 100%%">Sign In</button>
         </form>
     </div>
 </div>
@@ -912,16 +913,20 @@ urlpatterns += [
 # ---------------------------------------------------------------------------
 # Feature: --with-auth — nav extra (username + logout link)
 # ---------------------------------------------------------------------------
+#
+# This fragment is a SUBSTITUTION VALUE (spliced into BASE_HTML via
+# ``%(nav_extra)s``), so its template tags carry single ``%`` — ``%%``
+# escaping belongs only in the ``%``-format template strings themselves.
+# Escaping here survives verbatim into the generated base.html, where
+# ``{%%`` is an invalid block tag (#2876).
 
 AUTH_NAV_EXTRA = """\
-            <div class="flex items-center gap-3">
-                {%% if user.is_authenticated %%}
-                <span class="text-sm text-gray-400">{{ user.username }}</span>
-                <a href="{%% url 'logout' %%}" class="text-sm text-indigo-400 hover:text-indigo-300">Logout</a>
-                {%% else %%}
-                <a href="{%% url 'login' %%}" class="text-sm text-indigo-400 hover:text-indigo-300">Login</a>
-                {%% endif %%}
-            </div>
+            {% if user.is_authenticated %}
+            <span class="muted">{{ user.username }}</span>
+            <a href="{% url 'logout' %}">Logout</a>
+            {% else %}
+            <a href="{% url 'login' %}">Login</a>
+            {% endif %}
 """
 
 # ---------------------------------------------------------------------------
@@ -1023,22 +1028,27 @@ DB_VIEWS_DELETE_OVERRIDE = """\
 # ---------------------------------------------------------------------------
 # Feature: --with-presence — template partial
 # ---------------------------------------------------------------------------
+#
+# Like AUTH_NAV_EXTRA above, both feature template fragments below are
+# SUBSTITUTION VALUES (spliced into INDEX_HTML via ``%(template_extra)s``):
+# their template tags carry single ``%``. Presence records expose the joined
+# user as ``{{ user.meta.name }}`` (record shape: id / joined_at / meta).
 
 PRESENCE_TEMPLATE_EXTRA = """\
 
     <!-- Presence indicators -->
-    <div class="mt-8 border-t border-white/5 pt-4">
-        <div class="flex items-center gap-2 text-sm text-gray-400">
-            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-            {{ presence_count }} user{{ presence_count|pluralize }} online
+    <div style="margin-top: 2.5rem; border-top: 1px solid hsl(var(--border)); padding-top: 1rem">
+        <div class="muted" style="display: flex; align-items: center; gap: .5rem; font-size: .875rem">
+            <span style="width: .5rem; height: .5rem; border-radius: 999px; background: hsl(142 71% 45%)"></span>
+            <span>{{ presence_count }} user{{ presence_count|pluralize }} online</span>
         </div>
-        <div class="flex gap-1 mt-2">
-            {%% for user in presence_list %%}
-            <div class="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs text-white"
-                 title="{{ user.username }}">
-                {{ user.username|first|upper }}
-            </div>
-            {%% endfor %%}
+        <div style="display: flex; gap: .25rem; margin-top: .5rem">
+            {% for user in presence_list %}
+            <span title="{{ user.meta.name }}"
+                  style="width: 2rem; height: 2rem; border-radius: 999px; display: inline-flex;
+                         align-items: center; justify-content: center; font-size: .75rem;
+                         background: hsl(var(--primary)); color: hsl(var(--primary-foreground))">{{ user.meta.name|first|upper }}</span>
+            {% endfor %}
         </div>
     </div>
 """
@@ -1049,15 +1059,23 @@ PRESENCE_TEMPLATE_EXTRA = """\
 
 STREAMING_TEMPLATE_EXTRA = """\
 
-    <!-- Stream output -->
-    <div class="mt-8 border-t border-white/5 pt-4">
-        <h3 class="text-sm font-medium text-gray-400 mb-2">Live Feed</h3>
-        <div dj-stream="feed" dj-stream-mode="append"
-             class="glass rounded-lg p-4 max-h-64 overflow-y-auto space-y-1 text-sm font-mono">
-            {%% for entry in streams.feed %%}
-            <div class="text-gray-300">{{ entry }}</div>
-            {%% endfor %%}
+    <!-- Live feed (streams) -->
+    <div style="margin-top: 2.5rem">
+        <h3 class="muted" style="margin: 0 0 .5rem; font-size: .875rem; font-weight: 500">Live Feed</h3>
+        <div dj-stream="feed"
+             style="border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
+                    background: hsl(var(--card)); color: hsl(var(--card-foreground));
+                    padding: 1rem; max-height: 16rem; overflow-y: auto;
+                    display: grid; gap: .25rem; align-content: start;
+                    font-family: var(--font-mono, ui-monospace, monospace); font-size: .8125rem">
+            {% for entry in streams.feed %}
+            <div>{{ entry }}</div>
+            {% endfor %}
         </div>
+        <form dj-submit="send_message" style="display: flex; gap: .5rem; margin-top: .5rem">
+            <input type="text" name="message" placeholder="Say something..." aria-label="Feed message" style="width: 12rem">
+            <button type="submit" class="btn btn-primary" dj-loading.disable>Send</button>
+        </form>
     </div>
 """
 
@@ -1128,46 +1146,48 @@ SCHEMA_LIST_HTML = """\
 {%% csrf_token %%}
 <div dj-root dj-view="%(app_name)s.views.%(view_class)s">
 
-    <h1 class="text-2xl font-bold text-white mb-6">%(model_display)s</h1>
+    <h1 style="font-size: 2rem; margin: 0 0 1.5rem">%(model_display)s</h1>
 
     <!-- Search -->
-    <div class="mb-6">
+    <div style="margin-bottom: 1.5rem">
         <input type="text"
                dj-input="search"
                name="value"
                value="{{ search_query }}"
                placeholder="Search %(model_display_lower)s..."
-               class="w-full px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">
+               aria-label="Search %(model_display_lower)s">
     </div>
 
     <!-- Add form -->
-    <form dj-submit="create" class="glass rounded-lg p-4 mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <form dj-submit="create" class="card"
+          style="margin-bottom: 1.5rem; display: grid; gap: .75rem; justify-content: start">
 %(form_fields_html)s\
-        <div class="sm:col-span-2">
-            <button type="submit"
-                    class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition"
-                    dj-loading.class="opacity-50" dj-loading.disable>
+        <div>
+            <button type="submit" class="btn btn-primary"
+                    dj-loading.disable>
                 Add %(model_display_singular)s
             </button>
         </div>
     </form>
 
     <!-- List -->
-    <div class="space-y-2">
+    <div style="display: grid; gap: .5rem">
         {%% for item in items %%}
-        <div class="glass rounded-lg px-4 py-3 flex items-center justify-between group">
-            <div class="flex items-center gap-4">
+        <div class="card"
+             style="display: flex; align-items: center; justify-content: space-between;
+                    gap: 1rem; padding: .75rem 1rem">
+            <div style="display: flex; align-items: center; gap: 1rem">
 %(list_item_fields)s\
             </div>
             <button dj-click="delete"
                     data-item_id:int="{{ item.id }}"
                     dj-confirm="Delete this %(model_display_singular_lower)s?"
-                    class="text-red-400 opacity-0 group-hover:opacity-100 hover:text-red-300 transition text-sm">
+                    class="btn btn-ghost" style="color: hsl(var(--destructive))">
                 Delete
             </button>
         </div>
         {%% empty %%}
-        <div class="text-center text-gray-500 py-12">No %(model_display_lower)s yet.</div>
+        <div class="muted" style="text-align: center; padding: 3rem 0">No %(model_display_lower)s yet.</div>
         {%% endfor %%}
     </div>
 
