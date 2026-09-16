@@ -9,6 +9,11 @@ tag's frozen ``CHANGELOG.md`` snapshot.
 has NO section used to be invisible (the gate silently fell back to the
 previous tag — v1.1.3 shipped to PyPI that way).
 
+#2862 extends it with *deletion* detection: the #2028 pin iterated only the
+sections the working tree still has, so a shipped section deleted from the
+tree was never compared and its removal exited 0. The fix iterates the union
+of the tree's sections and the anchor snapshot's sections.
+
 Some tests run against the REAL repo + tags (the check reads git tags from the
 repo root), so the empirical canary (#1459) is a permanent regression: injecting
 spurious content into a shipped section MUST make the check fail, and the
@@ -163,6 +168,30 @@ def test_missing_newest_section_is_caught(tmp_path):
     assert f"no '## [{anchor}]' section" in result.stderr
 
 
+@requires_shipped
+def test_deleting_a_superseded_section_is_caught(tmp_path):
+    """#2862 replay on the real repo: delete a genuinely-frozen superseded
+    section from a copy (real tags still back the comparison). Before the fix
+    the pin iterated only the tree's own sections, so this exited 0 with
+    'OK: N-1 shipped section(s)' — the exact v1.2.0rc6 deletion reproduction.
+    Now it must fail naming the section as missing."""
+    ver = _first_superseded_section()
+    text = CHANGELOG.read_text(encoding="utf-8")
+    start = text.index(f"## [{ver}]")
+    end = text.find("## [", start + 1)
+    deleted = text[:start] + (text[end:] if end != -1 else "")
+    copy = tmp_path / "CHANGELOG.md"
+    copy.write_text(deleted, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(copy)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert f"## [{ver}]' shipped" in result.stderr
+    assert "missing from the" in result.stderr
+
+
 class TestParseVersion:
     """The absence check sorts tags, so the pre-release order must be right:
     ``1.2.0rc7 < 1.2.0`` and ``1.1.2 < 1.1.3``."""
@@ -283,4 +312,64 @@ class TestMissingSectionForHigherTag:
         repo.set_sections(["1.1.1"])
         repo.tag("v1.1.1")
         repo.tag("vnot-a-version")
+        assert repo.run_check().returncode == 0
+
+
+class TestDeletedShippedSection:
+    """#2862 — a shipped section deleted from the tree must fail the pin.
+
+    The #2028 loop iterated only the working tree's own sections, so a
+    deletion was never compared (exit 0, count N-1). The fix iterates the
+    anchor snapshot's sections too, so *deletion* and *rewrite* are two
+    symptoms of one union comparison. The anchor-itself case is different:
+    there the pin falls back to the next tag and the #2854 absence check is
+    what fires — pinned here so the mechanism split stays explicit.
+    """
+
+    def test_deleting_a_superseded_section_fails(self, tmp_path):
+        # [1.1.1] shipped before the v1.1.2 anchor; deleting it from the tree
+        # used to leave nothing for the pin to compare against.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.set_sections(["1.1.2"])  # delete [1.1.1] below the anchor
+        result = repo.run_check()
+        assert result.returncode == 1
+        assert "## [1.1.1]' shipped" in result.stderr
+        assert "missing from the" in result.stderr
+
+    def test_deleting_the_anchor_section_fails(self, tmp_path):
+        # The anchor deleted: the pin falls back to v1.1.1 and the #2854
+        # absence check demands the deleted anchor's section by name.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        repo.set_sections(["1.1.1"])  # delete the anchor [1.1.2] itself
+        result = repo.run_check()
+        assert result.returncode == 1
+        assert "no '## [1.1.2]' section" in result.stderr
+
+    def test_edit_above_the_anchor_still_passes(self, tmp_path):
+        # Legitimate work above the anchor must stay green: content in
+        # [Unreleased] and a brand-new not-yet-tagged section.
+        repo = _TempRepo(tmp_path / "repo")
+        repo.set_sections(["1.1.1", "1.1.2"])
+        repo.tag("v1.1.1")
+        repo.tag("v1.1.2")
+        text = (repo.root / "CHANGELOG.md").read_text(encoding="utf-8")
+        text = text.replace(
+            "## [Unreleased]\n",
+            "## [Unreleased]\n\n- New unreleased work.\n",
+            1,
+        )
+        text = text.replace(
+            "## [1.1.2]",
+            "## [1.1.3] - 2026-09-15\n\n- Untagged new section.\n\n## [1.1.2]",
+            1,
+        )
+        (repo.root / "CHANGELOG.md").write_text(text, encoding="utf-8")
+        repo._git("add", "-A")
+        repo._git("commit", "-q", "--allow-empty", "-m", "changelog")
         assert repo.run_check().returncode == 0
