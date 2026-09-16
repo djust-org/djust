@@ -1,0 +1,212 @@
+[
+ {
+  "ghsa_id": "GHSA-xjw9-38cr-6372",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "<= 1.1.1",
+    "patched_versions": "1.1.2"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-9395-2g46-rj3f",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "<= 1.1.0",
+    "patched_versions": "1.1.1"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-pvg3-6q9j-mj3x",
+  "severity": "medium",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-8g2f-g3gq-5rjv",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-c67v-vqrp-m5wj",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-f795-p5jw-j6g2",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-pg97-jvmf-qfvc",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-v9rj-xjfv-xj9r",
+  "severity": "medium",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-3492-cvg7-9mr2",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-xhhm-f6hp-2qwj",
+  "severity": "critical",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-c7c5-5j6r-q957",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-cc7c-9jff-58wj",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-4mf4-73j6-mvrw",
+  "severity": "medium",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-7prp-2623-8g45",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.7",
+    "patched_versions": "1.0.7"
+   }
+  ]
+ },
+ {
+  "ghsa_id": "GHSA-xx4j-w367-7247",
+  "severity": "high",
+  "vulnerabilities": [
+   {
+    "package": {
+     "ecosystem": "pip",
+     "name": "djust"
+    },
+    "vulnerable_version_range": "< 1.0.4",
+    "patched_versions": "1.0.4"
+   }
+  ]
+ }
+]

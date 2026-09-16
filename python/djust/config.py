@@ -117,6 +117,10 @@ class LiveViewConfig:
         # Set to False if you orchestrate the file watcher externally (e.g.
         # watchfiles wrapping uvicorn) and want full manual control.
         "hot_reload_auto_enable": True,
+        # Once-a-day notice of newer releases / security advisories on the
+        # dev server and in ``manage.py check``. Cached, silent on failure,
+        # never runs with DEBUG=False. See docs/website/guides/update-check.md.
+        "update_check": True,
         # Hot View Replacement (v0.6.1) — state-preserving Python code
         # reload in dev. Gated on DEBUG=True AND hot_reload=True.
         "hvr_enabled": True,

@@ -600,6 +600,7 @@ dependencies = [
     { name = "markdown" },
     { name = "msgpack" },
     { name = "nh3" },
+    { name = "packaging" },
     { name = "requests" },
 ]
 
@@ -688,6 +689,7 @@ requires-dist = [
     { name = "nh3", marker = "extra == 'components'", specifier = ">=0.2,<1" },
     { name = "orjson", marker = "extra == 'dev'", specifier = ">=3.11.6,<4" },
     { name = "orjson", marker = "extra == 'performance'", specifier = ">=3.11.6,<4" },
+    { name = "packaging", specifier = ">=21" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'tenants-postgres'", specifier = ">=3.1,<4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0,<10" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21,<2" },
