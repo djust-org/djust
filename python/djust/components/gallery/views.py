@@ -14,6 +14,8 @@ from django.template.backends.base import BaseEngine
 from django.templatetags.static import static
 from django.utils.html import escape
 
+from djust._log_utils import sanitize_for_log
+
 from .registry import get_gallery_data
 
 logger = logging.getLogger(__name__)
@@ -50,11 +52,14 @@ def _get_theme_css(
     except Exception:
         # Keep the gallery renderable, but do not do it silently — a silent
         # fallback here is indistinguishable from "this theme has no CSS".
+        #
+        # sanitize_for_log on all three: they come from the gallery's own
+        # cookies, so they are request data (CodeQL py/log-injection).
         logger.exception(
             "component gallery could not generate theme CSS for %s/%s/%s",
-            design_system,
-            preset,
-            mode,
+            sanitize_for_log(design_system),
+            sanitize_for_log(preset),
+            sanitize_for_log(mode),
         )
         return ""
 
