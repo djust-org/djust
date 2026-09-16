@@ -1,1 +1,0 @@
-- Avoid repeated `dir()` scans for numeric lookups on exact built-in sequences during template rendering, while preserving Django's lookup behavior for custom objects and subclasses.
