@@ -205,8 +205,10 @@ Your First LiveView:
   paths — new project (three commands plus the feature-flag table), existing
   project (`djust init`, `--dry-run`, what it changes), and "Configure by hand"
   (the current manual settings/ASGI/URL steps). Building from source stays.
-- `docs/website/getting-started/troubleshooting.md`: the two recovery
-  sections moved from the install page, linked from it.
+- A "Troubleshooting" section at the end of `installation.md` holds the two
+  recovery sections. It is a section, not a new page, because both docs sites
+  keep their navigation in their own repos and those nav changes are gated on a
+  release tag.
 - `docs/website/guides/scaffolding.md`: short `djust init` reference.
 - `changelog.d/`: `djust-init.added.md` and a `scaffold-make-dev.changed.md`.
 
