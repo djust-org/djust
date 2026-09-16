@@ -168,3 +168,61 @@ def test_cli_success_prints_next_steps(capsys, monkeypatch):
     output = capsys.readouterr().out
     assert "  cd child\n  make dev\n" in output
     assert "http://127.0.0.1:8000/" in output
+
+
+# --- default demo page and --bare -------------------------------------------
+
+
+def _check(project, app: str):
+    import sys
+
+    env = dict(os.environ, DJANGO_SETTINGS_MODULE="%s.settings" % app)
+    env["PYTHONPATH"] = os.pathsep.join([str(project), env.get("PYTHONPATH", "")])
+    return subprocess.run(
+        [sys.executable, "manage.py", "check"], cwd=project, env=env, capture_output=True, text=True
+    )
+
+
+def test_default_demo_switches_themes_and_links_to_docs(tmp_path):
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    views = (project / "child" / "views.py").read_text()
+    base = (project / "child" / "templates" / "child" / "base.html").read_text()
+    index = (project / "child" / "templates" / "child" / "index.html").read_text()
+    settings = (project / "child" / "settings.py").read_text()
+    assert "class ChildView(ThemeMixin, LiveView)" in views
+    assert "{% theme_head %}" in base
+    # Inside dj-root: djust binds dj-* events only within the LiveView root.
+    root = index.split("<div dj-root", 1)[1]
+    assert 'dj-click="toggle_theme_mode"' in root
+    assert 'dj-click="set_theme_preset"' in root
+    assert "cdn.tailwindcss.com" not in base
+    assert "var(--background)" in base
+    assert "docs.djust.org/getting-started/first-liveview" in index
+    assert "docs.djust.org/theming" in index
+    assert "djust.theming" in settings
+    assert "djust.theming.context_processors.theme_context" in settings
+    check = _check(project, "child")
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
+    project = generator.generate_project(
+        "child", target_dir=str(tmp_path), auto_setup=False, bare=True
+    )
+    views = (project / "child" / "views.py").read_text()
+    index = (project / "child" / "templates" / "child" / "index.html").read_text()
+    base = (project / "child" / "templates" / "child" / "base.html").read_text()
+    assert "class ChildView(LiveView)" in views
+    assert "ThemeMixin" not in views
+    assert "add_item" not in views
+    assert 'dj-click="ping"' in index
+    assert "theme_head" not in base
+    assert "djust.theming" not in (project / "child" / "settings.py").read_text()
+    check = _check(project, "child")
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_cli_passes_bare_through():
+    with patch.object(generator, "generate_project") as gen:
+        cli.cmd_new(argparse.Namespace(name="child", no_setup=True, bare=True))
+    assert gen.call_args.kwargs["bare"] is True

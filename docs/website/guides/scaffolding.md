@@ -160,6 +160,9 @@ uvx djust@latest new myapp --with-auth --with-db --with-presence --with-streamin
 # Generate models, admin, migrations and views from a JSON schema
 uvx djust@latest new myapp --from-schema schema.json
 
+# A placeholder page instead of the themed demo
+uvx djust@latest new myapp --bare
+
 # Add djust to an existing Django project (run beside manage.py)
 uvx djust@latest init
 
@@ -183,6 +186,7 @@ djust:
 | `PresenceMixin` example | off | `--with-presence` |
 | Stream-friendly base templates | off | `--with-streaming` |
 | Models generated from a JSON schema | off | `--from-schema schema.json` |
+| Demo page: live list, theme switcher, docs links | on | Replace with a placeholder via `--bare` |
 | Create `.venv`, install dependencies, migrate, and check | on | Skip with `--no-setup` |
 
 `--from-schema` reads a small JSON file describing models and fields, then

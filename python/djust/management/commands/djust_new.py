@@ -60,6 +60,11 @@ class Command(BaseCommand):
             help="Path to a JSON schema file describing models",
         )
         parser.add_argument(
+            "--bare",
+            action="store_true",
+            help="Placeholder page instead of the themed demo",
+        )
+        parser.add_argument(
             "--no-setup",
             action="store_true",
             dest="no_setup",
@@ -87,6 +92,7 @@ class Command(BaseCommand):
                 with_streaming=options["with_streaming"],
                 from_schema=options.get("from_schema"),
                 auto_setup=not options["no_setup"],
+                bare=options.get("bare", False),
             )
         except (ValueError, ScaffoldSetupError) as e:
             raise CommandError(str(e)) from e
