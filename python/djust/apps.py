@@ -186,6 +186,10 @@ def _start_update_notice() -> None:
     try:
         from django.conf import settings
 
+        # DEBUG=False never checks, and production keeps its import footprint
+        # (test_lazy_package_init_2559): decide before importing the module.
+        if not settings.DEBUG:
+            return
         from djust import updates
 
         config = getattr(settings, "DJUST_CONFIG", None) or {}

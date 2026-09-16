@@ -74,8 +74,9 @@ def test_security_message_wins_and_targets_the_higher_version():
         installed="1.0.6", latest="1.2.1", advisories=updates.advisories_for("1.0.6", ADVISORIES)
     )
     message = status.message("uv pip install -U djust")
-    assert message.startswith("SECURITY: djust 1.0.6 has 14 published advisories")
-    assert "upgrade to 1.2.1 or later" in message
+    assert message.startswith("SECURITY: djust 1.0.6 has 14 published advisories (")
+    assert " and 11 more): upgrade to 1.2.1 or later" in message
+    assert message.count("GHSA-") == 3
 
 
 def test_no_message_when_current():

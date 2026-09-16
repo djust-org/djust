@@ -33,6 +33,7 @@ ADVISORIES_PAGE = "https://github.com/djust-org/djust/security/advisories"
 TIMEOUT_SECONDS = 2
 CACHE_TTL = 24 * 60 * 60
 FAILURE_BACKOFF = 60 * 60
+MAX_LISTED_ADVISORIES = 3
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,9 @@ class UpdateStatus:
 
     def message(self, install_hint: str) -> Optional[str]:
         if self.advisories:
-            ids = ", ".join(a.ghsa_id for a in self.advisories)
+            shown = [a.ghsa_id for a in self.advisories[:MAX_LISTED_ADVISORIES]]
+            more = len(self.advisories) - len(shown)
+            ids = ", ".join(shown) + (" and %d more" % more if more else "")
             noun = "advisory" if len(self.advisories) == 1 else "advisories"
             target = self.upgrade_target()
             upgrade = "upgrade to %s or later" % target if target else "upgrade"
