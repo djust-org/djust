@@ -105,6 +105,7 @@ class DjustConfig(AppConfig):
         import os
 
         if not os.environ.get("PYTEST_CURRENT_TEST"):
+            _start_update_notice()
             try:
                 from djust.config import config
 
@@ -174,3 +175,28 @@ class DjustConfig(AppConfig):
                 "[FilterBridge] startup warm in DjustConfig.ready() failed"
             )
             return False
+
+
+def _start_update_notice() -> None:
+    """Log one line about a newer release or advisory, from a daemon thread.
+
+    Gated by ``djust.updates.should_check`` (off with DEBUG=False, in CI, or
+    via DJUST_CONFIG["update_check"] = False). Never raises.
+    """
+    try:
+        from django.conf import settings
+
+        from djust import updates
+
+        config = getattr(settings, "DJUST_CONFIG", None) or {}
+        if not updates.should_check(debug=bool(settings.DEBUG), config=config):
+            return
+
+        def announce(status: "updates.UpdateStatus") -> None:
+            message = status.message("uv pip install -U djust")
+            if message:
+                logging.getLogger("djust.updates").info("%s", message)
+
+        updates.check_in_background(announce)
+    except Exception:  # noqa: BLE001 - never let the notice break startup
+        logging.getLogger("djust").debug("update notice failed to start", exc_info=True)
