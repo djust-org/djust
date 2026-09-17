@@ -105,11 +105,24 @@
       <h1>Theme Gallery</h1>
       <form class="gallery__preset-form" method="get">
         <label for="preset-select">Preset:</label>
-        <select id="preset-select" name="preset" onchange="this.form.submit()">
+        {% comment %}
+        `setPreset` rather than `this.form.submit()`. A GET form changes the
+        preset for that page load only, so removing `?preset=` from the URL fell
+        back to whatever preset the visitor had stored — "I picked midnight,
+        took the parameter off, and it reverted to candy".
+
+        `window.djustTheme.setPreset` is the framework's own persisting API
+        (theme.js:217): it writes the cookie and localStorage and reloads, so the
+        choice survives, and every other theme control on the site already works
+        this way. The form stays as the no-JS fallback.
+        {% endcomment %}
+        <select id="preset-select" name="preset"
+                onchange="window.djustTheme &amp;&amp; window.djustTheme.setPreset(this.value)">
           {% for preset in presets %}
           <option value="{{ preset.name }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
           {% endfor %}
         </select>
+        <noscript><button type="submit">Apply</button></noscript>
       </form>
     </div>
 
