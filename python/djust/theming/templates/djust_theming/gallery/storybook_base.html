@@ -279,7 +279,14 @@
     </nav>
 
     <!-- Content -->
-    <main class="sb-content">
+    {% comment %}
+    `dj-view` is the mount point. Without it the page renders the component
+    markup but nothing is listening, so `dj-click` goes nowhere — which is
+    exactly why the accordion showed a chevron and did nothing. The child
+    template names its own view class via its `view_class` block, the same
+    contract the component gallery's `_base.html` uses.
+    {% endcomment %}
+    <main class="sb-content" dj-view="djust.theming.gallery.live_views.{% block view_class %}StorybookDetailView{% endblock %}">
       {% block content %}{% endblock %}
     </main>
   </div>
