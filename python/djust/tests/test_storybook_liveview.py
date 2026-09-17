@@ -186,3 +186,44 @@ async def test_http_render_and_ws_mount_agree_structurally():
         "paths will not resolve. First divergence: "
         f"{next((i for i, (a, b) in enumerate(zip(http_shape, ws_shape)) if a != b), 'length')}"
     )
+
+
+# (component, event, params) — the descriptors the storybook attaches, and the
+# event each one's markup emits. `_INTERACTIVE` in live_views.py is the source
+# of truth for the set; this list is what proves each one answers.
+_INTERACTIVE_EVENTS = [
+    ("accordion", "accordion_toggle", {"value": "2"}),
+    ("tabs", "set_tab", {"value": "2"}),
+    ("collapsible", "toggle_collapsible", {"value": "1"}),
+    ("dropdown", "toggle_dropdown", {}),
+    ("modal", "toggle_modal", {"value": "1"}),
+    ("sheet", "toggle_sheet", {"value": "1"}),
+    ("tooltip", "toggle_tooltip", {"value": "1"}),
+    ("carousel", "carousel_go", {"value": "1"}),
+]
+
+
+@_BASE
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("component,event,params", _INTERACTIVE_EVENTS)
+async def test_interactive_component_answers_its_event(component, event, params):
+    """Rendering is not functionality: the event has to reach a handler.
+
+    Each of these components emits a `dj-click` naming its own event. Before the
+    storybook became a LiveView, that click reached nothing at all — the markup
+    was correct and the component was inert. Mounting and asserting a non-error
+    frame is what separates the two.
+    """
+    communicator, _mounted = await _mount(component)
+    try:
+        await communicator.send_json_to(
+            {"type": "event", "event": event, "params": params, "ref": 1}
+        )
+        response = await communicator.receive_json_from(timeout=5)
+    finally:
+        await communicator.disconnect()
+
+    assert response.get("type") != "error", (
+        f"{component}: {event} was refused by the server: {response!r}"
+    )
