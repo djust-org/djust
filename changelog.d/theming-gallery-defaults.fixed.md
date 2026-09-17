@@ -107,3 +107,12 @@
   `carousel` — are now mounted over a real `WebsocketCommunicator` and sent their
   own event, asserting a non-error frame comes back. Gate-off (removing a
   descriptor) fails the two tests for that component.
+- Fix the storybook's LIVE PREVIEW showing the component's invocation as text for
+  13 of the 24 template components. The preview was a hand-written chain of
+  `{% if name == "button" %}…{% elif %}` covering 11 names; every other component
+  fell through to an `{% else %}` that printed the call, so a section headed LIVE
+  PREVIEW read `tabs(id=…, active=0)` — `avatar`, `breadcrumb`, `nav`, `nav_group`,
+  `nav_item`, `pagination`, `progress`, `sidebar_nav`, `skeleton`, `table`, `tabs`,
+  `toast` and `tooltip`. Previews are now rendered from each component's own
+  template with the contract's example kwargs, in Python, so the page has one
+  preview mechanism rather than two and the list cannot fall behind the components.

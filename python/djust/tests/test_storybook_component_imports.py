@@ -86,3 +86,58 @@ def test_pages_do_not_name_the_static_namespace_as_a_package():
     for name in _python_components():
         line = build_storybook_detail_context(name)["import_line"]
         assert "djust_components." not in line, f"{name}: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# Template components — the preview is rendered, not printed
+# ---------------------------------------------------------------------------
+
+
+def _template_component_names() -> list[str]:
+    return [
+        name
+        for name in sorted(_COMPONENT_TO_CATEGORY)
+        if build_storybook_detail_context(name).get("component_type") == "template"
+    ]
+
+
+def test_there_are_template_components_to_check():
+    assert len(_template_component_names()) >= 20
+
+
+def test_every_template_component_gets_a_rendered_preview():
+    """The LIVE PREVIEW must show the component, not its invocation.
+
+    The preview was a hand-written chain of `{% if name == "button" %}…{% elif %}`
+    covering 11 of the 24 template components. The other 13 fell through to an
+    `{% else %}` that printed the call — so a section headed LIVE PREVIEW showed
+    `tabs(id=…, active=0)` as text. The previews are now rendered from each
+    component's own template with the contract's example kwargs, which needs no
+    per-component entry and cannot fall behind the component list.
+    """
+    unrendered = {}
+    for name in _template_component_names():
+        ctx = build_storybook_detail_context(name)
+        previews = ctx.get("template_examples_html") or []
+        if not previews:
+            unrendered[name] = "no previews produced"
+            continue
+        html = "".join(p["html"] for p in previews)
+        if not html.strip():
+            unrendered[name] = "preview is empty"
+        elif "dj-component-preview-error" in html:
+            unrendered[name] = html[:160]
+
+    assert not unrendered, f"template components with no rendered preview: {unrendered}"
+
+
+def test_the_preview_is_not_the_invocation():
+    """`tabs(...)` as text is the specific shape the fallback produced."""
+    import re
+
+    for name in _template_component_names():
+        ctx = build_storybook_detail_context(name)
+        for preview in ctx.get("template_examples_html") or []:
+            assert not re.match(rf"^\s*{re.escape(name)}\(", preview["html"]), (
+                f"{name}: the preview is the invocation, not the component"
+            )
