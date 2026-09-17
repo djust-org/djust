@@ -2410,6 +2410,17 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .dj-status-indicator:focus-visible { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 2px; border-radius: 9999px; }
 .dj-inline-edit__display:focus-visible { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 1px; }
 
+/* --- Data Table ---
+   The block had no rules, so a populated table rendered with browser-default
+   borders and spacing — inconsistent with every other table in the set and, at
+   zero rows, indistinguishable from a broken component. */
+.dj-data-table { width: 100%; overflow-x: auto; }
+.dj-data-table__table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.dj-data-table__th { padding: 0.5rem 0.75rem; text-align: left; font-weight: 600; color: hsl(var(--muted-foreground, 215 16% 47%)); border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); white-space: nowrap; }
+.dj-data-table__td { padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-data-table__tr:last-child .dj-data-table__td { border-bottom: 0; }
+.dj-data-table__tr:hover .dj-data-table__td { background: hsl(var(--muted, 210 40% 96%) / 0.5); }
+
 /* --- Progress Circle ---
    No rules existed. The component emits an SVG with `__track` and `__value`
    circles, so with nothing to size or stroke them the ring rendered as two
