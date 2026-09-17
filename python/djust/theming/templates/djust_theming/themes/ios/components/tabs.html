@@ -1,24 +1,36 @@
+{% comment %}
+The iOS theme's tabs — the same server-driven contract as the default
+`components/tabs.html`, restyled as a segmented control. Theme packs can ship
+their own copy of a component template, so this change had to be mirrored here
+or the iOS theme would have kept the retired client-side hook.
+
+Keep this in step with `components/tabs.html`: `dj-click="set_tab"` carrying the
+index as `data-value`, and a stringified `active` comparison (the DEP-002 `Tabs`
+descriptor stores the client's string, while `{% theme_tabs %}` is called with
+an int index — `0 == "0"` is False, and the tab set would never move).
+{% endcomment %}
 <div class="{{ css_prefix }}segmented-control {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     data-theme-tabs="{{ id }}"
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <div class="{{ css_prefix }}segmented-control-track" role="tablist">
         {% for tab in tabs %}
-        <button class="{{ css_prefix }}segment{% if forloop.counter0 == active %} {{ css_prefix }}segment-active{% endif %}"
+        <button class="{{ css_prefix }}segment{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %} {{ css_prefix }}segment-active{% endif %}"
                 role="tab"
                 id="{{ id }}-tab-{{ forloop.counter0 }}"
-                aria-selected="{% if forloop.counter0 == active %}true{% else %}false{% endif %}"
+                aria-selected="{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %}true{% else %}false{% endif %}"
                 aria-controls="{{ id }}-panel-{{ forloop.counter0 }}"
-                {% if forloop.counter0 != active %}tabindex="-1"{% endif %}>
+                dj-click="set_tab"
+                data-value="{{ forloop.counter0 }}"
+                {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}tabindex="-1"{% endif %}>
             {{ tab.label }}
         </button>
         {% endfor %}
     </div>
     {% for tab in tabs %}
-    <div class="{{ css_prefix }}tab-panel{% if forloop.counter0 != active %} {{ css_prefix }}tab-panel-hidden{% endif %}"
+    <div class="{{ css_prefix }}tab-panel{% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %} {{ css_prefix }}tab-panel-hidden{% endif %}"
          role="tabpanel"
          id="{{ id }}-panel-{{ forloop.counter0 }}"
          aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
-         {% if forloop.counter0 != active %}hidden{% endif %}>
+         {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}hidden{% endif %}>
         {{ tab.content|safe }}
     </div>
     {% endfor %}

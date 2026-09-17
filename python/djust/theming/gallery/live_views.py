@@ -228,6 +228,32 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
             )
         return rendered
 
+    def _render_live_template_examples(self) -> list:
+        """Template-component examples re-rendered against descriptor state.
+
+        The python branch has always done this (`_render_examples`), which is why
+        the accordion works there. Template components did not, so `tabs`,
+        `dropdown` and `modal` — all three of which have a descriptor in
+        `_INTERACTIVE` — rendered from their example kwargs alone and never moved
+        when clicked. Their templates now carry `dj-click`, and without this join
+        the event reaches the server, the state changes, the page re-renders and
+        the markup comes back identical: a control that is wired to nothing.
+        """
+        from .storybook import _render_template_examples
+
+        fallback = self._base_ctx.get("template_examples_html") or []
+        state = self._descriptor_state()
+        if not state:
+            return fallback
+
+        examples = self._base_ctx.get("examples") or []
+        if not examples:
+            return fallback
+
+        return _render_template_examples(
+            self.component_name, [{**example, **state} for example in examples]
+        )
+
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
@@ -235,6 +261,8 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         ctx["current_component"] = self.current_component
         if self._base_ctx.get("component_type") == "python":
             ctx["python_examples_html"] = self._render_examples()
+        else:
+            ctx["template_examples_html"] = self._render_live_template_examples()
         return ctx
 
 
@@ -326,3 +354,22 @@ class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveVie
             enriched.append(comp)
 
         self.category_components = enriched
+
+
+# There is deliberately no `ThemeGalleryView` here.
+#
+# The theme gallery looks like a candidate for the same treatment as the
+# storybook — it renders the same `theme_tabs` / `theme_modal` /
+# `theme_dropdown` components, and they are descriptor-friendly. It cannot be
+# one: `gallery.html` uses all 25 `{% theme_* %}` tags, and those are registered
+# with **Django's** template engine only. Nothing registers them with djust's
+# Rust engine, so as a LiveView the page raises on the first tag it meets:
+#
+#     RuntimeError: Template error: Invalid block tag on line 1:
+#     'theme_button'. Did you forget to register or load this tag?
+#
+# Turning this into a LiveView means registering the theming library with the
+# Rust engine first. Until that exists, the gallery stays a plain Django view
+# and `components.js` drives its components — with a guard that makes it stand
+# down on any page carrying a djust mount root, so LiveView pages never get
+# both paths at once.

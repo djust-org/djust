@@ -144,7 +144,19 @@ class TestModalComponent(ComponentTestCase):
         html = self.render_component("modal", id="test-modal", title="Test Modal")
         self.assert_has_element(html, "div", {"role": "dialog"})
         self.assert_contains(html, "Test Modal")
-        self.assert_contains(html, 'data-theme-modal="test-modal"')
+
+    def test_modal_open_state_is_rendered(self):
+        """`is_open` drives visibility, and it must beat the author cascade.
+
+        `.modal-backdrop` is `display: flex` in both `theming/css/components.css`
+        and `scaffold.css`, so the `hidden` attribute cannot close this dialog —
+        the inline style is load-bearing, not a shortcut.
+        """
+        closed = self.render_component("modal", id="mc", title="Closed")
+        self.assert_contains(closed, 'style="display:none;"')
+
+        opened = self.render_component("modal", id="mo", title="Open", is_open=True)
+        self.assertNotIn('style="display:none;"', opened)
 
     def test_contract(self):
         html = self.render_component("modal", id="m1", title="Title")
@@ -164,9 +176,19 @@ class TestModalComponent(ComponentTestCase):
         self.assert_has_class(html, "modal-lg")
 
     def test_default_close_button(self):
+        """The close control dispatches a server event.
+
+        Carrying `dj-click` is also what makes Escape close the dialog:
+        `51-keyboard-nav.js:_closeModal` locates a dialog's close control with
+        `[dj-click]` and dispatches it, so the framework's own keyboard layer
+        picks this up without any theming-specific wiring.
+        """
         html = self.render_component("modal", id="m5")
-        self.assert_has_element(html, "button", {"data-theme-modal-close": None})
+
         self.assert_has_element(html, "button", {"aria-label": "Close"})
+        self.assert_contains(html, 'dj-click="toggle_modal"')
+        # Fallback retained for plain pages — see `test_tabs_are_server_driven`.
+        self.assert_contains(html, "data-theme-modal-close")
 
     def test_slot_header(self):
         request = self._make_mock_request()
@@ -257,7 +279,36 @@ class TestDropdownComponent(ComponentTestCase):
         self.assert_has_element(html, "div")
         self.assert_has_element(html, "button", {"aria-haspopup": "true"})
         self.assert_contains(html, "Menu")
-        self.assert_contains(html, 'data-theme-dropdown="dd1"')
+
+    def test_dropdown_is_server_driven(self):
+        """The trigger dispatches an event; nothing is toggled client-side.
+
+        Replaced a `data-theme-dropdown` hook that `components.js` bound a click
+        listener to and used to flip `display`, `aria-expanded` and `data-open`
+        itself.
+        """
+        html = self.render_component("dropdown", id="dd1b", label="Menu")
+
+        self.assert_contains(html, 'dj-click="toggle_dropdown"')
+        # Fallback retained for plain pages — see `test_tabs_are_server_driven`.
+        self.assert_contains(html, 'data-theme-dropdown="dd1b"')
+
+    def test_open_state_is_rendered(self):
+        """`is_open` drives every artefact the CSS and keyboard layer read.
+
+        The chevron rotation is keyed on `data-open` (`theming/css/components.css`),
+        and `51-keyboard-nav.js` reads it to decide whether the menu is open —
+        both were previously the client's to set.
+        """
+        closed = self.render_component("dropdown", id="dd1c", label="Menu")
+        self.assert_contains(closed, 'aria-expanded="false"')
+        self.assert_contains(closed, 'style="display:none;"')
+        self.assertNotIn("data-open", closed)
+
+        opened = self.render_component("dropdown", id="dd1d", label="Menu", is_open=True)
+        self.assert_contains(opened, 'aria-expanded="true"')
+        self.assert_contains(opened, 'data-open="true"')
+        self.assertNotIn('style="display:none;"', opened)
 
     def test_contract(self):
         html = self.render_component("dropdown", id="dd2", label="Actions")
@@ -367,8 +418,25 @@ class TestTabsComponent(ComponentTestCase):
         html = self.render_component("tabs", id="t7", tabs=self._sample_tabs())
         self.assert_has_element(html, "button", {"tabindex": "-1"})
 
-    def test_data_theme_tabs_attr(self):
+    def test_tabs_are_server_driven(self):
+        """Each tab dispatches its index; nothing is toggled client-side.
+
+        This replaced a `data-theme-tabs` attribute that `components.js` bound a
+        click listener to and used to swap `tab-active` / `tab-panel-hidden`
+        itself. The server already renders the active state (see
+        `test_active_tab`), so the client was re-deriving a decision the server
+        had made — and the tab set only moved at all because of it.
+        """
         html = self.render_component("tabs", id="t8", tabs=self._sample_tabs())
+
+        self.assert_contains(html, 'dj-click="set_tab"')
+        for index in range(3):
+            self.assert_contains(html, f'data-value="{index}"')
+        # The client fallback stays alongside it. A plain page — the theme
+        # gallery, the theme editor — has no server to dispatch to, and the
+        # gallery cannot become a LiveView (its 25 `theme_*` tags are
+        # Django-engine only), so both paths have to coexist. `components.js`
+        # picks one: it stands down when a djust mount root is present.
         self.assert_contains(html, 'data-theme-tabs="t8"')
 
 

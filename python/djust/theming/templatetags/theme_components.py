@@ -201,20 +201,35 @@ def theme_input(
 
 @register.simple_tag(takes_context=True)
 def theme_modal(
-    context: Context, id: str, title: Optional[str] = None, size: str = "md", **attrs: Any
+    context: Context,
+    id: str,
+    title: Optional[str] = None,
+    size: str = "md",
+    is_open: bool = False,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed modal dialog.
 
     Args:
-        id: Unique modal identifier (used for data-theme-modal-open triggers)
+        id: Unique modal identifier
         title: Optional modal title
         size: 'sm', 'md', 'lg'
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id` on the close control. Required when a page
+            declares more than one modal descriptor — the framework wires one
+            `toggle_modal` handler and cannot auto-resolve which instance an
+            event belongs to. A page with a single modal can omit it.
+        is_open: Whether the dialog renders open. Server-driven: the host
+            LiveView's `Modal` descriptor owns this, and the close control
+            dispatches `toggle_modal`. Defaults to closed, which is what a
+            static page gets — and a static page has no server to dispatch to,
+            so a modal needs a LiveView host to open at all.
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_modal id="confirm" title="Confirm Action" size="md" %}
-        <!-- Trigger: <button data-theme-modal-open="confirm">Open</button> -->
+        {% theme_modal id="confirm" title="Confirm Action" size="md" is_open=modal.is_open %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "modal")
@@ -222,6 +237,8 @@ def theme_modal(
         "id": id,
         "title": title,
         "size": size,
+        "is_open": is_open,
+        "component_id": component_id,
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }
@@ -230,7 +247,13 @@ def theme_modal(
 
 @register.simple_tag(takes_context=True)
 def theme_dropdown(
-    context: Context, id: str, label: str, align: str = "left", **attrs: Any
+    context: Context,
+    id: str,
+    label: str,
+    align: str = "left",
+    is_open: bool = False,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed dropdown menu.
@@ -239,10 +262,19 @@ def theme_dropdown(
         id: Unique dropdown identifier
         label: Trigger button text
         align: Menu alignment ('left' or 'right')
+        is_open: Whether the menu renders open. Server-driven: the host
+            LiveView's `Dropdown` descriptor owns this and the trigger
+            dispatches `toggle_dropdown`.
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id`. Required when a page declares more than one
+            descriptor of the same type: the framework wires one
+            `toggle_dropdown` handler and cannot auto-resolve which instance an
+            event belongs to, so the trigger must say. A page with a single
+            dropdown can omit it.
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_dropdown id="actions" label="Actions" align="right" %}
+        {% theme_dropdown id="actions" label="Actions" align="right" is_open=menu.is_open %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "dropdown")
@@ -250,6 +282,8 @@ def theme_dropdown(
         "id": id,
         "label": label,
         "align": align,
+        "is_open": is_open,
+        "component_id": component_id,
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }
@@ -258,7 +292,12 @@ def theme_dropdown(
 
 @register.simple_tag(takes_context=True)
 def theme_tabs(
-    context: Context, id: str, tabs: Any = None, active: int = 0, **attrs: Any
+    context: Context,
+    id: str,
+    tabs: Any = None,
+    active: int = 0,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render themed tabs with panels.
@@ -266,7 +305,12 @@ def theme_tabs(
     Args:
         id: Unique tabs identifier
         tabs: List of dicts with 'label' and 'content' keys
-        active: Zero-based index of the initially active tab
+        active: Zero-based index of the active tab. Server-driven: the host
+            LiveView's `Tabs` descriptor owns this and the tab buttons dispatch
+            `set_tab` with their index.
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id`. Required when a page declares more than one
+            tabs descriptor; a page with a single tab set can omit it.
         **attrs: Additional HTML attributes
 
     Usage:
@@ -278,6 +322,7 @@ def theme_tabs(
         "id": id,
         "tabs": tabs or [],
         "active": active,
+        "component_id": component_id,
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }

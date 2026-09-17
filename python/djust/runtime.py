@@ -3881,6 +3881,18 @@ class ViewRuntime:
 
         component = view._components.get(component_id) if hasattr(view, "_components") else None
         if not component:
+            # A DEP-002 descriptor is NOT a LiveComponent and never enters
+            # `view._components` (a documented gap, `components/base.py` #1165),
+            # but it does take a `component_id`: `__set_name__` wires its
+            # `Meta.event` onto the view, and the handler that
+            # `_make_event_handler` builds resolves the instance from that
+            # parameter itself. So fall through and let the normal dispatch
+            # deliver it — erroring here would make every descriptor on a page
+            # with more than one instance of its type unreachable, which is
+            # exactly the case `data-component-id` exists for.
+            if component_id in getattr(type(view), "_component_descriptors", {}):
+                return False
+
             # Verbatim WS shape (websocket.py:3358-3362): the component_id is
             # server-assigned (not free-form client text), so echoing it in the
             # error is the existing behavior.
