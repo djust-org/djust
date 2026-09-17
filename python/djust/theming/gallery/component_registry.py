@@ -677,7 +677,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
     {
         "agent_step": [{}],
         "alert": [{"message": "Example"}],
-        "app_shell": [{}],
+        "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
         "approval_gate": [{}],
         "aspect_ratio": [{}],
         "audit_log": [{}],
@@ -791,7 +791,30 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "cron_input": [{}],
         "currency_input": [{}],
         "cursors_overlay": [{}],
-        "dashboard_grid": [{}],
+        "dashboard_grid": [
+            {
+                "panels": [
+                    {
+                        "id": "p1",
+                        "title": "Revenue",
+                        "col": 1,
+                        "row": 1,
+                        "width": 2,
+                        "height": 1,
+                        "content": "<p>$12,345</p>",
+                    },
+                    {
+                        "id": "p2",
+                        "title": "Users",
+                        "col": 3,
+                        "row": 1,
+                        "width": 2,
+                        "height": 1,
+                        "content": "<p>1,234</p>",
+                    },
+                ]
+            }
+        ],
         "data_card_grid": [
             {
                 "columns": 3,
@@ -949,7 +972,15 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "map_picker": [{"lat": 51.5074, "lng": -0.1278}],
         "markdown_editor": [{}],
         "markdown_textarea": [{}],
-        "masonry_grid": [{}],
+        "masonry_grid": [
+            {
+                "items": [
+                    {"content": "<p>First card</p>", "height": "120px"},
+                    {"content": "<p>Second card</p>", "height": "90px"},
+                    {"content": "<p>Third card</p>", "height": "140px"},
+                ]
+            }
+        ],
         "mentions_input": [
             {
                 "name": "comment",
@@ -1054,11 +1085,16 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "active": ["👍"],
             }
         ],
-        "resizable_panel": [{}],
-        "responsive_image": [{}],
+        "resizable_panel": [{"content": "<p>Drag the edge to resize.</p>"}],
+        "responsive_image": [
+            {
+                "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='90'%3E%3Crect width='160' height='90' fill='%233b82f6'/%3E%3C/svg%3E",
+                "alt": "A blue placeholder",
+            }
+        ],
         "rich_select": [{}],
         "rich_text_editor": [{}],
-        "scroll_area": [{}],
+        "scroll_area": [{"content": "<p>Scrollable body text.</p>" * 12}],
         "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
         "scroll_to_top": [{}],
         "sheet": [{}],
@@ -1075,8 +1111,24 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "signature_pad": [{}],
         "skeleton": [{}],
         "skeleton_factory": [{}],
-        "sortable_grid": [{}],
-        "sortable_list": [{}],
+        "sortable_grid": [
+            {
+                "items": [
+                    {"id": "a", "label": "Alpha"},
+                    {"id": "b", "label": "Beta"},
+                    {"id": "c", "label": "Gamma"},
+                ]
+            }
+        ],
+        "sortable_list": [
+            {
+                "items": [
+                    {"id": "1", "label": "First item"},
+                    {"id": "2", "label": "Second item"},
+                    {"id": "3", "label": "Third item"},
+                ]
+            }
+        ],
         "source_citation": [{}],
         "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
         "split_pane": [{}],
