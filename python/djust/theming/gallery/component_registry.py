@@ -721,6 +721,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "color_picker": [
             {
                 "name": "accent",
+                "event": "set_color",
                 "value": "#3b82f6",
                 "label": "Accent",
                 "swatches": ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"],
@@ -729,6 +730,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "combobox": [
             {
                 "name": "language",
+                "event": "set_language",
                 "label": "Language",
                 "value": "python",
                 "options": [
@@ -1124,7 +1126,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "content": "<p>Overview content.</p>",
             }
         ],
-        "tag_input": [{"name": "labels", "label": "Labels", "tags": ["django", "rust"]}],
+        "tag_input": [
+            {"name": "labels", "label": "Labels", "event": "add_tag", "tags": ["django", "rust"]}
+        ],
         "time_picker": [{"name": "start", "value": "09:30", "label": "Start time"}],
         "toast": [{"message": "Example"}],
         "tooltip": [

@@ -89,7 +89,9 @@ def _flip(current: Any, _incoming: Any) -> Any:
     return not current
 
 
-def _month(delta: int):
+def _step(delta: int):
+    """Add `delta` to the current value — carousel slides, date-picker months."""
+
     def _shift(current: Any, _incoming: Any) -> Any:
         try:
             return int(current) + delta
@@ -104,6 +106,51 @@ def _append_row(current: Any, _incoming: Any) -> Any:
     return list(current or []) + [{"value": ""}]
 
 
+def _add_tag(current: Any, incoming: Any) -> Any:
+    tags = list(current or [])
+    if incoming and incoming not in tags:
+        tags.append(incoming)
+    return tags
+
+
+def _toggle_member(current: Any, incoming: Any) -> Any:
+    """Add/remove `incoming` — `reactions` keeps its picks in a list."""
+    active = list(current or [])
+    if incoming in active:
+        active.remove(incoming)
+    else:
+        active.append(incoming)
+    return active
+
+
+def _add_card(current: Any, _incoming: Any) -> Any:
+    """Append a card to the first kanban column."""
+    columns = [dict(c) for c in (current or [])]
+    if not columns:
+        return columns
+    cards = list(columns[0].get("cards") or [])
+    cards.append({"id": f"new-{len(cards)}", "title": "New card"})
+    columns[0]["cards"] = cards
+    return columns
+
+
+def _toggle_node(current: Any, incoming: Any) -> Any:
+    """Flip `expanded` on the tree node whose id is `incoming`."""
+
+    def walk(nodes: Any) -> Any:
+        out = []
+        for node in nodes or []:
+            node = dict(node)
+            if node.get("id") == incoming:
+                node["expanded"] = not node.get("expanded", False)
+            if node.get("children"):
+                node["children"] = walk(node["children"])
+            out.append(node)
+        return out
+
+    return walk(current)
+
+
 #: event name -> (the example kwarg it sets, how to compute the new value)
 _DEMO_EVENTS: Dict[str, Any] = {
     "set_rating": ("value", _text),
@@ -111,8 +158,8 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_select": ("value", _text),
     "date_select": ("selected", _text),
     "set_step": ("active", _as_int),
-    "date_prev_month": ("month", _month(-1)),
-    "date_next_month": ("month", _month(1)),
+    "date_prev_month": ("month", _step(-1)),
+    "date_next_month": ("month", _step(1)),
     "toggle_expand": ("expanded", _flip),
     "toggle_preview": ("preview", _flip),
     "inline_edit": ("editing", _flip),
@@ -131,6 +178,28 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "approve": ("status", lambda _c, _v: "approved"),
     "reject": ("status", lambda _c, _v: "rejected"),
     "send": ("sent", lambda _c, _v: True),
+    # Found by re-running the audit after the examples above gained content:
+    # giving a component something to show also gives it something to click.
+    # `carousel` emits next/prev only once it has slides, `data_table` emits a
+    # sort event only once it has columns, and `color_picker` / `combobox` /
+    # `tag_input` fall back to their `name` as the event name — so their
+    # examples now pass an explicit `event` rather than making the handler
+    # depend on what the example happened to be called.
+    "dismiss_announcement": ("dismissed", lambda _c, _v: True),
+    "carousel_next": ("active", _step(1)),
+    "carousel_prev": ("active", _step(-1)),
+    "set_color": ("value", _text),
+    "set_language": ("value", _text),
+    "add_tag": ("tags", _add_tag),
+    "on_table_sort": ("sort_by", _text),
+    "select_file": ("selected", _text),
+    "tree_select": ("selected", _text),
+    "tree_expand": ("nodes", _toggle_node),
+    "clear_filters": ("active_count", lambda _c, _v: 0),
+    "kanban_add_card": ("columns", _add_card),
+    "react": ("active", _toggle_member),
+    "toggle_sidebar": ("collapsed", _flip),
+    "toggle_list": ("expanded", _flip),
 }
 
 
@@ -281,9 +350,15 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 
         self.component_name = component_name
         self._base_ctx = ctx
-        #: What the demo handlers have set, keyed by example kwarg. Empty until
-        #: something is clicked, so each example's own values stand until then.
-        self._demo_values: Dict[str, Any] = {}
+        #: What the demo handlers have set, keyed by example kwarg. Seeded from
+        #: the example itself, so a transform that steps a value (`carousel`'s
+        #: `active`, `date_picker`'s `month`) has a base to step from rather
+        #: than starting at nothing — a first click that computed `None + 1`
+        #: would override the example with `None` and blank the component.
+        from .component_registry import PYTHON_COMPONENT_EXAMPLES
+
+        examples = PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
+        self._demo_values: Dict[str, Any] = dict(examples[0]) if examples else {}
         self._init_sidebar(component_name)
 
     def _descriptor_state(self) -> Dict[str, Any]:
