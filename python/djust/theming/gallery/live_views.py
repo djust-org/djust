@@ -191,17 +191,50 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 
         self.component_name = component_name
         self._base_ctx = ctx
+        #: The rating page's value. `None` until a star is clicked, so the
+        #: example's own `value=` stands until then (see `_rating_state`).
+        self._rating_value: Optional[int] = None
         self._init_sidebar(component_name)
 
     def _descriptor_state(self) -> Dict[str, Any]:
         """The live state of this component's descriptor, if it has one."""
         name = self.component_name
+        if name == "rating":
+            return self._rating_state()
         if name not in _INTERACTIVE:
             return {}
         state = getattr(self, name, None)
         # The descriptor resolves to its state dict once the framework has
         # bound it; before that (or for a non-interactive name) there is none.
         return dict(state) if isinstance(state, dict) else {}
+
+    def _rating_state(self) -> Dict[str, Any]:
+        """Rating is the one interactive component with no descriptor.
+
+        `djust.components.descriptors` has no `Rating` — it covers the
+        containers (tabs, modal, accordion), not value inputs — so there is
+        nothing for `_INTERACTIVE` to point at and the component's
+        `dj-click="set_rating"` reached no handler. The click produced a server
+        error instead of a rating.
+
+        Holding the number here rather than adding a descriptor is deliberate:
+        a descriptor is public framework API, and inventing one to make a demo
+        page work is the wrong order. If rating deserves one, it should be
+        designed against the other value-input components, not here.
+        """
+        if self._rating_value is None:
+            return {}
+        return {"value": self._rating_value}
+
+    @event_handler
+    def set_rating(self, value: str = "", **kwargs: Any) -> None:
+        """`dj-click` on a star. `data-value` is the star's 1-based position."""
+        try:
+            self._rating_value = int(value)
+        except (TypeError, ValueError):
+            # A malformed value leaves the current rating alone rather than
+            # clearing it — the click was meaningless, not a request for zero.
+            return
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """Render the component's examples against the CURRENT descriptor state.

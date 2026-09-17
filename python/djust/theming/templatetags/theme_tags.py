@@ -18,6 +18,7 @@ Usage:
 """
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from django import template
@@ -193,7 +194,52 @@ def build_theme_head_context(
         # actually the default. JSON-encoded like cookie_prefix_js, since it
         # is interpolated into a <script> literal.
         "resolved_mode_js": json.dumps(state.mode),
+        # Cache-buster for the asset tags below. Without one a browser keeps the
+        # `components.js` / `components.css` it already downloaded: Django's
+        # static server sends no `Cache-Control`, so browsers fall back to
+        # heuristic freshness — a fraction of the file's age — and revalidate
+        # only once that elapses. A fix to either file is then invisible on the
+        # page it was made for, which reads as "the fix didn't work". Production
+        # avoids this with hashed filenames (`ManifestStaticFilesStorage`); a
+        # dev server serving the source does not.
+        "asset_version": _theme_asset_version(),
     }
+
+
+def _theme_asset_version() -> str:
+    """A short token that changes whenever a theming static asset does.
+
+    Derived from the newest mtime under the theming static tree rather than
+    from the package version, because the case that bites is an edit — someone
+    changes `components.css`, reloads, and sees the old stylesheet. A
+    release-keyed token would not move until the next release, which is exactly
+    when it is not needed.
+
+    Both static trees are scanned, because `theme_head.html` links assets from
+    each: the theming package's own, and `djust_components/components.css` from
+    the optional components app. Scanning only the first would leave a fix to
+    the second uncached — which is exactly the file whose spinner rules were
+    written but never reaching the page.
+
+    Cheap enough to compute per render: the trees are a handful of files.
+    """
+    app_static = Path(__file__).resolve().parent.parent / "static"
+    bases = [app_static / "djust_theming"]
+    # djust/components/static/djust_components — a sibling app, not a parent.
+    components_base = app_static.parent.parent / "components" / "static" / "djust_components"
+    if components_base.is_dir():
+        bases.append(components_base)
+
+    newest = 0.0
+    for base in bases:
+        for path in base.rglob("*"):
+            if path.suffix not in (".js", ".css"):
+                continue
+            try:
+                newest = max(newest, path.stat().st_mtime)
+            except OSError:  # pragma: no cover — a file that vanished mid-scan
+                continue
+    return f"{int(newest):x}"
 
 
 @register.simple_tag(takes_context=True)

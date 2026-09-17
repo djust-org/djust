@@ -269,13 +269,26 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Django", "variant": "info"},
         {"label": "New", "variant": "success"},
     ],
+    # `max_stars`, not `max` — and `name` is not a parameter at all. Both old
+    # examples passed the wrong keys, so the star count and the value fell back
+    # to defaults while the preview still looked plausible.
+    #
+    # One example rather than two: every example on a storybook page is
+    # rendered against the *same* live state, so a second, deliberately
+    # different rating (`readonly`, value 2) would silently mirror whatever the
+    # first one was clicked to. `readonly` is documented in the PARAMETERS
+    # table below rather than demonstrated at its own rating's expense.
     "rating": [
-        {"value": 4, "max": 5, "name": "rating1"},
-        {"value": 2, "max": 5, "name": "rating2", "readonly": True},
+        {"value": 4, "max_stars": 5},
     ],
+    # `Meter` renders `segments` against a `total` — it has no `value`/`min`/`max`
+    # at all. The old example passed those three, every one of them landed in
+    # `**kwargs` and went nowhere, and the preview showed an empty bar under a
+    # label: a component that looked broken because its example used an API it
+    # has never had.
     "meter": [
-        {"value": 70, "min": 0, "max": 100, "label": "Storage"},
-        {"value": 30, "min": 0, "max": 100, "label": "Memory"},
+        {"segments": [{"value": 70, "label": "Used"}], "total": 100, "label": "Storage"},
+        {"segments": [{"value": 30, "label": "Used"}], "total": 100, "label": "Memory"},
     ],
     "callout": [
         {"message": "This is an important notice.", "variant": "info", "title": "Info"},
@@ -697,7 +710,22 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "date_picker": [{}],
         "dependent_select": [{}],
         "diff_viewer": [{}],
-        "dropdown": [{}],
+        # Was `[{}]` — every argument defaulted, so the preview rendered a button
+        # reading "Menu" and nothing else. `Dropdown` renders its menu only when
+        # `is_open`, so a closed preview with no `content` is a lone button with
+        # nothing to open: the descriptor worked perfectly and there was nothing to
+        # show. The menu items are ordinary markup because the component takes
+        # `content` as a string rather than a list.
+        "dropdown": [
+            {
+                "label": "Actions",
+                "content": (
+                    '<a class="dropdown-item" role="menuitem" href="#">Edit</a>'
+                    '<a class="dropdown-item" role="menuitem" href="#">Duplicate</a>'
+                    '<a class="dropdown-item" role="menuitem" href="#">Archive</a>'
+                ),
+            }
+        ],
         "error_boundary": [{}],
         "expandable_text": [{}],
         "fieldset": [{}],

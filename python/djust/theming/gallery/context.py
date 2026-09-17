@@ -101,22 +101,52 @@ def _input_examples() -> list[dict[str, Any]]:
 
 
 def _modal_examples() -> list[dict[str, Any]]:
-    examples: list[dict[str, Any]] = []
-    for size in ("sm", "md", "lg"):
-        examples.append(
-            {
-                "id": f"gallery-modal-{size}",
-                "title": f"Modal ({size})",
-                "size": size,
-            }
-        )
-    return examples
+    """One modal, not three.
+
+    It was `sm`/`md`/`lg` side by side, which reads well as a size comparison on
+    a page that can open them independently — the theming gallery gives each its
+    own trigger and its own `Modal` descriptor. A storybook page cannot: it
+    declares ONE descriptor per component and renders every example against that
+    same state, so one trigger would open all three and they would stack on top
+    of each other. `size` is documented in the PARAMETERS table; demonstrating
+    it three times over is not worth a dialog that behaves wrongly.
+    """
+    return [
+        {
+            "id": "gallery-modal-md",
+            "title": "Modal (md)",
+            "size": "md",
+        }
+    ]
 
 
 def _dropdown_examples() -> list[dict[str, Any]]:
+    """Two dropdowns, each with a populated menu.
+
+    They passed `label` and `align` and nothing else, and the theming dropdown
+    renders its menu from `slot_menu` — so the preview was a working trigger
+    over an empty menu. Clicking it opened a blank panel, which reads as a
+    broken component rather than an example that forgot its contents.
+
+    `role="menuitem"` is not decoration: `51-keyboard-nav.js` and
+    `components.js` both locate menu items with `[role="menuitem"], .dropdown-item`.
+    """
+    items = (
+        '<a class="dropdown-item" role="menuitem" href="#">Edit</a>'
+        '<a class="dropdown-item" role="menuitem" href="#">Duplicate</a>'
+        '<a class="dropdown-item" role="menuitem" href="#">Archive</a>'
+    )
+    # One dropdown, not two. The page declares one `Dropdown` descriptor and
+    # renders every example against it, so a left/right pair shared a single
+    # `is_open`: opening either opened both. `align` is documented in the
+    # PARAMETERS table — see `_modal_examples` for the same trade-off.
     return [
-        {"id": "gallery-dropdown-left", "label": "Dropdown (left)", "align": "left"},
-        {"id": "gallery-dropdown-right", "label": "Dropdown (right)", "align": "right"},
+        {
+            "id": "gallery-dropdown",
+            "label": "Actions",
+            "align": "left",
+            "slot_menu": items,
+        }
     ]
 
 

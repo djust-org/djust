@@ -39,10 +39,18 @@
 </script>
 {{ css_block }}
 {{ deferred_css_block }}
-{% if include_component_link %}<link rel="stylesheet" href="{% static 'djust_theming/css/components.css' %}">{% endif %}
-{% if include_components_app_link %}<link rel="stylesheet" href="{% static 'djust_components/components.css' %}">{% endif %}
+{% comment %}
+`?v={{ asset_version }}` on each of these, because none of them had a
+cache-buster and Django's static server sends no `Cache-Control` — so a browser
+applied heuristic freshness to `components.js` / `components.css` and kept the
+copy it already had. An edit to either was invisible on the page it was made
+for. The token is derived from the assets' newest mtime (see
+`_theme_asset_version`), so it moves on an edit rather than on a release.
+{% endcomment %}
+{% if include_component_link %}<link rel="stylesheet" href="{% static 'djust_theming/css/components.css' %}?v={{ asset_version }}">{% endif %}
+{% if include_components_app_link %}<link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={{ asset_version }}">{% endif %}
 {{ component_css_block }}
-<link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}" media="print">
-{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}" defer></script>
-<script src="{% static 'djust_theming/js/components.js' %}" defer></script>{% endif %}
+<link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}?v={{ asset_version }}" media="print">
+{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}?v={{ asset_version }}" defer></script>
+<script src="{% static 'djust_theming/js/components.js' %}?v={{ asset_version }}" defer></script>{% endif %}
 {% endautoescape %}
