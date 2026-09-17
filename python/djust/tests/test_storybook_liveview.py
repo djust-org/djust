@@ -21,6 +21,8 @@ mount until the project allowlists them. That is the bug filed as #2889; this
 suite is about the storybook, and the override keeps the two independent.
 """
 
+import re
+
 import pytest
 from django.test import override_settings
 
@@ -131,3 +133,56 @@ async def test_unknown_component_is_refused_not_rendered():
         )
     finally:
         await communicator.disconnect()
+
+
+def _tag_sequence(html: str) -> list[str]:
+    """Tag names in document order, comments stripped — the tree's shape."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    region = re.search(r'<div dj-view="[^"]*">(.*)</div>\s*</main>', html, re.DOTALL)
+    return re.findall(r"<(/?[a-zA-Z][a-zA-Z0-9]*)", region.group(1) if region else html)
+
+
+@_BASE
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_http_render_and_ws_mount_agree_structurally():
+    """A patch path computed server-side must resolve against the client's DOM.
+
+    The two frames come from different code paths — the HTTP GET renders the
+    page shell and replaces the dj-root region, the WS mount renders the same
+    region for diffing — and if they disagree about the tree, every patch
+    targets a path that does not exist. The client's symptom is exactly that:
+
+        Path traversal failed at index 7, only 1 children (parent: MAIN)
+        Patch failed (SetText): node not found at path=7/1/3/1/0
+
+    followed by a `html_recovery` morph, so a toggle "works" by re-rendering the
+    whole region instead of patching it.
+
+    The cause was the mount attribute sitting on a `<main>`. `_DJ_VIEW_RE` and
+    `_DJ_ROOT_RE` (`mixins/template.py:32`, `:48`) both require a `<div>`, so the
+    dj-root normalisation was skipped and the initial-GET HTML kept the comments
+    and whitespace the WS frame had already stripped — the mismatch docstring
+    #1737 describes. This pins the invariant rather than the div: whatever the
+    mount element is, the two frames must describe the same tree.
+    """
+    from asgiref.sync import sync_to_async
+    from django.test import Client
+
+    # sync_to_async: the test client is synchronous and this test is not.
+    def _fetch() -> str:
+        return Client().get("/theme/gallery/storybook/accordion/").content.decode()
+
+    http_html = await sync_to_async(_fetch)()
+    _communicator, mounted = await _mount("accordion")
+    await _communicator.disconnect()
+
+    http_shape = _tag_sequence(http_html)
+    ws_shape = _tag_sequence(mounted.get("html", ""))
+
+    assert http_shape, "the HTTP render had no tags to compare"
+    assert http_shape == ws_shape, (
+        "the HTTP render and the WS mount disagree about the tree, so patch "
+        "paths will not resolve. First divergence: "
+        f"{next((i for i, (a, b) in enumerate(zip(http_shape, ws_shape)) if a != b), 'length')}"
+    )

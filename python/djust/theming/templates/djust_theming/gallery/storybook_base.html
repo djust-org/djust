@@ -280,14 +280,17 @@
 
     <!-- Content -->
     {% comment %}
-    `dj-view` is the mount point. Without it the page renders the component
-    markup but nothing is listening, so `dj-click` goes nowhere — which is
-    exactly why the accordion showed a chevron and did nothing. The child
-    template names its own view class via its `view_class` block, the same
-    contract the component gallery's `_base.html` uses.
+    The mount point must be a `<div>`. `_DJ_VIEW_RE` and `_DJ_ROOT_RE` both
+    match `<div ... dj-root|dj-view ...>` specifically (mixins/template.py:32,
+    :48), so putting the attribute on a `<main>` renders fine but silently
+    skips the dj-root normalisation — and the initial-GET HTML then disagrees
+    structurally with the WS frame, which is the patch-path mismatch #1737
+    describes. Hence a div inside the landmark rather than on it.
     {% endcomment %}
-    <main class="sb-content" dj-view="djust.theming.gallery.live_views.{% block view_class %}StorybookDetailView{% endblock %}">
-      {% block content %}{% endblock %}
+    <main class="sb-content">
+      <div dj-view="djust.theming.gallery.live_views.{% block view_class %}StorybookDetailView{% endblock %}">
+        {% block content %}{% endblock %}
+      </div>
     </main>
   </div>
 
