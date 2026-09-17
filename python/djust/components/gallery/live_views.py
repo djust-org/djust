@@ -94,7 +94,6 @@ class GalleryCategoryMixin(_GalleryMixinBase):
             raise Http404(f"Unknown category: {slug}")
 
         self.category_label = CATEGORIES[slug]
-        self.view_class_name = type(self).__name__
 
         # Sidebar
         data = get_gallery_data()
