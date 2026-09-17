@@ -1869,7 +1869,11 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .dj-meter { display: flex; flex-direction: column; gap: 0.375rem; }
 .dj-meter__label { font-size: 0.875rem; font-weight: 500; color: hsl(var(--foreground, 222 47% 11%)); }
 .dj-meter__bar { display: flex; height: 0.5rem; border-radius: 9999px; overflow: hidden; background: hsl(var(--muted, 210 40% 96%)); }
-.dj-meter__segment { height: 100%; transition: width var(--duration-slow, 0.3s) var(--ease-in-out, ease); }
+/* A default fill, because the component only sets `background` inline when a
+   segment is given a `color` — and `Meter`'s own example passes none. Without
+   this the bar had width and no paint: the markup and the ARIA were correct and
+   the meter was invisible. A segment's own `color` still wins (inline style). */
+.dj-meter__segment { height: 100%; background: hsl(var(--primary, 222 47% 51%)); transition: width var(--duration-slow, 0.3s) var(--ease-in-out, ease); }
 .dj-meter__legend { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.8125rem; }
 .dj-meter__legend-item { display: flex; align-items: center; gap: 0.25rem; }
 .dj-meter__legend-swatch { width: 0.625rem; height: 0.625rem; border-radius: 2px; flex-shrink: 0; }
