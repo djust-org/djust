@@ -4391,11 +4391,24 @@ class ViewRuntime:
         """Resolve URL-pattern kwargs (e.g. ``pk``, ``slug``) from
         ``page_url``. Returns ``{}`` for unresolvable paths so callers can
         unconditionally ``mount_kwargs.update(...)``.
+
+        ``unquote`` first, and that is load-bearing. ``page_url`` is the
+        browser's ``location.pathname``, which is percent-encoded, but
+        ``django.urls.resolve`` expects a path that has ALREADY been decoded —
+        Django decodes ``request.path`` before it ever reaches the resolver, so
+        the two are not interchangeable. Resolving the raw form hands a view the
+        encoded value: a category named "Core UI" arrives as ``"Core%20UI"``,
+        misses its own lookup, and the page renders fine over HTTP while its
+        WebSocket mount dies with ``Http404`` — so the page is visible and
+        inert. Any kwarg with a space, a slash or a non-ASCII character is
+        affected; ``unquote`` is idempotent for the ones that are not.
         """
         try:
+            from urllib.parse import unquote
+
             from django.urls import resolve
 
-            match = resolve(page_url)
+            match = resolve(unquote(page_url))
             return dict(match.kwargs) if match.kwargs else {}
         except Exception:
             return {}
