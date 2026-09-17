@@ -1,6 +1,9 @@
 {% extends "djust_theming/gallery/storybook_base.html" %}
 {% load theme_tags theme_components %}
 
+{# Names the class the base template's `dj-view` mounts. #}
+{% block view_class %}{{ view_class_name }}{% endblock %}
+
 {% block title %}{{ display_name }} — Component Storybook{% endblock %}
 
 {% block content %}
@@ -104,9 +107,9 @@
       {% if component_type == "template" %}<span>template</span>{% else %}<span>python</span>{% endif %}
     </div>
     {% if component_type == "template" %}
-    <pre class="sb-code-body">{% verbatim %}{%{% endverbatim %} load theme_components {% verbatim %}%}{% endverbatim %}
+    <pre class="sb-code-body">{% templatetag openblock %} load theme_components {% templatetag closeblock %}
 
-{% verbatim %}{%{% endverbatim %} theme_{{ name }}{% for p in required_context %} {{ p.name }}{% endfor %}{% for p in optional_context %} {{ p.name }}={{ p.default|default:"..." }}{% endfor %} {% verbatim %}%}{% endverbatim %}</pre>
+{% templatetag openblock %} theme_{{ name }}{% for p in required_context %} {{ p.name }}{% endfor %}{% for p in optional_context %} {{ p.name }}={{ p.default|default:"..." }}{% endfor %} {% templatetag closeblock %}</pre>
     {% else %}
     {% if import_line %}
     <pre class="sb-code-body">{{ import_line }}

@@ -44,3 +44,12 @@
   `from djust.components import Accordion` works for all of them; a module with
   no component class documents no import instead of a wrong one. Also corrected
   the same wrong path in `server_event_toast`'s own docstring example.
+- Make the storybook's component previews a real djust view. The detail page was a
+  plain Django view, which renders a component's markup but cannot make it *work*:
+  `dj-click` is a server event and a plain view ships no server to reach, so the
+  accordion showed a chevron and did nothing when clicked. It is now a `LiveView`
+  with the DEP-002 descriptor components attached — the same mechanism the component
+  gallery's `/lv/` pages use — and the descriptor's state is merged into each
+  example's kwargs, so a click updates it and the re-render carries the change.
+  `dj-view` is declared on the content element, without which the page renders but
+  nothing listens.
