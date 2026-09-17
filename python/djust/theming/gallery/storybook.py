@@ -182,6 +182,24 @@ def build_storybook_index_context() -> dict:
     }
 
 
+def _import_line(component_name: str) -> str:
+    """The USAGE snippet's import line, or "" when there is nothing to import."""
+    from .component_registry import get_python_component_import
+
+    _module_path, names = get_python_component_import(component_name)
+    if not names:
+        return ""
+    return f"from djust.components import {', '.join(names)}"
+
+
+def _first_class_name(component_name: str) -> str:
+    """The class to instantiate in the snippet; "" when the module has none."""
+    from .component_registry import get_python_component_import
+
+    _module_path, names = get_python_component_import(component_name)
+    return names[0] if names else ""
+
+
 def build_storybook_detail_context(component_name: str) -> dict:
     """Build context data for a single component's storybook detail page.
 
@@ -276,6 +294,21 @@ def build_storybook_detail_context(component_name: str) -> dict:
             "display_name": display_name,
             "category": category,
             "component_type": "python",
+            # The USAGE snippet's import line, computed here rather than spelled
+            # out in the template. The template used to hardcode
+            # `from djust_components.components.<name> import <Name>`, and both
+            # halves of that were wrong: `djust_components` is the static
+            # namespace, not a package (so nothing imported at all), and the
+            # class name is not always the snake→CamelCase of the module name
+            # (`qr_code` defines `QRCode`; `form_validation` defines two
+            # components; `server_event_toast` defines only a mixin).
+            #
+            # Derived from the module and emitted over the public
+            # `djust.components` namespace, which resolves these lazily. Empty
+            # when the module defines no component class, so the page documents
+            # no import rather than a wrong one.
+            "import_line": _import_line(component_name),
+            "class_name": _first_class_name(component_name),
             "required_context": [],
             "optional_context": [],
             "required_elements": [],

@@ -11,7 +11,7 @@ class ServerEventToastMixin:
 
     Usage::
 
-        from djust_components.components import ServerEventToastMixin
+        from djust.components import ServerEventToastMixin
 
         class MyView(ServerEventToastMixin, LiveView):
             def on_save(self):

@@ -566,3 +566,40 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
         return params
     except Exception:
         return None
+
+
+def get_python_component_import(component_name: str) -> tuple[str, list[str]]:
+    """``(module_path, class_names)`` to document for a python component.
+
+    The class is NOT always the snake→CamelCase of the module name, and three
+    components prove it: ``qr_code`` defines ``QRCode`` (not ``QrCode``),
+    ``form_validation`` defines two components (``FormErrors``, ``FieldError``),
+    and ``server_event_toast`` defines only a mixin — no component class at all.
+
+    Guessing produced a USAGE snippet that did not import. This reads the module
+    and reports what is actually there: the single component class when there is
+    one, every component class when there are several, and an empty list when
+    the module has none (the caller then documents no import rather than a wrong
+    one).
+    """
+    import inspect
+
+    from djust.components.base import Component
+
+    module_path = f"djust.components.components.{component_name}"
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError:
+        return module_path, []
+
+    owns = [
+        name
+        for name, obj in vars(module).items()
+        if inspect.isclass(obj) and obj.__module__ == module.__name__ and issubclass(obj, Component)
+    ]
+    owns.sort()
+
+    guessed = _to_class_name(component_name)
+    if guessed in owns:
+        return module_path, [guessed]
+    return module_path, owns
