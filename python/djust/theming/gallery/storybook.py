@@ -8,10 +8,16 @@ Supports both template-based components (24 contracted) and Python components
 (all 169 djust-components).
 """
 
+import logging
 import re
 from pathlib import Path
 
+from django.utils.html import escape
+
+from djust._log_utils import sanitize_for_log
 from djust.theming.contracts import COMPONENT_CONTRACTS
+
+logger = logging.getLogger(__name__)
 
 # Path to the default component templates shipped with the package.
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "djust_theming"
@@ -182,6 +188,36 @@ def build_storybook_index_context() -> dict:
     }
 
 
+def _render_template_examples(component_name: str, examples: list[dict]) -> list[dict]:
+    """Render a template component's examples through its own template.
+
+    Returns ``[{"html": ..., "kwargs": ...}]`` in the shape the python branch
+    already uses, so the page has one preview mechanism rather than two.
+    A failure renders a visible message instead of nothing — the same contract
+    `render_python_component_example` now honours.
+    """
+    from django.template.loader import render_to_string
+
+    template_name = f"djust_theming/components/{component_name}.html"
+    rendered = []
+    for example in examples:
+        try:
+            html = render_to_string(template_name, dict(example))
+        except Exception as exc:
+            logger.warning(
+                "Could not render template component %s: %s",
+                sanitize_for_log(component_name),
+                sanitize_for_log(str(exc)),
+            )
+            html = (
+                f'<div class="dj-component-preview-error" role="status">'
+                f"<code>{escape(component_name)}</code> failed to render: "
+                f"<code>{escape(type(exc).__name__)}: {escape(str(exc))}</code></div>"
+            )
+        rendered.append({"html": html, "kwargs": example})
+    return rendered
+
+
 def _import_line(component_name: str) -> str:
     """The USAGE snippet's import line, or "" when there is nothing to import."""
     from .component_registry import get_python_component_import
@@ -268,6 +304,14 @@ def build_storybook_detail_context(component_name: str) -> dict:
             "template_source": template_source,
             "css_variables": css_variables,
             "examples": examples,
+            # Rendered here rather than by a hand-written chain of
+            # `{% if name == "button" %}…{% elif %}` in the template. That chain
+            # covered 11 of these 24 components; every other one fell through to
+            # an `{% else %}` that printed the invocation as text — so a section
+            # headed LIVE PREVIEW showed `tabs(id=…, active=0)` for 13 of them.
+            # The component's own template with the contract's example kwargs is
+            # what the tag renders anyway, and it needs no per-component entry.
+            "template_examples_html": _render_template_examples(component_name, examples),
         }
     else:
         # Python component: render examples via dynamic import

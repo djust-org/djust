@@ -30,29 +30,12 @@
 </div>
 
 {# ===== Live Preview (template components) ===== #}
-{% if component_type == "template" and examples %}
+{% if component_type == "template" and template_examples_html %}
 <div class="sb-section">
-  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ examples|length }}</span></div>
+  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ template_examples_html|length }}</span></div>
   <div class="sb-preview">
-    {% for ex in examples %}
-      <div>
-        {% if name == "button" %}{% theme_button ex.text variant=ex.variant size=ex.size %}
-        {% elif name == "badge" %}{% theme_badge ex.text variant=ex.variant %}
-        {% elif name == "card" %}{% theme_card title=ex.title description=ex.description %}
-        {% elif name == "alert" %}{% theme_alert ex.message variant=ex.variant %}
-        {% elif name == "input" %}{% theme_input ex.name label=ex.label placeholder=ex.placeholder type=ex.type %}
-        {% elif name == "checkbox" %}{% theme_checkbox ex.name label=ex.label description=ex.description %}
-        {% elif name == "textarea" %}{% theme_textarea ex.name label=ex.label placeholder=ex.placeholder rows=ex.rows %}
-        {% elif name == "select" %}{% theme_select ex.name label=ex.label options=ex.options placeholder=ex.placeholder %}
-        {% elif name == "modal" %}{% theme_modal ex.id title=ex.title size=ex.size %}
-        {% elif name == "dropdown" %}{% theme_dropdown ex.id label=ex.label align=ex.align %}
-        {% elif name == "radio" %}{% theme_radio ex.name label=ex.label options=ex.options selected=ex.selected %}
-        {% else %}
-          <span style="font-size: 0.8125rem; color: hsl(var(--muted-foreground));">
-            {{ name }}({% for key, val in ex.items %}{{ key }}={{ val }}{% if not forloop.last %}, {% endif %}{% endfor %})
-          </span>
-        {% endif %}
-      </div>
+    {% for ex in template_examples_html %}
+      <div>{{ ex.html|safe }}</div>
     {% endfor %}
   </div>
 </div>
