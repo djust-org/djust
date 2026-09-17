@@ -901,20 +901,93 @@ def _consumes_body(compile_func: Callable[..., Any]) -> bool:
 _PROBE_BODY = "djust-wrapper-probe-body"
 
 
+class _ProbeLenientDict(dict):
+    """A context layer that answers every lookup with ``""`` so a wrapper that
+    reads ``context["name"]`` at render time is probed rather than refused."""
+
+    def __contains__(self, key: Any) -> bool:
+        return True
+
+    def __getitem__(self, key: Any) -> Any:
+        return dict.get(self, key, "")
+
+
+class _ProbeSentinel:
+    """Planted in the compiled node's nodelist: records the context the body
+    is rendered in. ``must_be_first`` mirrors ``Node``'s attribute so
+    ``NodeList`` treats it as a node."""
+
+    must_be_first = False
+    child_nodelists: Tuple[str, ...] = ()
+
+    def __init__(self, visible: set) -> None:
+        self.visible = visible  # keys the probe context exposes at the top level
+        self.rendered = False
+        self.autoescape: Optional[bool] = None
+        self.pushed: set = set()
+
+    def render_annotated(self, context: Any) -> str:
+        return self.render(context)
+
+    def render(self, context: Any) -> str:
+        self.rendered = True
+        self.autoescape = context.autoescape
+        # Anything visible that the probe did not put there was pushed by the
+        # wrapper around its body — Django's body would see it, ours cannot.
+        for layer in context.dicts:
+            if not isinstance(layer, _ProbeLenientDict):
+                self.pushed.update(k for k in layer if k not in self.visible)
+        return ""
+
+    def get_nodes_by_type(self, nodetype: Any) -> list:
+        return []
+
+
+def _plant_sentinel(node: Any, visible: set) -> Optional[_ProbeSentinel]:
+    """Append a sentinel to every ``NodeList`` the compiled node holds."""
+    from django.template.base import NodeList
+
+    sentinel = _ProbeSentinel(visible)
+    found = False
+    for value in list(vars(node).values()):
+        if isinstance(value, NodeList):
+            value.append(sentinel)
+            found = True
+    return sentinel if found else None
+
+
+def _segments_reason(calls: List[Tuple[str, ...]], end_name: str) -> str:
+    return "it parses more than one body segment (it stops first at %s rather than %r)" % (
+        calls[0],
+        end_name,
+    )
+
+
 def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[str]:
     """Why a body-consuming raw tag cannot take the rendered-body route, or
     ``None`` when it can (ADR-030 D1).
 
     The tag is compiled once, at registration, against the exact stream
     ``LibraryBlockTagHandler`` will hand it — ``[TEXT(body), BLOCK(end<name>)]``
-    — with ``parser.parse`` counted. It is a wrapper when it made exactly one
-    ``parse`` call stopping at ``end<name>`` AND its node renders the probe
-    body verbatim. ``split_pane`` (an intermediate ``{% pane %}``) fails the
-    first test; ``tabs`` (which keeps only ``TabNode`` children) fails the
-    second, silently dropping a text body — which is why a passing source
-    shape is not enough and the render is checked too. Behavioural, so
+    — with ``parser.parse`` counted, then rendered once with a sentinel
+    planted in its nodelist. It is a wrapper when: it made exactly one
+    ``parse`` call stopping at ``end<name>``; its node rendered the body;
+    and it rendered it in the SAME context it received — no pushed variables,
+    same ``autoescape``. The last condition is what the bridge cannot honour
+    (the Rust engine renders the body before the node runs), so a node that
+    does ``with context.push(x=...)`` around its body would diverge from
+    Django silently; it is refused instead. ``split_pane`` (an intermediate
+    ``{% pane %}``) fails the first test; ``tabs`` (which keeps only
+    ``TabNode`` children) never renders the sentinel. Behavioural, so
     ``inspect.getsource`` limitations do not apply.
+
+    Two limits, documented in ``docs/TEMPLATE_BACKEND.md``: the probe runs
+    the tag's compile and render once at ``{% load %}`` time, so a render
+    with side effects fires once with a probe context; and a compile function
+    that raises without arguments cannot be probed and stays refused.
     """
+    from django.http import HttpRequest
+    from django.template import Context
     from django.template.base import Token, TokenType
 
     end_name = "end" + name
@@ -935,25 +1008,33 @@ def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[st
                 type(exc).__name__,
                 exc,
             )
-        return "it parses more than one body segment (first stop set %s, then %s: %s)" % (
-            calls[0],
-            type(exc).__name__,
-            exc,
-        )
+        return _segments_reason(calls, end_name)
     if not calls:
         return "it reads the token stream directly (next_token / skip_past)"
     if len(calls) != 1 or calls[0] != (end_name,):
-        return "it parses more than one body segment or stops at %s rather than %r" % (
-            calls[0],
-            end_name,
-        )
+        return _segments_reason(calls, end_name)
+    ctx = Context(_ProbeLenientDict(), autoescape=True)
+    visible = {key for layer in ctx.dicts for key in layer}
+    sentinel = _plant_sentinel(node, visible)
+    if sentinel is None:
+        return "its node does not keep the parsed body as a nodelist"
+    request = HttpRequest()
+    request.path = request.path_info = "/"
+    ctx.request = request  # type: ignore[attr-defined]
+    string_if_invalid, debug = _render_engine_options()
+    ctx.template = _stub_template_with(string_if_invalid, debug)
     try:
-        output, _bindings = _render_node(node, {}, True)
+        node.render(ctx)
     except Exception as exc:  # noqa: BLE001
-        return "its node could not render a plain text body (%s: %s)" % (type(exc).__name__, exc)
-    if _PROBE_BODY not in str(output):
+        return "its node raised while rendering a probe body (%s: %s)" % (type(exc).__name__, exc)
+    if not sentinel.rendered:
+        return "its node does not render its body (it inspects the nodelist or renders it conditionally)"
+    if sentinel.autoescape is not True:
+        return "it renders its body with autoescape changed, which the bridge cannot honour"
+    if sentinel.pushed:
         return (
-            "its node does not render its body as-is (it inspects the nodelist for typed children)"
+            "it renders its body in a modified context (pushes %s), which the bridge cannot honour"
+            % (", ".join(sorted(str(k) for k in sentinel.pushed)[:3]))
         )
     return None
 

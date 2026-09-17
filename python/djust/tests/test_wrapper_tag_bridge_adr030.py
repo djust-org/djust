@@ -71,11 +71,16 @@ def test_the_component_census_matches_adr_030():
     assert len(reasons) == 57
     assert all(reasons[name] is None for name in FIVE)
     assert "more than one body segment" in reasons["split_pane"]
-    for parent in ("tabs", "accordion", "modal", "dropdown", "sidebar"):
-        assert "does not render its body as-is" in reasons[parent], parent
+    for parent in ("tabs", "accordion", "modal", "sidebar", "nav_menu"):
+        assert "does not render its body" in reasons[parent], parent
+    # Renders its body under a pushed variable: the one shape that would
+    # diverge from Django silently on the bridge, so it must be refused.
+    assert "modified context" in reasons["form_array"]
     wrappers = sorted(name for name, reason in reasons.items() if reason is None)
     refused = sorted(name for name, reason in reasons.items() if reason is not None)
-    assert len(wrappers) == 39 and len(refused) == 18, (wrappers, refused)
+    # A deliberate pin: a new body-consuming component tag moves one of these
+    # counts, and the change should say which side it landed on.
+    assert len(wrappers) == 40 and len(refused) == 17, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):

@@ -488,7 +488,43 @@ def test_a_nodelist_introspecting_raw_block_tag_is_refused_with_the_reason():
             "{% wrapblock2547 %}x{% endwrapblock2547 %}{% endintrospect2547 %}",
             CTX,
         )
-    assert "does not render its body as-is" in str(info.value)
+    assert "does not render its body" in str(info.value)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", sorted(RENDER))
+def test_a_wrapper_that_transforms_its_output_is_bridged_byte_equal(path):
+    source = "{% load lib2547_rawblock %}{% upper2547 %}{{ name }} x{% endupper2547 %}"
+    assert RENDER[path](source, CTX) == django_render(source, CTX) == "JACK &AMP; JILL X"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", sorted(RENDER))
+def test_a_wrapper_that_reads_the_context_is_bridged(path):
+    """The probe context answers every lookup, so a render-time read is not a
+    reason to refuse."""
+    source = "{% load lib2547_rawblock %}{% ctxread2547 %}y{% endctxread2547 %}"
+    assert RENDER[path](source, CTX) == django_render(source, CTX) == "Jack & Jill:y"
+
+
+@pytest.mark.parametrize(
+    "tag, body, fragment",
+    [
+        ("pushvar2547", "[{{ who }}]", "modified context (pushes who)"),
+        ("noesc2547", "{{ hostile }}", "autoescape changed"),
+        ("reqarg2547", "x", "without arguments"),
+    ],
+)
+def test_wrappers_the_bridge_cannot_honour_are_refused_with_the_reason(tag, body, fragment):
+    """A node that pushes variables or flips autoescape around its body would
+    diverge from Django silently on the bridge (the body is rendered before
+    the node runs), so the probe refuses it. A compile function that demands
+    an argument cannot be probed and stays refused, saying so."""
+    with pytest.raises(TemplateSyntaxError) as info:
+        plain_render(
+            "{%% load lib2547_rawblock %%}{%% %s %%}%s{%% end%s %%}" % (tag, body, tag), CTX
+        )
+    assert fragment in str(info.value)
 
 
 @pytest.mark.django_db

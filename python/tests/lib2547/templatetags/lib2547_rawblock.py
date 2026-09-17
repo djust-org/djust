@@ -56,11 +56,15 @@ def twoseg2547(parser, token):
 
 
 class IntrospectNode(template.Node):
+    """Keeps its nodelist (as Django's own parents do) but renders only the
+    typed children it finds in it — a rendered text body has none."""
+
     def __init__(self, nodelist):
-        self.children = [n for n in nodelist if isinstance(n, WrapNode)]
+        self.nodelist = nodelist
 
     def render(self, context):
-        return "children=%d" % len(self.children)
+        children = [n for n in self.nodelist if isinstance(n, WrapNode)]
+        return "children=%d:%s" % (len(children), "".join(c.render(context) for c in children))
 
 
 @register.tag
@@ -68,6 +72,87 @@ def introspect2547(parser, token):
     nodelist = parser.parse(("endintrospect2547",))
     parser.delete_first_token()
     return IntrospectNode(nodelist)
+
+
+class PushNode(template.Node):
+    """Renders its body under a pushed variable — the shape the rendered-body
+    bridge cannot honour (the body is rendered before the node runs)."""
+
+    def __init__(self, nodelist):
+        self.nodelist = nodelist
+
+    def render(self, context):
+        with context.push(who="inner"):
+            return self.nodelist.render(context)
+
+
+@register.tag
+def pushvar2547(parser, token):
+    nodelist = parser.parse(("endpushvar2547",))
+    parser.delete_first_token()
+    return PushNode(nodelist)
+
+
+class NoEscNode(template.Node):
+    def __init__(self, nodelist):
+        self.nodelist = nodelist
+
+    def render(self, context):
+        previous, context.autoescape = context.autoescape, False
+        try:
+            return self.nodelist.render(context)
+        finally:
+            context.autoescape = previous
+
+
+@register.tag
+def noesc2547(parser, token):
+    nodelist = parser.parse(("endnoesc2547",))
+    parser.delete_first_token()
+    return NoEscNode(nodelist)
+
+
+class UpperNode(template.Node):
+    """Transforms its body's OUTPUT — still a wrapper: Django, too, renders the
+    nodelist to a string first."""
+
+    def __init__(self, nodelist):
+        self.nodelist = nodelist
+
+    def render(self, context):
+        return self.nodelist.render(context).upper()
+
+
+@register.tag
+def upper2547(parser, token):
+    nodelist = parser.parse(("endupper2547",))
+    parser.delete_first_token()
+    return UpperNode(nodelist)
+
+
+class ReadsContextNode(template.Node):
+    def __init__(self, nodelist):
+        self.nodelist = nodelist
+
+    def render(self, context):
+        return "%s:%s" % (context["name"], self.nodelist.render(context))
+
+
+@register.tag
+def ctxread2547(parser, token):
+    nodelist = parser.parse(("endctxread2547",))
+    parser.delete_first_token()
+    return ReadsContextNode(nodelist)
+
+
+@register.tag
+def reqarg2547(parser, token):
+    bits = token.split_contents()
+    if len(bits) != 2:
+        raise template.TemplateSyntaxError("reqarg2547 takes exactly one argument")
+    nodelist = parser.parse(("endreqarg2547",))
+    parser.delete_first_token()
+    return WrapNode(nodelist)
 
 
 @register.tag
