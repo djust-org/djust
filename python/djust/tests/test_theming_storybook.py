@@ -52,9 +52,18 @@ class TestStorybookURLResolution:
         assert url == "/theming/gallery/storybook/button/"
 
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_detail_url_resolves_to_view(self):
+    def test_storybook_detail_url_resolves_to_the_liveview(self):
+        """It resolves to the LiveView, not the plain view it used to.
+
+        The detail page has to be a `LiveView`: `dj-click` is a server event, and
+        a plain view ships no server for it to reach, so the component previews
+        rendered but did nothing when clicked.
+        """
+        from djust.theming.gallery.live_views import StorybookDetailView
+
         match = resolve("/theming/gallery/storybook/button/")
-        assert match.func is storybook_detail_view
+        assert match.func.view_class is StorybookDetailView
+        assert match.kwargs["component_name"] == "button"
 
 
 # ---------------------------------------------------------------------------
