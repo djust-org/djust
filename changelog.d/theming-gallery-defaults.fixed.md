@@ -62,3 +62,13 @@
   failed with `node not found at path=7/1/3/1/0` and the client re-morphed from
   recovery HTML (#1737). The mount is now a `<div>` inside the `<main>` landmark,
   and a test pins that the HTTP render and the WS mount describe the same tree.
+- Fix the theme gallery's preset switcher applying only part of the preset. The
+  gallery's override block was emitted as `{{ gallery_preset_css }}` without
+  `|safe`, so autoescaping rewrote the quotes in its generated CSS: the selector
+  `html[data-theme="dark"]` was emitted as `html[data-theme=&quot;dark&quot;]`,
+  which no browser matches. The `:root` block has no quotes, so it survived — and
+  the page therefore applied the preset's root values while every dark-mode
+  override fell through to the configured theme. Choosing a preset changed the
+  background and left the components in the previous theme's colours. With the
+  selector fixed, `?preset=forest` renders green components rather than purple
+  ones on a green background.

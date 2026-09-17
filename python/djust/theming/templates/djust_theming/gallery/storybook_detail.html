@@ -118,9 +118,11 @@ component = {{ class_name }}({% for p in python_params %}{% if not forloop.first
     {% endif %}{{ p.name }}{% if p.default != "—" %}={{ p.default }}{% endif %}{% if not forloop.last %},{% endif %}{% endfor %})
 html = component.render()</pre>
     {% else %}
-    {# A module with no component class of its own — `server_event_toast`
-       defines only a mixin. Documenting an import for it would document a
-       `from ... import` that cannot resolve. #}
+    {% comment %}
+    A module with no component class of its own — `server_event_toast` defines
+    only a mixin. Documenting an import for it would document a `from ...
+    import` that cannot resolve.
+    {% endcomment %}
     <pre class="sb-code-body"># `{{ name }}` defines no component class of its own. It ships shared
 # parts — mixins and helpers — that other components are built from.</pre>
     {% endif %}
