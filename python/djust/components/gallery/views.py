@@ -160,6 +160,17 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
         # djust_theming may not be installed / staticfiles may not resolve it; skip silently.
         logger.debug("Optional djust_theming base CSS link unavailable: %s", exc)
 
+    # Versioned, like every other asset link: Django's static server sends no
+    # `Cache-Control`, so a bare link is cached heuristically and an edit to the
+    # stylesheet stays invisible on the page it was made for.
+    try:
+        from djust.theming.templatetags.theme_tags import _theme_asset_version
+
+        asset_version = f"?v={_theme_asset_version()}"
+    except Exception as exc:
+        logger.debug("Theming asset version unavailable, linking styles unversioned: %s", exc)
+        asset_version = ""
+
     return f"""\
 <head>
     <meta charset="UTF-8">
@@ -167,8 +178,8 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
     <title>{title}</title>
     {theming_base_link}
     <style data-djust-theme>{theme_css}</style>
-    <link rel="stylesheet" href="{static("djust_components/components.css")}">
-    <link rel="stylesheet" href="{static("djust_components/components-classes.css")}">
+    <link rel="stylesheet" href="{static("djust_components/components.css")}{asset_version}">
+    <link rel="stylesheet" href="{static("djust_components/components-classes.css")}{asset_version}">
     <style>
         /* ── Token aliases ──
            The layout rules below reference `--color-bg`, `--color-text`,

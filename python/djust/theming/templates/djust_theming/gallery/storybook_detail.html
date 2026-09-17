@@ -86,28 +86,68 @@
       </div>
       {% if component_type == "template" %}<span>template</span>{% else %}<span>python</span>{% endif %}
     </div>
-    {% if component_type == "template" %}
-    <pre class="sb-code-body">{% templatetag openblock %} load theme_components {% templatetag closeblock %}
-
-{% templatetag openblock %} theme_{{ name }}{% for p in required_context %} {{ p.name }}{% endfor %}{% for p in optional_context %} {{ p.name }}={{ p.default|default:"..." }}{% endfor %} {% templatetag closeblock %}</pre>
-    {% else %}
-    {% if import_line %}
-    <pre class="sb-code-body">{{ import_line }}
-
-component = {{ class_name }}({% for p in python_params %}{% if not forloop.first %}
-    {% endif %}{{ p.name }}{% if p.default != "—" %}={{ p.default }}{% endif %}{% if not forloop.last %},{% endif %}{% endfor %})
-html = component.render()</pre>
-    {% else %}
     {% comment %}
-    A module with no component class of its own — `server_event_toast` defines
-    only a mixin. Documenting an import for it would document a `from ...
-    import` that cannot resolve.
+    The snippet shows the two files a developer writes — the view that holds the
+    state and the template that renders it — rather than the component in
+    isolation. `component = X(...)` followed by `html = component.render()`
+    documents the one step that was never in question, and leaves out the
+    `{{ component|safe }}` that actually puts it on a page.
     {% endcomment %}
-    <pre class="sb-code-body"># `{{ name }}` defines no component class of its own. It ships shared
-# parts — mixins and helpers — that other components are built from.</pre>
-    {% endif %}
-    {% endif %}
+    <pre class="sb-code-body">{{ usage_snippet }}</pre>
   </div>
+</div>
+
+{# ===== Where it lives, and what styles it ===== #}
+<div class="sb-section">
+  <div class="sb-section-title">SOURCE &amp; STYLES</div>
+  <table class="sb-table">
+    <thead>
+      <tr><th>File</th><th>Path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      {% if template_path %}
+      <tr>
+        <td><code>template</code></td>
+        <td><code>{{ template_path }}</code></td>
+        <td>
+          Override it by placing a copy at the same path under your own
+          templates, or for one theme only at
+          <code>djust_theming/themes/&lt;theme&gt;/components/{{ name }}.html</code>.
+        </td>
+      </tr>
+      {% endif %}
+      {% if module_path %}
+      <tr>
+        <td><code>module</code></td>
+        <td><code>{{ module_path }}</code></td>
+        <td>
+          Subclass it, or pass <code>custom_class</code>, to change how it
+          renders without forking the module.
+        </td>
+      </tr>
+      {% endif %}
+      {% for sheet in styles %}
+      <tr>
+        <td><code>css</code></td>
+        <td><code>{{ sheet.path }}</code></td>
+        <td>
+          Defines {{ sheet.classes|length }} of this component's
+          class{{ sheet.classes|length|pluralize:"es" }} at
+          line{{ sheet.lines|length|pluralize }} {{ sheet.lines|join:", " }}.
+          Override those rules or the custom properties they read in a
+          stylesheet of your own, loaded after this one.
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="3" style="color: hsl(var(--muted-foreground));">
+          No rule in either stylesheet matches this component's classes — it
+          renders with browser defaults and whatever your own CSS supplies.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 
 {# ===== Python Params ===== #}

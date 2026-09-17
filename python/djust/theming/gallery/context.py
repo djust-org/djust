@@ -38,9 +38,19 @@ def _button_examples() -> list[dict[str, Any]]:
 
 def _card_examples() -> list[dict[str, Any]]:
     return [
-        {"title": "Card Title", "content": "Card body content goes here.", "footer": "Card footer"},
-        {"title": "No Footer", "content": "A card without a footer."},
-        {"content": "A card with no title or footer."},
+        # `slot_body` rather than `content`: `theme_card` takes `title` and
+        # `footer` as parameters and funnels every other keyword into `attrs`,
+        # and card.html only ever reads `attrs.class` / `attrs.id`. A `content`
+        # key is therefore accepted and dropped — the body renders empty with no
+        # error to say why. `slot_*` is the name the tag lifts into the context
+        # the template reads.
+        {
+            "title": "Card Title",
+            "slot_body": "Card body content goes here.",
+            "footer": "Card footer",
+        },
+        {"title": "No Footer", "slot_body": "A card without a footer."},
+        {"slot_body": "A card with no title or footer."},
     ]
 
 

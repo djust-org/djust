@@ -500,11 +500,14 @@ class Command(BaseCommand):
             {% theme_switcher %}
         </div>
 
-        {% theme_card title="Welcome" %}
-            <p class="mb-4">This is an example using djust-theming components.</p>
+        {# `theme_card` is a simple_tag: it takes its body as an argument and has
+           no `{% end_theme_card %}`, so it cannot wrap other template tags. #}
+        {% theme_card title="Welcome" body="This is an example using djust-theming components." %}
+
+        <div class="mt-4 flex gap-2">
             {% theme_button "Click me" variant="primary" %}
             {% theme_button "Secondary" variant="secondary" %}
-        {% end_theme_card %}
+        </div>
 
         <div class="mt-4">
             {% theme_alert "This is a success message!" variant="success" dismissible=True %}
