@@ -2061,6 +2061,39 @@ def register_with_rust_engine() -> None:
 
     register_block_tag_handler("dj_suspense", "enddj_suspense", SuspenseTagHandler())
 
+    # {% split_pane %}…{% pane %}…{% endsplit_pane %} — two body segments, which
+    # the native block path cannot express (see the note where SplitPaneHandler
+    # used to be). Django's own `do_split_pane` handles the intermediate itself:
+    # it parses to `{% pane %}`, then to `{% endsplit_pane %}`.
+    #
+    # The raw path suits that exactly. The Rust parser hands the body over
+    # UN-rendered — `{% pane %}` and all — and `LibraryRawBlockTagHandler`
+    # re-lexes it, appends `{% endsplit_pane %}`, and calls Django's own compile
+    # function on a synthetic parser. So the two-pane markup, the drag handle
+    # and the inline JS are Django's byte for byte, rather than a stub div.
+    #
+    # Cost, the same one every raw-path tag pays: the panes' CONTENTS are
+    # rendered by Django rather than Rust, so `dj-*` bindings inside a pane do
+    # not get Rust VDOM identity. Parity is the right trade for a component
+    # whose entire output is the split structure — and the alternative was not
+    # "render in Rust" but "raise on every use".
+    try:
+        from djust._rust import register_raw_block_tag_handler  # type: ignore[import]
+        from djust.template_libraries import LibraryRawBlockTagHandler
+
+        from .templatetags import djust_components as _components_lib
+    except ImportError:
+        # `djust._rust` absent — the earlier import already returned, but the
+        # template_libraries import is separate and must not take the whole
+        # registration down if it is unavailable.
+        return
+
+    register_raw_block_tag_handler(
+        "split_pane",
+        "endsplit_pane",
+        LibraryRawBlockTagHandler("djust_components", "split_pane", _components_lib.do_split_pane),
+    )
+
 
 # ===========================================================================
 # TIER 2 REMAINING + TIER 3 HANDLERS
@@ -2598,27 +2631,17 @@ INLINE_HANDLERS.extend(
 )
 
 
-class SplitPaneHandler:
-    """Block handler for {% split_pane %}...{% pane %}...{% endsplit_pane %}"""
-
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        # For Rust engine, content is pre-rendered; we just wrap it
-        kwargs = _parse_args(args, context)
-        direction = kwargs.get("direction", "horizontal")
-        from django.utils.html import conditional_escape as ce
-        import uuid as _uuid
-
-        uid = f"sp-{_uuid.uuid4().hex[:6]}"
-        return _safe(
-            f'<div class="split-pane split-pane-{ce(direction)}" id="{uid}">{content}</div>'
-        )
-
-
-BLOCK_HANDLERS.extend(
-    [
-        ("split_pane", "endsplit_pane", SplitPaneHandler()),
-    ]
-)
+# {% split_pane %} is deliberately NOT in BLOCK_HANDLERS.
+#
+# It is a two-segment tag — {% split_pane %}…{% pane %}…{% endsplit_pane %} —
+# and the native block path declares exactly one end tag, so the parser met
+# `{% pane %}` and raised "Invalid block tag on line 1: 'pane', expected
+# 'endsplit_pane'". The handler that used to be registered here,
+# `SplitPaneHandler`, was also a stub: it wrapped the rendered body in a single
+# div and ignored the split entirely, so even had the parse succeeded it would
+# have diverged from Django's own node.
+#
+# It registers on the RAW path instead — see `register_with_rust_engine`.
 
 
 # ===========================================================================
