@@ -154,7 +154,7 @@
     </style>
 </head>
 <body>
-<div dj-view="djust_components.gallery.live_views.{% block view_class %}GalleryIndexView{% endblock %}">
+<div dj-view="djust.components.gallery.live_views.{% block view_class %}GalleryIndexView{% endblock %}">
     <style data-djust-theme>{{ theme_css|safe }}</style>
 
     <header class="gallery-header">
@@ -186,7 +186,7 @@
     <div class="gallery-body">
         <nav class="gallery-sidebar">
             {% for cat in category_cards %}
-            <h3><a href="/lv/{{ cat.slug }}/" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
+            <h3><a href="{{ cat.url }}" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
             {% endfor %}
         </nav>
         <main class="gallery-content preview-container {{ preview_mode }}">

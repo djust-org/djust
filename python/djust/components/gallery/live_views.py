@@ -39,6 +39,33 @@ else:
 # ---------------------------------------------------------------------------
 
 
+def _category_url(slug: str) -> str:
+    """The LiveView URL for a category — reversed, not spelled out.
+
+    The templates used `href="/lv/{{ slug }}/"`, an absolute path that assumes
+    the gallery is mounted at the site root. The theming app mounts it at
+    `/theme/components/`, where every one of those links 404'd — including the
+    ones the search results use, so searching the gallery and clicking a result
+    was a dead end. `href="lv/…"` is not a fix either: resolved from
+    `/theme/components/form/` it becomes `/theme/components/form/lv/…`.
+
+    Reversed, so it is correct under any mount point. Tries the bare name first
+    (a project including the gallery's urls directly) and then the theming
+    namespace (djust.theming.urls, which is where this gallery is mounted in
+    djust's own stack).
+    """
+    from django.urls import NoReverseMatch, reverse
+
+    for name in (f"gallery-{slug}-lv", f"djust_theming:gallery-{slug}-lv"):
+        try:
+            # `str()` because `reverse` is untyped: returning its value directly
+            # trips mypy's no-any-return on this `-> str` signature (ADR-023).
+            return str(reverse(name))
+        except NoReverseMatch:
+            continue
+    return ""
+
+
 class GalleryCategoryMixin(_GalleryMixinBase):
     """Base for per-category gallery views.
 
@@ -77,6 +104,7 @@ class GalleryCategoryMixin(_GalleryMixinBase):
                 "slug": s,
                 "label": CATEGORIES.get(s, s.title()),
                 "count": len(categories.get(CATEGORIES.get(s, s.title()), [])),
+                "url": _category_url(s),
             }
             for s in CATEGORY_ORDER
         ]
@@ -88,12 +116,20 @@ class GalleryCategoryMixin(_GalleryMixinBase):
         # Prev/next navigation
         idx = CATEGORY_ORDER.index(slug)
         self.prev_category = (
-            {"slug": CATEGORY_ORDER[idx - 1], "label": CATEGORIES.get(CATEGORY_ORDER[idx - 1], "")}
+            {
+                "slug": CATEGORY_ORDER[idx - 1],
+                "label": CATEGORIES.get(CATEGORY_ORDER[idx - 1], ""),
+                "url": _category_url(CATEGORY_ORDER[idx - 1]),
+            }
             if idx > 0
             else None
         )
         self.next_category = (
-            {"slug": CATEGORY_ORDER[idx + 1], "label": CATEGORIES.get(CATEGORY_ORDER[idx + 1], "")}
+            {
+                "slug": CATEGORY_ORDER[idx + 1],
+                "label": CATEGORIES.get(CATEGORY_ORDER[idx + 1], ""),
+                "url": _category_url(CATEGORY_ORDER[idx + 1]),
+            }
             if idx < len(CATEGORY_ORDER) - 1
             else None
         )
@@ -149,6 +185,13 @@ class GalleryIndexView(LiveView):
                 "slug": s,
                 "label": CATEGORIES.get(s, s.title()),
                 "count": len(categories.get(CATEGORIES.get(s, s.title()), [])),
+                # `_base.html` renders the sidebar from this same list and
+                # `index.html` renders the landing grid from it, both via
+                # `{{ cat.url }}`. Without the key the attribute resolves to
+                # the empty string and every one of the 18 links renders as
+                # `href=""` — a link to the current page that looks like a
+                # normal link and goes nowhere.
+                "url": _category_url(s),
             }
             for s in CATEGORY_ORDER
         ]
@@ -169,6 +212,7 @@ class GalleryIndexView(LiveView):
                         "label": comp["label"],
                         "category_slug": s,
                         "category_label": label,
+                        "url": _category_url(s),
                     }
                 )
 

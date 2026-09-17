@@ -18,12 +18,12 @@
 
 <div class="category-nav">
     {% if prev_category %}
-    <a href="/lv/{{ prev_category.slug }}/">&larr; {{ prev_category.label }}</a>
+    <a href="{{ prev_category.url }}">&larr; {{ prev_category.label }}</a>
     {% else %}
     <span></span>
     {% endif %}
     {% if next_category %}
-    <a href="/lv/{{ next_category.slug }}/">{{ next_category.label }} &rarr;</a>
+    <a href="{{ next_category.url }}">{{ next_category.label }} &rarr;</a>
     {% else %}
     <span></span>
     {% endif %}
