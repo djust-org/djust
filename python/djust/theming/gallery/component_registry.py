@@ -305,13 +305,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "segmented_progress": [
-        {
-            "segments": [
-                {"label": "Done", "value": 40, "variant": "success"},
-                {"label": "In Progress", "value": 30, "variant": "warning"},
-                {"label": "Todo", "value": 30},
-            ]
-        },
+        {"steps": ["Cart", "Address", "Payment", "Done"], "current": 3, "size": "md"}
     ],
     "empty_state": [
         {
@@ -330,11 +324,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "page_alert": [
         {"message": "Your trial expires in 3 days.", "variant": "warning", "dismissible": True},
     ],
-    "status_dot": [
-        {"status": "online", "label": "Online"},
-        {"status": "offline", "label": "Offline"},
-        {"status": "busy", "label": "Busy"},
-    ],
+    "status_dot": [{"status": "running", "variant": "success", "size": "md"}],
     "status_indicator": [
         {"status": "running", "label": "Service running"},
         {"status": "stopped", "label": "Service stopped"},
@@ -343,10 +333,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"connected": True},
         {"connected": False},
     ],
-    "live_indicator": [
-        {"active": True, "label": "Live"},
-        {"active": False, "label": "Offline"},
-    ],
+    "live_indicator": [{"user": {"name": "Ada"}, "field": "Title", "action": "typing"}],
     "thinking_indicator": [
         {"label": "Thinking..."},
     ],
@@ -367,9 +354,11 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "countdown": [
         {"target": "2026-12-31", "label": "Until New Year"},
     ],
-    "relative_time": [
-        {"timestamp": "2026-03-01T12:00:00"},
-    ],
+    # `auto_update` left at its default: without it the component renders the
+    # raw ISO string as its text content rather than a relative label, because
+    # the formatting is the client's job. Disabling it made the preview look
+    # like a broken component.
+    "relative_time": [{"datetime": "2026-09-17T09:00:00Z"}],
     "animated_number": [
         {"value": 1234, "duration": 1000},
     ],
@@ -414,11 +403,11 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     ],
     "activity_feed": [
         {
-            "items": [
-                {"actor": "Alice", "action": "created issue", "target": "#123", "time": "2h ago"},
-                {"actor": "Bob", "action": "merged PR", "target": "#45", "time": "4h ago"},
+            "events": [
+                {"user": "Ada", "action": "commented on", "target": "PR #412", "time": "2m ago"},
+                {"user": "Grace", "action": "merged", "target": "main", "time": "1h ago"},
             ]
-        },
+        }
     ],
     "notification_badge": [
         {"count": 5},
@@ -426,12 +415,12 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"count": 0},
     ],
     "avatar_group": [
-        {"avatars": [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}], "max": 3},
+        {
+            "users": [{"name": "Ada Lovelace"}, {"name": "Grace Hopper"}, {"name": "Alan Turing"}],
+            "max_display": 2,
+        }
     ],
-    "ribbon": [
-        {"label": "New", "variant": "success"},
-        {"label": "Beta", "variant": "warning"},
-    ],
+    "ribbon": [{"text": "New", "variant": "primary", "position": "top-right"}],
     "fab": [
         {"label": "Create", "icon": "+"},
     ],
@@ -449,22 +438,17 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     ],
     "toolbar": [
         {
-            "items": [
-                {"label": "Bold", "action": "bold"},
-                {"label": "Italic", "action": "italic"},
-                {"label": "Underline", "action": "underline"},
-            ]
-        },
+            "content": '<button type="button">Bold</button><button type="button">Italic</button>',
+            "align": "left",
+        }
     ],
     "announcement_bar": [
-        {"message": "🎉 djust v1.0 is now available!", "variant": "success"},
+        {"content": "Scheduled maintenance on Sunday.", "variant": "warning", "dismissible": True}
     ],
     "cookie_consent": [
         {"message": "We use cookies to improve your experience."},
     ],
-    "feedback_widget": [
-        {"question": "Was this helpful?"},
-    ],
+    "feedback_widget": [{"mode": "thumbs", "value": "up"}],
     "streaming_text": [
         {"text": "Generating response...", "active": True},
     ],
