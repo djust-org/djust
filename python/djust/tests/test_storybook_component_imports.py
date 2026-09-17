@@ -1,0 +1,88 @@
+"""Every storybook page must document an import that actually imports.
+
+The USAGE snippet's import line used to be spelled out in
+`storybook_detail.html` as `from djust_components.components.<name> import
+<Name>`, and both halves of that were wrong:
+
+* `djust_components` is the **static** namespace (`static/djust_components/`),
+  not a Python package — so `from djust_components...` raised
+  `ModuleNotFoundError` on every page, for every component;
+* the class name is not always the snake→CamelCase of the module name —
+  `qr_code` defines `QRCode`, `form_validation` defines two components, and
+  `server_event_toast` defines only a mixin.
+
+A copy-paste that fails is worse than no snippet, so the line is now derived
+from the module and emitted over the public `djust.components` namespace. These
+tests are the guarantee: they execute every generated line.
+"""
+
+from djust.theming.gallery.component_registry import (
+    _COMPONENT_TO_CATEGORY,
+    get_python_component_import,
+)
+from djust.theming.gallery.storybook import build_storybook_detail_context
+
+
+def _python_components() -> list[str]:
+    return [
+        name
+        for name in sorted(_COMPONENT_TO_CATEGORY)
+        if build_storybook_detail_context(name).get("component_type") == "python"
+    ]
+
+
+def test_there_are_python_components_to_check():
+    """Guard: a scan that finds nothing would pass every assertion below."""
+    assert len(_python_components()) > 100
+
+
+def test_every_generated_import_line_executes():
+    """The point of the fix. This fails on the old `djust_components.…` line."""
+    broken = {}
+    for name in _python_components():
+        line = build_storybook_detail_context(name)["import_line"]
+        if not line:
+            continue  # documented as having no class — asserted separately
+        try:
+            exec(line, {})
+        except Exception as exc:  # noqa: BLE001 — any failure is the finding
+            broken[name] = f"{line!r} -> {type(exc).__name__}: {exc}"
+
+    assert not broken, f"storybook documents unimportable lines: {broken}"
+
+
+def test_a_module_with_no_component_class_documents_no_import():
+    """`server_event_toast` defines only a mixin.
+
+    The old template emitted `import ServerEventToast` for it — a name that
+    exists nowhere.
+    """
+    ctx = build_storybook_detail_context("server_event_toast")
+
+    assert ctx["component_type"] == "python"
+    assert ctx["import_line"] == ""
+    assert ctx["class_name"] == ""
+
+
+def test_class_name_is_read_from_the_module_not_guessed():
+    """`qr_code` defines `QRCode`; snake→CamelCase would say `QrCode`."""
+    _module, names = get_python_component_import("qr_code")
+
+    assert names == ["QRCode"]
+
+
+def test_a_module_with_several_components_documents_all_of_them():
+    """`form_validation` defines two; documenting one would be arbitrary."""
+    _module, names = get_python_component_import("form_validation")
+
+    assert names == ["FieldError", "FormErrors"]
+
+    line = build_storybook_detail_context("form_validation")["import_line"]
+    assert "FieldError" in line and "FormErrors" in line
+
+
+def test_pages_do_not_name_the_static_namespace_as_a_package():
+    """The static namespace must never appear in a Python import line."""
+    for name in _python_components():
+        line = build_storybook_detail_context(name)["import_line"]
+        assert "djust_components." not in line, f"{name}: {line!r}"

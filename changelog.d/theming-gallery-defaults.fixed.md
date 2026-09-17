@@ -32,3 +32,15 @@
   are rendered by Django rather than Rust, so `dj-*` bindings inside a pane do
   not get Rust VDOM identity — the same trade every raw-path tag makes, and
   preferable to raising on every use.
+- Fix every storybook page documenting an import that does not work. The USAGE
+  snippet was spelled out in the template as
+  `from djust_components.components.<name> import <Name>`, and both halves were
+  wrong: `djust_components` is the *static* namespace, not a Python package, so
+  it raised `ModuleNotFoundError` on all 150 pages; and the class name is not
+  always the snake→CamelCase of the module (`qr_code` defines `QRCode`,
+  `form_validation` defines two components, `server_event_toast` defines only a
+  mixin). The line is now derived from the module and emitted over the public
+  `djust.components` namespace, which resolves component classes lazily so
+  `from djust.components import Accordion` works for all of them; a module with
+  no component class documents no import instead of a wrong one. Also corrected
+  the same wrong path in `server_event_toast`'s own docstring example.

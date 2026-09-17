@@ -108,11 +108,19 @@
 
 {% verbatim %}{%{% endverbatim %} theme_{{ name }}{% for p in required_context %} {{ p.name }}{% endfor %}{% for p in optional_context %} {{ p.name }}={{ p.default|default:"..." }}{% endfor %} {% verbatim %}%}{% endverbatim %}</pre>
     {% else %}
-    <pre class="sb-code-body">from djust_components.components.{{ name }} import {{ display_name|cut:" " }}
+    {% if import_line %}
+    <pre class="sb-code-body">{{ import_line }}
 
-component = {{ display_name|cut:" " }}({% for p in python_params %}{% if not forloop.first %}
+component = {{ class_name }}({% for p in python_params %}{% if not forloop.first %}
     {% endif %}{{ p.name }}{% if p.default != "—" %}={{ p.default }}{% endif %}{% if not forloop.last %},{% endif %}{% endfor %})
 html = component.render()</pre>
+    {% else %}
+    {# A module with no component class of its own — `server_event_toast`
+       defines only a mixin. Documenting an import for it would document a
+       `from ... import` that cannot resolve. #}
+    <pre class="sb-code-body"># `{{ name }}` defines no component class of its own. It ships shared
+# parts — mixins and helpers — that other components are built from.</pre>
+    {% endif %}
     {% endif %}
   </div>
 </div>
