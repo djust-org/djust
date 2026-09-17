@@ -409,6 +409,20 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Django's `{# #}` comment is SINGLE-LINE only. A multi-line one is not a
+      # comment: the lexer emits it as TEXT, so it renders on the page and any
+      # tag written inside it *executes*. Three bites in one session — a printed
+      # comment above the masthead, a doubled `{% block %}` that 500'd the page,
+      # and an autoescaped selector rendered as body text — none of which raise
+      # or fail a test. Mechanical, so it gets a mechanical check.
+      - id: check-template-comments
+        name: check no multi-line {# #} template comments
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-template-comments.py'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-commit]
+
       # Cross-reference tag-emit _event defaults against component/mixin
       # handler methods. Catches #1275-class (stale/typo'd emit default)
       # bugs before they reach CI (#1290).
