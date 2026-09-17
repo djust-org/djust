@@ -768,7 +768,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "content_loader": [{}],
+        "content_loader": [{"loaded": False, "placeholder": "<p>Loading…</p>"}],
         "context_menu": [{}],
         "conversation_thread": [
             {
@@ -879,9 +879,24 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "helper": "We never share it.",
             }
         ],
-        "gantt_chart": [{}],
+        "gantt_chart": [
+            {
+                "title": "Sprint plan",
+                "tasks": [
+                    {"name": "Design", "start": 0, "duration": 3},
+                    {"name": "Build", "start": 2, "duration": 5},
+                    {"name": "Ship", "start": 6, "duration": 2},
+                ],
+            }
+        ],
         "gauge": [{}],
-        "heatmap": [{}],
+        "heatmap": [
+            {
+                "data": [[1, 4, 2], [3, 0, 5], [2, 6, 1]],
+                "x_labels": ["Mon", "Tue", "Wed"],
+                "y_labels": ["Week 1", "Week 2", "Week 3"],
+            }
+        ],
         "hover_card": [
             {"trigger": "Hover me", "content": "<p>Shown on hover.</p>", "position": "top"}
         ],
@@ -931,7 +946,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "map_picker": [{}],
+        "map_picker": [{"lat": 51.5074, "lng": -0.1278}],
         "markdown_editor": [{}],
         "markdown_textarea": [{}],
         "masonry_grid": [{}],
@@ -958,7 +973,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "selected": ["django"],
             }
         ],
-        "multimodal_input": [{}],
+        "multimodal_input": [{"name": "prompt", "placeholder": "Ask anything…"}],
         "nav_menu": [
             {
                 "brand": "MyApp",
@@ -1013,7 +1028,22 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "title": "Traffic sources",
             }
         ],
-        "pivot_table": [{}],
+        "pivot_table": [
+            {
+                "rows": "region",
+                "cols": "quarter",
+                # `values` names the numeric field to aggregate. Without it the
+                # table renders its header row and nothing else — a pivot with
+                # no numbers, which looks like a broken component rather than a
+                # missing argument.
+                "values": "revenue",
+                "data": [
+                    {"region": "North", "quarter": "Q1", "revenue": 120},
+                    {"region": "North", "quarter": "Q2", "revenue": 150},
+                    {"region": "South", "quarter": "Q1", "revenue": 90},
+                ],
+            }
+        ],
         "popover": [{}],
         "presence_avatars": [{}],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
@@ -1084,7 +1114,15 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "treemap": [{}],
+        "treemap": [
+            {
+                "data": [
+                    {"name": "Search", "size": 45},
+                    {"name": "Direct", "size": 30},
+                    {"name": "Social", "size": 15},
+                ]
+            }
+        ],
         "truncated_list": [
             {
                 "items": ["First item", "Second item", "Third item", "Fourth item", "Fifth item"],
@@ -1092,6 +1130,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "virtual_list": [{}],
-        "voice_input": [{}],
+        "voice_input": [{"lang": "en-US"}],
     }
 )
