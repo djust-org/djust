@@ -452,10 +452,13 @@ CANARY_MODULE = textwrap.dedent(
     from django.template import Context, Engine, Library, Node, TemplateSyntaxError
     from django.test import SimpleTestCase
 
-    # A raw @register.tag that CONSUMES A BODY — the one library-tag shape
-    # djust still refuses (#2547): the synthetic parser has no token stream
-    # to hand it. `Engine(libraries={"canary_lib": "canary_tests"})` imports
-    # this module as the library, so the canary is self-contained.
+    # A raw @register.tag that CONSUMES A BODY and renders it in a MODIFIED
+    # context — the library-tag shape djust still refuses (ADR-030): a plain
+    # wrapper is bridged now, but a node that pushes a variable around its
+    # body would diverge silently, because the Rust engine has rendered the
+    # body before the node runs. `Engine(libraries={"canary_lib":
+    # "canary_tests"})` imports this module as the library, so the canary is
+    # self-contained.
     register = Library()
 
 
@@ -464,7 +467,8 @@ CANARY_MODULE = textwrap.dedent(
             self.nodelist = nodelist
 
         def render(self, context):
-            return self.nodelist.render(context).upper()
+            with context.push(loud=True):
+                return self.nodelist.render(context).upper()
 
 
     @register.tag
@@ -494,8 +498,9 @@ CANARY_MODULE = textwrap.dedent(
             # `ifchanged` until #2517, `{% cache %}` until #2517's library
             # row, the `tz` filters until #2541. No Django tag or filter is
             # refused any more, so the canary moved to the refusal that
-            # remains — a project library's raw `@register.tag` that consumes
-            # a block (#2547), which the bridge cannot hand a token stream.
+            # remains — a project library's raw `@register.tag` that renders
+            # its body under a pushed variable (ADR-030), which the bridge
+            # refuses rather than render in the wrong context.
             src = "{% load canary_lib %}{% shout %}hi{% endshout %}"
             engine = Engine(libraries={"canary_lib": "canary_tests"})
             out = engine.from_string(src).render(Context({}))
