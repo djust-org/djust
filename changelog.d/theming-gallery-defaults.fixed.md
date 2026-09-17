@@ -100,3 +100,10 @@
   `modal`, `bottom_sheet`, `tour`, `image_lightbox`, `export_dialog`,
   `prompt_editor`, `table_of_contents` and `form_validation` — where a blank
   preview would be misleading and the explicit message is the honest one.
+- Assert that every interactive component's event actually reaches a handler.
+  Rendering is not functionality: a component whose `dj-click` reaches nothing is
+  inert while looking perfectly correct. All eight the storybook attaches —
+  `accordion`, `tabs`, `collapsible`, `dropdown`, `modal`, `sheet`, `tooltip`,
+  `carousel` — are now mounted over a real `WebsocketCommunicator` and sent their
+  own event, asserting a non-error frame comes back. Gate-off (removing a
+  descriptor) fails the two tests for that component.
