@@ -56,6 +56,96 @@ _INTERACTIVE = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Demo events — the storybook hosting its own previews
+# ---------------------------------------------------------------------------
+#
+# A component renders `dj-click="something"` because a host is expected to
+# answer it; that is the contract, and the documentation for each tells a
+# developer to write the handler. On a storybook page this view IS the host, so
+# every event its own previews emit has to resolve. An unanswered `dj-click` is
+# a server error, not a no-op — clicking it produced an error frame and a
+# console traceback on a page whose whole job is to look dependable.
+#
+# Twenty events across seventeen components were unanswered. They are uniform
+# enough to drive from one table: each names a single state kwarg the component
+# already accepts, so re-rendering with that kwarg changed is the whole fix.
+# This mirrors what DEP-002 already does for the container components, for the
+# ones that have no descriptor to declare.
+
+
+def _text(_current: Any, incoming: Any) -> Any:
+    return incoming
+
+
+def _as_int(_current: Any, incoming: Any) -> Any:
+    try:
+        return int(incoming)
+    except (TypeError, ValueError):
+        return None  # leave the kwarg out rather than write a bad one
+
+
+def _flip(current: Any, _incoming: Any) -> Any:
+    return not current
+
+
+def _month(delta: int):
+    def _shift(current: Any, _incoming: Any) -> Any:
+        try:
+            return int(current) + delta
+        except (TypeError, ValueError):
+            return None
+
+    return _shift
+
+
+def _append_row(current: Any, _incoming: Any) -> Any:
+    # `rows` is a list of `{"value": ...}` dicts (see `form_array`).
+    return list(current or []) + [{"value": ""}]
+
+
+#: event name -> (the example kwarg it sets, how to compute the new value)
+_DEMO_EVENTS: Dict[str, Any] = {
+    "set_rating": ("value", _text),
+    "rate_response": ("value", _text),
+    "toggle_select": ("value", _text),
+    "date_select": ("selected", _text),
+    "set_step": ("active", _as_int),
+    "date_prev_month": ("month", _month(-1)),
+    "date_next_month": ("month", _month(1)),
+    "toggle_expand": ("expanded", _flip),
+    "toggle_preview": ("preview", _flip),
+    "inline_edit": ("editing", _flip),
+    "toggle_split_menu": ("is_open", _flip),
+    "toggle_notifications": ("is_open", _flip),
+    "toggle_sheet": ("is_open", _flip),
+    "close_sheet": ("is_open", lambda _c, _v: False),
+    "close_palette": ("is_open", lambda _c, _v: False),
+    "accept_cookies": ("accepted", lambda _c, _v: True),
+    "dismiss_alert": ("dismissed", lambda _c, _v: True),
+    "add_row": ("rows", _append_row),
+    # These three carry no state the component can be re-rendered with — the
+    # host is expected to act on them itself (send a message, record a review).
+    # Answered anyway, so the preview reports no failure; there is simply
+    # nothing for the page to change.
+    "approve": ("status", lambda _c, _v: "approved"),
+    "reject": ("status", lambda _c, _v: "rejected"),
+    "send": ("sent", lambda _c, _v: True),
+}
+
+
+def _make_demo_handler(event: str, key: str, transform: Any):
+    """One `@event_handler` per event, named so dispatch finds it."""
+
+    def handler(self: Any, value: str = "", **kwargs: Any) -> None:
+        current = self._demo_values.get(key)
+        self._demo_values[key] = transform(current, value)
+
+    handler.__name__ = event
+    handler.__qualname__ = event
+    return event_handler(handler)
+
+
 class StorybookSidebarMixin:
     """The sidebar's state and handlers, shared by every storybook page.
 
@@ -191,50 +281,45 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 
         self.component_name = component_name
         self._base_ctx = ctx
-        #: The rating page's value. `None` until a star is clicked, so the
-        #: example's own `value=` stands until then (see `_rating_state`).
-        self._rating_value: Optional[int] = None
+        #: What the demo handlers have set, keyed by example kwarg. Empty until
+        #: something is clicked, so each example's own values stand until then.
+        self._demo_values: Dict[str, Any] = {}
         self._init_sidebar(component_name)
 
     def _descriptor_state(self) -> Dict[str, Any]:
-        """The live state of this component's descriptor, if it has one."""
-        name = self.component_name
-        if name == "rating":
-            return self._rating_state()
-        if name not in _INTERACTIVE:
-            return {}
-        state = getattr(self, name, None)
+        """Everything the preview should be re-rendered against.
+
+        Two sources, merged: a DEP-002 descriptor's state when the component has
+        one (accordion, tabs, modal, …), and `_demo_values` for the components
+        the storybook hosts by hand. A component can need both — `sheet` has a
+        `Sheet` descriptor whose event is `toggle_sheet`, while its own markup
+        dispatches `close_sheet`, so the close button needs the second source
+        even though the component is in `_INTERACTIVE`.
+        """
+        state: Dict[str, Any] = {}
+        descriptor = getattr(self, self.component_name, None)
         # The descriptor resolves to its state dict once the framework has
         # bound it; before that (or for a non-interactive name) there is none.
-        return dict(state) if isinstance(state, dict) else {}
+        if isinstance(descriptor, dict):
+            state.update(descriptor)
+        state.update(self._demo_state())
+        return state
 
-    def _rating_state(self) -> Dict[str, Any]:
-        """Rating is the one interactive component with no descriptor.
+    def _demo_state(self) -> Dict[str, Any]:
+        """State for the components whose interaction the storybook hosts.
 
-        `djust.components.descriptors` has no `Rating` — it covers the
-        containers (tabs, modal, accordion), not value inputs — so there is
-        nothing for `_INTERACTIVE` to point at and the component's
-        `dj-click="set_rating"` reached no handler. The click produced a server
-        error instead of a rating.
+        A component renders `dj-click="X"` because a host is expected to answer
+        it — that is the contract. On a storybook page this view *is* the host,
+        so every event its own previews emit has to resolve; an unanswered
+        `dj-click` is a server error, not a no-op. Twenty of them were
+        unanswered, which is why `rating` errored on click and so would have the
+        other nineteen.
 
-        Holding the number here rather than adding a descriptor is deliberate:
-        a descriptor is public framework API, and inventing one to make a demo
-        page work is the wrong order. If rating deserves one, it should be
-        designed against the other value-input components, not here.
+        Kept as one dict rather than a descriptor per component because most of
+        these have a single state parameter (`value`, `active`, `expanded`,
+        `is_open`) and the mapping is mechanical — see `_DEMO_EVENTS`.
         """
-        if self._rating_value is None:
-            return {}
-        return {"value": self._rating_value}
-
-    @event_handler
-    def set_rating(self, value: str = "", **kwargs: Any) -> None:
-        """`dj-click` on a star. `data-value` is the star's 1-based position."""
-        try:
-            self._rating_value = int(value)
-        except (TypeError, ValueError):
-            # A malformed value leaves the current rating alone rather than
-            # clearing it — the click was meaningless, not a request for zero.
-            return
+        return dict(self._demo_values)
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """Render the component's examples against the CURRENT descriptor state.
@@ -302,6 +387,17 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 # ---------------------------------------------------------------------------
 # Index
 # ---------------------------------------------------------------------------
+
+
+# Install the demo handlers onto the detail view. `setattr` rather than twenty
+# written-out methods: the framework wires its own descriptor events the same
+# way (`components/base.py:__set_name__`), and a table keeps the event names,
+# their state kwargs, and their transforms readable as one thing — which is what
+# makes it obvious when a component gains an event and this table does not.
+for _event, (_key, _transform) in _DEMO_EVENTS.items():
+    if not hasattr(StorybookDetailView, _event):
+        setattr(StorybookDetailView, _event, _make_demo_handler(_event, _key, _transform))
+del _event, _key, _transform
 
 
 class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
