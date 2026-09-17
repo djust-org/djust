@@ -681,9 +681,15 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "approval_gate": [{}],
         "aspect_ratio": [{}],
         "audit_log": [{}],
-        "avatar": [{}],
+        "avatar": [{"initials": "JD", "alt": "Jane Doe", "size": "md"}],
         "badge": [{"label": "Example"}],
-        "bar_chart": [{}],
+        "bar_chart": [
+            {
+                "data": [12, 19, 8, 15],
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+                "title": "Quarterly revenue",
+            }
+        ],
         "breadcrumb": [
             {
                 "items": [
@@ -697,7 +703,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "button": [{"label": "Example"}],
         "calendar_heatmap": [{}],
         "calendar_view": [{}],
-        "card": [{}],
+        "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
         "carousel": [{}],
         "chat_bubble": [{}],
         "collab_selection": [{}],
@@ -793,8 +799,23 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "expandable_text": [{}],
         "fieldset": [{}],
         "file_dropzone": [{}],
-        "file_tree": [{}],
-        "filter_bar": [{}],
+        "file_tree": [
+            {
+                "nodes": [
+                    {
+                        "name": "src",
+                        "type": "folder",
+                        "children": [
+                            {"name": "app.py", "type": "file"},
+                            {"name": "util.py", "type": "file"},
+                        ],
+                    },
+                    {"name": "README.md", "type": "file"},
+                ],
+                "selected": "src/app.py",
+            }
+        ],
+        "filter_bar": [{"content": "<span>Status: Active</span>", "active_count": 1}],
         "form_array": [{}],
         "form_group": [{}],
         "gantt_chart": [{}],
@@ -806,10 +827,42 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "import_wizard": [{}],
         "inline_edit": [{}],
         "input_group": [{}],
-        "kanban_board": [{}],
-        "line_chart": [{}],
+        "kanban_board": [
+            {
+                "columns": [
+                    {
+                        "id": "todo",
+                        "title": "To do",
+                        "cards": [{"id": "c1", "title": "Write docs"}],
+                    },
+                    {
+                        "id": "doing",
+                        "title": "In progress",
+                        "cards": [{"id": "c2", "title": "Fix crash"}],
+                    },
+                    {"id": "done", "title": "Done", "cards": []},
+                ]
+            }
+        ],
+        "line_chart": [
+            {
+                "series": [
+                    {"name": "This year", "data": [4, 8, 6, 11]},
+                    {"name": "Last year", "data": [3, 5, 7, 8]},
+                ],
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+            }
+        ],
         "loading_overlay": [{}],
-        "log_viewer": [{}],
+        "log_viewer": [
+            {
+                "lines": [
+                    "[info] server started",
+                    "[info] connected to database",
+                    "[warn] slow query: 1.2s",
+                ]
+            }
+        ],
         "map_picker": [{}],
         "markdown_editor": [{}],
         "markdown_textarea": [{}],
@@ -829,18 +882,44 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "multimodal_input": [{}],
-        "nav_menu": [{}],
+        "nav_menu": [
+            {
+                "brand": "MyApp",
+                "items": [
+                    {"label": "Home", "href": "/", "active": True},
+                    {"label": "Docs", "href": "/docs/"},
+                    {"label": "Blog", "href": "/blog/"},
+                ],
+            }
+        ],
         "notification_center": [{}],
         "notification_popover": [{}],
         "number_stepper": [{}],
-        "org_chart": [{}],
+        "org_chart": [
+            {
+                "nodes": [
+                    {"id": "ceo", "name": "Ada Lovelace", "title": "CEO"},
+                    {"id": "cto", "name": "Grace Hopper", "title": "CTO", "parent": "ceo"},
+                    {"id": "eng", "name": "Alan Turing", "title": "Engineer", "parent": "cto"},
+                ]
+            }
+        ],
         "otp_input": [{"name": "code", "digits": 6, "label": "Verification code"}],
         "pagination": [{}],
-        "pie_chart": [{}],
+        "pie_chart": [
+            {
+                "segments": [
+                    {"label": "Direct", "value": 45},
+                    {"label": "Search", "value": 35},
+                    {"label": "Referral", "value": 20},
+                ],
+                "title": "Traffic sources",
+            }
+        ],
         "pivot_table": [{}],
         "popover": [{}],
         "presence_avatars": [{}],
-        "progress": [{}],
+        "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
         "reactions": [{}],
         "resizable_panel": [{}],
         "responsive_image": [{}],
@@ -857,14 +936,26 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "sortable_grid": [{}],
         "sortable_list": [{}],
         "source_citation": [{}],
-        "sparkline": [{}],
+        "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
         "split_pane": [{}],
         "sticky_header": [{}],
-        "tabs": [{}],
+        "tabs": [
+            {
+                "tabs": [{"id": "one", "label": "Overview"}, {"id": "two", "label": "Activity"}],
+                "active": "one",
+                "content": "<p>Overview content.</p>",
+            }
+        ],
         "tag_input": [{"name": "labels", "label": "Labels", "tags": ["django", "rust"]}],
         "time_picker": [{"name": "start", "value": "09:30", "label": "Start time"}],
         "toast": [{"message": "Example"}],
-        "tooltip": [{}],
+        "tooltip": [
+            {
+                "text": "Helpful hint",
+                "content": '<button type="button">Hover me</button>',
+                "position": "top",
+            }
+        ],
         "tree_view": [
             {
                 "nodes": [
