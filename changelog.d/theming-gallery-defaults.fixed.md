@@ -19,3 +19,16 @@
   mode by accident (the browser default is dark-on-light) and rendered the
   header and section headings white on white in dark mode. The six are now
   aliased to the theming tokens.
+- Fix `{% split_pane %}` raising `Invalid block tag on line 1: 'pane', expected
+  'endsplit_pane'` on the Rust engine, the last component in the gallery that
+  could not render. It is a two-segment tag (`{% split_pane %}`…`{% pane %}`…
+  `{% endsplit_pane %}`) and the native block path declares exactly one end
+  tag, so `{% pane %}` was rejected. The handler registered on that path,
+  `SplitPaneHandler`, also ignored the split — it wrapped the pre-rendered body
+  in a single `<div>` — so it diverged from Django even when it parsed. It now
+  registers on the raw path, where `LibraryRawBlockTagHandler` hands the
+  un-rendered body to Django's own `do_split_pane`: the two panes, the drag
+  handle and the inline script are Django's, byte for byte. The panes' contents
+  are rendered by Django rather than Rust, so `dj-*` bindings inside a pane do
+  not get Rust VDOM identity — the same trade every raw-path tag makes, and
+  preferable to raising on every use.
