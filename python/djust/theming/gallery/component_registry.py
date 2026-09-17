@@ -684,7 +684,15 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "avatar": [{}],
         "badge": [{"label": "Example"}],
         "bar_chart": [{}],
-        "breadcrumb": [{}],
+        "breadcrumb": [
+            {
+                "items": [
+                    {"label": "Home", "url": "/"},
+                    {"label": "Library", "url": "/library/"},
+                    {"label": "Data", "active": True},
+                ]
+            }
+        ],
         "breadcrumb_dropdown": [{}],
         "button": [{"label": "Example"}],
         "calendar_heatmap": [{}],
@@ -693,10 +701,40 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "carousel": [{}],
         "chat_bubble": [{}],
         "collab_selection": [{}],
-        "color_picker": [{}],
-        "combobox": [{}],
+        "color_picker": [
+            {
+                "name": "accent",
+                "value": "#3b82f6",
+                "label": "Accent",
+                "swatches": ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"],
+            }
+        ],
+        "combobox": [
+            {
+                "name": "language",
+                "label": "Language",
+                "value": "python",
+                "options": [
+                    {"value": "python", "label": "Python"},
+                    {"value": "rust", "label": "Rust"},
+                    {"value": "go", "label": "Go"},
+                ],
+            }
+        ],
         "command_palette": [{}],
-        "comparison_table": [{}],
+        "comparison_table": [
+            {
+                "plans": [
+                    {"name": "Free", "price": "$0"},
+                    {"name": "Pro", "price": "$20", "highlighted": True},
+                    {"name": "Team", "price": "$60"},
+                ],
+                "features": [
+                    {"name": "Projects", "values": ["1", "Unlimited", "Unlimited"]},
+                    {"name": "Support", "values": ["Community", "Email", "Priority"]},
+                ],
+            }
+        ],
         "content_loader": [{}],
         "context_menu": [{}],
         "conversation_thread": [{}],
@@ -705,8 +743,33 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "cursors_overlay": [{}],
         "dashboard_grid": [{}],
         "data_card_grid": [{}],
-        "data_grid": [{}],
-        "data_table": [{}],
+        "data_grid": [
+            {
+                "columns": [
+                    {"key": "name", "label": "Name"},
+                    {"key": "owner", "label": "Owner"},
+                    {"key": "status", "label": "Status"},
+                ],
+                "rows": [
+                    {"name": "Alpha", "owner": "Ada", "status": "Active"},
+                    {"name": "Beta", "owner": "Grace", "status": "Paused"},
+                ],
+            }
+        ],
+        "data_table": [
+            {
+                "columns": [
+                    {"key": "name", "label": "Name"},
+                    {"key": "status", "label": "Status"},
+                    {"key": "updated", "label": "Updated"},
+                ],
+                "rows": [
+                    {"name": "Alpha", "status": "Active", "updated": "2m ago"},
+                    {"name": "Beta", "status": "Paused", "updated": "1h ago"},
+                    {"name": "Gamma", "status": "Active", "updated": "yesterday"},
+                ],
+            }
+        ],
         "date_picker": [{}],
         "dependent_select": [{}],
         "diff_viewer": [{}],
@@ -753,14 +816,25 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "masonry_grid": [{}],
         "mentions_input": [{}],
         "model_selector": [{}],
-        "multi_select": [{}],
+        "multi_select": [
+            {
+                "name": "frameworks",
+                "label": "Frameworks",
+                "options": [
+                    {"value": "django", "label": "Django"},
+                    {"value": "flask", "label": "Flask"},
+                    {"value": "fastapi", "label": "FastAPI"},
+                ],
+                "selected": ["django"],
+            }
+        ],
         "multimodal_input": [{}],
         "nav_menu": [{}],
         "notification_center": [{}],
         "notification_popover": [{}],
         "number_stepper": [{}],
         "org_chart": [{}],
-        "otp_input": [{}],
+        "otp_input": [{"name": "code", "digits": 6, "label": "Verification code"}],
         "pagination": [{}],
         "pie_chart": [{}],
         "pivot_table": [{}],
@@ -787,11 +861,26 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "split_pane": [{}],
         "sticky_header": [{}],
         "tabs": [{}],
-        "tag_input": [{}],
-        "time_picker": [{}],
+        "tag_input": [{"name": "labels", "label": "Labels", "tags": ["django", "rust"]}],
+        "time_picker": [{"name": "start", "value": "09:30", "label": "Start time"}],
         "toast": [{"message": "Example"}],
         "tooltip": [{}],
-        "tree_view": [{}],
+        "tree_view": [
+            {
+                "nodes": [
+                    {
+                        "id": "src",
+                        "label": "src",
+                        "expanded": True,
+                        "children": [
+                            {"id": "src/app", "label": "app.py"},
+                            {"id": "src/util", "label": "util.py"},
+                        ],
+                    },
+                    {"id": "tests", "label": "tests", "children": []},
+                ]
+            }
+        ],
         "treemap": [{}],
         "truncated_list": [{}],
         "virtual_list": [{}],
