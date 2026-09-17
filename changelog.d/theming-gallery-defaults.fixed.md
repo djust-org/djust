@@ -72,3 +72,11 @@
   background and left the components in the previous theme's colours. With the
   selector fixed, `?preset=forest` renders green components rather than purple
   ones on a green background.
+- Fix the theme gallery's preset choice not persisting, so it appeared to revert.
+  The preset `<select>` submitted a GET form (`?preset=`), which changes the
+  preset for that page load only — remove the parameter and the page fell back to
+  whatever preset the visitor had stored, which reads as "I picked midnight, took
+  the parameter off, and it reverted to candy". It now calls the framework's own
+  `window.djustTheme.setPreset` (`theme.js:217`), which writes the cookie and
+  localStorage and reloads, matching every other theme control on the site. The
+  form is kept behind `<noscript>` as the no-JS fallback.
