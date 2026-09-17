@@ -13,6 +13,9 @@ Provides:
 import importlib
 import inspect
 import logging
+from typing import Any
+
+from django.utils.html import escape
 
 from djust._log_utils import sanitize_for_log
 
@@ -341,12 +344,12 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"text": "pip install djust-theming", "label": "Install"},
     ],
     "icon": [
-        {"name": "check", "size": 24},
-        {"name": "x", "size": 24},
-        {"name": "search", "size": 24},
+        {"name": "check", "size": "md"},
+        {"name": "x", "size": "sm"},
+        {"name": "search", "size": "lg"},
     ],
     "qr_code": [
-        {"data": "https://djust.org", "size": 150},
+        {"data": "https://djust.org", "size": "md"},
     ],
     "countdown": [
         {"target": "2026-12-31", "label": "Until New Year"},
@@ -374,7 +377,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"code": 'print("Hello, world!")', "language": "python", "title": "example.py"},
     ],
     "markdown": [
-        {"content": "# Hello\n\nThis is **markdown** rendered inline."},
+        {"text": "# Hello\n\nThis is **markdown** rendered inline."},
     ],
     "json_viewer": [
         {"data": {"name": "djust", "version": "0.4.0", "stable": True}},
@@ -504,6 +507,33 @@ def get_all_components_with_metadata() -> list[dict]:
     return result
 
 
+def _load_component_class(component_name: str) -> tuple[Any, str]:
+    """``(cls, class_name)`` for a python component, or ``(None, "")``.
+
+    The class is NOT always the snake→CamelCase of the module name: ``qr_code``
+    defines ``QRCode``, and guessing ``QrCode`` silently produced an empty
+    preview, an empty signature table and a broken import line. Reading the
+    module is what keeps the storybook's USAGE import, its PARAMETERS table and
+    its rendered example agreeing with each other.
+
+    Never raises — callers decide what a missing class means.
+    """
+    module_path = f"djust.components.components.{component_name}"
+    try:
+        module = importlib.import_module(module_path)
+    except Exception:  # noqa: BLE001 — an unimportable component is a finding, not a crash
+        logger.debug("component module unavailable: %s", sanitize_for_log(module_path))
+        return None, ""
+
+    _path, names = get_python_component_import(component_name)
+    for class_name in names:
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls, class_name
+    logger.debug("no component class found in %s", sanitize_for_log(module_path))
+    return None, ""
+
+
 def render_python_component_example(component_name: str, kwargs_dict: dict) -> str:
     """Import and render a djust-component by name.
 
@@ -512,10 +542,17 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
 
     Returns rendered HTML string, or an error message string if import/render fails.
     """
-    class_name = _to_class_name(component_name)
+    cls, _class_name = _load_component_class(component_name)
+    if cls is None:
+        # Visible, not silent. Returning "" left the example slot blank with no
+        # hint why — which is how three components shipped with a preview that
+        # rendered nothing at all.
+        return (
+            f'<div class="dj-component-preview-error" role="status">'
+            f"No component class found for <code>{escape(component_name)}</code>."
+            f"</div>"
+        )
     try:
-        module = importlib.import_module(f"djust.components.components.{component_name}")
-        cls = getattr(module, class_name)
         instance = cls(**kwargs_dict)
         # cls comes from a dynamic getattr (Any), so .render() is Any; coerce
         # to ``str`` at the boundary (render() returns the rendered HTML str).
@@ -526,12 +563,19 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         )
         return ""
     except Exception as exc:
-        logger.debug(
+        # Same reasoning as the missing-class branch above: a blank preview
+        # with a DEBUG-only log is indistinguishable from a component that
+        # legitimately renders nothing.
+        logger.warning(
             "Could not render component %s: %s",
             sanitize_for_log(component_name),
             sanitize_for_log(str(exc)),
         )
-        return ""
+        return (
+            f'<div class="dj-component-preview-error" role="status">'
+            f"<code>{escape(component_name)}</code> failed to render: "
+            f"<code>{escape(type(exc).__name__)}: {escape(str(exc))}</code></div>"
+        )
 
 
 def get_python_component_signature(component_name: str) -> list[dict] | None:
@@ -540,10 +584,10 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
     Returns a list of dicts with keys: name, kind, default, annotation.
     Returns None if the component cannot be imported.
     """
-    class_name = _to_class_name(component_name)
+    cls, _class_name = _load_component_class(component_name)
+    if cls is None:
+        return None
     try:
-        module = importlib.import_module(f"djust.components.components.{component_name}")
-        cls = getattr(module, class_name)
         sig = inspect.signature(cls.__init__)
         params = []
         for param_name, param in sig.parameters.items():

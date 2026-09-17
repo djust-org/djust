@@ -80,3 +80,13 @@
   `window.djustTheme.setPreset` (`theme.js:217`), which writes the cookie and
   localStorage and reloads, matching every other theme control on the site. The
   form is kept behind `<noscript>` as the no-JS fallback.
+- Fix three components whose gallery preview rendered nothing at all. The preview
+  helper returned an empty string on *any* failure and logged at DEBUG, so a
+  component that could not render was indistinguishable from one that renders
+  nothing by design. `markdown` passed `content=` to a constructor that takes
+  `text=` (swallowed by `**kwargs`); `icon` and `qr_code` passed pixel `size`
+  values to components whose `size` is a name (`xs/sm/md/lg`), so `html.escape`
+  raised on the int; and `qr_code`'s class is `QRCode` while the lookup guessed
+  `QrCode`. Failures now render a visible message carrying the reason, the class
+  is resolved by reading the module rather than guessing, and a sweep test renders
+  every component and fails if any produces nothing.
