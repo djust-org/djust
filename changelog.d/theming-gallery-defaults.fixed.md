@@ -90,3 +90,13 @@
   `QrCode`. Failures now render a visible message carrying the reason, the class
   is resolved by reading the module rather than guessing, and a sweep test renders
   every component and fails if any produces nothing.
+- Give 106 components a storybook preview. Only 50 of 151 Python components had an
+  example defined, so 101 storybook pages read "Preview not available" — the page
+  advertised 197 components and showed 96. The examples are derived from each
+  component's own `__init__` signature (required parameters get a typed
+  placeholder, optional ones keep their default) and every one is asserted to
+  render non-empty markup by `test_gallery_component_sweep.py`. Eight components
+  are deliberately left out because they render nothing until opened — a closed
+  `modal`, `bottom_sheet`, `tour`, `image_lightbox`, `export_dialog`,
+  `prompt_editor`, `table_of_contents` and `form_validation` — where a blank
+  preview would be misleading and the explicit message is the honest one.
