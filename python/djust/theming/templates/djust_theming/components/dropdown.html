@@ -1,13 +1,41 @@
+{% comment %}
+Server-driven dropdown. The trigger dispatches `toggle_dropdown`; openness is
+the host LiveView's `is_open`, and every open/closed artefact is rendered from
+it — the menu's `display`, `aria-expanded`, and the `data-open` attribute the
+chevron rotation is keyed on (`theming/css/components.css`), which
+`51-keyboard-nav.js` also reads to decide whether the menu is open.
+
+`data-theme-dropdown` below is the client fallback for plain pages, and
+`components.js` stands down on any page with a djust mount root so a LiveView
+page uses only the server path. Both hooks coexist deliberately: the theming
+gallery cannot be a LiveView (its 25 `theme_*` tags are Django-engine only), so
+dropping the fallback would leave it with a dead dropdown.
+
+`data-open="true"` rather than a bare attribute: `theming/css/components.css`
+matches on presence and would accept either, but the app-level
+`djust_components/components.css` matches `[data-open="true"]` and
+`51-keyboard-nav.js` handles both — emitting the valued form satisfies all three.
+
+Known gap, unchanged here: the `slot_trigger` branch renders the caller's markup
+verbatim, so it carries no `dj-click` and therefore no server event — and no
+`aria-haspopup` / `aria-expanded`, which `DROPDOWN_CONTRACT` requires. A
+slot-provided trigger is inert. That predates this change; fixing it means
+deciding whether the contract should be enforced on caller-supplied markup.
+{% endcomment %}
 <div class="{{ css_prefix }}dropdown {% if attrs.class %}{{ attrs.class }}{% endif %}"
      data-theme-dropdown="{{ id }}"
+     {% if is_open %}data-open="true"{% endif %}
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_trigger %}
     {{ slot_trigger|safe }}
     {% else %}
     <button class="{{ css_prefix }}dropdown-trigger"
             aria-haspopup="true"
-            aria-expanded="false"
-            aria-controls="{{ id }}-menu">
+            aria-expanded="{% if is_open %}true{% else %}false{% endif %}"
+            aria-controls="{{ id }}-menu"
+            dj-click="toggle_dropdown"
+            data-value="{{ id }}"
+            {% if component_id %}data-component-id="{{ component_id }}"{% endif %}>
         {{ label }}
         <svg class="{{ css_prefix }}dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="m6 9 6 6 6-6"/>
@@ -17,7 +45,7 @@
     <div class="{{ css_prefix }}dropdown-menu {{ css_prefix }}dropdown-{{ align }}"
          id="{{ id }}-menu"
          role="menu"
-         style="display:none;">
+         {% if not is_open %}style="display:none;"{% endif %}>
         {% if slot_menu %}{{ slot_menu|safe }}{% endif %}
     </div>
 </div>

@@ -257,6 +257,22 @@
     // =========================================================================
 
     function initAll(root) {
+        // Stand down on any page djust is driving.
+        //
+        // The theming components are server-driven when a LiveView hosts them:
+        // their markup carries `dj-click`, the state lives on the server, and
+        // the framework re-renders from it. Binding here as well would put two
+        // writers on the same DOM — the client toggling `display`, the active
+        // classes and `aria-expanded` while the server renders the same change
+        // — and the loser is whichever runs second.
+        //
+        // `dj-view` is the signal: the server stamps it onto the mount root of
+        // every LiveView render (`mixins/request.py`), and a plain Django page
+        // never has one. The theming gallery and the theme editor are plain
+        // pages, so they keep this fallback; the storybook's pages are
+        // LiveViews, so they do not.
+        if (document.querySelector('[dj-view]')) return;
+
         initModals(root);
         initDropdowns(root);
         initTabs(root);

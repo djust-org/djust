@@ -1,3 +1,28 @@
+{% comment %}
+Server-driven tabs. Each tab button carries `dj-click="set_tab"` with its index
+as `data-value`, so the active tab lives in the host LiveView's state and the
+markup below is re-rendered from it.
+
+The `data-theme-*` attributes below are the client fallback, not the primary
+path. `components.js` stands down on any page carrying a djust mount root, so a
+LiveView page is driven entirely by `dj-click`; a plain Django page — the theme
+gallery, the theme editor — has no server to dispatch to and keeps using them,
+which is why both sets of hooks coexist here. Removing the fallback outright
+was tried and reverted: the theming gallery cannot be a LiveView (all 25
+`theme_*` tags are registered with Django's engine only, not the Rust one), so
+without these it would have had no working tab set at all.
+
+The fallback is genuinely second-best for the reasons that motivated the
+server-driven path: the server already computed `aria-selected`, `tabindex` and
+the active class correctly for the initial paint, so the JS existed only to
+re-derive what the server had already decided.
+
+The list comparison is deliberately stringified: the DEP-002 `Tabs` descriptor
+stores `active` as the string the client sends, while `{% theme_tabs %}` is
+called with an int index. Comparing `forloop.counter0 == active` directly would
+be False for `0 == "0"` — a live tab set that renders tab 1 active and never
+moves.
+{% endcomment %}
 <div class="{{ css_prefix }}tabs {% if attrs.class %}{{ attrs.class }}{% endif %}"
      data-theme-tabs="{{ id }}"
      data-active-class="{{ css_prefix }}tab-active"
@@ -5,22 +30,25 @@
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <div class="{{ css_prefix }}tab-list" role="tablist">
         {% for tab in tabs %}
-        <button class="{{ css_prefix }}tab{% if forloop.counter0 == active %} {{ css_prefix }}tab-active{% endif %}"
+        <button class="{{ css_prefix }}tab{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %} {{ css_prefix }}tab-active{% endif %}"
                 role="tab"
                 id="{{ id }}-tab-{{ forloop.counter0 }}"
-                aria-selected="{% if forloop.counter0 == active %}true{% else %}false{% endif %}"
+                aria-selected="{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %}true{% else %}false{% endif %}"
                 aria-controls="{{ id }}-panel-{{ forloop.counter0 }}"
-                {% if forloop.counter0 != active %}tabindex="-1"{% endif %}>
+                dj-click="set_tab"
+                data-value="{{ forloop.counter0 }}"
+                {% if component_id %}data-component-id="{{ component_id }}"{% endif %}
+                {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}tabindex="-1"{% endif %}>
             {{ tab.label }}
         </button>
         {% endfor %}
     </div>
     {% for tab in tabs %}
-    <div class="{{ css_prefix }}tab-panel{% if forloop.counter0 != active %} {{ css_prefix }}tab-panel-hidden{% endif %}"
+    <div class="{{ css_prefix }}tab-panel{% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %} {{ css_prefix }}tab-panel-hidden{% endif %}"
          role="tabpanel"
          id="{{ id }}-panel-{{ forloop.counter0 }}"
          aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
-         {% if forloop.counter0 != active %}hidden{% endif %}>
+         {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}hidden{% endif %}>
         {{ tab.content|safe }}
     </div>
     {% endfor %}
