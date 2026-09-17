@@ -53,3 +53,12 @@
   example's kwargs, so a click updates it and the re-render carries the change.
   `dj-view` is declared on the content element, without which the page renders but
   nothing listens.
+- Fix the storybook's LiveView patching by re-rendering the whole region on every
+  click. `dj-view` sat on a `<main>`, and `_DJ_VIEW_RE` / `_DJ_ROOT_RE`
+  (`mixins/template.py:32`, `:48`) both require a `<div>` — so the mount attribute
+  matched nothing, the dj-root normalisation was skipped, and the initial-GET HTML
+  kept the comments and as-authored whitespace the WS frame had already stripped.
+  The two frames then described different trees, so one of three patches per click
+  failed with `node not found at path=7/1/3/1/0` and the client re-morphed from
+  recovery HTML (#1737). The mount is now a `<div>` inside the `<main>` landmark,
+  and a test pins that the HTTP render and the WS mount describe the same tree.
