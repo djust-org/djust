@@ -699,12 +699,39 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "breadcrumb_dropdown": [{}],
+        "breadcrumb_dropdown": [
+            {
+                "items": [
+                    {"label": "Home", "url": "/"},
+                    {"label": "Library", "url": "/library/"},
+                    {"label": "Data", "url": "/library/data/"},
+                    {"label": "Tables", "url": "/library/data/tables/"},
+                    {"label": "Current page"},
+                ],
+                "max_visible": 3,
+            }
+        ],
         "button": [{"label": "Example"}],
         "calendar_heatmap": [{}],
         "calendar_view": [{}],
         "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
-        "carousel": [{}],
+        "carousel": [
+            {
+                "images": [
+                    {
+                        "src": "https://picsum.photos/seed/one/600/300",
+                        "alt": "First slide",
+                        "caption": "Slide one",
+                    },
+                    {
+                        "src": "https://picsum.photos/seed/two/600/300",
+                        "alt": "Second slide",
+                        "caption": "Slide two",
+                    },
+                ],
+                "active": 0,
+            }
+        ],
         "chat_bubble": [{}],
         "collab_selection": [{}],
         "color_picker": [
@@ -743,12 +770,38 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "content_loader": [{}],
         "context_menu": [{}],
-        "conversation_thread": [{}],
+        "conversation_thread": [
+            {
+                "messages": [
+                    {
+                        "sender": "user",
+                        "name": "You",
+                        "text": "Summarise this thread.",
+                        "time": "10:04",
+                    },
+                    {
+                        "sender": "assistant",
+                        "name": "Assistant",
+                        "text": "Three points so far.",
+                        "time": "10:04",
+                    },
+                ]
+            }
+        ],
         "cron_input": [{}],
         "currency_input": [{}],
         "cursors_overlay": [{}],
         "dashboard_grid": [{}],
-        "data_card_grid": [{}],
+        "data_card_grid": [
+            {
+                "columns": 3,
+                "items": [
+                    {"title": "Alpha", "description": "First example project.", "category": "Web"},
+                    {"title": "Beta", "description": "Second example project.", "category": "Web"},
+                    {"title": "Gamma", "description": "Third example project.", "category": "CLI"},
+                ],
+            }
+        ],
         "data_grid": [
             {
                 "columns": [
@@ -797,7 +850,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "error_boundary": [{}],
         "expandable_text": [{}],
-        "fieldset": [{}],
+        "fieldset": [
+            {"legend": "Shipping address", "content": '<label>Street <input type="text"></label>'}
+        ],
         "file_dropzone": [{}],
         "file_tree": [
             {
@@ -817,16 +872,29 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "filter_bar": [{"content": "<span>Status: Active</span>", "active_count": 1}],
         "form_array": [{}],
-        "form_group": [{}],
+        "form_group": [
+            {
+                "label": "Email",
+                "content": '<input type="email" placeholder="you@example.com">',
+                "helper": "We never share it.",
+            }
+        ],
         "gantt_chart": [{}],
         "gauge": [{}],
         "heatmap": [{}],
-        "hover_card": [{}],
+        "hover_card": [
+            {"trigger": "Hover me", "content": "<p>Shown on hover.</p>", "position": "top"}
+        ],
         "image_cropper": [{}],
         "image_upload_preview": [{}],
         "import_wizard": [{}],
-        "inline_edit": [{}],
-        "input_group": [{}],
+        "inline_edit": [{"name": "title", "value": "Click to edit", "editing": False}],
+        "input_group": [
+            {
+                "content": '<span>$</span><input type="number" value="20"><span>.00</span>',
+                "size": "md",
+            }
+        ],
         "kanban_board": [
             {
                 "columns": [
@@ -867,7 +935,16 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "markdown_editor": [{}],
         "markdown_textarea": [{}],
         "masonry_grid": [{}],
-        "mentions_input": [{}],
+        "mentions_input": [
+            {
+                "name": "comment",
+                "users": [
+                    {"id": "u1", "name": "Ada Lovelace"},
+                    {"id": "u2", "name": "Grace Hopper"},
+                ],
+                "placeholder": "Mention someone…",
+            }
+        ],
         "model_selector": [{}],
         "multi_select": [
             {
@@ -893,7 +970,27 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "notification_center": [{}],
-        "notification_popover": [{}],
+        "notification_popover": [
+            {
+                "notifications": [
+                    {
+                        "id": "n1",
+                        "title": "New comment",
+                        "body": "Ada replied to your post.",
+                        "time": "2m",
+                        "read": False,
+                    },
+                    {
+                        "id": "n2",
+                        "title": "Deploy finished",
+                        "body": "build #412 is live.",
+                        "time": "1h",
+                        "read": True,
+                    },
+                ],
+                "unread_count": 1,
+            }
+        ],
         "number_stepper": [{}],
         "org_chart": [
             {
@@ -920,16 +1017,31 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "popover": [{}],
         "presence_avatars": [{}],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
-        "reactions": [{}],
+        "reactions": [
+            {
+                "options": ["", "👍", "🎉", "❤️"],
+                "counts": {"👍": 3, "🎉": 1, "❤️": 0},
+                "active": ["👍"],
+            }
+        ],
         "resizable_panel": [{}],
         "responsive_image": [{}],
         "rich_select": [{}],
         "rich_text_editor": [{}],
         "scroll_area": [{}],
-        "scroll_spy": [{}],
+        "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
         "scroll_to_top": [{}],
         "sheet": [{}],
-        "sidebar": [{}],
+        "sidebar": [
+            {
+                "title": "Workspace",
+                "items": [
+                    {"label": "Dashboard", "href": "/", "active": True},
+                    {"label": "Projects", "href": "/projects/"},
+                    {"label": "Settings", "href": "/settings/"},
+                ],
+            }
+        ],
         "signature_pad": [{}],
         "skeleton": [{}],
         "skeleton_factory": [{}],
@@ -973,7 +1085,12 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "treemap": [{}],
-        "truncated_list": [{}],
+        "truncated_list": [
+            {
+                "items": ["First item", "Second item", "Third item", "Fourth item", "Fifth item"],
+                "max": 3,
+            }
+        ],
         "virtual_list": [{}],
         "voice_input": [{}],
     }
