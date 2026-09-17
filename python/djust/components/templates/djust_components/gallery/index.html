@@ -36,7 +36,7 @@
 </p>
 <div class="category-grid">
     {% for comp in filtered_cards %}
-    <a class="category-card" href="/lv/{{ comp.category_slug }}/">
+    <a class="category-card" href="{{ comp.url }}">
         <h3 style="font-size: 0.95rem;">{{ comp.label }}</h3>
         <span class="count">{{ comp.category_label }}</span>
     </a>
@@ -45,7 +45,7 @@
 {% else %}
 <div class="category-grid">
     {% for cat in category_cards %}
-    <a class="category-card" href="lv/{{ cat.slug }}/">
+    <a class="category-card" href="{{ cat.url }}">
         <h3>{{ cat.label }}</h3>
         <span class="count">{{ cat.count }} component{{ cat.count|pluralize }}</span>
     </a>
