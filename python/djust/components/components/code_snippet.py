@@ -1,6 +1,7 @@
 """Code Snippet component — code block with copy button and language badge."""
 
 import html
+import uuid
 
 from djust import Component
 from typing import Any
@@ -47,6 +48,11 @@ class CodeSnippet(Component):
         self.code = code
         self.language = language
         self.custom_class = custom_class
+        # Identifies this instance's <code> block so the copy button can name it
+        # as a `dj-copy` target. Private, so it stays out of the template
+        # context; the same `uuid4().hex[:6]` shape the templatetag components
+        # use for their per-instance ids.
+        self._copy_target_id = f"dj-code-snippet-{uuid.uuid4().hex[:8]}"
 
     def _render_custom(self) -> str:
         """Render the code snippet HTML."""
@@ -62,15 +68,26 @@ class CodeSnippet(Component):
         if self.language:
             lang_badge = f'<span class="dj-code-snippet__lang">{e_lang}</span>'
 
+        # `dj-copy="#<id>"` — the framework's own client-side clipboard
+        # attribute: it copies the named element's `textContent`, so the
+        # clipboard gets the raw code rather than the escaped HTML the `<code>`
+        # holds, and adds its "Copied!" feedback. The button previously carried
+        # no handler at all, so it rendered as a working control and did
+        # nothing when clicked.
+        #
+        # Deliberately not a server event. A clipboard write is a browser API;
+        # there is nothing for the server to do, and a round-trip would only add
+        # latency and a failure mode to a purely local action.
         return (
             f'<div class="{class_str}">'
             f'<div class="dj-code-snippet__header">'
             f"{lang_badge}"
             f'<button class="dj-code-snippet__copy" aria-label="Copy code" '
-            f'type="button">Copy</button>'
+            f'type="button" dj-copy="#{self._copy_target_id}" '
+            f'dj-copy-feedback="Copied!">Copy</button>'
             f"</div>"
             f'<pre class="dj-code-snippet__pre">'
-            f'<code class="dj-code-snippet__code">{e_code}</code>'
+            f'<code class="dj-code-snippet__code" id="{self._copy_target_id}">{e_code}</code>'
             f"</pre>"
             f"</div>"
         )

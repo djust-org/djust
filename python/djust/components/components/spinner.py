@@ -82,6 +82,13 @@ class Spinner(Component):
         sr_label = ""
         e_label = html.escape(self.label) if self.label else ""
         if self.label:
-            sr_label = f'<span class="dj-sr-only">{e_label}</span>'
+            # `sr-only`, not `dj-sr-only`. The utility is defined once, without
+            # the `dj-` prefix, in `djust_components/components.css` — and every
+            # sibling component (`toast_simple`, `alert_simple`, `spinner_simple`)
+            # already uses that spelling. The prefixed name matched no rule
+            # anywhere, so this span was not hidden: the spinner rendered as a
+            # circle (or, with no spinner CSS at all, as nothing) with the words
+            # "Loading..." sitting next to it in plain text.
+            sr_label = f'<span class="sr-only">{e_label}</span>'
 
         return f'<span class="{class_str}" role="status" aria-label="{e_label}">{sr_label}</span>'

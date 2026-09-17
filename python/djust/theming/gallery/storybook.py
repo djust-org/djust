@@ -188,6 +188,28 @@ def build_storybook_index_context() -> dict:
     }
 
 
+#: Components whose template renders no trigger of its own.
+#:
+#: Most components carry their own control: `tabs` has tab buttons, `dropdown`
+#: has a trigger, `collapsible` has a header. A `modal` does not — by design,
+#: its trigger belongs to the page that opens it, not to the dialog — so on a
+#: storybook page the preview was a closed dialog with nothing to open it and
+#: no way to tell the component worked. The storybook supplies the missing
+#: control here.
+#:
+#: The markup dispatches the same event the component's descriptor listens for,
+#: so this is the real server path rather than a demo-only shim.
+_STORYBOOK_TRIGGERS = {
+    "modal": (
+        '<button type="button" dj-click="toggle_modal" '
+        'style="font: inherit; padding: 0.375rem 0.75rem; border-radius: 0.375rem; '
+        "border: 1px solid hsl(var(--border)); background: hsl(var(--card)); "
+        'color: hsl(var(--card-foreground)); cursor: pointer; margin-bottom: 0.75rem;">'
+        "Open modal</button>"
+    ),
+}
+
+
 def _render_template_examples(component_name: str, examples: list[dict]) -> list[dict]:
     """Render a template component's examples through its own template.
 
@@ -214,7 +236,11 @@ def _render_template_examples(component_name: str, examples: list[dict]) -> list
                 f"<code>{escape(component_name)}</code> failed to render: "
                 f"<code>{escape(type(exc).__name__)}: {escape(str(exc))}</code></div>"
             )
-        rendered.append({"html": html, "kwargs": example})
+        # The trigger goes before the component's own markup, not inside it: a
+        # modal's backdrop is `position: fixed`, so a control rendered within it
+        # would be covered once the dialog opened.
+        trigger = _STORYBOOK_TRIGGERS.get(component_name, "")
+        rendered.append({"html": f"{trigger}{html}", "kwargs": example})
     return rendered
 
 
