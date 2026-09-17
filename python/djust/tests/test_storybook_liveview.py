@@ -138,8 +138,27 @@ async def test_unknown_component_is_refused_not_rendered():
 def _tag_sequence(html: str) -> list[str]:
     """Tag names in document order, comments stripped — the tree's shape."""
     html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
-    region = re.search(r'<div dj-view="[^"]*">(.*)</div>\s*</main>', html, re.DOTALL)
-    return re.findall(r"<(/?[a-zA-Z][a-zA-Z0-9]*)", region.group(1) if region else html)
+    # Extract the CONTENTS of the mount root, in a shape both sides share.
+    #
+    # Two things this must not assume. The attributes are stamped server-side
+    # (`mixins/request.py` adds `dj-view` after `dj-root`), so matching
+    # `<div dj-view=...>` literally misses. And the root now wraps the whole
+    # layout, so the region does not end at `</main>` — it ends at the root's
+    # own closing `</div>`, which is the last one before `</body>`.
+    m = re.search(r"<div[^>]*\bdj-root\b[^>]*>", html)
+    if not m:
+        return re.findall(r"<(/?[a-zA-Z][a-zA-Z0-9]*)", html)
+
+    start = m.end()
+    body_close = html.find("</body>", start)
+    if body_close == -1:
+        # A WS mount frame: already the region, with no document shell.
+        region = html[start:]
+    else:
+        root_close = html.rfind("</div>", start, body_close)
+        region = html[start:root_close] if root_close != -1 else html[start:body_close]
+
+    return re.findall(r"<(/?[a-zA-Z][a-zA-Z0-9]*)", region)
 
 
 @_BASE

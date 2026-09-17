@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 from django.http import Http404
 
 from djust import LiveView
+from djust.decorators import event_handler
 
 from djust.components.descriptors import (
     Accordion,
@@ -55,7 +56,106 @@ _INTERACTIVE = {
 }
 
 
-class StorybookDetailView(LiveView):
+class StorybookSidebarMixin:
+    """The sidebar's state and handlers, shared by every storybook page.
+
+    The sidebar search box and the collapsible category headers were driven by a
+    `<script>` in `storybook_base.html` that filtered `.sb-sidebar-link` elements
+    by writing `style.display`. Three things were wrong with that on a page whose
+    entire purpose is demonstrating djust:
+
+    * the browser owned the state, on a framework that exists to keep it on the
+      server;
+    * the markup was the data source — a filtered-out link was still there, just
+      hidden, so the sidebar and the server disagreed about what existed;
+    * it could not survive a re-render, which is why the script also had to
+      re-bind itself on every `djust:dom-update`.
+
+    Both are server events now. Filtering in Python and then `{% regroup %}`-ing
+    the *filtered* list also retires the empty-category cleanup the script
+    hand-rolled — a category with no matches simply is not in the regrouped
+    output.
+    """
+
+    def _init_sidebar(self, current_component: Optional[str] = None) -> None:
+        from .storybook import build_storybook_index_context
+
+        #: Every component, unfiltered — the sidebar's denominator.
+        self.all_components = build_storybook_index_context().get("components", [])
+        #: What the sidebar actually renders. Kept as real state rather than a
+        #: template-side filter so the server and the DOM cannot disagree.
+        self.sidebar_components = list(self.all_components)
+        self.search_query = ""
+        self.collapsed_categories: list = []
+        self.current_component = current_component
+
+    @event_handler
+    def search(self, value: str = "", **kwargs: Any) -> None:
+        """`dj-input` on the sidebar search box."""
+        self.search_query = value.strip()
+        self._refresh_sidebar()
+        self._on_search()
+
+    @event_handler
+    def toggle_category(self, value: str = "", **kwargs: Any) -> None:
+        """`dj-click` on a sidebar category header."""
+        collapsed = list(self.collapsed_categories)
+        if value in collapsed:
+            collapsed.remove(value)
+        else:
+            collapsed.append(value)
+        self.collapsed_categories = collapsed
+
+    def _refresh_sidebar(self) -> None:
+        q = self.search_query.lower()
+        if not q:
+            self.sidebar_components = list(self.all_components)
+            return
+        self.sidebar_components = [
+            c
+            for c in self.all_components
+            if q in c["display_name"].lower() or q in c["name"].lower()
+        ]
+
+    def _on_search(self) -> None:
+        """Hook for subclasses that also filter page content by the query."""
+
+
+class StorybookAccessMixin:
+    """The gallery's own access gate, honoured on every transport.
+
+    The index and category pages used to call `views._check_access()` from a
+    plain Django function. That covers only the initial HTTP GET: mounted over a
+    WebSocket they would have been open, because `check_view_auth` reads
+    `login_required` / `permission_required` / `check_permissions`
+    (`djust/auth/core.py:57-69`) and a plain function has none of them. Moving
+    the same predicate onto the LiveView closes that without changing *who* can
+    see the page — the rule is deliberately identical to `_check_access`.
+
+    Deliberately NOT on `StorybookSidebarMixin`. `StorybookDetailView` has never
+    been gated (it sets `login_required = False` and checks nothing), so putting
+    this on the shared mixin would silently change who can reach the detail page
+    — a separate defect, tracked on its own rather than fixed in passing here.
+    """
+
+    def check_permissions(self, request: Any) -> None:
+        from django.conf import settings
+        from django.core.exceptions import PermissionDenied
+
+        gallery_public = getattr(settings, "DJUST_THEMING_GALLERY_PUBLIC", settings.DEBUG)
+        if gallery_public:
+            return
+
+        user = getattr(request, "user", None)
+        if not (
+            user is not None
+            and getattr(user, "is_authenticated", False)
+            and getattr(user, "is_staff", False)
+        ):
+            raise PermissionDenied("Gallery is only available in DEBUG mode or for staff users.")
+
+
+class StorybookDetailView(StorybookSidebarMixin, LiveView):
     """One component's storybook page, with its examples actually working."""
 
     template_name = "djust_theming/gallery/storybook_detail.html"
@@ -75,7 +175,7 @@ class StorybookDetailView(LiveView):
 
     def mount(self, request: Any, component_name: Optional[str] = None, **kwargs: Any) -> None:
         from .component_registry import _COMPONENT_TO_CATEGORY
-        from .storybook import build_storybook_detail_context, build_storybook_index_context
+        from .storybook import build_storybook_detail_context
         from djust.theming.contracts import COMPONENT_CONTRACTS
 
         if not component_name or (
@@ -90,12 +190,8 @@ class StorybookDetailView(LiveView):
             raise Http404(f"Unknown component: {component_name}") from exc
 
         self.component_name = component_name
-        # The template's `dj-view` names this class — the same contract the
-        # component gallery's `_base.html` uses to mount its LiveViews.
-        self.view_class_name = type(self).__name__
         self._base_ctx = ctx
-        self.all_components = build_storybook_index_context().get("components", [])
-        self.current_component = component_name
+        self._init_sidebar(component_name)
 
     def _descriptor_state(self) -> Dict[str, Any]:
         """The live state of this component's descriptor, if it has one."""
@@ -140,3 +236,93 @@ class StorybookDetailView(LiveView):
         if self._base_ctx.get("component_type") == "python":
             ctx["python_examples_html"] = self._render_examples()
         return ctx
+
+
+# ---------------------------------------------------------------------------
+# Index
+# ---------------------------------------------------------------------------
+
+
+class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
+    """The storybook landing page: every component, filterable.
+
+    Was a plain Django function view whose entire filtering behaviour was a
+    `<script>` toggling `style.display` on the cards. The chips and the search
+    box are server events now, so the grid and the server cannot disagree about
+    what is being shown.
+    """
+
+    template_name = "djust_theming/gallery/storybook_index.html"
+    login_required = False
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        from .storybook import build_storybook_index_context
+
+        ctx = build_storybook_index_context()
+        self._init_sidebar()
+        self.total_count = ctx["total_count"]
+        self.components_by_category = ctx["components_by_category"]
+        self.active_category = "all"
+        self.visible_components = list(self.all_components)
+
+    @event_handler
+    def set_category(self, value: str = "", **kwargs: Any) -> None:
+        """`dj-click` on a category chip. `"all"` clears the filter."""
+        self.active_category = value or "all"
+        self._filter_components()
+
+    def _on_search(self) -> None:
+        # The grid honours the sidebar's query too. That was a second,
+        # separately-written `style.display` loop in storybook_index.html
+        # duplicating the sidebar's own — one query, two code paths.
+        self._filter_components()
+
+    def _filter_components(self) -> None:
+        q = self.search_query.lower()
+        category = self.active_category
+        self.visible_components = [
+            c
+            for c in self.all_components
+            if (category == "all" or c["category"] == category)
+            and (not q or q in c["display_name"].lower() or q in c["name"].lower())
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Category
+# ---------------------------------------------------------------------------
+
+
+class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
+    """One category's components. Same sidebar, so the same handlers."""
+
+    template_name = "djust_theming/gallery/storybook_category.html"
+    login_required = False
+
+    def mount(self, request: Any, category: Optional[str] = None, **kwargs: Any) -> None:
+        from .component_registry import COMPONENT_CATEGORIES, get_all_components_with_metadata
+
+        if category not in COMPONENT_CATEGORIES:
+            raise Http404(f"Unknown category: {category}")
+
+        self.category = category
+        self._init_sidebar()
+
+        # Template components carry contract counts; python components have no
+        # contract, which is why the enrichment is conditional.
+        from djust.theming.contracts import COMPONENT_CONTRACTS
+
+        enriched = []
+        for comp in get_all_components_with_metadata():
+            if comp["category"] != category:
+                continue
+            if comp["name"] in COMPONENT_CONTRACTS:
+                contract = COMPONENT_CONTRACTS[comp["name"]]
+                comp = dict(comp)
+                comp["required_count"] = len(contract.required_context)
+                comp["optional_count"] = len(contract.optional_context)
+                comp["slot_count"] = len(contract.available_slots)
+                comp["a11y_count"] = len(contract.accessibility)
+            enriched.append(comp)
+
+        self.category_components = enriched

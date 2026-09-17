@@ -109,10 +109,12 @@ def test_every_gallery_page_names_a_module_that_exists(page_url, _expected):
 @_BASE
 @pytest.mark.django_db(transaction=True)
 def test_the_index_names_the_index_view_and_a_category_names_its_own():
-    """The `{% block view_class %}` override must survive into the render.
+    """Each page must name its OWN view, not a shared default.
 
-    A single hardcoded default that no child overrides would mount the index
-    view on every category page — resolvable, and wrong.
+    The template no longer names a view at all — it emits `<div dj-root>` and
+    `request.py:349-350` stamps `dj-view` from the class doing the render. That
+    is exactly what this pins: the stamp is per-page, so a category page must
+    not come back carrying the index's class (resolvable, and wrong).
     """
     assert _rendered_view_path("/theme/components/").endswith(".GalleryIndexView")
     assert _rendered_view_path("/theme/components/lv/form/").endswith(".FormGalleryView")

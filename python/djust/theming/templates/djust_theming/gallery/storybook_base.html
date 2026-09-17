@@ -250,90 +250,92 @@
     <a href="{% url 'djust_theming:diff' %}">Diff</a>
   </div>
 
+  {% comment %}
+  The mount root wraps the SIDEBAR as well as the content — that is the whole
+  point of it. The sidebar's search box and category headers are `dj-input` /
+  `dj-click` server events, and djust only binds and dispatches events for
+  elements inside the dj-root region. With the root around the content only,
+  the sidebar's controls rendered correctly, carried the right attributes, and
+  sent nothing: no `dj-id` was ever stamped on them and a click produced no
+  frame at all.
+
+  Wrapping outside `.sb-layout` is layout-neutral: `.sb-sidebar` is
+  `position: fixed` and so out of flow, and `.sb-content`'s `flex: 1` still
+  resolves against `.sb-layout`.
+  {% endcomment %}
+  <div dj-root>
   <div class="sb-layout">
     <!-- Sidebar -->
     <nav class="sb-sidebar">
+      {% comment %}
+      `dj-input` with a debounce, not an `addEventListener` writing
+      `style.display`. The list below is the *filtered* one the server holds, so
+      a search result is data rather than a hidden element — and grouping the
+      filtered list means a category with no matches disappears on its own,
+      which is the cleanup the removed script did by hand.
+
+      `sidebar_components` is already ordered by category (the registry emits
+      them grouped, in canonical order), which `{% regroup %}` requires: it
+      groups *adjacent* runs, so an unsorted list would produce duplicate
+      headers. Filtering preserves that order.
+      {% endcomment %}
       <div class="sb-sidebar-search">
-        <input type="text" id="sb-search" placeholder="Search components..." autocomplete="off">
+        <input type="text" id="sb-search" placeholder="Search components..." autocomplete="off"
+               value="{{ search_query }}" dj-input="search" dj-debounce="300">
       </div>
-      <div class="sb-sidebar-label">All Components ({{ all_components|length }})</div>
-      {% regroup all_components by category as category_groups %}
+      <div class="sb-sidebar-label">Components ({{ sidebar_components|length }})</div>
+      {% regroup sidebar_components by category as category_groups %}
       {% for group in category_groups %}
       <div class="sb-sidebar-category" data-category="{{ group.grouper }}">
-        <div class="sb-sidebar-cat-header" onclick="toggleSidebarCategory(this)"
-          style="padding: 0.375rem 0.75rem; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none;">
+        <button type="button" class="sb-sidebar-cat-header"
+          dj-click="toggle_category" data-value="{{ group.grouper }}"
+          aria-expanded="{% if group.grouper in collapsed_categories %}false{% else %}true{% endif %}"
+          style="width: 100%; border: 0; background: none; font-family: inherit; text-align: left; padding: 0.375rem 0.75rem; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none;">
           <span>{{ group.grouper }}</span>
-          <span class="sb-cat-arrow" style="opacity: 0.5; transition: transform 0.15s;">▾</span>
-        </div>
+          <span class="sb-cat-arrow" style="opacity: 0.5; transition: transform 0.15s;{% if group.grouper in collapsed_categories %} transform: rotate(-90deg);{% endif %}">▾</span>
+        </button>
+        {% if group.grouper not in collapsed_categories %}
         <div class="sb-cat-items">
           {% for comp in group.list %}
           <a href="{% url 'djust_theming:storybook_detail' comp.name %}"
-             class="sb-sidebar-link {% if current_component == comp.name %}active{% endif %}"
-             data-name="{{ comp.name }}" data-display="{{ comp.display_name|lower }}" data-category="{{ comp.category }}">
+             class="sb-sidebar-link {% if current_component == comp.name %}active{% endif %}">
             {{ comp.display_name }}
           </a>
           {% endfor %}
         </div>
+        {% endif %}
       </div>
       {% endfor %}
     </nav>
 
     <!-- Content -->
     {% comment %}
-    The mount point must be a `<div>`. `_DJ_VIEW_RE` and `_DJ_ROOT_RE` both
-    match `<div ... dj-root|dj-view ...>` specifically (mixins/template.py:32,
-    :48), so putting the attribute on a `<main>` renders fine but silently
-    skips the dj-root normalisation — and the initial-GET HTML then disagrees
-    structurally with the WS frame, which is the patch-path mismatch #1737
-    describes. Hence a div inside the landmark rather than on it.
+    The view path is not named anywhere in this file. `mixins/request.py`
+    derives it from the class that rendered the page and stamps the dj-view
+    attribute onto the mount root above, so a template-side string can only
+    ever be wrong — which is exactly what happened here. This template used to
+    default to StorybookDetailView for the index and category pages, which
+    cannot mount without a component_name: all ten were refused with
+    `Unknown component: None` while rendering perfectly. The same shape is
+    #2893 in the components gallery.
+
+    NOTE: none of these comments spell the mount tag out with angle brackets.
+    `_search_dj_root_open` scans the RAW template source, so a comment quoting
+    the tag is matched as if it were markup — which erased this page's content
+    outright when this comment did.
     {% endcomment %}
     <main class="sb-content">
-      <div dj-view="djust.theming.gallery.live_views.{% block view_class %}StorybookDetailView{% endblock %}">
-        {% block content %}{% endblock %}
-      </div>
+      {% block content %}{% endblock %}
     </main>
   </div>
+  </div>
 
-  <script>
-    // Sidebar search filter
-    const search = document.getElementById('sb-search');
-    if (search) {
-      search.addEventListener('input', () => {
-        const q = search.value.toLowerCase();
-        document.querySelectorAll('.sb-sidebar-link').forEach(link => {
-          const name = link.dataset.display || link.textContent.toLowerCase();
-          const visible = name.includes(q);
-          link.style.display = visible ? '' : 'none';
-        });
-        // Show/hide category headers based on whether any items are visible
-        document.querySelectorAll('.sb-sidebar-category').forEach(cat => {
-          const anyVisible = [...cat.querySelectorAll('.sb-sidebar-link')].some(l => l.style.display !== 'none');
-          cat.style.display = anyVisible ? '' : 'none';
-        });
-      });
-    }
-
-    // Toggle sidebar category collapse
-    function toggleSidebarCategory(header) {
-      const items = header.nextElementSibling;
-      const arrow = header.querySelector('.sb-cat-arrow');
-      if (items.style.display === 'none') {
-        items.style.display = '';
-        if (arrow) arrow.style.transform = '';
-      } else {
-        items.style.display = 'none';
-        if (arrow) arrow.style.transform = 'rotate(-90deg)';
-      }
-    }
-
-    // Auto-expand the category of the current active component
-    document.querySelectorAll('.sb-sidebar-link.active').forEach(link => {
-      const cat = link.closest('.sb-sidebar-category');
-      if (cat) {
-        const items = cat.querySelector('.sb-cat-items');
-        if (items) items.style.display = '';
-      }
-    });
-  </script>
+  {% comment %}
+  No script here. This file used to carry ~40 lines that filtered
+  `.sb-sidebar-link` elements by writing `style.display`, toggled category
+  groups the same way, and re-bound itself on every `djust:dom-update` so it
+  survived a server patch. All of it is server state now: `dj-input="search"`
+  and `dj-click="toggle_category"` above, handled by `StorybookSidebarMixin`.
+  {% endcomment %}
 </body>
 </html>
