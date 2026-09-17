@@ -65,13 +65,16 @@ resolved and escaped by Django's machinery inside the node.
 What is refused, loudly
 -----------------------
 A raw ``@register.tag`` compile function that CONSUMES A BODY
-(``parser.parse((...))``, ``next_token``, ``skip_past``) cannot be bridged:
-the synthetic parser has no token stream to hand it. Such a tag is refused
-PER TAG, at parse time, the moment a template uses it — a
-``TemplateSyntaxError`` naming the tag and the library and pointing at
-#2558, which adds the raw-body registration kind — while the rest of its
-library (every other tag, every filter) bridges normally. A silent partial
-bridge would be worse than an error. A raw tag that builds a node from its
+(``parser.parse((...))``, ``next_token``, ``skip_past``) is probed once at
+``{% load %}`` time (ADR-030, ``_wrapper_refusal``). A plain WRAPPER — one
+``parser.parse(("end<name>",))`` whose node renders its body as-is — takes the
+rendered-body route ``LibraryBlockTagHandler`` already provides for
+``simple_block_tag``: the Rust engine renders the body and Django's node wraps
+it. Any other shape is refused PER TAG, at parse time, the moment a template
+uses it — a ``TemplateSyntaxError`` naming the tag, the library and the
+reason — while the rest of its library (every other tag, every filter)
+bridges normally. A silent partial bridge would be worse than an error. A
+raw tag that builds a node from its
 own token (``echo``, ``counter``) bridges fine.
 
 Scoping
@@ -789,14 +792,29 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         register_block_tag_handler(name, handler.end_name, handler)
         unregister_tag_handler(name)
     elif kind == "raw" and _consumes_body(compile_func):
-        # Refused per TAG, at parse time, the moment a template uses it —
-        # the rest of the library bridges normally. The Rust parser reads
-        # `REFUSE_AT_PARSE` and raises Django's `TemplateSyntaxError`.
-        if not isinstance(handler, RefusedTagHandler):
-            handler = RefusedTagHandler(label, name)
-            _engine_state("_handlers", _handlers)[compile_func] = handler
-        register_tag_handler(name, handler)
-        unregister_block_tag_handler(name)
+        # A body-consuming raw tag (ADR-030). A WRAPPER — one
+        # `parser.parse(("end<name>",))` whose node renders its body as-is —
+        # consumes exactly the token stream the simple_block_tag bridge
+        # supplies, so it is routed through `LibraryBlockTagHandler`: the Rust
+        # engine renders the body (VDOM identity, native tags and filters all
+        # kept), and Django's own node wraps it. Anything else is refused per
+        # TAG, at parse time, the moment a template uses it — the rest of the
+        # library bridges normally — and the message names the reason. The
+        # Rust parser reads `REFUSE_AT_PARSE` and raises Django's
+        # `TemplateSyntaxError`.
+        reason = _wrapper_refusal(name, compile_func)
+        if reason is None:
+            if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
+                handler = LibraryBlockTagHandler(label, name, compile_func)
+                _engine_state("_handlers", _handlers)[compile_func] = handler
+            register_block_tag_handler(name, handler.end_name, handler)
+            unregister_tag_handler(name)
+        else:
+            if not isinstance(handler, RefusedTagHandler) or handler.name != name:
+                handler = RefusedTagHandler(label, name, reason)
+                _engine_state("_handlers", _handlers)[compile_func] = handler
+            register_tag_handler(name, handler)
+            unregister_block_tag_handler(name)
     else:
         # Per-NAME, not per-compile-function (#2558): `translate`/`trans` are
         # one compile function registered under two names, and Django's
@@ -876,6 +894,149 @@ def _consumes_body(compile_func: Callable[..., Any]) -> bool:
     except (OSError, TypeError):
         return False
     return any(marker in source for marker in _BODY_CONSUMERS)
+
+
+#: The body every wrapper probe compiles against. Any text works; this one
+#: cannot occur in a tag's own markup by accident.
+_PROBE_BODY = "djust-wrapper-probe-body"
+
+
+class _ProbeLenientDict(dict):
+    """A context layer that answers every lookup with ``""`` so a wrapper that
+    reads ``context["name"]`` at render time is probed rather than refused."""
+
+    def __contains__(self, key: Any) -> bool:
+        return True
+
+    def __getitem__(self, key: Any) -> Any:
+        return dict.get(self, key, "")
+
+
+class _ProbeSentinel:
+    """Planted in the compiled node's nodelist: records the context the body
+    is rendered in. ``must_be_first`` mirrors ``Node``'s attribute so
+    ``NodeList`` treats it as a node."""
+
+    must_be_first = False
+    child_nodelists: Tuple[str, ...] = ()
+
+    def __init__(self, visible: set) -> None:
+        self.visible = visible  # keys the probe context exposes at the top level
+        self.rendered = False
+        self.autoescape: Optional[bool] = None
+        self.pushed: set = set()
+
+    def render_annotated(self, context: Any) -> str:
+        return self.render(context)
+
+    def render(self, context: Any) -> str:
+        self.rendered = True
+        self.autoescape = context.autoescape
+        # Anything visible that the probe did not put there was pushed by the
+        # wrapper around its body — Django's body would see it, ours cannot.
+        for layer in context.dicts:
+            if not isinstance(layer, _ProbeLenientDict):
+                self.pushed.update(k for k in layer if k not in self.visible)
+        return ""
+
+    def get_nodes_by_type(self, nodetype: Any) -> list:
+        return []
+
+
+def _plant_sentinel(node: Any, visible: set) -> Optional[_ProbeSentinel]:
+    """Append a sentinel to every ``NodeList`` the compiled node holds."""
+    from django.template.base import NodeList
+
+    sentinel = _ProbeSentinel(visible)
+    found = False
+    for value in list(vars(node).values()):
+        if isinstance(value, NodeList):
+            value.append(sentinel)
+            found = True
+    return sentinel if found else None
+
+
+def _segments_reason(calls: List[Tuple[str, ...]], end_name: str) -> str:
+    return "it parses more than one body segment (it stops first at %s rather than %r)" % (
+        calls[0],
+        end_name,
+    )
+
+
+def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[str]:
+    """Why a body-consuming raw tag cannot take the rendered-body route, or
+    ``None`` when it can (ADR-030 D1).
+
+    The tag is compiled once, at registration, against the exact stream
+    ``LibraryBlockTagHandler`` will hand it — ``[TEXT(body), BLOCK(end<name>)]``
+    — with ``parser.parse`` counted, then rendered once with a sentinel
+    planted in its nodelist. It is a wrapper when: it made exactly one
+    ``parse`` call stopping at ``end<name>``; its node rendered the body;
+    and it rendered it in the SAME context it received — no pushed variables,
+    same ``autoescape``. The last condition is what the bridge cannot honour
+    (the Rust engine renders the body before the node runs), so a node that
+    does ``with context.push(x=...)`` around its body would diverge from
+    Django silently; it is refused instead. ``split_pane`` (an intermediate
+    ``{% pane %}``) fails the first test; ``tabs`` (which keeps only
+    ``TabNode`` children) never renders the sentinel. Behavioural, so
+    ``inspect.getsource`` limitations do not apply.
+
+    Two limits, documented in ``docs/TEMPLATE_BACKEND.md``: the probe runs
+    the tag's compile and render once at ``{% load %}`` time, so a render
+    with side effects fires once with a probe context; and a compile function
+    that raises without arguments cannot be probed and stays refused.
+    """
+    from django.http import HttpRequest
+    from django.template import Context
+    from django.template.base import Token, TokenType
+
+    end_name = "end" + name
+    calls: List[Tuple[str, ...]] = []
+    parser = _parser([Token(TokenType.TEXT, _PROBE_BODY), Token(TokenType.BLOCK, end_name)])
+    original_parse = parser.parse
+
+    def counting_parse(parse_until: Any = None) -> Any:
+        calls.append(tuple(parse_until or ()))
+        return original_parse(parse_until)
+
+    parser.parse = counting_parse  # type: ignore[method-assign]
+    try:
+        node = compile_func(parser, _token(name, []))
+    except Exception as exc:  # noqa: BLE001 — the reason is reported, never raised here
+        if not calls:
+            return "it could not be compiled for probing without arguments (%s: %s)" % (
+                type(exc).__name__,
+                exc,
+            )
+        return _segments_reason(calls, end_name)
+    if not calls:
+        return "it reads the token stream directly (next_token / skip_past)"
+    if len(calls) != 1 or calls[0] != (end_name,):
+        return _segments_reason(calls, end_name)
+    ctx = Context(_ProbeLenientDict(), autoescape=True)
+    visible = {key for layer in ctx.dicts for key in layer}
+    sentinel = _plant_sentinel(node, visible)
+    if sentinel is None:
+        return "its node does not keep the parsed body as a nodelist"
+    request = HttpRequest()
+    request.path = request.path_info = "/"
+    ctx.request = request  # type: ignore[attr-defined]
+    string_if_invalid, debug = _render_engine_options()
+    ctx.template = _stub_template_with(string_if_invalid, debug)
+    try:
+        node.render(ctx)
+    except Exception as exc:  # noqa: BLE001
+        return "its node raised while rendering a probe body (%s: %s)" % (type(exc).__name__, exc)
+    if not sentinel.rendered:
+        return "its node does not render its body (it inspects the nodelist or renders it conditionally)"
+    if sentinel.autoescape is not True:
+        return "it renders its body with autoescape changed, which the bridge cannot honour"
+    if sentinel.pushed:
+        return (
+            "it renders its body in a modified context (pushes %s), which the bridge cannot honour"
+            % (", ".join(sorted(str(k) for k in sentinel.pushed)[:3]))
+        )
+    return None
 
 
 def _end_name(compile_func: Callable[..., Any], name: str) -> str:
@@ -1134,14 +1295,17 @@ class RefusedTagHandler:
     RETURNS_BINDINGS = True
     WANTS_AUTOESCAPE = True
 
-    def __init__(self, label: str, name: str) -> None:
+    def __init__(self, label: str, name: str, reason: str = "") -> None:
         self.label = label
         self.name = name
+        self.reason = reason
         self.REFUSE_AT_PARSE = (
             "'%s' from library '%s' is a raw @register.tag that consumes a block "
-            "(it calls parser.parse / next_token). djust bridges raw tags that build "
-            "a node from their own token only; port it to @register.simple_block_tag, "
-            "or wait for the raw-body registration kind (#2558)." % (name, label)
+            "and cannot be bridged: %s. A wrapper — one parser.parse(('end<name>',)) "
+            "whose node renders its body as-is — is bridged automatically (ADR-030); "
+            "give this tag a native handler (djust.register_block_tag_handler) or, on "
+            "Django 5.2+, port it to @register.simple_block_tag."
+            % (name, label, reason or "its shape is not a plain wrapper")
         )
 
     def render(
