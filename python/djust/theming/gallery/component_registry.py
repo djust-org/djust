@@ -257,8 +257,22 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Uptime", "value": "99.9%", "trend": "flat"},
     ],
     "switch": [
-        {"name": "notifications", "label": "Enable notifications", "checked": True},
-        {"name": "dark_mode", "label": "Dark mode", "checked": False},
+        # `action` is what the input's `dj-change` is built from, and a switch
+        # with no `dj-change` cannot move: its slider is drawn from the
+        # server-rendered `.dj-switch-checked`, so a browser-side toggle of the
+        # hidden checkbox changes nothing anyone can see.
+        {
+            "name": "notifications",
+            "label": "Enable notifications",
+            "checked": True,
+            "action": "toggle_switch",
+        },
+        {
+            "name": "dark_mode",
+            "label": "Dark mode",
+            "checked": False,
+            "action": "toggle_switch",
+        },
     ],
     "kbd": [
         {"keys": ["⌘", "K"]},
@@ -291,11 +305,16 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"segments": [{"value": 30, "label": "Used"}], "total": 100, "label": "Memory"},
     ],
     "callout": [
-        {"message": "This is an important notice.", "variant": "info", "title": "Info"},
-        {"message": "Warning: action is irreversible.", "variant": "warning", "title": "Warning"},
+        {"content": "This is an important notice.", "variant": "info", "title": "Info"},
+        {"content": "Warning: action is irreversible.", "variant": "warning", "title": "Warning"},
     ],
     "collapsible": [
-        {"title": "Show details", "content": "Hidden content shown when expanded."},
+        {"trigger": "Show details", "content": "Hidden content shown when expanded."},
+        {
+            "trigger": "Already open",
+            "content": "This one starts expanded.",
+            "is_open": True,
+        },
     ],
     "toggle_group": [
         {
@@ -310,7 +329,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "empty_state": [
         {
             "title": "No results found",
-            "message": "Try adjusting your search or filters.",
+            "description": "Try adjusting your search or filters.",
             "icon": "🔍",
         },
     ],
@@ -322,7 +341,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "page_alert": [
-        {"message": "Your trial expires in 3 days.", "variant": "warning", "dismissible": True},
+        {"message": "Your trial expires in 3 days.", "type": "warning", "dismissible": True},
     ],
     "status_dot": [{"status": "running", "variant": "success", "size": "md"}],
     "status_indicator": [
@@ -330,8 +349,8 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"status": "stopped", "label": "Service stopped"},
     ],
     "connection_status": [
-        {"connected": True},
-        {"connected": False},
+        {},
+        {"reconnecting_text": "Connection lost...", "connected_text": "Back online!"},
     ],
     "live_indicator": [{"user": {"name": "Ada"}, "field": "Title", "action": "typing"}],
     "thinking_indicator": [
@@ -341,7 +360,8 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"text": "npm install djust-theming", "label": "Copy"},
     ],
     "copyable_text": [
-        {"text": "pip install djust-theming", "label": "Install"},
+        {"text": "pip install djust-theming"},
+        {"text": "sk-abc123xyz", "copied_label": "Key copied!"},
     ],
     "icon": [
         {"name": "check", "size": "md"},
@@ -352,7 +372,8 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"data": "https://djust.org", "size": "md"},
     ],
     "countdown": [
-        {"target": "2026-12-31", "label": "Until New Year"},
+        {"target": "2026-12-31"},
+        {"target": "2026-12-31", "labels": {"days": "sleeps", "seconds": "secs"}},
     ],
     # `auto_update` left at its default: without it the component renders the
     # raw ISO string as its text content rather than a relative label, because
@@ -366,17 +387,18 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"value": 42, "label": "online"},
     ],
     "token_counter": [
-        {"count": 1500, "max": 4096, "label": "tokens"},
+        {"current": 1500, "max": 4096, "label": "tokens"},
+        {"current": 3800, "max": 4096, "label": "tokens"},
     ],
     "progress_circle": [
-        {"value": 75, "max": 100, "label": "75%"},
-        {"value": 33, "max": 100, "label": "33%"},
+        {"value": 75},
+        {"value": 33, "color": "warning"},
     ],
     "code_snippet": [
         {"code": "pip install djust", "language": "bash"},
     ],
     "code_block": [
-        {"code": 'print("Hello, world!")', "language": "python", "title": "example.py"},
+        {"code": 'print("Hello, world!")', "language": "python", "filename": "example.py"},
     ],
     "markdown": [
         {"text": "# Hello\n\nThis is **markdown** rendered inline."},
@@ -431,10 +453,11 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Save", "options": [{"label": "Save and continue"}, {"label": "Save as draft"}]},
     ],
     "theme_toggle": [
-        {"label": "Toggle theme"},
+        {"current": "system"},
+        {"current": "dark"},
     ],
     "stepper": [
-        {"steps": [{"label": "Account"}, {"label": "Details"}, {"label": "Review"}], "current": 1},
+        {"steps": [{"label": "Account"}, {"label": "Details"}, {"label": "Review"}], "active": 1},
     ],
     "toolbar": [
         {
@@ -450,7 +473,8 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     ],
     "feedback_widget": [{"mode": "thumbs", "value": "up"}],
     "streaming_text": [
-        {"text": "Generating response...", "active": True},
+        {"text": "Generating response..."},
+        {"text": "Streaming with a markdown cursor.", "markdown": True},
     ],
 }
 
@@ -945,7 +969,25 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "labels": ["Q1", "Q2", "Q3", "Q4"],
             }
         ],
-        "loading_overlay": [{}],
+        # The overlay is drawn over `content` and only while `active`; with
+        # neither supplied the preview was an empty wrapper, which reads as a
+        # broken component rather than as a component with nothing to show.
+        "loading_overlay": [
+            {
+                "content": (
+                    '<p style="margin:0 0 0.5rem">This card stays visible '
+                    "underneath the overlay.</p>"
+                    '<button type="button" dj-click="toggle_loading">'
+                    "Toggle the overlay</button>"
+                ),
+                "text": "Loading…",
+            },
+            {
+                "content": '<p style="margin:0">Already loading on first paint.</p>',
+                "active": True,
+                "text": "Uploading…",
+            },
+        ],
         "log_viewer": [
             {
                 "lines": [
@@ -977,7 +1019,37 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "placeholder": "Mention someone…",
             }
         ],
-        "model_selector": [{}],
+        "model_selector": [
+            {
+                "name": "model",
+                "label": "Model",
+                "options": [
+                    {
+                        "value": "claude-opus-5",
+                        "label": "Opus 5",
+                        "description": "Most capable",
+                        "context_window": "200k",
+                        "tier": "premium",
+                    },
+                    {
+                        "value": "claude-sonnet-5",
+                        "label": "Sonnet 5",
+                        "description": "Balanced",
+                        "context_window": "200k",
+                        "tier": "standard",
+                    },
+                    {
+                        "value": "claude-haiku-4-5",
+                        "label": "Haiku 4.5",
+                        "description": "Fast and cost-effective",
+                        "context_window": "200k",
+                        "tier": "free",
+                    },
+                ],
+                "value": "claude-sonnet-5",
+                "event": "select_model",
+            },
+        ],
         "multi_select": [
             {
                 "name": "frameworks",

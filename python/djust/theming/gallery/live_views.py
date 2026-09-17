@@ -68,10 +68,11 @@ _INTERACTIVE = {
 # console traceback on a page whose whole job is to look dependable.
 #
 # Twenty events across seventeen components were unanswered. They are uniform
-# enough to drive from one table: each names a single state kwarg the component
-# already accepts, so re-rendering with that kwarg changed is the whole fix.
-# This mirrors what DEP-002 already does for the container components, for the
-# ones that have no descriptor to declare.
+# enough to drive from one table: each names a state kwarg the component
+# already accepts — or a list of them, when one event moves more than one —
+# so re-rendering with those kwargs changed is the whole fix. This mirrors
+# what DEP-002 already does for the container components, for the ones that
+# have no descriptor to declare.
 
 
 def _text(_current: Any, incoming: Any) -> Any:
@@ -200,15 +201,44 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "react": ("active", _toggle_member),
     "toggle_sidebar": ("collapsed", _flip),
     "toggle_list": ("expanded", _flip),
+    # `switch` is a checkbox whose slider is drawn from `.dj-switch-checked`,
+    # a server-rendered class. Until the example named an `action` the input
+    # carried no `dj-change`, so the box flipped its own `checked` property and
+    # nothing else moved — the switch appeared not to toggle at all.
+    "toggle_switch": ("checked", _flip),
+    # `loading_overlay` is only visible while `active`, and `model_selector`
+    # has no open state of its own to toggle.
+    "toggle_loading": ("active", _flip),
+    "toggle_model_selector": ("is_open", _flip),
+    # Picking an option sets the value and closes the menu, so one event moves
+    # two kwargs.
+    "select_model": [("value", _text), ("is_open", lambda _c, _v: False)],
+    # `segmented_progress` steps are buttons now, carrying their 1-based number;
+    # `current` is 1-based too, so the value lands directly.
+    "set_segment": ("current", _as_int),
 }
 
 
-def _make_demo_handler(event: str, key: str, transform: Any):
-    """One `@event_handler` per event, named so dispatch finds it."""
+def _make_demo_handler(event: str, effects: Any):
+    """One `@event_handler` per event, named so dispatch finds it.
 
-    def handler(self: Any, value: str = "", **kwargs: Any) -> None:
-        current = self._demo_values.get(key)
-        self._demo_values[key] = transform(current, value)
+    `effects` is one `(key, transform)` pair, or a list of them when a single
+    event moves more than one kwarg — `model_selector`'s `select_model` sets the
+    chosen value *and* closes the menu, and a table that could only name one
+    key would have to leave the menu hanging open.
+    """
+    pairs = effects if isinstance(effects, list) else [effects]
+
+    # `value` is annotated `Any` rather than `str`: the framework validates a
+    # handler's parameters against its annotations, and a checkbox's `dj-change`
+    # sends a bool. Naming it `str` rejected the event before it ran —
+    # "expected str, got bool (True)" — which left `switch` unable to toggle
+    # even once its input carried `dj-change`.
+    def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
+        for key, transform in pairs:
+            if key not in self._demo_values:
+                self._demo_values[key] = self._example_value(key)
+            self._demo_values[key] = transform(self._demo_values[key], value)
 
     handler.__name__ = event
     handler.__qualname__ = event
@@ -350,16 +380,30 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 
         self.component_name = component_name
         self._base_ctx = ctx
-        #: What the demo handlers have set, keyed by example kwarg. Seeded from
-        #: the example itself, so a transform that steps a value (`carousel`'s
-        #: `active`, `date_picker`'s `month`) has a base to step from rather
-        #: than starting at nothing — a first click that computed `None + 1`
-        #: would override the example with `None` and blank the component.
-        from .component_registry import PYTHON_COMPONENT_EXAMPLES
-
-        examples = PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
-        self._demo_values: Dict[str, Any] = dict(examples[0]) if examples else {}
+        #: What the demo handlers have set, keyed by example kwarg. Empty at
+        #: mount, because `_render_examples` merges this dict into *every*
+        #: example: seeding it from `examples[0]` made every preview on the page
+        #: render the first example's kwargs. A two-state switch showed two
+        #: switches both on, and five progress bars all read 25%. Keys land here
+        #: only once the reader has moved them; `_make_demo_handler` reads the
+        #: starting value from the example on first use, so a transform that
+        #: steps (`carousel`'s `active`, `date_picker`'s `month`) still has a
+        #: base to step from rather than computing `None + 1`.
+        self._demo_values: Dict[str, Any] = {}
         self._init_sidebar(component_name)
+
+    def _example_value(self, key: str) -> Any:
+        """The starting value for a state kwarg, read from the first example.
+
+        The examples already carry a sensible base for every kwarg a demo
+        handler drives, so the event table does not have to restate them.
+        """
+        examples = self._base_ctx.get("examples")
+        if not examples:
+            from .component_registry import PYTHON_COMPONENT_EXAMPLES
+
+            examples = PYTHON_COMPONENT_EXAMPLES.get(self.component_name) or []
+        return examples[0].get(key) if examples else None
 
     def _descriptor_state(self) -> Dict[str, Any]:
         """Everything the preview should be re-rendered against.
@@ -469,10 +513,10 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 # way (`components/base.py:__set_name__`), and a table keeps the event names,
 # their state kwargs, and their transforms readable as one thing — which is what
 # makes it obvious when a component gains an event and this table does not.
-for _event, (_key, _transform) in _DEMO_EVENTS.items():
+for _event, _effects in _DEMO_EVENTS.items():
     if not hasattr(StorybookDetailView, _event):
-        setattr(StorybookDetailView, _event, _make_demo_handler(_event, _key, _transform))
-del _event, _key, _transform
+        setattr(StorybookDetailView, _event, _make_demo_handler(_event, _effects))
+del _event, _effects
 
 
 class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):

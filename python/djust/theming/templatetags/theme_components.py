@@ -65,40 +65,61 @@ def theme_button(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "button")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "text": text,
         "variant": variant,
         "size": size,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
 
 @register.simple_tag(takes_context=True)
 def theme_card(
-    context: Context, title: Optional[str] = None, footer: Optional[str] = None, **attrs: Any
+    context: Context,
+    title: Optional[str] = None,
+    footer: Optional[str] = None,
+    body: Optional[str] = None,
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed card container.
 
     Args:
         title: Optional card title
+        body: Optional card body. Passed through as `slot_body`, which is the
+            name `card.html` reads, so callers have one body argument rather
+            than two spellings of it.
         footer: Optional card footer content
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_card title="Card Title" %}
-            <p>Card content goes here</p>
-        {% end_theme_card %}
+        {% theme_card title="Card Title" body="Card content goes here" %}
+
+    Each part is optional and each is dropped when absent, so a card with only
+    a body is as valid as one with all three.
+
+    A card body is a string, not a block — this is a `simple_tag`, so it takes
+    no `{% end_theme_card %}` and cannot wrap other template tags.
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "card")
+    slots, remaining_attrs = _extract_slots(attrs)
+    if body is not None:
+        slots.setdefault("slot_body", body)
     ctx = {
         "title": title,
         "footer": footer,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -119,11 +140,17 @@ def theme_badge(context: Context, text: str, variant: str = "default", **attrs: 
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "badge")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "text": text,
         "variant": variant,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -153,13 +180,19 @@ def theme_alert(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "alert")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "message": message,
         "title": title,
         "variant": variant,
         "dismissible": dismissible,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -188,13 +221,19 @@ def theme_input(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "input")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "name": name,
         "label": label,
         "placeholder": placeholder,
         "type": type,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -233,14 +272,20 @@ def theme_modal(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "modal")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "id": id,
         "title": title,
         "size": size,
         "is_open": is_open,
         "component_id": component_id,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -278,14 +323,20 @@ def theme_dropdown(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "dropdown")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "id": id,
         "label": label,
         "align": align,
         "is_open": is_open,
         "component_id": component_id,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -353,13 +404,19 @@ def theme_table(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "table")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "headers": headers or [],
         "rows": rows or [],
         "variant": variant,
         "caption": caption,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -388,6 +445,11 @@ def theme_pagination(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "pagination")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
 
     # Build page range (show up to 5 pages around current)
     window = 2
@@ -424,8 +486,9 @@ def theme_pagination(
         "last_ellipsis": last_ellipsis,
         "prev_url": prev_url,
         "next_url": next_url,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 

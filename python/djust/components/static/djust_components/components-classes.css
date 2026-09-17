@@ -731,10 +731,12 @@
 .dj-model-sel { position: relative; }
 .dj-model-sel--disabled { opacity: 0.5; pointer-events: none; }
 .dj-model-sel__label { display: block; margin-bottom: 0.25rem; font-weight: 500; font-size: 0.875rem; }
-.dj-model-sel__trigger { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; min-height: 2.5rem; }
+.dj-model-sel__trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; min-height: 2.5rem; background: none; font: inherit; color: inherit; text-align: left; }
 .dj-model-sel__chevron { margin-left: 0.5rem; font-size: 0.75rem; }
 .dj-model-sel__placeholder { opacity: 0.5; }
 .dj-model-sel__dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.25rem; border: 1px solid; border-radius: 0.375rem; max-height: 16rem; overflow-y: auto; z-index: 50; }
+/* The host LiveView owns `is_open`; the component renders it as `data-open`. */
+.dj-model-sel[data-open="true"] .dj-model-sel__dropdown { display: block; }
 .dj-model-sel__opt { padding: 0.5rem 0.75rem; cursor: pointer; }
 .dj-model-sel__opt--active { font-weight: 600; }
 .dj-model-sel__info { display: flex; flex-direction: column; gap: 0.125rem; }

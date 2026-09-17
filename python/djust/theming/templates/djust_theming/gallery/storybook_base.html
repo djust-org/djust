@@ -4,11 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Component Storybook{% endblock %}</title>
+  {% comment %}
+  `theme_head` already links `djust_components/components.css`, versioned.
+  Repeating it here unversioned loaded the same file twice and let the
+  cacheable copy win — the stale one, on the next edit to it.
+  {% endcomment %}
   {% theme_head %}
-  <link href="{% static 'theme_demo/css/utilities.css' %}" rel="stylesheet">
-  <link href="{% static 'djust_components/components.css' %}" rel="stylesheet">
-  <link href="{% static 'djust_components/components-classes.css' %}" rel="stylesheet">
-  <link href="{% static 'theme_demo/css/bridge.css' %}" rel="stylesheet">
+  <link href="{% static 'theme_demo/css/utilities.css' %}?v={% theme_asset_version %}" rel="stylesheet">
+  <link href="{% static 'djust_components/components-classes.css' %}?v={% theme_asset_version %}" rel="stylesheet">
+  <link href="{% static 'theme_demo/css/bridge.css' %}?v={% theme_asset_version %}" rel="stylesheet">
   <style>
     body {
       margin: 0;

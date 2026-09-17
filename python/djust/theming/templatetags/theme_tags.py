@@ -580,3 +580,19 @@ def theme_resolved_mode(context: Context) -> str:
     request = context.get("request")
     manager = get_theme_manager(request)
     return manager.get_state().resolved_mode
+
+
+@register.simple_tag
+def theme_asset_version() -> str:
+    """The cache-buster token, for templates that link assets outside `theme_head`.
+
+    `theme_head` stamps its own links itself. A page that adds a stylesheet of
+    its own has no way to reach that token, and so links it bare — which is how
+    the storybook came to load `djust_components/components.css` twice, once
+    versioned and once not, with the unversioned copy second and therefore
+    winning. A bare link is a link that goes stale on the next edit.
+
+    Usage:
+        <link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={% theme_asset_version %}">
+    """
+    return _theme_asset_version()

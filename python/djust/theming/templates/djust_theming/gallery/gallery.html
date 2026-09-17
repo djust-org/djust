@@ -149,8 +149,9 @@
     <section class="gallery__section" id="card">
       <h2>Card</h2>
       <div class="gallery__examples gallery__wide">
-        {% theme_card title="Card Title" footer="Card footer" %}
-        {% theme_card title="No Footer" %}
+        {% theme_card title="Card Title" body="Card body content goes here." footer="Card footer" %}
+        {% theme_card title="No Footer" body="A card without a footer." %}
+        {% theme_card body="A card with no title or footer." %}
       </div>
     </section>
 

@@ -10,6 +10,7 @@ Supports both template-based components (24 contracted) and Python components
 
 import logging
 import re
+from typing import Any
 from pathlib import Path
 
 from django.utils.html import escape
@@ -211,20 +212,47 @@ _STORYBOOK_TRIGGERS = {
 
 
 def _render_template_examples(component_name: str, examples: list[dict]) -> list[dict]:
-    """Render a template component's examples through its own template.
+    """Render a template component's examples through its own tag.
 
     Returns ``[{"html": ..., "kwargs": ...}]`` in the shape the python branch
     already uses, so the page has one preview mechanism rather than two.
     A failure renders a visible message instead of nothing — the same contract
     `render_python_component_example` now honours.
-    """
-    from django.template.loader import render_to_string
 
-    template_name = f"djust_theming/components/{component_name}.html"
+    Through its **tag**, not its template: those are different programs. The
+    template is written to be rendered by ``{% theme_progress %}`` and reads
+    names the tag computes — ``percentage``, ``is_indeterminate``, ``css_prefix``,
+    ``attrs``, ``slot_*``. Passing the example's kwargs straight to the template
+    leaves those names unfilled, and Django's default ``string_if_invalid=""``
+    turns an unfilled name into silence rather than an error: the progress
+    preview read ``style="width: %"`` on the page while the same tag rendered
+    ``width: 25.0%`` for any real caller. An empty string is indistinguishable
+    from a correctly-rendered empty value, so nothing caught it.
+
+    Rendering through the tag means the preview is the developer's own path, so
+    a preview can no longer be wrong in a way the component is not.
+    """
+    from django.template import RequestContext
+
+    from djust.theming.templatetags import theme_components
+
+    tag = getattr(theme_components, f"theme_{component_name}", None)
     rendered = []
     for example in examples:
         try:
-            html = render_to_string(template_name, dict(example))
+            if tag is not None:
+                # `simple_tag` compiles to a node whose `render` calls the
+                # wrapped function with the context first; calling it directly
+                # is that same call without the template machinery.
+                html = str(tag(RequestContext({}), **example))
+            else:
+                # No `theme_<name>` tag: nothing computes the derived context,
+                # so the template is the only thing there is to render.
+                from django.template.loader import render_to_string
+
+                html = render_to_string(
+                    f"djust_theming/components/{component_name}.html", dict(example)
+                )
         except Exception as exc:
             logger.warning(
                 "Could not render template component %s: %s",
@@ -242,6 +270,183 @@ def _render_template_examples(component_name: str, examples: list[dict]) -> list
         trigger = _STORYBOOK_TRIGGERS.get(component_name, "")
         rendered.append({"html": f"{trigger}{html}", "kwargs": example})
     return rendered
+
+
+#: The stylesheets a storybook page loads, with the label to show for each.
+#: Derived from disk rather than hand-listed: a component's styling moves
+#: between files, and a list maintained by hand is one that goes stale quietly.
+_CSS_TREES: list[tuple[str, Path]] = [
+    ("djust_theming", Path(__file__).resolve().parent.parent / "static" / "djust_theming" / "css"),
+    (
+        "djust_components",
+        Path(__file__).resolve().parent.parent.parent
+        / "components"
+        / "static"
+        / "djust_components",
+    ),
+]
+
+
+def _classes_in(html: str) -> list[str]:
+    """Every class the component's own markup uses, in first-seen order."""
+    seen: dict[str, None] = {}
+    for match in re.finditer(r'class="([^"]*)"', html):
+        for cls in match.group(1).split():
+            seen.setdefault(cls, None)
+    return list(seen)
+
+
+def styles_for(html: str) -> list[dict]:
+    """Which stylesheets define the classes this markup uses, and where.
+
+    Answers "what do I override to change how this looks?" with a file and a
+    line rather than a shrug. A developer can read the rule they need to beat
+    without grepping the package, and see which of the two `components.css`
+    files (the theming one and the components app's) is actually in play.
+    """
+    classes = _classes_in(html)
+    if not classes:
+        return []
+
+    patterns = {cls: re.compile(r"\." + re.escape(cls) + r"(?![\w-])") for cls in classes}
+    found: list[dict] = []
+
+    for label, tree in _CSS_TREES:
+        if not tree.is_dir():
+            continue
+        for path in sorted(tree.rglob("*.css")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:  # pragma: no cover — unreadable file mid-scan
+                continue
+            hits: dict[str, int] = {}
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                for cls, pattern in patterns.items():
+                    if cls not in hits and pattern.search(line):
+                        hits[cls] = lineno
+            if hits:
+                found.append(
+                    {
+                        "label": label,
+                        "path": f"{label}/{path.relative_to(tree)}",
+                        "classes": sorted(hits),
+                        # Several classes routinely share a line
+                        # (`.a { … }` and `.b { … }` written together), and a
+                        # repeated line number reads as a mistake.
+                        "lines": sorted(set(hits.values())),
+                    }
+                )
+
+    # The file that styles most of the component is the one to start with.
+    found.sort(key=lambda row: -len(row["classes"]))
+    return found
+
+
+def _usage_snippet(
+    component_name: str,
+    component_type: str,
+    examples: list[dict],
+    class_name: str,
+    import_line: str,
+) -> str:
+    """The two-file example a developer actually writes.
+
+    The page used to show only the component in isolation —
+    `progress(value=0, max=100, label=None, …)` then `component.render()` —
+    which is not how any of this is used. A djust component is assigned in a
+    LiveView and interpolated in a template; showing the assignment without the
+    view it lives in, or the `{{ … }}` that renders it, documents the one part
+    that was never in question.
+    """
+    first = dict(examples[0]) if examples else {}
+    # Show the arguments that produce the example's own output, not the
+    # signature's defaults: `value=0, label=None` documents nothing a reader can
+    # picture, and it is not what the preview above shows.
+    args = ", ".join(f"{k}={v!r}" for k, v in first.items() if not k.startswith("slot_"))
+    slot_args = [k for k in first if k.startswith("slot_")]
+
+    if component_type == "template":
+
+        def is_literal(value: object) -> bool:
+            return value is None or isinstance(value, (str, int, float, bool))
+
+        named = {k: v for k, v in first.items() if not k.startswith("slot_")}
+        # A template argument is parsed by Django, not Python: `repr()` of a
+        # list of dicts — `[{'label': 'Home'}]` — is a TemplateSyntaxError, not
+        # a value. Anything the template cannot write as a literal is held on
+        # the view and passed by name, which is what a developer does anyway.
+        on_view = {k: v for k, v in named.items() if not is_literal(v)}
+        # One value always comes from the view even when it could be inlined,
+        # so the two files visibly connect instead of reading as unrelated.
+        first_name = next(iter(on_view), next(iter(named), "value"))
+        on_view.setdefault(first_name, named.get(first_name))
+
+        # Tag arguments are space-separated; a comma between them is a syntax
+        # error in the template, not a style choice.
+        tag_args = " ".join(f"{k}={k if k in on_view else repr(v)}" for k, v in named.items())
+
+        lines = [
+            "# views.py",
+            "from djust import LiveView",
+            "",
+            "",
+            "class MyView(LiveView):",
+            '    template_name = "my_template.html"',
+            "",
+            "    def mount(self, request, **kwargs):",
+        ]
+        for key, value in on_view.items():
+            lines.append(f"        self.{key} = {value!r}")
+        lines += [
+            "",
+            "",
+            "# my_template.html",
+            "{% load theme_components %}",
+            f"{{% theme_{component_name}{' ' + tag_args if tag_args else ''} %}}",
+        ]
+        return "\n".join(lines)
+
+    if not import_line:
+        return (
+            f"# `{component_name}` defines no component class of its own. It ships\n"
+            "# shared parts — mixins and helpers — that other components are built\n"
+            "# from."
+        )
+
+    assignment = (
+        f"self.component = {class_name}({args})" if args else f"self.component = {class_name}()"
+    )
+    lines = [
+        "# views.py",
+        "from djust import LiveView",
+        import_line,
+        "",
+        "",
+        "class MyView(LiveView):",
+        '    template_name = "my_template.html"',
+        "",
+        "    def mount(self, request, **kwargs):",
+        f"        {assignment}",
+    ]
+    if slot_args:
+        lines.append("")
+        lines.append("        # `" + "` / `".join(slot_args) + "` carry markup, so they are")
+        lines.append("        # passed the rendered HTML rather than a value.")
+    lines += [
+        "",
+        "",
+        "# my_template.html",
+        "{{ component|safe }}",
+    ]
+    return "\n".join(lines)
+
+
+def _module_path(component_name: str) -> str:
+    """The module a python component's class is defined in, or ""."""
+    from .component_registry import get_python_component_import
+
+    module_path, _names = get_python_component_import(component_name)
+    return module_path or ""
 
 
 def _import_line(component_name: str) -> str:
@@ -300,6 +505,7 @@ def build_storybook_detail_context(component_name: str) -> dict:
 
         builder = _EXAMPLE_BUILDERS.get(component_name)
         examples = builder() if builder else []
+        rendered_examples = _render_template_examples(component_name, examples)
 
         return {
             "name": component_name,
@@ -337,12 +543,22 @@ def build_storybook_detail_context(component_name: str) -> dict:
             # headed LIVE PREVIEW showed `tabs(id=…, active=0)` for 13 of them.
             # The component's own template with the contract's example kwargs is
             # what the tag renders anyway, and it needs no per-component entry.
-            "template_examples_html": _render_template_examples(component_name, examples),
+            "template_examples_html": rendered_examples,
+            "template_path": f"djust_theming/components/{component_name}.html",
+            "module_path": "",
+            # Which stylesheets give this markup its look, and where in them.
+            # Read off the rendered examples rather than a hand-kept table, so
+            # a component that gains a class gains its stylesheet entry too.
+            "styles": styles_for("".join(e["html"] for e in rendered_examples)),
+            "usage_snippet": _usage_snippet(component_name, "template", examples, "", ""),
         }
     else:
         # Python component: render examples via dynamic import
         raw_examples = PYTHON_COMPONENT_EXAMPLES.get(component_name, [])
-        python_examples_html = []
+        # Annotated because the dict is heterogeneous (`html` is a string, the
+        # others are the example's kwargs), and without it `e["html"]` infers
+        # as a collection rather than a str at the `join` below.
+        python_examples_html: list[dict[str, Any]] = []
         for kwargs in raw_examples:
             html = render_python_component_example(component_name, kwargs)
             # Pre-render kwargs display string in Python to avoid Django template
@@ -389,6 +605,18 @@ def build_storybook_detail_context(component_name: str) -> dict:
             "examples": [],
             "python_examples_html": python_examples_html,
             "python_params": python_params,
+            # A python component renders itself, so there is no contract
+            # template — the module is the source a reader would open.
+            "template_path": "",
+            "module_path": _module_path(component_name),
+            "styles": styles_for("".join(e["html"] for e in python_examples_html)),
+            "usage_snippet": _usage_snippet(
+                component_name,
+                "python",
+                raw_examples,
+                _first_class_name(component_name),
+                _import_line(component_name),
+            ),
         }
 
 
