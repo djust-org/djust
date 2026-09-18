@@ -123,6 +123,28 @@ def test_json_script_spells_the_mapping_like_djangos_encoder(name):
     assert _rust(t, {"x": make()}) == _django(t, {"x": make()})
 
 
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{% if x == x %}same{% endif %}",
+        "{% with x as w %}{% if x == w %}eq{% else %}ne{% endif %}{% endwith %}",
+        "{% if x == y %}eq{% else %}ne{% endif %}",
+        "{% if x != x %}ne{% else %}eq{% endif %}",
+        "{% if x == plain %}eq{% else %}ne{% endif %}",
+        "{% for r in rows %}{% ifchanged r %}C{% else %}-{% endifchanged %}{% endfor %}",
+    ],
+)
+@pytest.mark.parametrize("name", sorted(VALUES))
+def test_equality_matches_django(name, template):
+    """Review 🔴1: a carried mapping is equal to itself, to an equal mapping
+    and to a plain dict with the same items (``dict.__eq__``), and
+    ``{% ifchanged %}`` sees the same object as unchanged."""
+    make = VALUES[name]
+    x = make()
+    ctx = {"x": x, "y": make(), "plain": dict(x), "rows": [x, x, make()]}
+    assert _rust(template, ctx) == _django(template, ctx)
+
+
 def test_querydict_last_value_and_arity_cells_hold():
     """#2556's cells survive the QueryDict crossing as itself."""
     qd = QueryDict("a=1&a=2&page=3")
@@ -156,12 +178,15 @@ def test_normalize_keeps_a_self_spelling_subclass_for_the_render_path():
 class Page(LiveView):
     template = (
         '<div dj-root dj-id="0">[{{ box }}][{{ box.a }}][{{ od }}][{{ od.b }}]'
-        "[{{ request.GET }}][{{ request.GET.q }}][{{ ts }}][{{ ts.active }}]</div>"
+        "[{{ request.GET }}][{{ request.GET.q }}][{{ ts }}][{{ ts.active }}]"
+        "[{{ nested.inner }}][{{ nested.inner.k }}][{{ nested.rows.0 }}]</div>"
     )
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self.box = DictLike(a=1)
         self.od = collections.OrderedDict(a=1, b=2)
+        # Review 🔴2: nested at every depth, not only at the top (#1646).
+        self.nested = {"inner": collections.OrderedDict(k="alpha"), "rows": [Strs(a=1)]}
         self.ts = TS(active="z")
 
 
@@ -178,10 +203,11 @@ def test_liveview_http_path_matches_django():
         "od": collections.OrderedDict(a=1, b=2),
         "request": request,
         "ts": TS(active="z"),
+        "nested": {"inner": collections.OrderedDict(k="alpha"), "rows": [Strs(a=1)]},
     }
     expected = _django(
         "[{{ box }}][{{ box.a }}][{{ od }}][{{ od.b }}][{{ request.GET }}][{{ request.GET.q }}]"
-        "[{{ ts }}][{{ ts.active }}]",
+        "[{{ ts }}][{{ ts.active }}][{{ nested.inner }}][{{ nested.inner.k }}][{{ nested.rows.0 }}]",
         ctx,
     )
     assert expected in body, body

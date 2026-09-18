@@ -3195,6 +3195,14 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm: last value
     // per key, through the ONE helper `FromPyObject for Value` uses (#2556,
     // #1646).
+    // #2899: a dict SUBCLASS with its own spelling crosses as the carrier on
+    // THIS converter too, through the one `FromPyObject` arm that builds it —
+    // otherwise `{% if qd == other %}` compared a last-value map while
+    // `{{ qd }}` spelled the object (#1646, two converters, one object).
+    if djust_core::dict_subclass_spells_itself(obj) {
+        return obj.extract::<Value>();
+    }
+
     if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
         let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
             indexmap::IndexMap::with_capacity(pairs.len());

@@ -823,7 +823,7 @@ class TestTheGateHasOneStatement:
         assert added != source
         assert self._call_sites(added, "_rust.crosses_as_encoded") == 2
 
-    def test_the_helper_has_exactly_the_two_arms_that_should_ask_it(self) -> None:
+    def test_the_helper_has_exactly_the_three_arms_that_should_ask_it(self) -> None:
         """And the other half: WHO asks. The callable arm (#2621), the dict
         arm (#2899 — a dict subclass with its own spelling stays raw for the
         renderer) and the final fallback (#2477/#2489) — a fourth asker is a

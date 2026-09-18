@@ -497,6 +497,10 @@ class ContextMixin:
                     result[k] = self._jit_serialize_model_list(v, template_content, child_name)
                 else:
                     result[k] = [normalize_django_value(item) for item in v]
+            elif isinstance(v, dict) and _crosses_as_encoded(v):
+                # #2899: a nested dict subclass with its own spelling stays
+                # raw at every depth, as the top-level one does (#1646).
+                result[k] = v
             elif isinstance(v, dict):
                 result[k] = self._deep_serialize_dict(v, template_content, child_name)
             else:

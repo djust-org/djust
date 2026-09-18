@@ -625,7 +625,10 @@ pub struct Encoded {
     ///    identity-bearing spelling, so the default repr
     ///    (`<mod.X object at 0x…>`) IS a faithful token and
     ///    [`Encoded::repr`] answers it with no new field. Equality only.
-    /// 4. `None` — every other object, including one that overrides `__eq__`
+    /// 4. [`EqClass::Mapping`] — a carried `dict` subclass (#2899): Python's
+    ///    own `==` over the live handles, or item equality against a plain
+    ///    map. Equality only.
+    /// 5. `None` — every other object, including one that overrides `__eq__`
     ///    (only Python can run it) and one with default `__eq__` but a CUSTOM
     ///    `__repr__` (a `dict_values`: two distinct empty ones share the
     ///    spelling `dict_values([])`, so the repr is not a token). Never
@@ -669,9 +672,11 @@ pub struct Encoded {
     /// GIL — the same shape `Context::raw_py_objects` already uses.
     ///
     /// **What can never acquire one.** `crosses_as_encoded` / the
-    /// `FromPyObject` impl claim a `dict`, a tuple, anything with
-    /// `__djust_serialize__` and any `Model` in arms ABOVE [`opaque_value`],
-    /// so no dict, model or manager reaches this field.
+    /// `FromPyObject` impl claim an exact `dict` (and a subclass that inherits
+    /// the dict spelling), a tuple, anything with `__djust_serialize__` and
+    /// any `Model` in arms ABOVE [`opaque_value`], so no plain dict, model or
+    /// manager reaches this field. A dict SUBCLASS that spells itself does,
+    /// since #2899 ([`dict_subclass_spells_itself`]).
     ///
     /// A `list` and a `QuerySet` DO reach it since #2717, and until then did
     /// not: the #2695 review exempted both from the conversion's decline at
@@ -755,6 +760,13 @@ pub enum EqClass {
     /// object.__repr__`: identity semantics, spelled by a repr that carries
     /// the address. Equality only — `object()` does not order either.
     Identity,
+    /// A `dict` subclass carried since #2899. Two carriers compare through
+    /// Python's own `==` on the live handles ([`Encoded::live_eq`]) — the
+    /// object's `__eq__`, order-sensitive for an `OrderedDict`; against a
+    /// plain map, by items ([`Encoded::live_mapping_value`]), as
+    /// `OrderedDict(a=1) == {"a": 1}` is. After a round trip that dropped the
+    /// handle, two carriers compare by `repr`. Equality only.
+    Mapping,
 }
 
 /// The attribute names carried on a [`Value::Encoded`] for each of the four
@@ -1413,6 +1425,8 @@ pub const EQ_CLASS_SET: u8 = 1;
 pub const EQ_CLASS_NUMBER: u8 = 2;
 /// The wire tag for [`EqClass::Identity`].
 pub const EQ_CLASS_IDENTITY: u8 = 3;
+/// The wire tag for [`EqClass::Mapping`] (#2899).
+pub const EQ_CLASS_MAPPING: u8 = 4;
 
 /// The key the [`EqClass`] triple sits under inside slot 10's map (#2480).
 ///
@@ -1434,6 +1448,7 @@ fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
         Some(EqClass::Set) => (EQ_CLASS_SET, 0.0, 0.0),
         Some(EqClass::Number { real, imag }) => (EQ_CLASS_NUMBER, real, imag),
         Some(EqClass::Identity) => (EQ_CLASS_IDENTITY, 0.0, 0.0),
+        Some(EqClass::Mapping) => (EQ_CLASS_MAPPING, 0.0, 0.0),
     };
     map.insert(
         ObjectKey::Str(EQ_CLASS_KEY.to_string()),
@@ -1479,6 +1494,7 @@ fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
             imag: as_f64(imag)?,
         }),
         Ok(EQ_CLASS_IDENTITY) => Some(EqClass::Identity),
+        Ok(EQ_CLASS_MAPPING) => Some(EqClass::Mapping),
         _ => None,
     }
 }
@@ -4649,6 +4665,23 @@ impl Encoded {
     /// A `MultiValueDict` reads through [`multi_value_dict_pairs`] (last value
     /// per key, #2556), which is also what `DjangoJSONEncoder` sees: it
     /// iterates the object as a dict, whose `items()` is last-value.
+    /// Python's own `self == other` over two live handles (#2899) — the
+    /// object's `__eq__`, whatever it is. `None` when either handle is gone.
+    /// Python's own `self == other` where `other` is a converted [`Value`]
+    /// (a plain map, list, scalar) rebuilt as a Python object (#2899).
+    pub fn live_eq_value(&self, other: &Value) -> Option<bool> {
+        let a = self.live.as_ref()?;
+        Python::attach(|py| {
+            let b = other.into_pyobject(py).ok()?;
+            a.bind(py).eq(b).ok()
+        })
+    }
+
+    pub fn live_eq(&self, other: &Encoded) -> Option<bool> {
+        let (a, b) = (self.live.as_ref()?, other.live.as_ref()?);
+        Python::attach(|py| a.bind(py).eq(b.bind(py)).ok())
+    }
+
     pub fn live_mapping_value(&self) -> Option<Value> {
         let handle = self.live.as_ref()?;
         Python::attach(|py| {
@@ -5189,6 +5222,12 @@ fn equality_class(ob: &Bound<'_, PyAny>) -> Option<EqClass> {
     // ones share the spelling `dict_values([])` — so `repr` would call them
     // equal where Python says they are not. Measured, not reasoned about.
     let ty = ob.get_type();
+    // #2899: a carried dict subclass compares as Python compares it — through
+    // its own `__eq__` on the live handle (`OrderedDict` is order-sensitive,
+    // `Counter` is not; both are "a mapping" here).
+    if ob.cast::<PyDict>().is_ok() {
+        return Some(EqClass::Mapping);
+    }
     let eq_is_default = ty
         .getattr("__eq__")
         .is_ok_and(|f| f.is(protocols.object_eq.bind(py)));
