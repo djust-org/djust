@@ -35,7 +35,8 @@ case "$src" in
   *.whl)
     tmp_dir="$(mktemp -d)"
     unzip -o -q "$src" 'djust/_rust*.so' -d "$tmp_dir"
-    src="$(ls "$tmp_dir"/djust/_rust*.so | head -1)"
+    src="$(find "$tmp_dir/djust" -name '_rust*.so' -print -quit)"
+    [ -n "$src" ] || { echo "no djust/_rust*.so inside $1" >&2; exit 1; }
     ;;
 esac
 
