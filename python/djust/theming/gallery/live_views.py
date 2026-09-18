@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 from django.http import Http404
 
 from djust import LiveView
+from djust.components.base import BoundComponent
 from djust.decorators import event_handler
 
 from djust.components.descriptors import (
@@ -417,8 +418,17 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         """
         state: Dict[str, Any] = {}
         descriptor = getattr(self, self.component_name, None)
-        # The descriptor resolves to its state dict once the framework has
-        # bound it; before that (or for a non-interactive name) there is none.
+        # ADR-031: a class-level descriptor resolves to a `BoundComponent`
+        # whose per-view state is `.state`. It is not a dict, so reading the
+        # attribute straight into the merge — which is what this did before —
+        # silently contributed nothing: `tabs`, `dropdown`, `modal` and the
+        # other five interactive previews lost their state and stopped
+        # responding. Same unwrap the components gallery applies
+        # (`components/gallery/live_views.py:158`).
+        if isinstance(descriptor, BoundComponent):
+            descriptor = descriptor.state
+        # ...or a plain dict, once the framework has bound it; before that
+        # (or for a non-interactive name) there is none.
         if isinstance(descriptor, dict):
             state.update(descriptor)
         state.update(self._demo_state())

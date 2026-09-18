@@ -498,3 +498,53 @@ class TestSegmentedProgressIsClickable:
         html = SegmentedProgress(steps=["A", "B"], current=1, event="")._render_custom()
         assert "<button" not in html
         assert "dj-click" not in html
+
+
+class TestDescriptorStateUnwrapsBoundComponent:
+    """ADR-031 changed what a class-level descriptor attribute resolves to.
+
+    It used to be the `State` — a `dict` — and `_descriptor_state` merged it in
+    with `isinstance(descriptor, dict)`. It is now a `BoundComponent`, whose
+    per-view state is `.state`. A `BoundComponent` is not a dict, so the
+    isinstance test failed and the merge silently contributed nothing: the
+    eight interactive previews lost their state and stopped responding.
+
+    The rebase onto ADR-031 is what surfaced it — the components gallery got the
+    same unwrap (`components/gallery/live_views.py:158`) and this one did not,
+    the parallel-path shape: one pattern, two galleries, one of them fixed.
+    """
+
+    def _view(self, component_name: str):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        view = StorybookDetailView()
+        view.mount(RequestFactory().get("/"), component_name=component_name)
+        return view
+
+    def test_the_attribute_really_is_a_bound_component(self):
+        """If this stops being true, the unwrap below is dead code."""
+        from djust.components.base import BoundComponent
+
+        bound = getattr(self._view("accordion"), "accordion")
+        assert isinstance(bound, BoundComponent), (
+            "ADR-031's BoundComponent is gone — the unwrap in `_descriptor_state` "
+            "can be simplified, and this test with it"
+        )
+
+    def test_descriptor_state_is_the_bound_component_state(self):
+        bound = getattr(self._view("accordion"), "accordion")
+        assert self._view("accordion")._descriptor_state() == dict(bound.state)
+        # Not merely non-empty: the descriptor's own fields must be in there.
+        assert "active" in self._view("accordion")._descriptor_state()
+
+    def test_a_descriptor_event_moves_the_state_and_the_render(self):
+        """The unwrap is only useful if the change reaches the markup."""
+        view = self._view("accordion")
+        before = view._render_examples()[0]["html"]
+        view.accordion_toggle(value="2")
+        after = view._render_examples()[0]["html"]
+        assert view._descriptor_state()["active"] == "2"
+        assert before != after
+        assert "accordion-item--open" in after
