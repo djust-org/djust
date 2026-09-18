@@ -17,6 +17,7 @@ Usage:
     {% theme_preset_selector layout="dropdown" %}
 """
 
+import functools
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -602,8 +603,11 @@ def theme_asset_version() -> str:
 # Storybook preview (ADR-032)
 # ---------------------------------------------------------------------------
 
-_STORYBOOK_PREVIEW_TEMPLATE = template.Template(
-    """{% if component_type == "template" %}{% if examples_html %}
+# Compiled lazily through a private ``Engine``: ``django.template.Template``
+# needs a configured ``DjangoTemplates`` backend, and a ``djust new`` project
+# configures only ``DjustTemplateBackend`` — a module-level ``Template(...)``
+# here broke the import of every theme tag in such a project.
+_STORYBOOK_PREVIEW_SOURCE = """{% if component_type == "template" %}{% if examples_html %}
 <div class="sb-section">
   <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
   <div class="sb-preview">
@@ -644,7 +648,13 @@ _STORYBOOK_PREVIEW_TEMPLATE = template.Template(
     </div>
   </div>
   {% endif %}{% endif %}"""
-)
+
+
+@functools.lru_cache(maxsize=1)
+def _storybook_preview_template() -> Any:
+    from django.template import Engine
+
+    return Engine(autoescape=True).from_string(_STORYBOOK_PREVIEW_SOURCE)
 
 
 @register.simple_tag
@@ -665,7 +675,7 @@ def storybook_preview(
         component_name, component_type, list(examples or []), dict(values or {})
     )
     return mark_safe(
-        _STORYBOOK_PREVIEW_TEMPLATE.render(
+        _storybook_preview_template().render(
             Context(
                 {
                     "name": component_name,

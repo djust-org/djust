@@ -563,3 +563,21 @@ class TestPreviewOwnsTheDescriptorState:
         assert "{{ preview }}" in source
         assert "preview." not in source and "preview|" not in source
         assert "examples_html" not in source
+
+
+class TestPreviewTagNeedsNoDjangoTemplatesBackend:
+    """A `djust new` project configures only `DjustTemplateBackend`; the
+    preview tag's markup must compile without a `DjangoTemplates` engine
+    (a module-level `django.template.Template(...)` broke the import of every
+    theme tag there — found by serving the gallery from such a project)."""
+
+    def test_storybook_preview_renders_with_only_the_djust_backend(self):
+        from django.test import override_settings
+
+        from djust.theming.templatetags.theme_tags import storybook_preview
+
+        with override_settings(
+            TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]
+        ):
+            html = storybook_preview("badge", "python", [{"text": "New"}], {})
+        assert "sb-preview" in html and "New" in html
