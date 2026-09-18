@@ -1,306 +1,292 @@
-# ADR-031: A class-level LiveComponent's State renders, and the caching it already declares becomes load-bearing
+# ADR-031: A class-level LiveComponent is bound per view — it renders with `{{ component }}` and receives its own events
 
 **Status**: Proposed
 **Date**: 2026-09-17
-**Citations**: `file:line` pinned to `fix/theming-gallery-render-and-styling` at `f1f1ef23`; every one asserted against its expected token at write time. Measurements in §Measured were taken on this tree, not reasoned about.
+**Citations**: `file:line` pinned to `main` at `476cedf0`; every one asserted against its expected token at write time. Measurements in §Measured were run on that tree (see §7 for what the first draft got wrong, and how).
 **Deciders**: Project maintainers
 **Related**:
 - [ADR-020](020-island-attribute-component-interop.md) — the attribute↔component boundary
-- Issues: #2501 (closed — the escaping fix §The four things the docs say that this tree does not measures as **already landed**), #2894 (the `theme_card` block-tag gap, adjacent but separate)
-- `docs/website/guides/components.md:227-233`, `:252`, `:643` — three claims this ADR measures and finds stale
-- `python/djust/components/mixins/base.py:39-42` — the render-caching contract, declared and unread
+- Issues: #2501 (closed — the escaping fix is landed, §Docs item 1), #2894 (the `theme_card` block-tag gap, adjacent but separate)
+- `docs/website/guides/components.md:227`, `:252`, `:236-266`, `:643` — four claims this ADR measures and finds stale
+- `python/djust/components/mixins/base.py:39-42` — the render-cache contract, declared and unread
 
 ---
 
 ## Summary (plain language first)
 
-A djust developer can write a component two ways. Assigned to `self` in
-`mount()`, it holds per-request state and renders with `{{ component }}`. Declared
-as a **class attribute**, it becomes a *descriptor*: the framework gives it state
-that is correctly per-view-instance — and then hands that state back to you
-instead of the component. So `self.nav.active` is `"overview"` as intended, and
-`{{ nav }}` prints `{'active': 'overview', 'component_id': 'nav'}` instead of a
-tab strip. **The class-level form cannot be rendered at all.**
+A djust developer can declare a component two ways. Assigned to `self` in
+`mount()`, it renders with `{{ counter }}` and receives events, because the
+framework registers it in `view._components` and routes `component_id` events to
+it. Declared as a **class attribute**, it becomes a *descriptor*: the framework
+gives it state that is correctly per-view — and then hands that *state* back
+instead of the component. So `self.nav.active` works, `{{ nav }}` prints a dict,
+the component is invisible to snapshots and session save, and it can receive
+exactly one event, bolted onto the view by `Meta.event`.
 
-That is the whole gap, and it is not a design that was never considered. The
-state object is a `TypedState`, and `TypedState`'s own docstring describes a
-render cache — `_dirty`, `_cached_html`, `_render_hash` — with the sentence *"The
-render caching system checks this flag to skip re-rendering unchanged
-components"* (`components/mixins/base.py:39-42`). The three fields are written on
-every mutation and **read nowhere in the package** (§Measured, M5). The rendering
-half of the descriptor pattern was designed, half-built, and left.
+The two halves of the gap — rendering and events — are one missing thing: a
+**per-view object that owns both**. Instance components have it (the instance
+itself). Class-level components have only the shared descriptor and a bare
+`State` dict.
 
-**Decision:** a `LiveComponent` that declares a `template` (or `template_name`)
-becomes renderable from its descriptor. `__get__` binds the state it returns to
-its component and its view, and `str(state)` renders when — and only when — that
-component declares a template. All eight first-party descriptors declare none, so
-nothing in the tree changes behaviour; the change is opt-in by construction.
+**Decision:** `__get__` returns a per-view **bound component**: the shared
+descriptor plus this view's `State` plus its id. It registers itself in
+`view._components` under the attribute name, so it is snapshotted, saved and
+event-routed exactly like an instance component. Its handlers are ordinary
+`@event_handler` methods on the component class, called with the bound
+component as `self`, so `self.state.active` is this view's state. `str()` of it
+renders the component's template when one is declared. Attribute access is
+forwarded to the state, so existing view code keeps working.
 
 What this means for a developer:
 
-- **One spelling, both forms.** `{{ component }}` renders whichever way the
-  component was declared. `|safe` is not needed — and has not been since #2501
-  landed (§The four things the docs say that this tree does not, item 1).
-- **No behaviour change for existing code.** A descriptor without a template
-  keeps today's `str()` exactly: the dict repr. The eight `djust.components.descriptors`
-  classes are untouched.
-- **Cost when it is used.** The render cache that already exists becomes
-  load-bearing, so a re-render whose state did not change is skipped.
+```python
+class Tabs(LiveComponent):
+    template = '<div class="tabs">{% for t in tabs %}<button dj-click="select" dj-value-tab="{{ t }}">{{ t }}</button>{% endfor %}</div>'
+
+    class State(TypedState):
+        active: str = "overview"
+        tabs: list = ["overview", "settings"]
+
+    @event_handler()
+    def select(self, tab: str = "", **kwargs):
+        self.state.active = tab          # this view's state
+
+
+class Dashboard(LiveView):
+    nav = Tabs()                          # nothing to register in mount()
+
+    @event_handler()
+    def save(self, **kwargs):
+        if self.nav.active == "settings": ...   # attribute access still works
+```
+
+```django
+{{ nav }}            {# the Tabs template with this view's state #}
+{{ nav.active }}     {# overview #}
+```
+
+- **No behaviour change for shipped code.** The eight `djust.components.descriptors`
+  classes declare no template (M6) and use `Meta.event`, which becomes an alias
+  for a handler. Their state, serialization and the theming tags that draw them
+  are untouched.
+- **One visible change.** `isinstance(view.nav, Tabs.State)` becomes `False`;
+  `view.nav.state` is the `State`. Reads and writes through `view.nav.active`
+  behave as before.
+- **Two PRs.** Events and registration first (nothing renders differently);
+  rendering second (opt-in by declaring a template).
 
 ## Context
 
 ### The two forms, and what each gives
 
-```python
-class A(LiveView):                      # instance form — renders, state per instance
-    def mount(self, request, **kwargs):
-        self.counter = CounterWidget(initial=10)
-```
+`__set_name__` (`components/base.py:683`) registers a class-level component in
+`_component_descriptors` and, if `Meta.event` is set, attaches **one** handler
+to the owner view (`:750`) that looks the state up by attribute name and calls
+the descriptor's single `_handle_event` (`:772`; `descriptors/tabs.py:26-29`).
+`__get__` (`:709`) returns the component itself when there is no `State` class
+(`:721`) and otherwise a per-view `State` stored at `obj.__dict__[_component_<name>]`,
+rehydrated from a plain dict after deserialization.
 
-```python
-class B(LiveView):                      # class form — per-view state, renders nothing
-    counter = CounterWidget(initial=10)
-```
+Instance components take a different path: `_assign_component_ids`
+(`mixins/components.py:131`) walks `self.__dict__` for `Component`/`LiveComponent`
+instances (`:138`), they live in `view._components` (a dict, `live_view.py:556`),
+and an event carrying `component_id` — which the client reads off the
+`data-component-id` wrapper (`static/djust/src/09-event-binding.js:536`) — is
+resolved there (`runtime.py:3705-3709`) and dispatched to the component's own
+handler methods.
 
-`__set_name__` (`components/base.py:683`) registers the class-level object in
-`_component_descriptors` and auto-wires its `Meta.event` handler onto the owner.
-`__get__` (`:709`) then decides what attribute access yields:
-
-- no nested `State` class → `return self` (`:721`) — the component, renderable
-- nested `State` class → a per-view `State` instance, **not** renderable
-
-The second branch is the one that matters. It is deliberate: it is how a
-descriptor gets state that two concurrent requests do not share. The state is
-stored at `obj.__dict__[_component_<name>]` and rehydrated from a plain dict
-after djust's serialization (`:724-735`). None of that is in question. What is
-missing is only that the thing returned cannot render.
+So the class-level form has per-view state and none of the plumbing; the
+instance form has the plumbing and no per-view state without `mount()`.
 
 ### What the tree already declares about rendering it
 
-`TypedState` (`components/mixins/base.py:22`) is a `dict` subclass with typed
-properties. Its docstring documents dirty tracking in full
-(`mixins/base.py:39-42`), and `__init__`/`__setitem__` maintain all three fields
-(`:64-76`, `:89`). A package-wide grep for readers of `_cached_html`,
-`_render_hash` and `_dirty` returns **zero hits outside the file that writes
-them** (§Measured, M5).
+`TypedState` (`components/mixins/base.py:22`) documents a render cache
+(`:39-42`): `_dirty`, `_cached_html`, `_render_hash`. Only one of the three is
+read anywhere: `_dirty` is how the bridge detects an in-place mutation of a
+`TypedState` between events (`mixins/rust_bridge.py:837`, `:861`) and it is
+cleared after every sync (`:907-908`). `_cached_html` and `_render_hash` are
+written and never read (M5). The dirty flag is therefore load-bearing for
+**change detection**, not for caching, and any render cache must leave it alone.
 
-This is the failure mode the repository's own canon names — a pin that is
-decorative (#1859), a mechanism declared and not wired (#1860). The fields are
-load-bearing for nothing today. This ADR either wires them or the docstring is a
-lie; leaving both is not an option the tree should keep.
+### Why `str()` on the State cannot be the render hook
+
+The first draft proposed giving `TypedState` a `__str__`. Measured (M9): the Rust
+engine converts every `dict` — subclasses included — into an engine map
+(`mixins/rust_bridge.py:174`) and displays the map itself; `__str__` on the
+subclass is never called, on `render_template` or on the LiveView HTTP path.
+A `Component` renders (M1-M3) only because it is *not* a dict: it crosses as an
+opaque object whose `str()` the engine takes as safe. Rendering therefore needs
+a non-dict object on the context, which is the same object events need.
 
 ## Measured
 
-Every row below was run on this tree. M1-M4 establish the problem, M5-M8 are
-the supporting facts each decision rests on.
-
 | # | Measurement | Result |
 |---|---|---|
-| M1 | `{{ c }}` for a `Component`, plain Django `Engine()` | `<div class="dj-progress">…`, **escaped? No** |
+| M1 | `{{ c }}` for a `Component`, plain Django `Engine()` | `<div class="dj-progress">…`, unescaped |
 | M2 | `{{ c }}` through `djust._rust.render_template` | unescaped |
-| M3 | `{{ c }}` through the **real LiveView HTTP path** (a `LiveView` whose `get_context_data` returns the component, fetched with `django.test.Client`) | `<div class="dj-progress">…`, **escaped? No** |
-| M4 | `{{ nav }}` where `nav = Tabs(active="overview")` is a class attribute | `{'active': 'overview', 'component_id': 'nav'}` — a dict repr |
-| M5 | readers of `_cached_html` / `_render_hash` / `_dirty` outside `mixins/base.py` | **0** |
+| M3 | `{{ c }}` through the real LiveView HTTP path | unescaped |
+| M4 | `{{ nav }}` where `nav = Tabs(active="overview")` is a class attribute | `{'active': 'overview', 'component_id': 'nav'}` — the engine's map display |
+| M5 | readers of `_cached_html` / `_render_hash` outside `mixins/base.py` | **0**; readers of `_dirty`: `rust_bridge.py:837`, `:861`, `:907` |
 | M6 | the eight `components/descriptors/*.py` declare a `template`? | **0 of 8** |
-| M7 | `str()` of a `SafeString`-returning `__str__` | stays a `SafeString` — this is *why* M1-M3 do not escape (Django does `str(value)` then `conditional_escape`, and `str()` does not downcast a `str` subclass) |
-| M8 | `Counter.descriptor()` on a `LiveComponent` | `AttributeError: type object 'Counter' has no attribute 'descriptor'` — the two mentions in the tree (`components/base.py:572`, `docs/website/guides/components.md:252`) are the only two |
+| M7 | `str()` of a `SafeString`-returning `__str__` | stays a `SafeString` — why M1-M3 do not escape |
+| M8 | `Counter.descriptor()` on a `LiveComponent` | `AttributeError` — `components/base.py:572` and `components.md:252` are the only mentions |
+| M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, both engine paths | the dict repr; `__str__` never called |
+| M10 | `{{ nav }}\|{{ nav.active }}` with a non-dict object forwarding attribute access and rendering on `str()`, both engine paths | `<nav>overview</nav>\|overview` |
+| M11 | `view._components` type; the documented workaround `self._components.append(...)` (`components.md:258`) | `dict` (`live_view.py:556`) — the workaround raises `AttributeError` |
 
 ## The four things the docs say that this tree does not
 
-Found while measuring, each independently actionable:
+1. **`components.md:643`** — "markup is currently escaped on all four render paths … add `|safe` until the second half of #2501 lands." False: M1-M3 render unescaped and #2501 is closed.
+2. **`components.md:227`** — the same `|safe` instruction, scoped to `LiveComponent`.
+3. **`components.md:252` and `components/base.py:572`** — `GreetingWidget.descriptor()` is documented as the class-level pattern; the method does not exist (M8).
+4. **`components.md:236-266`** — the "auto-promotion gap" section's workaround appends to `_components`, which is a dict (M11). The gap is real; the workaround never worked.
 
-1. **`components.md:643`** — *"A component's markup is currently escaped on all four render paths … Add it — `{{ component|safe }}` — until the second half of #2501 lands."* **False today.** M1, M2 and M3 all render unescaped, including the LiveView path the note calls out. #2501 is closed (`gh issue view 2501`). The note is stale and instructs developers to add a filter that is not needed.
-2. **`components.md:227-233`** — the same claim, scoped to `LiveComponent`: *"`|safe` is needed until #2501's escaping fix lands."* Same finding.
-3. **`components.md:252` and `components/base.py:572`** — both document `GreetingWidget.descriptor()` as *the* class-level pattern. **The method does not exist** (§Measured, M8). The two occurrences in the tree are the only two.
-4. **`components.md:236-266`** — the "Descriptor-pattern auto-promotion gap" section, whose stated workaround is item 3's non-existent method. The gap it describes is real; the workaround is not.
-
-Items 1-3 are correctness defects in shipped documentation and are cheap to fix
-independently of this ADR (§Sequencing S0).
+All four are cheap to fix independently (§Sequencing S0).
 
 ## Decision Drivers
 
-1. **Two ways to declare a component must not differ in whether they work.** The
-   framework cannot recommend the descriptor pattern for its per-view state and
-   then make it the one form that cannot be drawn.
-2. **Additive, or not at all.** Eight shipped descriptors and every downstream
-   theme pack use the current `__get__` contract. An opt-in that leaves them
-   byte-identical is the only version with no migration.
-3. **Name the mechanism honestly.** `TypedState` documents a render cache. Either
-   it is wired here or the docstring is corrected; a declared-and-unread field is
-   the decorative-pin class the repo already has a rule about (#1859).
-4. **One spelling for the developer.** `{{ component }}` — the documented,
-   recommended spelling (`components.md:231`) — must work for both forms. Not
-   `{{ component.render }}`, which renders empty (#2501's fourth row) and which
-   the docs already tell people not to use.
-5. **Per-view state is not negotiable.** Whatever renders must render *this
-   view's* state. A design that reaches renderability by sharing one component
-   instance across requests trades a display bug for a data-leak bug.
+1. **Two ways to declare a component must not differ in what works.** Per-view state is the descriptor's whole point; it must not be the form that cannot render or receive events.
+2. **One object, one registry.** Everything that walks `_components` — event routing, time-travel, session save — should see a class-level component the same way it sees an instance one.
+3. **Additive for the eight shipped descriptors.** `Meta.event` keeps working; no template means no render change.
+4. **Explicit state.** Inside a handler, `self.state.active` says what is per-view. Forwarding on the *view* side (`view.nav.active`) is kept for compatibility; forwarding on the *handler* side is not offered.
+5. **Leave `_dirty` to the bridge.** A render cache must not touch the flag change detection reads.
+6. **The documented contract is part of the change.**
 
 ## Options Considered
 
-**A. Return a per-view proxy from `__get__` that forwards attribute access to the state and renders.**
-Rejected as the primary shape: `isinstance(self.nav, Tabs.State)` becomes False,
-and the tree's own walkers test types — `_assign_component_ids` is
-`isinstance(value, (Component, LiveComponent))` (`mixins/components.py:138`), and
-third-party code testing for the state class would break silently. It also adds
-an object per access on a hot path.
+**A. A render proxy at the engine boundary only.** `__get__` keeps returning the
+`State`; a non-dict wrapper is substituted when context is handed to the engine.
+Fixes `{{ component }}` (M10) and nothing else: events stay one-per-component
+via `Meta.event`, snapshots stay blind. Rejected as the end state; it is a
+subset of B.
 
-**B. Give `TypedState` a `render()` and make `__str__` consult it, opt-in on the component declaring a template.** *Chosen.* The object `__get__` already returns is the one that gains rendering, so every existing access pattern (`state.active`, `state["active"]`, rehydration, serialization) is untouched, and the opt-in leaves the eight shipped descriptors byte-identical.
+**B. A per-view bound component from `__get__`.** *Chosen.* One object owns
+state, id, rendering and dispatch, and registers in `_components`. The cost is
+`isinstance(view.nav, Tabs.State)`; attribute forwarding keeps every other read
+and write the same.
 
-**C. Make `__get__` return the component, with state resolved from the owner.**
-The descriptor is a **single shared object** — one per class, not one per view — so
-it cannot hold a back-reference to "the" view without cross-request bleed. Making
-it per-view means copying the component per access. Rejected on both counts.
+**C. Events first through a dispatch entry, rendering via A.** Two objects for
+one component and two places to keep in sync; converges on B. Kept only as
+B's *staging order* (§Sequencing).
 
-**D. Leave the framework; document the instance form as the supported one.**
-Viable, and the honest status quo. Rejected because the per-view state the
-descriptor provides is the property the instance form *lacks* — the two forms
-give different things, so "use the other one" does not answer the request. (It
-also leaves M5's three fields unread.)
+**D. Return the descriptor itself, with state resolved from the owner.** The
+descriptor is one shared object per class; giving it a view back-reference is a
+cross-request leak. Rejected.
 
-**E. Make every descriptor renderable, including the eight first-party ones.**
-Rejected: those eight are pure state, and their markup is owned by the theming
-tags (`{% theme_tabs %}` and friends) which render from the same state.
-Giving them templates would create two sources for one markup.
+**E. `TypedState.__str__` renders.** The first draft. Unimplementable: M9.
 
 ## Decision
 
-**D1 — Opt-in is "the component declares a template."** A `LiveComponent` whose
-class declares `template` or `template_name` is renderable from its descriptor.
-One that declares neither keeps today's behaviour exactly. All eight shipped
-descriptors declare neither (M6), so this decision changes nothing already
-shipped.
+**D1 — `__get__` returns a `BoundComponent`.** For a descriptor with a `State`
+class, `__get__` creates, on first access, a per-view object holding the shared
+descriptor, this view's `State`, and the attribute name as `component_id`, stores
+it at the existing `obj.__dict__[_component_<name>]` slot, and returns it
+thereafter. After a round trip (the slot holds a plain dict) it rebuilds the
+bound component around the rehydrated `State`, as `__get__` rehydrates today.
+Descriptors without a `State` class keep returning the component itself (`:721`).
 
-**D2 — `__get__` binds the state it returns.** When it creates or rehydrates a
-`State`, it records the owning component and the view on the state with
-`object.__setattr__` under `_`-prefixed names, which keeps them out of the dict
-and out of every path that serializes it — `_extract_component_state` already
-filters `not key.startswith("_")` (`mixins/components.py:98`), and
-`TypedState.__setitem__` already exempts `_` keys from dirty tracking
-(`mixins/base.py:65`). Nothing is stored on the component, so the shared
-descriptor object holds no per-request reference.
+**D2 — The bound component registers in `view._components`** under its
+`component_id`, on creation and on rebuild, so `runtime.py:3709` resolves it,
+and time-travel and session save see it.
 
-**D3 — `TypedState.__str__` renders only when bound to a renderable component.**
-Unbound, or bound to a component with no template, it returns `super().__str__()`
-— the dict repr, unchanged. This is the single point where the two behaviours
-diverge, and it is a two-line guard.
+**D3 — Attribute access forwards to the state.** `bound.active` reads
+`state["active"]`; `bound.active = x` writes it through `TypedState.__setitem__`
+(dirty tracking intact). `bound.state` is the `State` itself. Unknown names raise
+`AttributeError`.
 
-**D4 — Rendering does not go through `LiveComponent.render()`.** That method
-raises for an unmounted component (`components/base.py:840`), and a descriptor-path
-component is never mounted. A state-bound render builds its context from the
-state (`dict(state)` plus `component_id`) and renders `template` /
-`template_name` through the same `_render_template_with_fallback` entry the
-mounted path uses. **`get_context_data()` is not called on this path** — it reads
-instance attributes the descriptor does not have, and a component that declares
-both a `State` and a `get_context_data()` reading `self.x` would silently render
-defaults. That split is a documented contract, not an implementation detail:
-*State is the context on the descriptor path.*
+**D4 — Handlers are `@event_handler` methods on the component class**, invoked
+with the bound component as `self`. `self.state` is the per-view state. An event
+naming a method that is not an event handler raises, as it does on a view.
+`Meta.event` is preserved: it registers the same view-level alias as today
+(`:750`), now implemented as a call into D4's dispatch, so the eight shipped
+descriptors keep their `_handle_event` unchanged.
 
-**D5 — The declared render cache becomes load-bearing.** `_cached_html` and
-`_render_hash` are consulted and written by D3's render, and `_dirty` is
-cleared on a successful render. A state whose hash matches the cached one
-returns the cached HTML without re-rendering. This is what the docstring at
-`mixins/base.py:39-42` already promises, and M5 is the evidence that nobody has
-been keeping that promise.
+**D5 — `str(bound)` renders when the component declares a template.**
+`template` or `template_name` → render with `dict(state) + component_id`
+through `_render_template_with_fallback` (`components/base.py:42`), wrapped in
+`<div data-component-id="…">` exactly as `render()` wraps (`:842-857`), so a
+`dj-*` event inside it carries `component_id`. No template → `str(state)`, the
+dict repr, unchanged. `get_context_data()` is not called on this path: **State
+is the context** for a class-level component, a documented contract.
 
-**D6 — Registration in `_components` is in scope, but sequenced last.** The
-documented auto-promotion gap (`components.md:236-266`) means descriptor
-components are invisible to time-travel snapshots and session save/restore. A
-renderable class-level component with per-view state that no snapshot can capture
-is a support burden. `_assign_component_ids` (`mixins/components.py:131`) walks
-`self.__dict__`, which is exactly where `__get__` stores the state — the walk
-needs to consult `_component_descriptors` as well. This ships in S2, separately,
-so a regression there cannot implicate the render path.
+**D6 — Render cache on `_render_hash` and `_cached_html` only.** A render whose
+state hash matches returns the cached HTML. `_dirty` is not written by rendering
+(driver 5).
+
+**D7 — `_extract_component_state` and session save** treat a bound component
+as its `State` (a plain dict on the wire). The bound object is never serialized;
+nothing on it is a dict key.
+
+**D8 — Docs.** `components.md` items 1-4 corrected (S0); the class-level form
+documented with the example in §Summary and the State-is-the-context contract
+(S3).
 
 ## Security
 
-The rendered markup is a component template rendered through the standard entry
-point, so escaping is inherited and unchanged: the Rust engine escapes the
-state's values as it does for any other context value, and the result is marked
-safe exactly as `render()` marks its output (`components/base.py:842-872`). The
-state holds UI state only — which tab is active — by the stated contract
-(`mixins/base.py:12-14`).
-
-Three things to verify rather than assume in review:
-
-1. **`_dj_view` is a back-reference from a serialized object to a view.** D2 relies
-   on the `_`-prefix filter at `mixins/components.py:98` to keep it out of session
-   payloads, and on `TypedState.__setitem__`'s `_`-exempt dirty tracking
-   (`mixins/base.py:65`). Both are asserted by test, not by reading. A path that
-   serializes the state dict wholesale — `normalize_django_value` is one candidate
-   — must be checked, because `_`-prefixed *keys* are still keys.
-2. **`__str__` is consulted in more places than `{{ }}`.** It is what every log
-   line and error message that interpolates the state gets. D3's guard limits the
-   change to renderable components, but the guard's default branch is the
-   security-relevant one: it must be the dict repr, never an empty string.
-3. **`mark_safe` on this path.** The rendered template is marked safe because the
-   engine escaped it. D4's context is built from `dict(state)`, whose values are
-   developer-set and may be `mark_safe`-wrapped by the developer. That is the same
-   surface `render()` already has; it must not widen.
+- Rendering inserts the component template's output as safe, as `render()`
+  does. Values inside the template are escaped by the engine like any context
+  value; the component author's `mark_safe` surface is unchanged.
+- The bound component holds a view reference. It lives only in the view's
+  `__dict__` and `_components`, never on the shared descriptor, so no
+  cross-request reference exists. Session save writes the `State` only (D7);
+  a test asserts the saved payload has no bound-object leak.
+- Event dispatch uses the same `@event_handler` gate as views: a method without
+  the decorator is not callable from the client.
 
 ## Consequences
 
-**Positive.** The class-level form renders, with per-view state, so the pattern
-the framework recommends for state is no longer the one that cannot be drawn.
-`{{ component }}` is one spelling for both forms. Three documented claims that
-measure false are corrected. Three fields stop being decorative.
+**Positive.** Class-level components render, receive any number of events, are
+snapshotted and saved, with no `mount()` boilerplate. One spelling,
+`{{ component }}`, for both forms. Four stale doc claims corrected. Two unread
+fields become load-bearing; the one that was already load-bearing is left alone.
 
-**Negative, accepted.** `str(state)` for a renderable descriptor changes meaning
-from "the state" to "the markup". That is the point, and it is opt-in, but any
-project that declared a `template` on a `State`-bearing component *before* this
-change has no such component today — D1's opt-in cannot be reached accidentally,
-because until this ADR nothing read the template on that path.
+**Negative, accepted.** `isinstance(view.nav, Tabs.State)` is `False` after PR 1.
+A search of the tree for that check is part of PR 1; downstream code doing it
+gets a documented `bound.state`.
 
-**Neutral.** The state dict gains two `_`-prefixed entries. `len(state)` is
-unchanged; `state["_dj_view"]` is reachable but is not a key any serializer
-should see (Security §1).
+**Neutral.** Instance components are untouched.
 
 ## Sequencing
 
-- **S0 — documentation corrections, independent, may land first.** Fix items 1-3
-  of §The four things the docs say that this tree does not: the stale `|safe`
-  requirement in two places, and the `descriptor()` reference that has no
-  implementation. No code change; `components.md` only.
-- **S1 — D1-D5.** `TypedState.__str__` and its guard, `__get__`'s binding, and the
-  state-bound render with the cache wired. Tests first.
-- **S2 — D6**, the `_components` registration, separately, so its own regression
-  cannot implicate S1.
-- **S3 — `components.md`**: document the class-level form as renderable and the
-  State-is-the-context contract from D4.
+- **S0 — docs corrections** (items 1-4), independent, first.
+- **S1 (PR 1) — events and registration**: `BoundComponent` with D1-D4 and D7,
+  no render branch. Tests: per-view isolation across two views; a `component_id`
+  event reaching a handler with `self.state` bound; `Meta.event` alias; the
+  bound component present in a time-travel snapshot and in session save; the
+  eight descriptors' behaviour byte-identical; an undecorated method refused.
+- **S2 (PR 2) — rendering**: D5 and D6. Tests: `{{ nav }}` on the HTTP path and
+  the WebSocket path renders the template with this view's state; a
+  template-less descriptor still yields the dict repr (the opt-in gate-off);
+  a state whose hash is unchanged is not re-rendered (the cache gate-off);
+  a `dj-click` inside the rendered markup reaches the component's handler.
+- **S3 — docs** for the class-level form.
 
-No Rust step. The rendering entry point is the existing one.
+No Rust step: the object crosses the boundary as an opaque object (M10).
 
 ## Verification
 
-- **The end-to-end oracle is a real page.** A `LiveView` with a class-level
-  component that declares a template, fetched over HTTP, renders the component's
-  markup — not a dict repr — with the state applied. Asserted on the served
-  bytes, in the shape M3 uses, because M1/M2 alone would not have caught the
-  LiveView path's own behaviour.
-- **D1's opt-in is load-bearing.** Gating it off (render unconditionally) must
-  make a test fail that asserts a template-less descriptor still yields the dict
-  repr. Without that test, "opt-in" is a claim, not a property (#1468).
-- **D5's cache is load-bearing.** Gating the hash comparison off must make a test
-  fail that counts renders across two events with unchanged state. This is the
-  test M5 says does not exist today; writing it is part of S1.
-- **Per-view state survives.** Two view instances, one mutating its state, the
-  other unchanged — the M4-style probe extended, asserting isolation. This is the
-  property that rules out option C.
-- **The instance form is unchanged.** `{{ counter }}` on an instance-assigned
-  component renders as before; the whole existing `LiveComponent` suite stays
-  green.
-- **The eight descriptors are byte-identical.** A test asserting `str(state)` for
-  each of the eight still yields the dict repr.
+- The end-to-end oracle is a served page and a WebSocket round trip: a class-level
+  `Tabs` renders, a click on a tab changes `self.state.active` on that view only,
+  and the re-rendered markup reflects it.
+- Each gate-off named in §Sequencing must fail when its mechanism is removed
+  (#1468).
+- `make test` stays green; the `LiveComponent` and descriptor suites are the
+  regression net for instance components and the eight descriptors.
 
 ## Non-goals
 
-- **Not a change to the eight first-party descriptors.** Option E.
-- **Not a new spelling.** `{{ component }}` only; `{{ component.render }}` stays
-  as broken as #2501 left it, and the docs already steer away from it.
-- **Not a fix for `get_context_data` on the descriptor path.** D4 defines the
-  contract as State-is-the-context; making both work is a separate question with
-  its own ambiguity about precedence.
-- **Not `theme_card`.** #2894 is adjacent (a container component that cannot take
-  a body of template tags) and has its own decision to make about the tag's kind.
-- **Not a performance project.** D5 removes a re-render that already should not
-  happen; it is not a VDOM or engine change.
+- No change to the eight first-party descriptors' markup; the theming tags keep
+  drawing them.
+- No `{{ component.render }}` spelling.
+- No `get_context_data()` on the class-level path.
+- Not #2894.
+
+## 7. Record of what the first draft got wrong
+
+Kept in the style of ADR-029 §7.
+
+1. **The chosen mechanism was never tried against the engine.** `TypedState.__str__` cannot render because a dict crosses the boundary as a map (M9). One `render_template` call would have shown it; the draft reasoned from Django's `str()` behaviour (M7) and assumed the engine matched it.
+2. **A measurement was scoped to the claim it supported.** M5 said `_dirty` was read nowhere; `git grep` finds three readers in `rust_bridge.py`. The proposed cache would have cleared a flag change detection depends on.
+3. **The rejected option was the working one.** A non-dict proxy (Option A) was rejected on `isinstance` and hot-path grounds; measured, it is the only shape the engine renders (M10). The cost was real but belonged in the trade-off, not in a rejection.
+4. **The documented workaround was not tried.** `self._components.append(...)` fails because `_components` is a dict (M11). The draft cited the section without running its code.
+5. **Rendering and events were treated as separate problems.** They share one missing object; solving rendering alone would have left the event and snapshot gaps and required a second design.
