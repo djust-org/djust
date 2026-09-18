@@ -3881,15 +3881,20 @@ class ViewRuntime:
 
         component = view._components.get(component_id) if hasattr(view, "_components") else None
         if not component:
-            # A DEP-002 descriptor is NOT a LiveComponent and never enters
-            # `view._components` (a documented gap, `components/base.py` #1165),
-            # but it does take a `component_id`: `__set_name__` wires its
-            # `Meta.event` onto the view, and the handler that
-            # `_make_event_handler` builds resolves the instance from that
-            # parameter itself. So fall through and let the normal dispatch
-            # deliver it — erroring here would make every descriptor on a page
-            # with more than one instance of its type unreachable, which is
-            # exactly the case `data-component-id` exists for.
+            # A descriptor's `BoundComponent` is registered in
+            # `view._components` by `LiveComponent.__get__` (ADR-031 D2), so
+            # the lookup above finds it and this branch is normally not
+            # reached — descriptor events now take the validated
+            # component-dispatch path below, as events on an instance-assigned
+            # component always have.
+            #
+            # It remains the right fall-through for a descriptor nothing has
+            # materialised yet: the name is in `_component_descriptors`, but
+            # `__get__` has not run, so `_components` has no entry. Such a
+            # descriptor still takes a `component_id` — `__set_name__` wires
+            # its `Meta.event` onto the view, and `_make_event_handler`'s
+            # view-level alias resolves the instance from that parameter
+            # itself. Erroring here would make it unreachable.
             if component_id in getattr(type(view), "_component_descriptors", {}):
                 return False
 
