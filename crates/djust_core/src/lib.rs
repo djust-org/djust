@@ -5477,12 +5477,17 @@ fn named_tuple_class<'py>(
         .import("collections")?
         .getattr("namedtuple")?
         .call((name, fields.to_vec()), Some(&kwargs))?;
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(key)
-        .or_insert_with(|| cls.clone().unbind());
-    Ok(cls)
+    // The ENTRY is returned, not the class just built: two threads can build
+    // the same shape at once (no GIL on 3.14t — measured 171/200 first
+    // conversions), and only one build may become the canonical class. The
+    // loser's is dropped here.
+    //
+    // Process-lifetime, ~6 KB per shape, and only app code can grow it: the
+    // key is the shape of a class the app created. No eviction, because an
+    // evicted shape would come back as a second class.
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = guard.entry(key).or_insert_with(|| cls.unbind());
+    Ok(entry.bind(py).clone())
 }
 
 /// Convert &Value to Python object (clones the value).
