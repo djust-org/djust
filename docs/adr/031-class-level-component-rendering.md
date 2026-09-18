@@ -118,6 +118,11 @@ A `Component` renders (M1-M3) only because it is *not* a dict: it crosses as an
 opaque object whose `str()` the engine takes as safe. Rendering therefore needs
 a non-dict object on the context, which is the same object events need.
 
+The divergence is not specific to `TypedState`. Django's engine takes `str(o)`
+for *any* dict subclass, so `{{ request.GET }}` and a user subclass with its own
+`__str__` render differently on the two engines — filed as #2899, the dict-side
+counterpart of #2704 (which closed the same cell for sequences).
+
 ## Measured
 
 | # | Measurement | Result |
@@ -130,7 +135,7 @@ a non-dict object on the context, which is the same object events need.
 | M6 | the eight `components/descriptors/*.py` declare a `template`? | **0 of 8** |
 | M7 | `str()` of a `SafeString`-returning `__str__` | stays a `SafeString` — why M1-M3 do not escape |
 | M8 | `Counter.descriptor()` on a `LiveComponent` | `AttributeError` — `components/base.py:572` and `components.md:252` are the only mentions |
-| M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, both engine paths | the dict repr; `__str__` never called |
+| M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, on both **Rust** entry points (`render_template` and the LiveView HTTP path) | the dict repr; `__str__` never called. Django's own engine *does* call `__str__`, so the two engines diverge on this spelling — a separate defect, #2899 |
 | M10 | `{{ nav }}\|{{ nav.active }}` with a non-dict object forwarding attribute access and rendering on `str()`, both engine paths | `<nav>overview</nav>\|overview` |
 | M11 | `view._components` type; the documented workaround `self._components.append(...)` (`components.md:258`) | `dict` (`live_view.py:556`) — the workaround raises `AttributeError` |
 | M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:259-262` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2155` (`return str(value)`, warning at `:2104`) stringifies an unknown object before Rust sees it |
