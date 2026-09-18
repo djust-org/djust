@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
 
-from ..change_detection import deep_fingerprint, warn_fingerprint_truncated
+from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..template_filters import _ensure_custom_filters_bridged
@@ -781,20 +781,18 @@ class RustBridgeMixin:
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
 
-            # ADR-031: a class-level component is an opaque wrapper whose
-            # State is the thing that changes — fingerprint the State, never
-            # the wrapper's id() (a nested in-place mutation such as
-            # ``self.state["rows"].append(x)`` sets no dirty flag).
-            from ..components.base import BoundComponent
-
+            # ADR-031 / #2900: a class-level component is an opaque wrapper
+            # whose State is the thing that changes. ``fingerprints_by_content``
+            # / ``deep_fingerprint`` walk it as its State — the ONE rule every
+            # snapshot shares — so a nested in-place mutation such as
+            # ``self.state["rows"].append(x)`` (no dirty flag) is seen here
+            # exactly as ``_snapshot_assigns`` sees it.
             def _is_structural(value: Any) -> bool:
-                return isinstance(value, (dict, list, tuple, BoundComponent))
+                return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
             def _fp_of(key: str, value: Any) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
-                    if isinstance(value, BoundComponent):
-                        value = value.state
                     fp, truncated = deep_fingerprint(value)
                     new_fps[key] = fp
                     if truncated:

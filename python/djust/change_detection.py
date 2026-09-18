@@ -87,6 +87,33 @@ def warn_fingerprint_truncated(cls: type, name: str, value: Any) -> None:
     )
 
 
+#: The plain containers every snapshot walks structurally (#2664).
+CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+
+#: Marker a wrapper class sets so the snapshots fingerprint the object it
+#: wraps rather than the wrapper's ``id()``. ``BoundComponent`` (ADR-031) sets
+#: it: a class-level component's slot holds the wrapper, whose identity never
+#: changes, while the ``State`` inside it is what a handler mutates (#2900).
+STATE_MARKER = "_djust_fingerprint_state"
+
+
+def _unwrap(value: Any) -> Any:
+    """The object a snapshot should fingerprint for *value*."""
+    if getattr(type(value), STATE_MARKER, False):
+        return getattr(value, "state", value)
+    return value
+
+
+def fingerprints_by_content(value: Any) -> bool:
+    """Is *value* compared by STRUCTURE (walked) rather than by ``id()``?
+
+    ONE statement of the rule for every snapshot — ``_snapshot_assigns``, the
+    dirty baseline, ``@computed``'s dependency key and ``_sync_state_to_rust``
+    — so a shape one of them walks cannot be a leaf to another (#1646, #2900).
+    """
+    return isinstance(value, CONTAINER_TYPES) or bool(getattr(type(value), STATE_MARKER, False))
+
+
 def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable, bool]:
     """Return ``(fingerprint, truncated)`` for *value*.
 
@@ -100,6 +127,7 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
 
 
 def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]) -> Hashable:
+    value = _unwrap(value)
     counter[0] -= 1
     if counter[0] < 0:
         return (_TAG_TRUNCATED, id(value))

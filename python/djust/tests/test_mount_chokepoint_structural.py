@@ -257,8 +257,10 @@ _SETATTR_WHITELIST = {
     # that was its only writer. Still the same two sites.
     # +14 (1377/1379 → 1391/1393) by ADR-031 PR 1: the ``BoundComponent`` arms
     # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
-    ("live_view.py", 1391),
-    ("live_view.py", 1393),
+    # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
+    # import in live_view.py.
+    ("live_view.py", 1392),
+    ("live_view.py", 1394),
 }
 
 

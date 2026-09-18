@@ -13,7 +13,7 @@ from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
-from .change_detection import deep_fingerprint
+from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
     StateRoundtripJSONEncoder,
@@ -684,8 +684,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 continue
             if isinstance(v, (int, float, bool, str, bytes)) or v is None:
                 fp[k] = ("v", v)
-            elif isinstance(v, (list, tuple, dict, set, frozenset)):
-                # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty.
+            elif fingerprints_by_content(v):
+                # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty;
+                # a class-level component's State likewise (#2900).
                 fp[k] = ("c", id(v), deep_fingerprint(v)[0])
             else:
                 fp[k] = ("id", id(v))
