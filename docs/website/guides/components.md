@@ -325,14 +325,15 @@ bare `{{ nav }}`:
 <div dj-root>{% if nav %}{{ nav }}{% endif %}</div>
 ```
 
-Also page-rendered: a memoised `@computed("nav")` on the view (its value
-would change with the component), an unresolved `{% include %}` /
-`{% extends %}` (the partial could read the state), a handler that changes
-any other assign in the same event, `self._force_full_html = True`, a
-pending `push_event`, and `{{ nav }}` rendered more than once or inside a
-`dj-update="ignore"` / `dj-virtual` region. A plain `@computed` (no
-dependency list) that reads the component's state is not detected -- declare
-the dependency, `@computed("nav")`, so the event takes the page render.
+Also page-rendered: any other context value that changed with the event --
+a view `@property`, a `get_context_data` override or a `@computed` that
+derives something from `self.nav.active` is seen because the runtime
+compares the render context, key by key, against the last render before it
+takes the scoped path; an unresolved `{% include %}` / `{% extends %}` (the
+partial could read the state); a handler that changes any other assign in
+the same event; `self._force_full_html = True`; a pending `push_event`; and
+`{{ nav }}` rendered more than once or inside a `dj-update="ignore"` /
+`dj-virtual` region.
 
 ### Lifecycle
 

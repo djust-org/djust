@@ -1545,11 +1545,35 @@ impl RustLiveViewBackend {
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
                 return Ok(None);
             }
+            // Exactness check (review of #2920 🟡2): the page parse can
+            // relocate part of a component's markup OUTSIDE its wrapper —
+            // foster-parenting of a nested `<table>`, `<option>`/`<input>`
+            // under a `<select>` — and a fragment parse in the same context
+            // does not. Re-parse the markup the page was rendered with and
+            // diff it against the node the page holds: any difference means
+            // the wrapper does not contain what the full path would give it,
+            // so the scoped patch would leave the relocated part stale.
+            let old_html = match self.state.get(&component_id) {
+                Some(Value::String(s)) | Some(Value::SafeString(s)) => s.clone(),
+                _ => return Ok(None),
+            };
+            let mut old_roots = match parse_html_fragment(&old_html, &parent_tag) {
+                Ok(roots) => roots,
+                Err(_) => return Ok(None),
+            };
+            if old_roots.len() != 1 {
+                return Ok(None);
+            }
+            let mut reparsed_old = old_roots.pop().expect("one root");
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
 
             let Some(old_node) = get_vdom_node_mut(vdom, &path) else {
                 return Ok(None);
             };
+            splice_ignore_subtrees(old_node, &mut reparsed_old);
+            if !djust_vdom::diff::diff_nodes(old_node, &reparsed_old, &[]).is_empty() {
+                return Ok(None);
+            }
             let t_diff = Instant::now();
             splice_ignore_subtrees(old_node, &mut new_node);
             let patches = djust_vdom::diff::diff_nodes(old_node, &new_node, &path);

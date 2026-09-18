@@ -14,6 +14,7 @@ routes (``component_id`` and a ``Meta.event`` alias) and one real
 from __future__ import annotations
 
 import contextlib
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -142,6 +143,50 @@ class ComputedPage(LiveView):
         pass
 
     @computed("nav")
+    def label(self) -> str:
+        return f"tab:{self.nav.active}"
+
+
+class PropertyPage(LiveView):
+    """A view ``@property`` derived from the component, read by the template
+    under another name (review of #2920 🔴1)."""
+
+    template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
+    nav = Tabs()
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        pass
+
+    @property
+    def label(self) -> str:
+        return f"tab:{self.nav.active}"
+
+
+class ContextDataPage(LiveView):
+    """``get_context_data`` derives a value from the component."""
+
+    template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
+    nav = Tabs()
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        pass
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        ctx = super().get_context_data(**kwargs)
+        ctx["label"] = f"tab:{self.nav.active}"
+        return ctx
+
+
+class PlainComputedPage(LiveView):
+    """A dep-less ``@computed`` over the component."""
+
+    template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
+    nav = Tabs()
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        pass
+
+    @computed
     def label(self) -> str:
         return f"tab:{self.nav.active}"
 
@@ -407,6 +452,19 @@ class TestFullPathGates:
         assert "tab:x" in view.render_with_diff()[0]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("cls", [PropertyPage, ContextDataPage, PlainComputedPage])
+    async def test_a_value_derived_from_the_component_outside_the_template(self, cls):
+        """The template passes D2 (only ``{{ nav }}``), but the page reads a
+        value derived from the component under another name. The context
+        check sees ``label`` change and the page renders — the client must
+        never keep ``tab:overview`` (review of #2920 🔴1)."""
+        view, frame = await self._run(
+            cls, {"event": "select", "params": {"component_id": "nav", "value": "x"}}
+        )
+        assert "tab:x" in str(frame), frame
+        assert "tab:x" in view.render_with_diff()[0]
+
+    @pytest.mark.asyncio
     async def test_handler_changing_another_assign_as_well(self):
         view, frame = await self._run(OpaquePage, {"event": "both", "params": {}})
         assert frame["type"] == "patch"
@@ -500,9 +558,7 @@ class TestWebSocketFrame:
                 await communicator.send_json_to({"type": "request_html"})
                 recovery = await _receive_until(communicator, "html_recovery")
                 assert recovery.get("type") == "html_recovery", recovery
-                assert "billing<b" in recovery["html"].replace('dj-id="', "").replace('"', "") or (
-                    "billing" in recovery["html"]
-                )
+                assert re.search(r"billing<b[^>]*>nav</b>", recovery["html"]), recovery["html"]
                 assert recovery["version"] == updated["version"]
             finally:
                 await communicator.disconnect()

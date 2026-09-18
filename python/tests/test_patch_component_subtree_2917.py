@@ -236,3 +236,25 @@ def test_none_when_the_fragment_root_carries_another_id(view):
     before = view.render_with_diff()
     assert view.patch_component_subtree("nav", comp("billing", cid="other")) is None
     _assert_untouched(view, before)
+
+
+@pytest.mark.parametrize(
+    ("template", "markup"),
+    [
+        (
+            "<div dj-root><table>{{ nav }}</table></div>",
+            '<div data-component-id="nav"><table><tr><td>{v}</td></tr></table></div>',
+        ),
+    ],
+    ids=["table-in-table"],
+)
+def test_none_when_the_page_parse_relocated_part_of_the_component(template, markup):
+    """Review of #2920 🟡2: the page parse foster-parents a nested ``<table>``
+    out of the wrapper; a fragment parse of the same markup does not. The wrapper in the page then holds
+    less than the markup says, so a scoped patch would leave the relocated
+    part stale. Re-parsing the old markup and diffing it against the node the
+    page holds catches it — the scoped path is not exact, the page renders."""
+    view = make_view(template=template, nav=markup.format(v="a"))
+    before = view.render_with_diff()
+    assert view.patch_component_subtree("nav", markup.format(v="b")) is None
+    _assert_untouched(view, before)
