@@ -26,53 +26,13 @@
   {% endif %}
 </div>
 
-{# ===== Live Preview (template components) ===== #}
-{% if component_type == "template" and template_examples_html %}
-<div class="sb-section">
-  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ template_examples_html|length }}</span></div>
-  <div class="sb-preview">
-    {% for ex in template_examples_html %}
-      <div>{{ ex.html|safe }}</div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-{# ===== Python Component Preview ===== #}
-{% if component_type == "python" %}
-  {% if python_examples_html %}
-  <div class="sb-section">
-    <div class="sb-section-title">EXAMPLES <span class="sb-badge sb-badge-count">{{ python_examples_html|length }}</span></div>
-    {% for ex in python_examples_html %}
-    <div style="margin-bottom: 1rem;">
-      {% if ex.html %}
-      <div class="sb-preview" style="margin-bottom: 0.5rem;">
-        {{ ex.html|safe }}
-      </div>
-      {% endif %}
-      <div class="sb-code" style="margin-top: 0.5rem;">
-        <div class="sb-code-header">
-          <div class="sb-code-dots">
-            <span class="sb-code-dot" style="background:#ff5f57;"></span>
-            <span class="sb-code-dot" style="background:#febc2e;"></span>
-            <span class="sb-code-dot" style="background:#28c840;"></span>
-          </div>
-          <span>python</span>
-        </div>
-        <pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="sb-section">
-    <div class="sb-section-title">PREVIEW</div>
-    <div class="sb-preview" style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">
-      Preview not available — component requires runtime dependencies or no examples defined.
-    </div>
-  </div>
-  {% endif %}
-{% endif %}
+{# ===== Live preview — one bound component (ADR-032) ===== #}
+{% comment %}
+  `{{ preview }}` is the only read of the component on this page, so an
+  event that changes only its state patches the preview's subtree instead
+  of re-rendering the page. Keep it the bare variable.
+{% endcomment %}
+{{ preview }}
 
 {# ===== Usage ===== #}
 <div class="sb-section">

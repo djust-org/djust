@@ -596,3 +596,82 @@ def theme_asset_version() -> str:
         <link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={% theme_asset_version %}">
     """
     return _theme_asset_version()
+
+
+# ---------------------------------------------------------------------------
+# Storybook preview (ADR-032)
+# ---------------------------------------------------------------------------
+
+_STORYBOOK_PREVIEW_TEMPLATE = template.Template(
+    """{% if component_type == "template" %}{% if examples_html %}
+<div class="sb-section">
+  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
+  <div class="sb-preview">
+    {% for ex in examples_html %}
+      <div>{{ ex.html|safe }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}{% else %}{% if examples_html %}
+  <div class="sb-section">
+    <div class="sb-section-title">EXAMPLES <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
+    {% for ex in examples_html %}
+    <div style="margin-bottom: 1rem;">
+      {% if ex.html %}
+      <div class="sb-preview" style="margin-bottom: 0.5rem;">
+        {{ ex.html|safe }}
+      </div>
+      {% endif %}
+      <div class="sb-code" style="margin-top: 0.5rem;">
+        <div class="sb-code-header">
+          <div class="sb-code-dots">
+            <span class="sb-code-dot" style="background:#ff5f57;"></span>
+            <span class="sb-code-dot" style="background:#febc2e;"></span>
+            <span class="sb-code-dot" style="background:#28c840;"></span>
+          </div>
+          <span>python</span>
+        </div>
+        <pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="sb-section">
+    <div class="sb-section-title">PREVIEW</div>
+    <div class="sb-preview" style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">
+      Preview not available — component requires runtime dependencies or no examples defined.
+    </div>
+  </div>
+  {% endif %}{% endif %}"""
+)
+
+
+@register.simple_tag
+def storybook_preview(
+    component_name: str, component_type: str, examples: Any, values: Any
+) -> SafeString:
+    """The storybook page's live preview, rendered from the preview
+    component's State (`live_views.Preview`, ADR-032).
+
+    Renders the component's examples merged with the current `values` — the
+    markup that used to be computed in the view's `get_context_data` and
+    looped over in `storybook_detail.html`. Living in the component's own
+    template is what lets a click re-render the preview alone.
+    """
+    from ..gallery.live_views import render_preview_examples
+
+    examples_html = render_preview_examples(
+        component_name, component_type, list(examples or []), dict(values or {})
+    )
+    return mark_safe(
+        _STORYBOOK_PREVIEW_TEMPLATE.render(
+            Context(
+                {
+                    "name": component_name,
+                    "component_type": component_type,
+                    "examples_html": examples_html,
+                }
+            )
+        )
+    )

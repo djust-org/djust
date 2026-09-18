@@ -179,7 +179,7 @@ class TestExamplesAreNotCollapsedByDemoState:
 
         view = StorybookDetailView()
         view.mount(RequestFactory().get("/"), component_name="switch")
-        assert view._demo_values == {}
+        assert view.preview.state.values == {}
 
         rendered = view._render_examples()
         assert rendered[0]["html"] != rendered[1]["html"], (
@@ -500,18 +500,16 @@ class TestSegmentedProgressIsClickable:
         assert "dj-click" not in html
 
 
-class TestDescriptorStateUnwrapsBoundComponent:
-    """ADR-031 changed what a class-level descriptor attribute resolves to.
+class TestPreviewOwnsTheDescriptorState:
+    """ADR-032: the page's live preview is ONE bound component whose State
+    holds the descriptor state (accordion, tabs, modal, …) and the demo values.
 
-    It used to be the `State` — a `dict` — and `_descriptor_state` merged it in
-    with `isinstance(descriptor, dict)`. It is now a `BoundComponent`, whose
-    per-view state is `.state`. A `BoundComponent` is not a dict, so the
-    isinstance test failed and the merge silently contributed nothing: the
-    eight interactive previews lost their state and stopped responding.
-
-    The rebase onto ADR-031 is what surfaced it — the components gallery got the
-    same unwrap (`components/gallery/live_views.py:158`) and this one did not,
-    the parallel-path shape: one pattern, two galleries, one of them fixed.
+    Before, eight descriptor slots lived on the view and `_descriptor_state`
+    unwrapped the current one's `BoundComponent` (ADR-031) into the example
+    kwargs. Now the descriptor's defaults seed `preview.state.values` at mount,
+    its `_handle_event` runs against a State rebuilt from those values, and the
+    page reads the preview as the bare `{{ preview }}` — which is what lets an
+    event that changes only the preview patch the preview alone.
     """
 
     def _view(self, component_name: str):
@@ -523,28 +521,45 @@ class TestDescriptorStateUnwrapsBoundComponent:
         view.mount(RequestFactory().get("/"), component_name=component_name)
         return view
 
-    def test_the_attribute_really_is_a_bound_component(self):
-        """If this stops being true, the unwrap below is dead code."""
+    def test_the_preview_is_a_bound_component(self):
         from djust.components.base import BoundComponent
 
-        bound = getattr(self._view("accordion"), "accordion")
-        assert isinstance(bound, BoundComponent), (
-            "ADR-031's BoundComponent is gone — the unwrap in `_descriptor_state` "
-            "can be simplified, and this test with it"
+        bound = self._view("accordion").preview
+        assert isinstance(bound, BoundComponent)
+        assert bound.template, (
+            "the preview must declare a template for `{{ preview }}` to render it"
         )
 
-    def test_descriptor_state_is_the_bound_component_state(self):
-        bound = getattr(self._view("accordion"), "accordion")
-        assert self._view("accordion")._descriptor_state() == dict(bound.state)
-        # Not merely non-empty: the descriptor's own fields must be in there.
-        assert "active" in self._view("accordion")._descriptor_state()
+    def test_the_descriptor_fields_seed_the_preview_values(self):
+        from djust.components.descriptors import Accordion
 
-    def test_a_descriptor_event_moves_the_state_and_the_render(self):
-        """The unwrap is only useful if the change reaches the markup."""
+        values = self._view("accordion").preview.state.values
+        assert values == dict(Accordion.State())
+        assert "active" in values
+
+    def test_a_descriptor_event_moves_the_values_and_the_render(self):
+        """The forwarder on the view and the handler on the preview move the
+        same state, and the change reaches the markup."""
         view = self._view("accordion")
         before = view._render_examples()[0]["html"]
         view.accordion_toggle(value="2")
         after = view._render_examples()[0]["html"]
-        assert view._descriptor_state()["active"] == "2"
+        assert view.preview.state.values["active"] == "2"
         assert before != after
         assert "accordion-item--open" in after
+        # The component route reaches the same handler on the preview itself.
+        view.preview.accordion_toggle(value="2")
+        assert view.preview.state.values["active"] == ""
+
+    def test_the_page_reads_only_the_bare_preview(self):
+        """D2: any other read of the component would force a page render."""
+        from pathlib import Path
+
+        import djust.theming as theming
+
+        source = (
+            Path(theming.__file__).parent / "templates/djust_theming/gallery/storybook_detail.html"
+        ).read_text()
+        assert "{{ preview }}" in source
+        assert "preview." not in source and "preview|" not in source
+        assert "examples_html" not in source

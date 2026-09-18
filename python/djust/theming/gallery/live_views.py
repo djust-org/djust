@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 from django.http import Http404
 
 from djust import LiveView
-from djust.components.base import BoundComponent
+from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import event_handler
 
 from djust.components.descriptors import (
@@ -236,10 +236,139 @@ def _make_demo_handler(event: str, effects: Any):
     # "expected str, got bool (True)" — which left `switch` unable to toggle
     # even once its input carried `dj-change`.
     def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
+        values = dict(self.state.values)
         for key, transform in pairs:
-            if key not in self._demo_values:
-                self._demo_values[key] = self._example_value(key)
-            self._demo_values[key] = transform(self._demo_values[key], value)
+            if key not in values:
+                values[key] = self._example_value(key)
+            values[key] = transform(values[key], value)
+        # Reassigned, not mutated in place: the State's dirty flag and the
+        # change-detection snapshot both see the new dict.
+        self.state.values = values
+
+    handler.__name__ = event
+    handler.__qualname__ = event
+    return event_handler(handler)
+
+
+def _make_descriptor_handler(descriptor_cls: Any):
+    """The preview's handler for a descriptor's event (`accordion_toggle`, …).
+
+    The descriptor's own `_handle_event` decides what the click means — an
+    accordion toggles, tabs select, a modal flips — against a State rebuilt
+    from the preview's values, so the storybook does not restate any of it.
+    """
+    state_cls = descriptor_cls.State
+    fields = [n for n in state_cls.__annotations__ if not n.startswith("_")]
+
+    def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
+        current = self.state.values
+        state = state_cls(**{k: current[k] for k in fields if k in current})
+        descriptor_cls()._handle_event(state, value=value, **kwargs)
+        self.state.values = {**current, **{k: state[k] for k in fields}}
+
+    handler.__name__ = descriptor_cls.Meta.event
+    handler.__qualname__ = descriptor_cls.Meta.event
+    return event_handler(handler)
+
+
+def render_preview_examples(
+    component_name: str, component_type: str, examples: list, values: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    """Render a component's examples against the CURRENT preview values.
+
+    This is the whole trick. The examples are kwarg dicts, so merging the
+    values into them and re-rendering is what turns a click into updated
+    markup: `accordion_toggle` sets `active`, `active` lands in the kwargs,
+    and the re-render carries the open item. Returns `[{"html", "kwargs",
+    "kwargs_display"}]` for both component kinds, so the page has one preview
+    mechanism rather than two.
+
+    Template components go through their **tag**, not their template — those
+    are different programs (`storybook._render_template_examples`).
+    """
+    if component_type == "python":
+        from .component_registry import render_python_component_example
+
+        rendered = []
+        for kwargs in examples:
+            live_kwargs = {**kwargs, **values}
+            rendered.append(
+                {
+                    "html": render_python_component_example(component_name, live_kwargs),
+                    "kwargs": live_kwargs,
+                    "kwargs_display": ", ".join(f"{k}={v!r}" for k, v in live_kwargs.items()),
+                }
+            )
+        return rendered
+
+    from .storybook import _render_template_examples
+
+    if not examples:
+        return []
+    return _render_template_examples(
+        component_name, [{**example, **values} for example in examples]
+    )
+
+
+class Preview(LiveComponent):
+    """The storybook page's live preview: one bound component owning the
+    example state, rendered by `{% storybook_preview %}`.
+
+    Why a component and not view attributes (ADR-032): an event that changes
+    only this component's State is answered by re-rendering the preview and
+    patching its subtree — the page, with its sidebar of `{% url %}` rows, is
+    not rendered at all. That needs the state the previews depend on to live
+    in ONE slot, so the descriptor state (accordion, tabs, modal, …) and the
+    demo values the storybook hosts by hand are both `values` here, merged
+    into every example the way `_render_examples` always did.
+
+    The page template reads it as the bare `{{ preview }}` and nothing else,
+    which is what keeps the template component-opaque for it.
+    """
+
+    class State(TypedState):
+        component_name: str = ""
+        component_type: str = ""
+        #: The example kwarg dicts (`PYTHON_COMPONENT_EXAMPLES[name]` for a
+        #: python component, the contract's examples for a template one).
+        examples: list = []
+        #: Descriptor state + demo values, merged into every example.
+        values: dict = {}
+
+    template = (
+        "{% load theme_tags %}{% storybook_preview component_name component_type examples values %}"
+    )
+
+    def _example_value(self, key: str) -> Any:
+        """The starting value for a state kwarg, read from the first example.
+
+        The examples already carry a sensible base for every kwarg a demo
+        handler drives, so the event table does not have to restate them.
+        """
+        examples = self.state.examples
+        return examples[0].get(key) if examples else None
+
+
+for _descriptor_cls in _INTERACTIVE.values():
+    setattr(Preview, _descriptor_cls.Meta.event, _make_descriptor_handler(_descriptor_cls))
+for _event, _effects in _DEMO_EVENTS.items():
+    if not hasattr(Preview, _event):
+        setattr(Preview, _event, _make_demo_handler(_event, _effects))
+del _descriptor_cls, _event, _effects
+
+
+def _make_forwarder(event: str):
+    """A view-level `@event_handler` that forwards to the preview component.
+
+    A click inside the rendered preview carries `component_id="preview"` and is
+    routed to the component directly; an event sent without it — the shape the
+    storybook tests use, and what the descriptors' `Meta.event` alias used to
+    answer on the view — reaches this forwarder instead. Either way the only
+    state that changes is the preview's, so both routes patch the preview alone.
+    """
+
+    def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
+        getattr(self.preview, event)(value=value, **kwargs)
 
     handler.__name__ = event
     handler.__qualname__ = event
@@ -356,17 +485,10 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
     template_name = "djust_theming/gallery/storybook_detail.html"
     login_required = False
 
-    # Declared as class attributes so `__set_name__` registers them in
-    # `_component_descriptors` and the framework wires each one's event.
-    # A component with no descriptor here simply has no live state.
-    accordion = Accordion()
-    carousel = Carousel()
-    collapsible = Collapsible()
-    dropdown = Dropdown()
-    modal = Modal()
-    sheet = Sheet()
-    tabs = Tabs()
-    tooltip = Tooltip()
+    #: The live preview (ADR-032): one bound component owning every example's
+    #: state, so its events patch the preview alone. The descriptors in
+    #: `_INTERACTIVE` supply the semantics of each event through its handlers.
+    preview = Preview()
 
     def mount(self, request: Any, component_name: Optional[str] = None, **kwargs: Any) -> None:
         from .component_registry import _COMPONENT_TO_CATEGORY
@@ -386,151 +508,51 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
 
         self.component_name = component_name
         self._base_ctx = ctx
-        #: What the demo handlers have set, keyed by example kwarg. Empty at
-        #: mount, because `_render_examples` merges this dict into *every*
-        #: example: seeding it from `examples[0]` made every preview on the page
-        #: render the first example's kwargs. A two-state switch showed two
-        #: switches both on, and five progress bars all read 25%. Keys land here
-        #: only once the reader has moved them; `_make_demo_handler` reads the
-        #: starting value from the example on first use, so a transform that
-        #: steps (`carousel`'s `active`, `date_picker`'s `month`) still has a
-        #: base to step from rather than computing `None + 1`.
-        self._demo_values: Dict[str, Any] = {}
         self._init_sidebar(component_name)
 
-    def _example_value(self, key: str) -> Any:
-        """The starting value for a state kwarg, read from the first example.
-
-        The examples already carry a sensible base for every kwarg a demo
-        handler drives, so the event table does not have to restate them.
-        """
-        examples = self._base_ctx.get("examples")
-        if not examples:
+        # The preview's state, per view (fresh containers — a TypedState's
+        # class-level `[]` / `{}` defaults are shared objects).
+        component_type = ctx.get("component_type") or "python"
+        if component_type == "python":
             from .component_registry import PYTHON_COMPONENT_EXAMPLES
 
-            examples = PYTHON_COMPONENT_EXAMPLES.get(self.component_name) or []
-        return examples[0].get(key) if examples else None
-
-    def _descriptor_state(self) -> Dict[str, Any]:
-        """Everything the preview should be re-rendered against.
-
-        Two sources, merged: a DEP-002 descriptor's state when the component has
-        one (accordion, tabs, modal, …), and `_demo_values` for the components
-        the storybook hosts by hand. A component can need both — `sheet` has a
-        `Sheet` descriptor whose event is `toggle_sheet`, while its own markup
-        dispatches `close_sheet`, so the close button needs the second source
-        even though the component is in `_INTERACTIVE`.
-        """
-        state: Dict[str, Any] = {}
-        descriptor = getattr(self, self.component_name, None)
-        # ADR-031: a class-level descriptor resolves to a `BoundComponent`
-        # whose per-view state is `.state`. It is not a dict, so reading the
-        # attribute straight into the merge — which is what this did before —
-        # silently contributed nothing: `tabs`, `dropdown`, `modal` and the
-        # other five interactive previews lost their state and stopped
-        # responding. Same unwrap the components gallery applies
-        # (`components/gallery/live_views.py:158`).
-        if isinstance(descriptor, BoundComponent):
-            descriptor = descriptor.state
-        # ...or a plain dict, once the framework has bound it; before that
-        # (or for a non-interactive name) there is none.
-        if isinstance(descriptor, dict):
-            state.update(descriptor)
-        state.update(self._demo_state())
-        return state
-
-    def _demo_state(self) -> Dict[str, Any]:
-        """State for the components whose interaction the storybook hosts.
-
-        A component renders `dj-click="X"` because a host is expected to answer
-        it — that is the contract. On a storybook page this view *is* the host,
-        so every event its own previews emit has to resolve; an unanswered
-        `dj-click` is a server error, not a no-op. Twenty of them were
-        unanswered, which is why `rating` errored on click and so would have the
-        other nineteen.
-
-        Kept as one dict rather than a descriptor per component because most of
-        these have a single state parameter (`value`, `active`, `expanded`,
-        `is_open`) and the mapping is mechanical — see `_DEMO_EVENTS`.
-        """
-        return dict(self._demo_values)
+            examples = list(PYTHON_COMPONENT_EXAMPLES.get(component_name) or [])
+        else:
+            examples = list(ctx.get("examples") or [])
+        # A DEP-002 descriptor's defaults seed the values, as the descriptor
+        # slot's State did when it lived on the view. Demo values start empty:
+        # `render_preview_examples` merges them into *every* example, so seeding
+        # them from `examples[0]` would make the whole page show it repeated.
+        descriptor_cls = _INTERACTIVE.get(component_name)
+        values = dict(descriptor_cls.State()) if descriptor_cls is not None else {}
+        preview = self.preview
+        preview.state.component_name = component_name
+        preview.state.component_type = component_type
+        preview.state.examples = examples
+        preview.state.values = values
 
     def _render_examples(self) -> list[Dict[str, Any]]:
-        """Render the component's examples against the CURRENT descriptor state.
-
-        This is the whole trick. The examples are kwarg dicts, so merging the
-        descriptor's state into them and re-rendering is what turns a click into
-        updated markup: `accordion_toggle` sets `active`, `active` lands in the
-        kwargs, and the re-render carries the open item.
-        """
-        from .component_registry import PYTHON_COMPONENT_EXAMPLES, render_python_component_example
-
-        raw_examples = PYTHON_COMPONENT_EXAMPLES.get(self.component_name, [])
-        state = self._descriptor_state()
-
-        rendered = []
-        for kwargs in raw_examples:
-            live_kwargs = {**kwargs, **state}
-            rendered.append(
-                {
-                    "html": render_python_component_example(self.component_name, live_kwargs),
-                    "kwargs": live_kwargs,
-                    "kwargs_display": ", ".join(f"{k}={v!r}" for k, v in live_kwargs.items()),
-                }
-            )
-        return rendered
-
-    def _render_live_template_examples(self) -> list:
-        """Template-component examples re-rendered against descriptor state.
-
-        The python branch has always done this (`_render_examples`), which is why
-        the accordion works there. Template components did not, so `tabs`,
-        `dropdown` and `modal` — all three of which have a descriptor in
-        `_INTERACTIVE` — rendered from their example kwargs alone and never moved
-        when clicked. Their templates now carry `dj-click`, and without this join
-        the event reaches the server, the state changes, the page re-renders and
-        the markup comes back identical: a control that is wired to nothing.
-        """
-        from .storybook import _render_template_examples
-
-        fallback = self._base_ctx.get("template_examples_html") or []
-        state = self._descriptor_state()
-        if not state:
-            return fallback
-
-        examples = self._base_ctx.get("examples") or []
-        if not examples:
-            return fallback
-
-        return _render_template_examples(
-            self.component_name, [{**example, **state} for example in examples]
+        """The rendered examples, as the preview renders them now."""
+        state = self.preview.state
+        return render_preview_examples(
+            state.component_name, state.component_type, state.examples, state.values
         )
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
         ctx["current_component"] = self.current_component
-        if self._base_ctx.get("component_type") == "python":
-            ctx["python_examples_html"] = self._render_examples()
-        else:
-            ctx["template_examples_html"] = self._render_live_template_examples()
+        # The examples are the preview's (`{{ preview }}` in the template);
+        # the static context's pre-rendered lists must not shadow it.
+        ctx.pop("python_examples_html", None)
+        ctx.pop("template_examples_html", None)
         return ctx
 
 
-# ---------------------------------------------------------------------------
-# Index
-# ---------------------------------------------------------------------------
-
-
-# Install the demo handlers onto the detail view. `setattr` rather than twenty
-# written-out methods: the framework wires its own descriptor events the same
-# way (`components/base.py:__set_name__`), and a table keeps the event names,
-# their state kwargs, and their transforms readable as one thing — which is what
-# makes it obvious when a component gains an event and this table does not.
-for _event, _effects in _DEMO_EVENTS.items():
+for _event in list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()]:
     if not hasattr(StorybookDetailView, _event):
-        setattr(StorybookDetailView, _event, _make_demo_handler(_event, _effects))
-del _event, _effects
+        setattr(StorybookDetailView, _event, _make_forwarder(_event))
+del _event
 
 
 class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
