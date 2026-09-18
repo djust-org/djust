@@ -1896,18 +1896,38 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     cached on the class. Also false when a memoised ``@computed`` on the
     class lists the component among its dependencies — its value would
     change with the component's state and the template may read it."""
+    cls = type(view)
+    cache = cls.__dict__.get("_djust_component_opaque")
+    if cache is None:
+        cache = {}
+        setattr(cls, "_djust_component_opaque", cache)
+    # A file template (``template_name``) is resolved through the loader —
+    # and the Rust inheritance resolver when it extends — on every
+    # ``get_template()``; outside DEBUG the files do not change under a
+    # running process, so the verdict is keyed by name and the source is
+    # read once per class. In DEBUG (hot reload) the source is re-read and
+    # hashed every time, so an edit that adds ``{{ nav.active }}`` is seen.
+    from django.conf import settings as _dj_settings
+
+    template_name = getattr(view, "template_name", None)
+    inline = getattr(view, "template", None)
+    key: Tuple[str, str]
+    source: Any = None
+    if isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG:
+        key = (f"name:{template_name}", name)
+        verdict = cache.get(key)
+        if verdict is not None:
+            return bool(verdict)
     try:
         source = view.get_template()
     except Exception:  # noqa: BLE001 — no template, no scoped path
         return False
     if not isinstance(source, str):
         return False
-    cls = type(view)
-    cache = cls.__dict__.get("_djust_component_opaque")
-    if cache is None:
-        cache = {}
-        setattr(cls, "_djust_component_opaque", cache)
-    key = (hashlib.sha1(source.encode("utf-8", "surrogatepass")).hexdigest(), name)
+    if source is not None and not (
+        isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG
+    ):
+        key = (hashlib.sha1(source.encode("utf-8", "surrogatepass")).hexdigest(), name)
     verdict = cache.get(key)
     if verdict is None:
         verdict = _template_is_component_opaque(source, name)
