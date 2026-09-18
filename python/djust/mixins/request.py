@@ -724,7 +724,30 @@ class RequestMixin:
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
-            handler = getattr(self, event_name, None)
+            # ADR-031: an event carrying ``component_id`` targets the
+            # registered component, as ``runtime._dispatch_component_event``
+            # does over WebSocket (#1646 — the HTTP fallback must not differ).
+            owner: Any = self
+            component_id = params.get("component_id") if isinstance(params, dict) else None
+            if component_id:
+                registry = getattr(self, "_components", None) or {}
+                owner = registry.get(component_id)
+                if owner is None:
+                    logger.warning(
+                        "HTTP POST component not found: %s on %s",
+                        component_id,
+                        type(self).__name__,
+                    )
+                    return JsonResponse({"error": "Component not found"}, status=400)
+                params = {k: v for k, v in params.items() if k != "component_id"}
+            handler = getattr(owner, event_name, None)
+            if handler is None and owner is not self:
+                logger.warning(
+                    "HTTP POST handler '%s' not found on component %s",
+                    event_name,
+                    component_id,
+                )
+                return JsonResponse({"error": "Event handler not found"}, status=400)
             if handler and callable(handler):
                 if not is_event_handler(handler):
                     logger.warning(

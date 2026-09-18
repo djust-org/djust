@@ -19,6 +19,10 @@ class LiveComponent(_DjustLiveComponent):
     subclassing them further.
     """
 
+    # ``BoundComponent`` stops forwarding at this class: ``mount`` and
+    # ``get_context_data`` below are framework no-ops, not component API.
+    _djust_framework_component_base = True
+
     def mount(self, **kwargs: Any) -> None:
         """No-op — descriptors don't have their own lifecycle."""
 

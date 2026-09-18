@@ -13,6 +13,7 @@ from abc import ABC
 from django.utils.safestring import mark_safe
 
 from djust._template_guards import TemplateMutatorGuard, alters_data
+from djust.decorators import is_event_handler
 
 from .assigns import (
     Assign,
@@ -501,6 +502,9 @@ class Component(TemplateMutatorGuard, ABC):
 from djust._context_provider import ContextProviderMixin
 
 
+_MISSING = object()
+
+
 class BoundComponent:
     """A class-level :class:`LiveComponent` bound to one view instance (ADR-031).
 
@@ -535,28 +539,41 @@ class BoundComponent:
 
     # -- forwarding ---------------------------------------------------------
 
-    def _component_method(self, name: str) -> Optional[Callable[..., Any]]:
-        """Return ``name`` bound to this object when the component class
-        defines it below :class:`LiveComponent`; framework methods
-        (``render``, ``mount``, ``update`` ...) are not forwarded."""
+    def _component_member(self, name: str) -> Any:
+        """Resolve ``name`` from the component class, below the framework
+        bases, bound to this object: a method binds with the bound component
+        as ``self``, a ``@property`` / ``staticmethod`` / ``classmethod``
+        resolves through its descriptor, a plain class attribute is returned
+        as is. Framework methods (``render``, ``mount``, ``update`` ...) are
+        not forwarded — the walk stops at :class:`LiveComponent` and at any
+        class marked ``_djust_framework_component_base`` (the descriptors'
+        base). Returns :data:`_MISSING` when the class does not define it.
+
+        An ``@event_handler`` is stamped ``alters_data`` so neither template
+        engine calls it from ``{{ nav.set_active }}``.
+        """
         for cls in type(self._descriptor).__mro__:
-            if cls is LiveComponent:
-                return None
-            func = cls.__dict__.get(name)
-            if func is not None:
-                if isinstance(func, types.FunctionType):
-                    return types.MethodType(func, self)
-                return None
-        return None
+            if cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base"):
+                return _MISSING
+            if name not in cls.__dict__:
+                continue
+            member = cls.__dict__[name]
+            if isinstance(member, types.FunctionType) and is_event_handler(member):
+                member.alters_data = True  # type: ignore[attr-defined]
+            getter = getattr(type(member), "__get__", None)
+            if getter is not None and not isinstance(member, type):
+                return getter(member, self, type(self._descriptor))
+            return member
+        return _MISSING
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal lookup fails (own attrs, class attrs).
         state = self.__dict__.get("state")
         if state is None or name.startswith("_"):
             raise AttributeError(name)
-        method = self._component_method(name)
-        if method is not None:
-            return method
+        member = self._component_member(name)
+        if member is not _MISSING:
+            return member
         meta = getattr(type(self._descriptor), "Meta", None)
         if meta is not None and name == getattr(meta, "event", None):
             return self._meta_event_handler(name)

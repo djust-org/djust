@@ -131,8 +131,22 @@ class Toggle(LiveComponent):
         self.state.active = value
         self.state.count = self.state.count + 1
 
+    label = "toggle"
+
     def shout(self) -> str:
         return self.state.active.upper()
+
+    @property
+    def title(self) -> str:
+        return f"T:{self.state.active}"
+
+    @staticmethod
+    def as_static() -> int:
+        return 1
+
+    @classmethod
+    def as_class(cls) -> str:
+        return cls.__name__
 
     def not_a_handler(self, **kwargs: Any) -> None:
         self.state.active = "hacked"
@@ -254,6 +268,46 @@ class TestBoundComponentBinding:
         object.__setattr__(bound, "_dirty", False)
         assert bound.state._dirty is False
         assert "_dirty" not in bound.__dict__, "the flag lives on the State, not the wrapper"
+
+    def test_class_members_forward_and_framework_methods_do_not(self):
+        """Review 🟡3/🟡4: a ``@property``, ``staticmethod``, ``classmethod``,
+        plain class attribute and nested class resolve through the wrapper;
+        ``mount`` / ``get_context_data`` / ``render`` from the framework bases
+        do not."""
+        bound = Page().nav
+        assert bound.title == "T:a"
+        assert bound.label == "toggle"
+        assert bound.as_static() == 1
+        assert bound.as_class() == "Toggle"
+        assert bound.State is Toggle.State
+        for name in ("mount", "get_context_data", "render", "update"):
+            with pytest.raises(AttributeError):
+                getattr(bound, name)
+
+    def test_underscore_names_are_opaque_on_the_wrapper(self):
+        """Review M1/M7: ``_``-names neither forward to the component class
+        nor write into the State (a ``_x`` write would reach the session)."""
+
+        class TabsPage(LiveView):
+            tabs = Tabs(active="one")
+
+        bound = TabsPage().tabs
+        with pytest.raises(AttributeError):
+            bound._handle_event  # noqa: B018 — defined on Tabs, not forwarded
+        bound._scratch = 1
+        assert "_scratch" in bound.__dict__
+        assert "_scratch" not in bound.state
+        assert dict(bound.state) == {"active": "one", "component_id": "tabs"}
+
+    def test_forwarded_event_handler_is_not_called_by_templates(self):
+        """Review 🟡2: ``{{ nav.set_active }}`` must not run the handler."""
+        view = Page()
+        bound = view.nav
+        assert bound.set_active.alters_data is True
+        assert render_template("[{{ nav.set_active }}]", {"nav": bound}) == "[]"
+        django_out = Engine().from_string("[{{ nav.set_active }}]").render(Context({"nav": bound}))
+        assert django_out == "[]"
+        assert dict(bound.state) == {"active": "a", "count": 0, "component_id": "nav"}
 
     def test_descriptor_without_state_class_is_unchanged(self):
         view = LegacyPage()
@@ -384,6 +438,59 @@ class TestBoundComponentEvents:
         assert View().comp.state is not bound.state
 
 
+@pytest.mark.django_db
+class TestBoundComponentHttpPost:
+    """Review 🔴1: the HTTP fallback transport must route ``component_id``
+    like the runtime does, not silently re-render (#1646)."""
+
+    def _get(self):
+        request = _request("/probe/")
+        response = Page.as_view()(request)
+        assert response.status_code == 200
+        assert b">a</p>" in response.content
+        return request.session
+
+    def _post(self, session, payload):
+        request = RequestFactory().post(
+            "/probe/", data=json.dumps(payload), content_type="application/json"
+        )
+        request.session = session
+        return Page.as_view()(request)
+
+    def test_component_id_event_reaches_the_handler_over_http(self):
+        session = self._get()
+        response = self._post(
+            session,
+            {"event": "set_active", "params": {"component_id": "nav", "value": "http"}},
+        )
+        assert response.status_code == 200, response.content
+        assert b"http" in response.content
+        assert session["liveview_/probe/"]["nav"]["active"] == "http"
+        assert session["liveview_/probe/"]["nav"]["count"] == 1
+
+    def test_unknown_component_and_undecorated_method_are_400(self):
+        session = self._get()
+        missing = self._post(
+            session, {"event": "set_active", "params": {"component_id": "nope", "value": "x"}}
+        )
+        assert missing.status_code == 400
+        undecorated = self._post(
+            session, {"event": "not_a_handler", "params": {"component_id": "nav"}}
+        )
+        assert undecorated.status_code == 400
+        absent = self._post(session, {"event": "no_such", "params": {"component_id": "nav"}})
+        assert absent.status_code == 400
+        assert session["liveview_/probe/"]["nav"]["active"] == "a"
+
+    def test_meta_event_alias_still_works_over_http(self):
+        session = self._get()
+        response = self._post(session, {"event": "set_active", "params": {"value": "plain"}})
+        # No component_id: the view has no ``set_active`` (only the component
+        # does), so the request is refused rather than silently succeeding.
+        assert response.status_code in (200, 400)
+        assert session["liveview_/probe/"]["nav"]["active"] == "a"
+
+
 # ------------------------------------------------------------------ #
 # D7 — snapshots and session save see the State, never the wrapper
 # ------------------------------------------------------------------ #
@@ -478,6 +585,17 @@ class TestBoundComponentParity:
         ctx = view.get_context_data()
         assert ctx["nav"] is view.nav
         assert ctx["aux"] is view.aux
+
+    def test_gallery_passes_the_bound_state_into_cards(self):
+        """Review M10: ``_build_extra_context`` must hand the State to the
+        card renderer; with a wrapper that is not a dict it returned ``{}``."""
+        from djust.components.gallery.live_views import LayoutGalleryView
+
+        view = LayoutGalleryView()
+        view.tabs.active = "second"
+        ctx = view._build_extra_context("tabs")
+        assert ctx == {"active": "second", "component_id": "tabs"}
+        assert view._build_extra_context("not_a_descriptor") == {}
 
     def test_no_isinstance_state_checks_in_tree(self):
         """ADR-031 accepted consequence: ``isinstance(view.nav, X.State)`` is
