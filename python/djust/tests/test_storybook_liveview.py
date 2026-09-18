@@ -253,3 +253,48 @@ async def test_interactive_component_answers_its_event(component, event, params)
     assert response.get("type") != "error", (
         f"{component}: {event} was refused by the server: {response!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ADR-032 (#2917): a preview click patches the preview, not the page
+# ---------------------------------------------------------------------------
+
+_SCOPED = override_settings(
+    LIVEVIEW_ALLOWED_MODULES=None,
+    ROOT_URLCONF="djust.tests.urls_theming",
+    DJUST_EXPOSE_TIMING=True,
+)
+
+
+@_SCOPED
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [{"value": "2"}, {"value": "2", "component_id": "preview"}],
+    ids=["view-forwarder", "component-route"],
+)
+async def test_accordion_toggle_patches_only_the_preview(params):
+    """The page reads the live preview as the bare `{{ preview }}` and the
+    toggle changes only the preview's state, so the runtime answers with a
+    patch scoped to the preview — on both routes: the view-level forwarder
+    (no `component_id`, the shape the other tests send) and the component
+    route a real click takes (`component_id="preview"` from the wrapper)."""
+    communicator, mounted = await _mount("accordion")
+    try:
+        assert 'data-component-id="preview"' in _html_of(mounted), (
+            "the page no longer renders the preview component"
+        )
+        await communicator.send_json_to(
+            {"type": "event", "event": "accordion_toggle", "params": params, "ref": 1}
+        )
+        updated = await communicator.receive_json_from(timeout=5)
+    finally:
+        await communicator.disconnect()
+
+    assert updated.get("type") == "patch", updated
+    assert updated.get("timing", {}).get("scope") == "component", (
+        f"the toggle took the page render: {updated.get('timing')!r}"
+    )
+    assert updated["patches"], updated
+    assert "accordion" in str(updated["patches"]).lower()

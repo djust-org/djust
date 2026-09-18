@@ -20,6 +20,7 @@ while the page demonstrated the opposite of the framework, and it is the
 approach this module replaced.
 """
 
+import functools
 from typing import Any, Dict, Optional
 
 from django.http import Http404
@@ -375,6 +376,14 @@ def _make_forwarder(event: str):
     return event_handler(handler)
 
 
+@functools.lru_cache(maxsize=1)
+def _all_storybook_components() -> list:
+    """The storybook index's component list, built once per process."""
+    from .storybook import build_storybook_index_context
+
+    return list(build_storybook_index_context().get("components", []))
+
+
 class StorybookSidebarMixin:
     """The sidebar's state and handlers, shared by every storybook page.
 
@@ -396,16 +405,23 @@ class StorybookSidebarMixin:
     output.
     """
 
-    def _init_sidebar(self, current_component: Optional[str] = None) -> None:
-        from .storybook import build_storybook_index_context
+    @property
+    def _all_components(self) -> list:
+        """Every component, unfiltered — the sidebar's denominator, and the
+        source `_refresh_sidebar` filters from.
 
-        #: Every component, unfiltered — the sidebar's denominator, and the
-        #: source `_refresh_sidebar` filters from. **Private on purpose**: no
-        #: template reads it, and a public assign is not free — it enters the
-        #: render context and the LiveView state on every render. At 175
-        #: components that was ~36 KB serialized per event, alongside
-        #: `sidebar_components`, which is the list the template actually reads.
-        self._all_components = build_storybook_index_context().get("components", [])
+        A property over a process-wide cache rather than an instance
+        attribute: no template reads it, and an assign is not free — it
+        enters the render context and the LiveView state on every render (at
+        175 components ~36 KB serialized per event, alongside
+        `sidebar_components`, the list the template actually reads), and the
+        change-detection snapshot walks every assign before and after each
+        event (ADR-032 M4), so a 175-dict list that never changes was being
+        fingerprinted twice per click.
+        """
+        return _all_storybook_components()
+
+    def _init_sidebar(self, current_component: Optional[str] = None) -> None:
         #: What the sidebar actually renders. Kept as real state rather than a
         #: template-side filter so the server and the DOM cannot disagree.
         self.sidebar_components = list(self._all_components)
