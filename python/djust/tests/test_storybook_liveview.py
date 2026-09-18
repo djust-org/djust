@@ -93,16 +93,6 @@ async def test_storybook_view_mounts_over_the_socket():
 @_BASE
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ADR-031 (#2895) made this a noop: a class-level descriptor's slot now "
-        "holds a BoundComponent, which _snapshot_assigns compares by id(), so a "
-        "state change inside it is invisible to the auto-skip and the render is "
-        "skipped. Upstream, tracked as #2900 — remove this marker with the fix. "
-        "strict=True: this must turn into a failure the moment it starts passing."
-    ),
-)
 async def test_accordion_toggle_reaches_the_server():
     """The regression: this event used to reach no server at all.
 
@@ -111,7 +101,12 @@ async def test_accordion_toggle_reaches_the_server():
     the server answers. Asserting the response is a patch or an html update —
     not an error — is what distinguishes a mounted view from a rendered one.
 
-    Red since ADR-031 merged — see the marker above and #2900.
+    Red from ADR-031's merge (#2895) until #2900 was fixed (#2911): the
+    descriptor slot began holding a `BoundComponent`, which the skip gate
+    compared by `id()`, so the toggle's state change was invisible and the
+    runtime answered `noop`. It carried a strict `xfail` pointing at #2900
+    while that was true, which is what made this fail the moment it started
+    passing.
     """
     communicator, _mounted = await _mount("accordion")
     try:
