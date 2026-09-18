@@ -5399,10 +5399,7 @@ impl<'py> IntoPyObject<'py> for Value {
                 fields,
                 items,
             } => {
-                let cls = py
-                    .import("collections")?
-                    .getattr("namedtuple")?
-                    .call1((name, fields))?;
+                let cls = named_tuple_class(py, &name, &fields)?;
                 let args: Vec<_> = items
                     .into_iter()
                     .map(|v| v.into_pyobject(py))
@@ -5436,6 +5433,56 @@ impl<'py> IntoPyObject<'py> for Value {
             }
         }
     }
+}
+
+/// The `collections.namedtuple` class a [`Value::NamedTuple`] crosses back to
+/// Python as, ONE per `(name, fields)` shape for the life of the process.
+///
+/// A `Value::NamedTuple` carries only its shape — the original class is gone
+/// once the tuple crossed into Rust — so the Python side has to be rebuilt.
+/// Rebuilding it PER VALUE (`namedtuple(name, fields)` on every conversion)
+/// is a class creation: `exec` of a generated `__new__`, a dozen attribute
+/// sets, ~30 µs. A bridged tag converts the whole flat context on every call
+/// (`build_py_context`), so a page whose context holds ten regrouped rows and
+/// a `{% url %}` per sidebar link minted ~1 760 classes per render.
+///
+/// Keyed by the FULL shape, not the name alone: two namedtuples named `Row`
+/// with different fields are different classes and must stay so. What the
+/// cache changes is that two values of the SAME shape now share a class —
+/// `type(a) is type(b)` — which is what Python itself gives them; a class per
+/// value was the accident, not the contract.
+fn named_tuple_class<'py>(
+    py: Python<'py>,
+    name: &str,
+    fields: &[String],
+) -> PyResult<Bound<'py, PyAny>> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Cache = Mutex<HashMap<(String, Vec<String>), Py<PyAny>>>;
+    static CACHE: pyo3::sync::PyOnceLock<Cache> = pyo3::sync::PyOnceLock::new();
+    let cache = CACHE.get_or_init(py, || Mutex::new(HashMap::new()));
+    let key = (name.to_string(), fields.to_vec());
+    if let Some(cls) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(cls.bind(py).clone());
+    }
+    // Built OUTSIDE the lock: `namedtuple()` runs Python, which can re-enter
+    // this function (a field default's `__repr__`, a GC callback) and would
+    // deadlock a held `Mutex`.
+    // `module=` pinned: `namedtuple()` otherwise stamps `__module__` from the
+    // calling frame, which for a cached class would be whichever caller minted
+    // it first — a value that depends on request order is not a value.
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs.set_item("module", "djust._rust")?;
+    let cls = py
+        .import("collections")?
+        .getattr("namedtuple")?
+        .call((name, fields.to_vec()), Some(&kwargs))?;
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(key)
+        .or_insert_with(|| cls.clone().unbind());
+    Ok(cls)
 }
 
 /// Convert &Value to Python object (clones the value).
@@ -5823,10 +5870,7 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
             fields,
             items,
         } => {
-            let cls = py
-                .import("collections")?
-                .getattr("namedtuple")?
-                .call1((name, fields))?;
+            let cls = named_tuple_class(py, &name, &fields)?;
             let args: Vec<_> = items
                 .into_iter()
                 .map(|item| value_into_handler_pyobject(py, item))
