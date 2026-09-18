@@ -133,6 +133,7 @@ a non-dict object on the context, which is the same object events need.
 | M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, both engine paths | the dict repr; `__str__` never called |
 | M10 | `{{ nav }}\|{{ nav.active }}` with a non-dict object forwarding attribute access and rendering on `str()`, both engine paths | `<nav>overview</nav>\|overview` |
 | M11 | `view._components` type; the documented workaround `self._components.append(...)` (`components.md:258`) | `dict` (`live_view.py:556`) — the workaround raises `AttributeError` |
+| M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:257` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2035` stringifies an unknown object before Rust sees it |
 
 ## The four things the docs say that this tree does not
 
@@ -261,7 +262,11 @@ gets a documented `bound.state`.
   a `dj-click` inside the rendered markup reaches the component's handler.
 - **S3 — docs** for the class-level form.
 
-No Rust step: the object crosses the boundary as an opaque object (M10).
+No Rust step. M10 measured the bare engine; the LiveView path is different
+(M12): `get_context_data` drops a class-level value that is not JSON-serializable
+and `normalize_django_value` stringifies unknown objects, so PR 1 adds a
+`BoundComponent` arm to each (the same arms `Component` has) — the bound
+component crosses as its State until PR 2 gives it a rendered form.
 
 ## Verification
 
@@ -290,3 +295,4 @@ Kept in the style of ADR-029 §7.
 3. **The rejected option was the working one.** A non-dict proxy (Option A) was rejected on `isinstance` and hot-path grounds; measured, it is the only shape the engine renders (M10). The cost was real but belonged in the trade-off, not in a rejection.
 4. **The documented workaround was not tried.** `self._components.append(...)` fails because `_components` is a dict (M11). The draft cited the section without running its code.
 5. **Rendering and events were treated as separate problems.** They share one missing object; solving rendering alone would have left the event and snapshot gaps and required a second design.
+6. **M10 was measured on the wrong path.** `render_template` takes the object; `render_with_diff` never hands it to the engine (M12). Found by PR 1's first real-path test, which rendered `{{ nav.active }}` empty.
