@@ -168,6 +168,32 @@ pub fn max_djust_id_in(node: &VNode) -> Option<u64> {
     max_so_far
 }
 
+/// Paths (child-index chains from `root`) of every element whose attribute
+/// `key` equals `value`, in document order. ADR-032 D3 step 2: the scoped
+/// component patch needs the ONE node carrying `data-component-id`; the
+/// caller treats zero or several as "not exact" and takes the full path.
+pub fn find_paths_by_attr(root: &VNode, key: &str, value: &str) -> Vec<Vec<usize>> {
+    fn walk(
+        node: &VNode,
+        key: &str,
+        value: &str,
+        path: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        if node.attrs.get(key).map(String::as_str) == Some(value) {
+            out.push(path.clone());
+        }
+        for (i, child) in node.children.iter().enumerate() {
+            path.push(i);
+            walk(child, key, value, path, out);
+            path.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, key, value, &mut Vec::new(), &mut out);
+    out
+}
+
 /// Ensure the thread-local id counter is at least `min_value`. If the
 /// current counter is already at or above `min_value`, this is a no-op.
 /// Otherwise the counter is advanced to `min_value`.
@@ -1693,6 +1719,32 @@ mod tests {
             updated.children.first().and_then(|c| c.djust_id.clone()),
             span_id,
             "Child djust_id must be preserved"
+        );
+    }
+
+    // ADR-032 D3 step 2 (#2917): the scoped component patch locates its node
+    // by attribute and needs exactly one.
+    #[test]
+    fn find_paths_by_attr_returns_every_match_in_document_order() {
+        let tree = parse_html(
+            "<div><p>a</p><div data-component-id=\"nav\"><b>x</b></div>\
+             <section><div data-component-id=\"grid\"></div><i data-component-id=\"nav\"></i></section></div>",
+        )
+        .unwrap();
+        assert_eq!(
+            find_paths_by_attr(&tree, "data-component-id", "nav"),
+            vec![vec![1], vec![2, 1]]
+        );
+        assert_eq!(
+            find_paths_by_attr(&tree, "data-component-id", "grid"),
+            vec![vec![2, 0]]
+        );
+        assert!(find_paths_by_attr(&tree, "data-component-id", "missing").is_empty());
+        // The root itself can match (path `[]`).
+        let root = parse_html("<div data-component-id=\"nav\"><b>x</b></div>").unwrap();
+        assert_eq!(
+            find_paths_by_attr(&root, "data-component-id", "nav"),
+            vec![Vec::<usize>::new()]
         );
     }
 }

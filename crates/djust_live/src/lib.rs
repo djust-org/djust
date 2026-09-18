@@ -25,8 +25,9 @@ use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
-    cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
-    splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, VNode,
+    cache_ignore_subtree_html, diff, find_paths_by_attr, parse_html, parse_html_continue,
+    parse_html_fragment, reset_id_counter, splice_ignore_subtrees, sync_ids,
+    try_text_only_vdom_update_inplace, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -184,6 +185,9 @@ const FAST_PATH_FRAGMENT: f64 = 1.0;
 /// change that `render_with_diff` would report as `FAST_PATH_FRAGMENT` is
 /// therefore reported as this value by `render_binary_diff`.
 const FAST_PATH_TEXT_REGION: f64 = 2.0;
+/// ADR-032: no page render at all — one bound component's subtree was
+/// diffed and spliced by `patch_component_subtree`.
+const FAST_PATH_COMPONENT: f64 = 3.0;
 
 /// Per-phase timing from render_with_diff()
 #[derive(Debug, Clone)]
@@ -1457,6 +1461,128 @@ impl RustLiveViewBackend {
         })
     }
 
+    /// ADR-032 D3 — patch ONE bound component's subtree without a page render.
+    ///
+    /// `html` is the component's fresh render: the `<div data-component-id="…">`
+    /// wrapper and its contents (`BoundComponent.render`). The unique element
+    /// of `last_vdom` whose `data-component-id` equals `component_id` is
+    /// diffed against it with every patch path prefixed by the node's path
+    /// from the root, the new subtree is spliced in (ids carried forward by
+    /// `sync_ids`, fresh ones continuing the counter past the tree's
+    /// high-water mark — #1550/#1552), `version` is bumped and
+    /// `state[component_id]` is set to the new HTML as a safe string so a
+    /// later FULL render sees what the page shows. `last_html` is refreshed
+    /// from the spliced tree so the text fast paths keep a true baseline, and
+    /// the partial-render fragment cache is dropped (its `<html>` fragment
+    /// still holds the old component markup).
+    ///
+    /// Returns the `render_with_diff` triple `(html, patches_json, version)`
+    /// so the runtime emits the same `patch` frame it emits today, or `None`
+    /// when the scoped path cannot be exact — no VDOM yet, the node missing
+    /// or duplicated, the fragment not a single root carrying the id — and
+    /// the caller takes the full path (D6: not an error).
+    fn patch_component_subtree(
+        &mut self,
+        component_id: String,
+        html: String,
+    ) -> PyResult<Option<(String, String, u64)>> {
+        guard_panic("patch_component_subtree", move || {
+            use std::time::Instant;
+            let t_start = Instant::now();
+
+            let Some(vdom) = self.last_vdom.as_mut() else {
+                return Ok(None);
+            };
+            let mut paths = find_paths_by_attr(vdom, "data-component-id", &component_id);
+            if paths.len() != 1 {
+                return Ok(None);
+            }
+            let path = paths.pop().expect("one path");
+            // The full path never patches inside a `dj-update="ignore"` region
+            // (the old children are spliced back before the diff) and addresses
+            // a `[dj-virtual]` list's rows by key, not by path. A component
+            // under either would be patched differently here — not exact.
+            {
+                let mut node: &VNode = vdom;
+                let mut ancestors = Vec::with_capacity(path.len() + 1);
+                ancestors.push(node);
+                for &idx in &path {
+                    node = match node.children.get(idx) {
+                        Some(n) => n,
+                        None => return Ok(None),
+                    };
+                    ancestors.push(node);
+                }
+                if ancestors.iter().any(|n| {
+                    n.attrs.get("dj-update").map(String::as_str) == Some("ignore")
+                        || n.attrs.contains_key("dj-virtual")
+                }) {
+                    return Ok(None);
+                }
+            }
+
+            // dj-id continuity: fresh ids for inserted nodes must not collide
+            // with survivors anywhere in the page (#1550 / #1552).
+            if let Some(max_id) = djust_vdom::max_djust_id_in(vdom) {
+                djust_vdom::ensure_id_counter_at_least(max_id + 1);
+            }
+            let parent_tag = match path.split_last() {
+                Some((_, parent)) => get_vdom_node_mut(vdom, parent)
+                    .map(|n| n.tag.clone())
+                    .unwrap_or_else(|| "body".to_string()),
+                None => "body".to_string(),
+            };
+
+            let t_parse = Instant::now();
+            let mut roots = match parse_html_fragment(&html, &parent_tag) {
+                Ok(roots) => roots,
+                Err(_) => return Ok(None),
+            };
+            if roots.len() != 1 {
+                return Ok(None);
+            }
+            let mut new_node = roots.pop().expect("one root");
+            if new_node.attrs.get("data-component-id") != Some(&component_id) {
+                return Ok(None);
+            }
+            let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
+
+            let Some(old_node) = get_vdom_node_mut(vdom, &path) else {
+                return Ok(None);
+            };
+            let t_diff = Instant::now();
+            splice_ignore_subtrees(old_node, &mut new_node);
+            let patches = djust_vdom::diff::diff_nodes(old_node, &new_node, &path);
+            sync_ids(old_node, &mut new_node);
+            cache_ignore_subtree_html(&mut new_node);
+            *old_node = new_node;
+            let diff_ms = t_diff.elapsed().as_secs_f64() * 1000.0;
+
+            let t_serial = Instant::now();
+            let full_html = vdom.to_html();
+            let patches_json = serde_json::to_string(&patches)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            let serialize_ms = t_serial.elapsed().as_secs_f64() * 1000.0;
+
+            self.version += 1;
+            self.last_html = Some(full_html.clone());
+            self.node_html_cache = Vec::new();
+            self.fragment_text_map = None;
+            self.text_node_index = None; // positions moved; rebuilt by the next full parse
+            self.set_component_html(component_id, html);
+            self.last_render_timing = Some(RenderTiming {
+                render_ms: 0.0,
+                parse_ms,
+                diff_ms,
+                serialize_ms,
+                total_ms: t_start.elapsed().as_secs_f64() * 1000.0,
+                html_len: full_html.len(),
+                fast_path: FAST_PATH_COMPONENT,
+            });
+            Ok(Some((full_html, patches_json, self.version)))
+        })
+    }
+
     /// Reset the view state
     fn reset(&mut self) {
         self.last_vdom = None;
@@ -1635,6 +1761,16 @@ impl RustLiveViewBackend {
     /// removed keys as the only "changes", skipping every region the caller
     /// actually changed; with no pending set the next render is a full one,
     /// which re-renders the removed regions without any hint.
+    /// ADR-032 D3: after a scoped patch, `state[component_id]` is the
+    /// component's new HTML (safe) so a later page render sees what the page
+    /// shows. A copy-on-write door like `set_state` — a render holding the
+    /// map is never written through.
+    pub fn set_component_html(&mut self, component_id: String, html: String) {
+        std::sync::Arc::make_mut(&mut self.state)
+            .insert(component_id.clone(), Value::SafeString(html));
+        self.safe_keys.insert(component_id);
+    }
+
     pub fn retain_state_keys_rust(&mut self, keys: Vec<String>) -> Vec<String> {
         let removed = self.retain_state_keys(keys);
         if let Some(changed) = &mut self.changed_keys {
@@ -5654,6 +5790,12 @@ mod state_is_shared_not_copied_2737 {
             (
                 "clear_live_handles",
                 Box::new(|v: &mut RustLiveViewBackend| v.clear_live_handles()),
+            ),
+            (
+                "set_component_html",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    v.set_component_html("k".to_string(), "<i>k</i>".to_string())
+                }),
             ),
         ];
         for (label, mutate) in doors {
