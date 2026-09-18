@@ -319,7 +319,13 @@ class TestBoundComponentRenderRoundTrip:
                 {"type": "event", "event": "push", "params": {"component_id": "grid"}}
             )
             assert transport.errors == []
-            assert f">{expected}</i>" in _html(transport), _html(transport)
+            # ADR-032 (#2917): ``{{ grid }}`` is the only read of the component,
+            # so the event patches its subtree instead of shipping the page.
+            frame = transport.sent[-1]
+            assert frame["type"] == "patch", frame
+            texts = [p["text"] for p in frame["patches"] if p["type"] == "SetText"]
+            assert texts == [expected], frame["patches"]
+            assert f">{expected}</i>" in view.render_with_diff()[0]
 
     def test_state_field_named_items_renders(self):
         """Review 🔴1: a field shadowing ``dict.items`` must not break the hash."""

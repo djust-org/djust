@@ -298,6 +298,42 @@ their markup from the state.
 Note that `isinstance(view.nav, Tabs.State)` is `False` -- the state is
 `view.nav.state`.
 
+#### Scoped events: patching only the component
+
+An event that changes **only** a class-level component's state does not
+re-render the page
+([ADR-032](https://github.com/djust-org/djust/blob/main/docs/adr/032-component-scoped-rendering.md)).
+After the handler runs, the runtime compares the view's assigns before and
+after; if the component's slot is the one thing that changed and the view's
+template is *component-opaque* for it, only the component is rendered and its
+subtree is diffed and spliced into the page's VDOM. The client receives the
+same `patch` frame it always did (the debug panel and `benchmark_event` see
+`timing.scope == "component"` when timing is exposed), recovery and versions
+stay consistent, and nothing changes in `client.js`. Whenever any condition
+fails, the page renders as before -- the scoped path is exact or not taken.
+
+A template is component-opaque for `nav` when every reference to it is the
+bare `{{ nav }}`:
+
+```django
+{# scoped: the only read is the bare variable #}
+<div dj-root><h1>{{ title }}</h1>{{ nav }}</div>
+
+{# page render: another read of the component's state #}
+<div dj-root>{{ nav }} <small>{{ nav.active }}</small></div>
+<div dj-root>{{ nav|length }}</div>
+<div dj-root>{% if nav %}{{ nav }}{% endif %}</div>
+```
+
+Also page-rendered: a memoised `@computed("nav")` on the view (its value
+would change with the component), an unresolved `{% include %}` /
+`{% extends %}` (the partial could read the state), a handler that changes
+any other assign in the same event, `self._force_full_html = True`, a
+pending `push_event`, and `{{ nav }}` rendered more than once or inside a
+`dj-update="ignore"` / `dj-virtual` region. A plain `@computed` (no
+dependency list) that reads the component's state is not detected -- declare
+the dependency, `@computed("nav")`, so the event takes the page render.
+
 ### Lifecycle
 
 ```

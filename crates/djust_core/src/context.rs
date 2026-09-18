@@ -267,6 +267,12 @@ struct ScopeFrame {
     /// refcount bumps per clone, against the O(entire state) deep copy this
     /// removes.
     values: SharedValues,
+    /// A process-unique content stamp (#2914). Re-assigned on every `DerefMut`
+    /// — the one write door to `values` since #2733's copy-on-write `Arc` —
+    /// and at `from_shared`, so equal stamps imply identical contents and a
+    /// `Clone` (which shares the `Arc`) shares the stamp. `0` = never stamped,
+    /// which [`Context::bridged_py_dict`] treats as "convert, do not cache".
+    stamp: u64,
     /// The six metadata fields below are COPY-ON-WRITE too, for the same
     /// reason and by the same mechanism (#2735, the other half of #2732).
     ///
@@ -311,6 +317,64 @@ struct ScopeFrame {
     include_instance: Option<String>,
 }
 
+static FRAME_STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn next_frame_stamp() -> u64 {
+    FRAME_STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+// Per-thread memo of one frame's converted handler dict, keyed by the
+// frame's content stamp (#2914).
+//
+// A bridged tag receives the WHOLE context as a Python dict; building it
+// converted every value in every frame on every call, so a page with a
+// `{% url %}` per sidebar row paid O(context) × rows per render — 75 % of a
+// storybook toggle. A frame's contents only change through `DerefMut`, which
+// re-stamps it, so a converted frame can be reused verbatim until then. The
+// loop frame `{% for %}` rebinds each iteration is re-stamped and misses;
+// every frame above it hits.
+//
+// Lifetime (review of #2916): the memo never holds more than the frames of
+// the context that last called it — `bridged_py_dict` drops every entry
+// whose stamp is not on its stack — and the render entries hold a
+// [`BridgeFrameCacheGuard`] so nothing converted for a render outlives the
+// render. A converted dict is a full copy of the frame's values (and pins
+// any live Python handle among them), so an unbounded or render-spanning
+// cache would keep state alive that the view has already released.
+//
+// The `Py<PyDict>` values are dropped with the GIL held in practice (the
+// guard drops inside a pymethod); a drop at thread exit without it relies on
+// PyO3's reference pool, which this workspace leaves enabled.
+//
+// One visible consequence, which is Django's own behaviour: a tag that
+// mutates a nested value it received (a list inside the context) is seen by
+// later tags in the same render, because they receive the same object. No
+// write reaches Rust state either way.
+thread_local! {
+    static BRIDGE_FRAME_CACHE: std::cell::RefCell<AHashMap<u64, Py<pyo3::types::PyDict>>> =
+        std::cell::RefCell::new(AHashMap::new());
+}
+
+/// Drop every memoised frame dict (#2914). Safe to call from any thread at
+/// any time — a later call simply converts again.
+pub fn clear_bridge_frame_cache() {
+    let _ = BRIDGE_FRAME_CACHE.try_with(|cache| {
+        if let Ok(mut cache) = cache.try_borrow_mut() {
+            cache.clear();
+        }
+    });
+}
+
+/// Clears the bridged-frame memo when dropped. Every render entry holds one
+/// so the memo cannot outlive the render it served, on any exit path.
+#[must_use = "the guard clears the memo when it is dropped"]
+pub struct BridgeFrameCacheGuard;
+
+impl Drop for BridgeFrameCacheGuard {
+    fn drop(&mut self) {
+        clear_bridge_frame_cache();
+    }
+}
+
 impl std::ops::Deref for ScopeFrame {
     type Target = AHashMap<String, Value>;
     fn deref(&self) -> &Self::Target {
@@ -323,6 +387,7 @@ impl std::ops::DerefMut for ScopeFrame {
     /// resulting `&mut` is to a uniquely owned map either way, so every caller
     /// behaves exactly as it did when the field was a plain `AHashMap`.
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.stamp = next_frame_stamp();
         std::sync::Arc::make_mut(&mut self.values)
     }
 }
@@ -710,6 +775,7 @@ impl Context {
         Self {
             stack: vec![ScopeFrame {
                 values,
+                stamp: next_frame_stamp(),
                 ..ScopeFrame::default()
             }],
             node_identity: None,
@@ -2565,6 +2631,56 @@ impl Context {
             }
             Err(_) => Ok(Walked::Invalid),
         }
+    }
+
+    /// The handler dict a bridged Python tag receives (#2914), built frame by
+    /// frame through [`BRIDGE_FRAME_CACHE`]: a hit is a `dict.update` of the
+    /// cached frame, a miss converts that frame only.
+    ///
+    /// `remint_safe_context` then marks the dict's DOTTED safe paths in place
+    /// (`python_examples_html.0.html`), which lands on the cached object. That
+    /// is safe today because a dotted grant is render-global — it comes from
+    /// the view's `mark_safe_keys`, never from a template scope — so the mark
+    /// is the same on every call. If a scoped dotted grant is ever introduced,
+    /// the heads of those paths must be converted fresh per call instead.
+    pub fn bridged_py_dict<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
+        let out = pyo3::types::PyDict::new(py);
+        let result: Result<(), String> = BRIDGE_FRAME_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            // Only this context's frames may stay memoised: a popped loop
+            // frame, or a frame that was re-stamped, leaves at once.
+            cache.retain(|stamp, _| self.stack.iter().any(|f| f.stamp == *stamp));
+            for frame in &self.stack {
+                if frame.values.is_empty() {
+                    continue;
+                }
+                if frame.stamp != 0 {
+                    if let Some(cached) = cache.get(&frame.stamp) {
+                        out.update(cached.bind(py).as_mapping())
+                            .map_err(|e| format!("Failed to merge cached frame: {e}"))?;
+                        continue;
+                    }
+                }
+                let d = pyo3::types::PyDict::new(py);
+                for (key, value) in frame.values.iter() {
+                    let py_value = crate::value_into_handler_pyobject(py, value.clone())
+                        .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+                    d.set_item(key, py_value)
+                        .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+                }
+                out.update(d.as_mapping())
+                    .map_err(|e| format!("Failed to merge frame: {e}"))?;
+                if frame.stamp != 0 {
+                    cache.insert(frame.stamp, d.unbind());
+                }
+            }
+            Ok(())
+        });
+        result?;
+        Ok(out)
     }
 
     /// Convert the entire context to a flattened HashMap.

@@ -1,6 +1,6 @@
 # ADR-032: An event that changes only a bound component re-renders that component's subtree, not the page
 
-**Status**: Proposed
+**Status**: Accepted — S0 landed in #2915 (#2913), S0b in #2916 (#2914), S1 + S2 in the PR for #2917; S3 (storybook) rides #2887.
 **Date**: 2026-09-18
 **Citations**: `file:line` pinned to `main` at `6729f40a` unless marked `#2887` (the branch every measurement was taken on: `fix/theming-gallery-render-and-styling` at `3e02340d` merged with that `main`).
 **Deciders**: Project maintainers

@@ -1440,6 +1440,37 @@ pub(crate) fn build_py_context<'py>(
     Ok(py_context)
 }
 
+/// The context a bridged inline tag receives (#2914).
+///
+/// `Live` hands [`build_py_context_memo`] the frames, so an unchanged frame is
+/// reused verbatim across calls; `Flat` is the pre-flattened map every other
+/// registry entry point still takes — and what an inline tag takes while a
+/// `block.super` is armed, since that path binds a synthetic `block` key on a
+/// clone (`renderer::bridged_context_map`).
+pub enum ContextSource<'a> {
+    Flat(&'a HashMap<String, djust_core::Value>),
+    Live(&'a djust_core::Context),
+}
+
+/// [`build_py_context`] over the live `Context` with the per-frame memo
+/// (#2914). Same dict, same names, same values; only the conversion is shared
+/// across calls.
+pub(crate) fn build_py_context_memo<'py>(
+    py: Python<'py>,
+    context: &djust_core::Context,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
+    let py_context = context.bridged_py_dict(py)?;
+    if let Some(raw) = raw_py_objects {
+        for (key, obj) in raw {
+            py_context
+                .set_item(key, obj.bind(py))
+                .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+        }
+    }
+    Ok(py_context)
+}
+
 /// Re-mint the `SafeData` bit on the context values the renderer had marked
 /// safe (#2547).
 ///
@@ -1596,7 +1627,7 @@ fn autoescape_kwargs(
 pub fn call_handler_with_bindings(
     name: &str,
     args: &[TagArg],
-    context: &HashMap<String, djust_core::Value>,
+    source: ContextSource<'_>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     safe_paths: &[String],
     autoescape: bool,
@@ -1615,8 +1646,11 @@ pub fn call_handler_with_bindings(
     };
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
-        let py_context = build_py_context(py, context, raw_py_objects)
-            .map_err(DjangoRustError::TemplateError)?;
+        let py_context = match source {
+            ContextSource::Flat(context) => build_py_context(py, context, raw_py_objects),
+            ContextSource::Live(context) => build_py_context_memo(py, context, raw_py_objects),
+        }
+        .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
         let kwargs =
             autoescape_kwargs(py, wants, autoescape).map_err(DjangoRustError::TemplateError)?;
