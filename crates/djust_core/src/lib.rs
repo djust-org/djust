@@ -3397,6 +3397,41 @@ impl fmt::Display for Value {
     }
 }
 
+/// Does this `dict` SUBCLASS spell itself — is `str(o)` something other than
+/// the map display? (#2899, the dict half of #2704.)
+///
+/// Django renders `str(o)`. For an exact `dict`, and for a subclass that
+/// inherits both `__str__` and `__repr__` (a `TypedState`, a bare
+/// `class D(dict)`), that IS the map repr, so the engine map is the right
+/// carrier. For a `QueryDict` (`<QueryDict: {...}>`), an `OrderedDict`
+/// (`OrderedDict({...})`), a `defaultdict` or a user class with its own
+/// `__str__`, the map display is the wrong spelling — such an object crosses
+/// as the opaque carrier instead, whose `{{ v }}` is `str(o)` and whose item
+/// sinks read the live object (`walk_one_segment` tries `__getitem__` first,
+/// as Django does).
+///
+/// Compared by identity against `dict`'s own slots: a subclass that does not
+/// override a dunder resolves to the SAME wrapper object, so
+/// `type(o).__str__ is dict.__str__` is exactly "inherited". ONE statement of
+/// the rule, asked by the conversion arm and by [`crosses_as_encoded`].
+pub fn dict_subclass_spells_itself(ob: &Bound<'_, PyAny>) -> bool {
+    let Ok(d) = ob.cast::<PyDict>() else {
+        return false;
+    };
+    if d.is_exact_instance_of::<PyDict>() {
+        return false;
+    }
+    let dict_ty = ob.py().get_type::<PyDict>();
+    let ty = ob.get_type();
+    let overrides = |name: &str| -> bool {
+        match (ty.getattr(name), dict_ty.getattr(name)) {
+            (Ok(own), Ok(base)) => !own.is(&base),
+            _ => true,
+        }
+    };
+    overrides("__str__") || overrides("__repr__")
+}
+
 /// The `(key, value)` pairs of a Django `MultiValueDict` / `QueryDict`, one
 /// per key with the LAST value — `QueryDict.__getitem__`'s rule, and what
 /// Django renders for `{{ qd.a }}` on `?a=1&a=2` (#2556).
@@ -4019,47 +4054,59 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 .collect::<Option<Vec<Value>>>()
         }) {
             Ok(Value::List(list))
-        } else if let Some(pairs) = multi_value_dict_pairs(&ob.to_owned()) {
+        } else if let Some(pairs) = multi_value_dict_pairs(&ob.to_owned())
+            .filter(|_| !dict_subclass_spells_itself(&ob.to_owned()))
+        {
             // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm:
             // last value per key, as Django resolves it (#2556). See the
-            // helper for why the object arrives raw.
+            // helper for why the object arrives raw. A `QueryDict` spells
+            // itself (`<QueryDict: {...}>`), so on THIS converter it declines
+            // to the carrier below (#2899) — the last-value cells hold through
+            // the carrier's live `__getitem__`; this arm still serves the
+            // state converters, which need a map.
             let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
             for (k, v) in pairs {
                 m.insert(py_object_key(&k), v.extract::<Value>()?);
             }
             Ok(Value::Object(m))
-        } else if let Some(map) = ob.cast::<PyDict>().ok().and_then(|d| {
-            // Iterated by hand rather than `extract::<IndexMap<..>>()`, because
-            // extraction is exactly where Python's insertion order would be
-            // lost — and no later re-sort can recover it (#2203). PyDict
-            // iteration yields entries in insertion order.
-            //
-            // A NON-STRING key no longer rejects the whole dict (#2339). It
-            // used to: the arm returned `None`, the conversion fell through to
-            // the object handling below, and `{0: 1}` reached the renderer as
-            // its own `repr` — so `{% for k in d %}` iterated that string BY
-            // CHARACTER and `{{ d|length }}` counted 14. The key now carries
-            // its type, so such a dict is a real mapping.
-            // Snapshotted into an owned `Vec` BEFORE any recursive
-            // `.extract::<Value>()` call (#2510). `d.iter()` is a LIVE PyO3
-            // iterator directly over the dict; `.extract::<Value>()` can run
-            // arbitrary Python (any dunder check on an unresolved
-            // `SimpleLazyObject`, e.g. `__bool__`, triggers Django's lazy
-            // `_setup()`). If that side effect mutates THIS SAME dict — which
-            // is exactly what happens when a dict's own value is a lazy
-            // object whose resolution writes back into the dict — the live
-            // iterator's size check fails mid-iteration and PyO3 panics
-            // ("dictionary changed size during iteration"). Collecting into a
-            // `Vec` first fully drains the iterator before any Python
-            // callback runs, so a later mutation has nothing left to
-            // invalidate.
-            let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = d.iter().collect();
-            let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
-            for (k, v) in pairs {
-                m.insert(py_object_key(&k), v.extract::<Value>().ok()?);
-            }
-            Some(m)
-        }) {
+        } else if let Some(map) = ob
+            .cast::<PyDict>()
+            .ok()
+            // #2899: a subclass with its own spelling is not a map display.
+            .filter(|_| !dict_subclass_spells_itself(&ob.to_owned()))
+            .and_then(|d| {
+                // Iterated by hand rather than `extract::<IndexMap<..>>()`, because
+                // extraction is exactly where Python's insertion order would be
+                // lost — and no later re-sort can recover it (#2203). PyDict
+                // iteration yields entries in insertion order.
+                //
+                // A NON-STRING key no longer rejects the whole dict (#2339). It
+                // used to: the arm returned `None`, the conversion fell through to
+                // the object handling below, and `{0: 1}` reached the renderer as
+                // its own `repr` — so `{% for k in d %}` iterated that string BY
+                // CHARACTER and `{{ d|length }}` counted 14. The key now carries
+                // its type, so such a dict is a real mapping.
+                // Snapshotted into an owned `Vec` BEFORE any recursive
+                // `.extract::<Value>()` call (#2510). `d.iter()` is a LIVE PyO3
+                // iterator directly over the dict; `.extract::<Value>()` can run
+                // arbitrary Python (any dunder check on an unresolved
+                // `SimpleLazyObject`, e.g. `__bool__`, triggers Django's lazy
+                // `_setup()`). If that side effect mutates THIS SAME dict — which
+                // is exactly what happens when a dict's own value is a lazy
+                // object whose resolution writes back into the dict — the live
+                // iterator's size check fails mid-iteration and PyO3 panics
+                // ("dictionary changed size during iteration"). Collecting into a
+                // `Vec` first fully drains the iterator before any Python
+                // callback runs, so a later mutation has nothing left to
+                // invalidate.
+                let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = d.iter().collect();
+                let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
+                for (k, v) in pairs {
+                    m.insert(py_object_key(&k), v.extract::<Value>().ok()?);
+                }
+                Some(m)
+            })
+        {
             Ok(Value::Object(map))
         } else {
             // #2448: one of the four `datetime` types, whose
@@ -4587,6 +4634,39 @@ impl Encoded {
     /// because a field was read as a proxy. Whether a caller asks at all is
     /// `filters::carrier_answers_subscripts_from_the_live_object` — one
     /// statement, two sinks, rather than a copy of the rule here (#1646).
+    /// The mapping a dict-subclass carrier holds, as a [`Value::Object`], for
+    /// the sinks that spell a value as JSON (#2899).
+    ///
+    /// A dict subclass with its own spelling crosses as the carrier so that
+    /// `{{ v }}` is `str(o)` — but `json_script` is `json.dumps(o,
+    /// cls=DjangoJSONEncoder)`, and Django's encoder serializes a `dict`
+    /// subclass as the MAPPING (`{"k": 1}`), not as its `str()`. The carrier's
+    /// `json` slot is a string spelling, so `|json_script` reads the mapping
+    /// from the live handle instead. `None` for every non-mapping carrier and
+    /// for a carrier whose handle a msgpack round trip dropped — those keep
+    /// the string spelling, as every carrier did before this.
+    ///
+    /// A `MultiValueDict` reads through [`multi_value_dict_pairs`] (last value
+    /// per key, #2556), which is also what `DjangoJSONEncoder` sees: it
+    /// iterates the object as a dict, whose `items()` is last-value.
+    pub fn live_mapping_value(&self) -> Option<Value> {
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let ob = handle.bind(py);
+            let dict = ob.cast::<PyDict>().ok()?;
+            let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = match multi_value_dict_pairs(ob)
+            {
+                Some(pairs) => pairs,
+                None => dict.iter().collect(),
+            };
+            let mut map: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
+            for (k, v) in pairs {
+                map.insert(py_object_key(&k), v.extract::<Value>().ok()?);
+            }
+            Some(Value::Object(map))
+        })
+    }
+
     pub fn live_get_item(&self, index: i64) -> Option<PyResult<Option<Value>>> {
         let handle = self.live.as_ref()?;
         Some(Python::attach(|py| match handle.bind(py).get_item(index) {
@@ -4715,7 +4795,7 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
     if bounded_sequence_items(ob).is_some() {
         return false;
     }
-    if ob.cast::<PyDict>().is_ok() {
+    if ob.cast::<PyDict>().is_ok() && !dict_subclass_spells_itself(ob) {
         return false;
     }
     // Both serialization floors, which recurse rather than produce an

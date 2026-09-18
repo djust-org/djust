@@ -10,7 +10,7 @@ from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
-from ..serialization import normalize_django_value
+from ..serialization import _crosses_as_encoded, normalize_django_value
 from ..utils import is_model_list
 
 logger = logging.getLogger(__name__)
@@ -402,6 +402,14 @@ class ContextMixin:
                 # `build_render_sidecar` gives the non-LiveView paths.
                 continue
             if isinstance(value, dict):
+                if _crosses_as_encoded(value):
+                    # #2899: a dict SUBCLASS with its own spelling (an
+                    # `OrderedDict`, a user class with `__str__`) stays raw
+                    # for the same reason the `QueryDict` above does — the
+                    # renderer's carrier spells `{{ v }}` as `str(o)`, as
+                    # Django does, and reads items through the live object.
+                    # The `dict` rebuild below would erase the type.
+                    continue
                 context[key] = self._deep_serialize_dict(value, tc, key)
             elif isinstance(value, models.Model):
                 context[key] = normalize_django_value(value)

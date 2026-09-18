@@ -412,11 +412,15 @@ class TestTheReferenceTableIsRunNotTranscribed:
             "escapeseq": 17,
             "safeseq": 17,
             "unordered_list": 17,
-            "first": 27,
-            "last": 30,
-            "phone2numeric": 45,
+            # +1 each since #2899: `d-subclass`, a dict subclass Django refuses
+            # to index positionally, phone2numeric-s as text like every dict.
+            "first": 28,
+            "last": 31,
+            "phone2numeric": 46,
         }, per_filter
-        assert sum(per_filter.values()) == 153
+        # 156 since #2899: `d-subclass` adds one refusal to first / last /
+        # phone2numeric.
+        assert sum(per_filter.values()) == 156
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
@@ -460,7 +464,10 @@ class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
         thinking about this test is caught here.
         """
         dicts = [k for k, v in CORPUS.items() if isinstance(v, dict)]
-        assert len(dicts) == 8, dicts
+        # Nine since #2899 added `d-subclass`: a dict SUBCLASS with its own
+        # spelling crosses as the carrier, whose `last` is the live `o[-1]` —
+        # a `KeyError`, the same answer as the map.
+        assert len(dicts) == 9, dicts
         for key in dicts:
             with pytest.raises(Exception, match="KeyError|not subscriptable"):
                 _rust.render_template("{{ p|last }}", normalize_django_value({"p": CORPUS[key]}))
