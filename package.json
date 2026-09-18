@@ -21,7 +21,7 @@
     "eslint-plugin-security": "^4.0.1",
     "happy-dom": "^20.14.0",
     "jsdom": "^30.0.1",
-    "magic-string": "^1.2.3",
+    "magic-string": "^1.4.1",
     "terser": "^5.51.2",
     "vitest": "^5.0.0"
   },
