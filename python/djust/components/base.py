@@ -530,6 +530,10 @@ class BoundComponent:
     """
 
     _OWN_ATTRS = frozenset({"_descriptor", "_view", "state", "component_id"})
+    #: Every change-detection snapshot fingerprints this object as its State
+    #: (``change_detection.STATE_MARKER``, #2900): the wrapper's id() never
+    #: changes, the State inside it is what a handler mutates.
+    _djust_fingerprint_state = True
 
     def __init__(
         self, descriptor: "LiveComponent", view: Any, state: Any, component_id: str
