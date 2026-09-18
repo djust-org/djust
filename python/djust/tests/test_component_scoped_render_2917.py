@@ -77,6 +77,27 @@ class Tabs(LiveComponent):
         self.state.active = value
 
 
+class Idempotent(LiveComponent):
+    """A handler that may change nothing (#2922)."""
+
+    class State(TypedState):
+        accepted: bool = False
+
+    template = "<p>{{ accepted }}</p>"
+
+    @event_handler()
+    def accept(self, **kwargs: Any) -> None:
+        self.state.accepted = True
+
+
+class IdempotentPage(LiveView):
+    template = "<div dj-root>{{ banner }}</div>"
+    banner = Idempotent()
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        pass
+
+
 class Probe(LiveComponent):
     """``Meta.event`` alias: the event has no ``component_id`` and runs as a
     VIEW event through the skip gate (#2900)."""
@@ -418,6 +439,25 @@ class TestScopedPath:
         )
         assert view.nav.active == "b" and other.nav.active == "overview"
         assert "overview<b" in other.render_with_diff()[0]
+
+
+@pytest.mark.django_db
+class TestNoChangeOnTheComponentRoute:
+    @pytest.mark.asyncio
+    async def test_a_handler_that_changed_nothing_answers_noop(self):
+        """#2922: the component route rendered the whole page as an
+        ``html_update`` for a click whose handler left the state equal; the
+        view route answered ``noop``. Now both do."""
+        view, runtime, transport = _mounted(IdempotentPage)
+        event = {"type": "event", "event": "accept", "params": {"component_id": "banner"}}
+        await runtime.dispatch_event({**event, "ref": 1})
+        first = _last_frame(transport)
+        assert first["type"] == "patch" and first["ref"] == 1, first
+        await runtime.dispatch_event({**event, "ref": 2})
+        second = _last_frame(transport)
+        assert second["type"] == "noop", second
+        assert second["ref"] == 2 and second["event_name"] == "accept"
+        assert view.banner.accepted is True
 
 
 @pytest.mark.django_db

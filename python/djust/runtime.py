@@ -3984,6 +3984,22 @@ class ViewRuntime:
         # path; the frame is the ``patch`` frame that path emits.
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
             changed = _compute_changed_keys(pre_assigns, _snapshot_assigns(view))
+            # A click whose handler changed nothing (close on a closed sheet,
+            # a second "accept") is a ``noop``, as the view route answers —
+            # not a page render shipped as a 30 KB ``html_update`` (#2922).
+            if not changed and not getattr(view, "_pending_push_events", None):
+                await self._flush_all_pending()
+                noop_msg: Dict[str, Any] = {
+                    "type": "noop",
+                    "source": "event",
+                    "event_name": event_name,
+                }
+                if event_ref is not None:
+                    noop_msg["ref"] = event_ref
+                await self.transport.send(noop_msg)
+                self._dispatch_async_work(event_name)
+                await self._flush_deferred_activity_events()
+                return True
             if _scoped_component_for(view, changed) is component:
                 _scoped_start = time.perf_counter()
                 scoped = await self._render_scoped_component(view, component)
