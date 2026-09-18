@@ -35,8 +35,8 @@ pub(crate) fn smart_urlquote(url: &str) -> String {
     // urllib.parse.urlsplit removes these ASCII controls before splitting.
     let cleaned = url.replace(['\t', '\r', '\n'], "");
     let url = cleaned.trim_start_matches(|c: char| c <= ' ');
-    let (base, fragment) = url.split_once('#').map_or((url, ""), |parts| parts);
-    let (base, query) = base.split_once('?').map_or((base, ""), |parts| parts);
+    let (base, fragment) = url.split_once('#').unwrap_or((url, ""));
+    let (base, query) = base.split_once('?').unwrap_or((base, ""));
     let (scheme, authority_path) = base.split_once("://").unwrap_or(("", base));
     let (authority, path) = authority_path
         .find('/')
