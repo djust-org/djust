@@ -5183,7 +5183,12 @@ fn value_to_json(value: &Value) -> String {
         // payload is Django's, but a `Value::Encoded` can be deserialized
         // holding an arbitrary string (its binary tag's payload is unvalidated),
         // for exactly the reason the `Decimal` arm above documents.
-        Value::Encoded(e) => format!("\"{}\"", json_string_body(&e.json)),
+        // #2899: a dict-subclass carrier spells its MAPPING here, as
+        // `DjangoJSONEncoder` does; every other carrier keeps the string.
+        Value::Encoded(e) => match e.live_mapping_value() {
+            Some(mapping) => value_to_json(&mapping),
+            None => format!("\"{}\"", json_string_body(&e.json)),
+        },
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();

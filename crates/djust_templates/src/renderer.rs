@@ -928,6 +928,12 @@ fn ifchanged_key(value: &Value) -> String {
             Some(EqClass::Number { real, imag }) => {
                 format!("#c{}:{}", python_float_repr(real), python_float_repr(imag))
             }
+            // #2899: a carried mapping is keyed by its `repr` — two equal
+            // mappings share one, so `{% ifchanged row.meta %}` over rows
+            // holding equal `OrderedDict`s reports no change, as Python's
+            // `==` would. (Two distinct empty `dict_values` are the case that
+            // keeps `None` off this branch; a mapping's repr IS its items.)
+            Some(EqClass::Mapping) => format!("m{}", e.repr),
             _ => format!("o{value:?}"),
         },
         // A `Decimal` is a `numbers.Number`, so Python compares it BY VALUE
@@ -5790,6 +5796,17 @@ fn values_equal(a: &Value, b: &Value) -> bool {
                 && a.iter()
                     .all(|(k, v)| b.get(k).is_some_and(|other| values_equal(v, other)))
         }
+        // #2899: a carried mapping against a plain map — `OrderedDict(a=1) ==
+        // {"a": 1}` is True in Python, so it is here.
+        (Value::Encoded(e), other @ Value::Object(_))
+        | (other @ Value::Object(_), Value::Encoded(e))
+            if e.eq_class == Some(EqClass::Mapping) =>
+        {
+            // Python's own `==` against the plain map rebuilt as a `dict`: a
+            // `QueryDict` compares its LIST storage, an `OrderedDict` ignores
+            // order against a plain dict — whatever the object's `__eq__` says.
+            e.live_eq_value(other).unwrap_or(false)
+        }
         // Two members of the datetime family (#2471). Without this arm two
         // `Encoded`s fell to `_ => false` and were never equal — not even to
         // themselves — so `{% if a == b %}` on a datetime against ITSELF took
@@ -5906,6 +5923,11 @@ fn encoded_equal(a: &Encoded, b: &Encoded) -> bool {
         // address, so the token IS the identity. See `Encoded::eq_class` for
         // the address-reuse caveat and why it cannot bite within one render.
         (Some(EqClass::Identity), Some(EqClass::Identity)) => a.repr == b.repr,
+        // #2899: two carried mappings compare by items, as `dict.__eq__`
+        // does; without a live handle (a round trip) by `repr`.
+        (Some(EqClass::Mapping), Some(EqClass::Mapping)) => {
+            a.live_eq(b).unwrap_or_else(|| a.repr == b.repr)
+        }
         // Everything else — two Sets, two datetimes, and every CROSS-class
         // pair (which answers `None` there, i.e. false, exactly as Python
         // says `set() != complex(0)`).

@@ -216,6 +216,7 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
             eq_limbs(djust_core::EQ_CLASS_NUMBER, real, imag)
         }
         Some(djust_core::EqClass::Identity) => eq_limbs(djust_core::EQ_CLASS_IDENTITY, 0.0, 0.0),
+        Some(djust_core::EqClass::Mapping) => eq_limbs(djust_core::EQ_CLASS_MAPPING, 0.0, 0.0),
         None => Value::Object(indexmap::IndexMap::new()),
     });
     v

@@ -161,6 +161,11 @@ class _Members:
             # carried member.
             "bytes": b"ab",
             "deque": collections.deque(["a", PAYLOAD]),
+            # #2899: a dict SUBCLASS with its own spelling (`Counter({...})`)
+            # crosses as the carrier — Django renders `str(o)`, and the map
+            # display was the dict half of #2704's defect. A subclass that
+            # inherits the dict spelling is still a map (see `EARLIER`).
+            "counter": collections.Counter({"a": PAYLOAD}),
             "range": range(3),
             "getitem-seq": instance(
                 "SeqLike",
@@ -230,7 +235,10 @@ DECLINED_UNTIL_ADR027 = frozenset(
 #: Django with the rest. What remains is the arms that are genuinely earlier
 #: and stay that way: PyO3's MAPPING extraction, and a real `list`.
 EARLIER: dict[str, str] = {
-    "counter": "PyO3's mapping extraction — a dict subclass",
+    # `counter` was here until #2899: a dict subclass that SPELLS ITSELF is
+    # carried now. What stays is a subclass that inherits the map spelling.
+    "inheriting-dict": "PyO3's mapping extraction — a dict subclass with the "
+    "dict spelling (#2899 carries only one with its own)",
     "plain-dict": "PyO3's mapping extraction",
     "plain-list": "PyO3's sequence extraction (a real `list`, whose own "
     "`str()` IS the list repr — see #2704)",
@@ -262,7 +270,7 @@ def declined_values() -> dict:
 
 def earlier_values() -> dict:
     return {
-        "counter": collections.Counter({"a": 1}),
+        "inheriting-dict": type("Inheriting", (dict,), {})(a=PAYLOAD),
         "plain-dict": {"a": PAYLOAD},
         "plain-list": ["a", PAYLOAD],
     }
@@ -414,7 +422,7 @@ class TestBothPathsAnswerDjango:
         and cells that refuse, on Django, for every member.
         """
         members = _Members.build()
-        assert len(members) == 22, "the member list moved — update the count"
+        assert len(members) == 23, "the member list moved — update the count"
         assert len(TEMPLATES) == 16
         rendering = refusing = 0
         for source in TEMPLATES:
@@ -558,7 +566,7 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         assert not (CARRIED & set(DECLINED))
         assert not (CARRIED & set(EARLIER))
         assert not (set(DECLINED) & set(EARLIER))
-        assert len(CARRIED) == 22
+        assert len(CARRIED) == 23  # +`counter` (#2899)
         assert len(DECLINED) == 4
         assert len(EARLIER) == 3
 
@@ -815,21 +823,22 @@ class TestTheGateHasOneStatement:
         assert added != source
         assert self._call_sites(added, "_rust.crosses_as_encoded") == 2
 
-    def test_the_helper_has_exactly_the_two_arms_that_should_ask_it(self) -> None:
-        """And the other half: WHO asks. The callable arm (#2621) and the final
-        fallback (#2477/#2489) — a third asker is a new policy and has to come
-        here and say so."""
+    def test_the_helper_has_exactly_the_three_arms_that_should_ask_it(self) -> None:
+        """And the other half: WHO asks. The callable arm (#2621), the dict
+        arm (#2899 — a dict subclass with its own spelling stays raw for the
+        renderer) and the final fallback (#2477/#2489) — a fourth asker is a
+        new policy and has to come here and say so."""
         source = SERIALIZATION_PY.read_text(encoding="utf-8")
         body = source.split("def normalize_django_value", 1)[1]
-        assert body.count("_crosses_as_encoded(value)") == 2, (
-            "expected exactly two call sites inside `normalize_django_value`: the "
-            "callable arm and the final fallback"
+        assert body.count("_crosses_as_encoded(value)") == 3, (
+            "expected exactly three call sites inside `normalize_django_value`: the "
+            "callable arm, the #2899 dict arm and the final fallback"
         )
         removed = body.replace(
             "if not state_roundtrip and _crosses_as_encoded(value):", "if False:", 1
         )
         assert removed != body, "the mutation text did not match"
-        assert removed.count("_crosses_as_encoded(value)") == 1
+        assert removed.count("_crosses_as_encoded(value)") == 2
 
     def test_the_predicate_asks_the_shared_gate_and_converts_nothing(self) -> None:
         """Both mistakes this predicate has already made, pinned as source.

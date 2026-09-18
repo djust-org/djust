@@ -630,6 +630,7 @@ FILTER_ARGS = {
     "yesno": '"y,n,m"',
 }
 
+
 INPUTS = {
     "nt-empty": namedtuple("Empty", [])(),
     "nt-plain": namedtuple("Pair", "left right")("a", "b"),
@@ -949,6 +950,15 @@ INPUTS_LAZY: dict[str, typing.Callable[[], object]] = {
     # ITERATES the view. Without it the empty row alone cannot separate "the
     # view crossed" from "an empty thing crossed".
     "dv-keys-plain": lambda: {"<img src=x onerror=alert(1)>": 1}.keys(),
+    # A dict SUBCLASS with its own `__str__` (#2899). Django renders `str(o)`;
+    # djust used to flatten every dict into the map display, so `{{ v }}`
+    # diverged for a `QueryDict`, an `OrderedDict` or a user class. Lazy, like
+    # the rows above, because a class instance is not a literal the AST
+    # readers of `INPUTS` can rebuild. The payload rides the spelling itself,
+    # so a leak here is a leak on the page.
+    "d-subclass": lambda: type(
+        "DictSubclass", (dict,), {"__str__": lambda self: "sub" + dict.__repr__(self)}
+    )(k="<v>"),
     # A user-defined class instance: FALSY, with `__iter__` and NO `__len__`.
     # That is one of the two shapes #2466 explicitly DECLINED (the carrier
     # cannot produce the items without RUNNING the object), so it is the only
@@ -1041,6 +1051,7 @@ LIVE_FRAGMENTS = {
     "l-scalars": ["<img", "onerror="],
     "l-dict": ["<v>"],
     "d-plain": ["<v>"],
+    "d-subclass": ["<v>"],
     # The two payload-carrying factory rows (#2482). Neither value is marked,
     # so anything of them that reaches the page unescaped is a leak on the same
     # terms as `s-img`. `dv-keys-plain` puts the payload in a dict KEY that

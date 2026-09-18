@@ -1851,6 +1851,22 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, MultiValueDict):
         return dict(value.items())
 
+    # A dict SUBCLASS with its own spelling — a `QueryDict`, an `OrderedDict`,
+    # a `defaultdict`, a user class with `__str__` — crosses as ITSELF so the
+    # renderer spells `{{ v }}` as `str(o)`, which is what Django renders
+    # (#2899, the dict half of #2704). The renderer's carrier still answers
+    # `{{ v.k }}` / `|length` / `{% if v %}` through the live object. ONE
+    # authority on which objects that is: `_rust.crosses_as_encoded`, asked
+    # the way the fallback below asks it. A subclass that inherits the dict
+    # spelling (`TypedState`, `class D(dict)`) answers False and stays a map.
+    # The session boundary (`state_roundtrip=True`) cannot take the object,
+    # and a `MultiValueDict` keeps the last-value map ABOVE (#2556): the
+    # object would not survive a state-backend round trip, and a raw one —
+    # `{{ request.GET }}` through the sidecar, the bare entry points — still
+    # reaches the renderer's own arm and spells itself.
+    if not state_roundtrip and isinstance(value, dict) and _crosses_as_encoded(value):
+        return value
+
     # Containers -- recurse
     if isinstance(value, dict):
         return {
