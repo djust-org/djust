@@ -1,13 +1,14 @@
 # ADR-031: A class-level LiveComponent is bound per view — it renders with `{{ component }}` and receives its own events
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-09-17
-**Citations**: `file:line` pinned to `main` at `476cedf0`; every one asserted against its expected token at write time. Measurements in §Measured were run on that tree (see §7 for what the first draft got wrong, and how).
+**Shipped in**: unreleased on `main` (#2895 the binding and events, #2897 the rendering and docs)
+**Citations**: `file:line` pinned to `main` at `e441e3b1`; every one asserted against its expected token at write time. Measurements in §Measured were run on that tree (see §7 for what the first draft got wrong, and how).
 **Deciders**: Project maintainers
 **Related**:
 - [ADR-020](020-island-attribute-component-interop.md) — the attribute↔component boundary
 - Issues: #2501 (closed — the escaping fix is landed, §Docs item 1), #2894 (the `theme_card` block-tag gap, adjacent but separate)
-- `docs/website/guides/components.md:227`, `:252`, `:236-266`, `:643` — four claims this ADR measures and finds stale
+- `docs/website/guides/components.md` — four claims this ADR measured and found stale, **all four fixed by #2897** (§The four things)
 - `python/djust/components/mixins/base.py:39-42` — the render-cache contract, declared and unread
 
 ---
@@ -79,17 +80,17 @@ class Dashboard(LiveView):
 
 ### The two forms, and what each gives
 
-`__set_name__` (`components/base.py:683`) registers a class-level component in
+`__set_name__` (`components/base.py:768`) registers a class-level component in
 `_component_descriptors` and, if `Meta.event` is set, attaches **one** handler
 to the owner view (`:750`) that looks the state up by attribute name and calls
 the descriptor's single `_handle_event` (`:772`; `descriptors/tabs.py:26-29`).
-`__get__` (`:709`) returns the component itself when there is no `State` class
-(`:721`) and otherwise a per-view `State` stored at `obj.__dict__[_component_<name>]`,
+`__get__` (`:917`) returns the component itself when there is no `State` class
+(`:931`) and otherwise a per-view `State` stored at `obj.__dict__[_component_<name>]`,
 rehydrated from a plain dict after deserialization.
 
 Instance components take a different path: `_assign_component_ids`
-(`mixins/components.py:131`) walks `self.__dict__` for `Component`/`LiveComponent`
-instances (`:138`), they live in `view._components` (a dict, `live_view.py:556`),
+(`mixins/components.py:140`) walks `self.__dict__` for `Component`/`LiveComponent`
+instances (`:147`), they live in `view._components` (a dict, `live_view.py:556`),
 and an event carrying `component_id` — which the client reads off the
 `data-component-id` wrapper (`static/djust/src/09-event-binding.js:536`) — is
 resolved there (`runtime.py:3705-3709`) and dispatched to the component's own
@@ -134,20 +135,26 @@ counterpart of #2704 (which closed the same cell for sequences).
 | M5 | readers of `_cached_html` / `_render_hash` outside `mixins/base.py` | **0**; readers of `_dirty`: `rust_bridge.py:837`, `:861`, `:907` |
 | M6 | the eight `components/descriptors/*.py` declare a `template`? | **0 of 8** |
 | M7 | `str()` of a `SafeString`-returning `__str__` | stays a `SafeString` — why M1-M3 do not escape |
-| M8 | `Counter.descriptor()` on a `LiveComponent` | `AttributeError` — `components/base.py:572` and `components.md:252` are the only mentions |
+| M8 | `Counter.descriptor()` on a `LiveComponent` | `AttributeError`; the two mentions were the only two, and **#2897 has since removed both** — nothing in the tree matches `.descriptor()` |
 | M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, on both **Rust** entry points (`render_template` and the LiveView HTTP path) | the dict repr; `__str__` never called. Django's own engine *does* call `__str__`, so the two engines diverge on this spelling — a separate defect, #2899 |
 | M10 | `{{ nav }}\|{{ nav.active }}` with a non-dict object forwarding attribute access and rendering on `str()`, both engine paths | `<nav>overview</nav>\|overview` |
 | M11 | `view._components` type; the documented workaround `self._components.append(...)` (`components.md:258`) | `dict` (`live_view.py:556`) — the workaround raises `AttributeError` |
-| M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:259-262` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2155` (`return str(value)`, warning at `:2104`) stringifies an unknown object before Rust sees it |
+| M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:259-262` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2159` (`return str(value)`, warning at `:2104`) stringifies an unknown object before Rust sees it |
 
-## The four things the docs say that this tree does not
+## The four things the docs said that this tree does not — all four now fixed
 
-1. **`components.md:643`** — "markup is currently escaped on all four render paths … add `|safe` until the second half of #2501 lands." False: M1-M3 render unescaped and #2501 is closed.
-2. **`components.md:227`** — the same `|safe` instruction, scoped to `LiveComponent`.
-3. **`components.md:252` and `components/base.py:572`** — `GreetingWidget.descriptor()` is documented as the class-level pattern; the method does not exist (M8).
-4. **`components.md:236-266`** — the "auto-promotion gap" section's workaround appends to `_components`, which is a dict (M11). The gap is real; the workaround never worked.
+Measured while writing the first draft. **All four were fixed by #2897**, in the
+same change that landed this ADR's rendering half. Kept as the record, because
+three of them were instructions to developers that were actively harmful.
 
-All four are cheap to fix independently (§Sequencing S0).
+The line numbers below are from the tree **before** #2897 and no longer hold
+that content — they cite the defect this section is the record of, not the
+shipped docs.
+
+1. **`components.md:643`** — "markup is currently escaped on all four render paths … add `|safe` until the second half of #2501 lands." False: M1-M3 render unescaped and #2501 is closed. **Fixed** — the `|safe` instruction is gone.
+2. **`components.md:227`** — the same `|safe` instruction, scoped to `LiveComponent`. **Fixed** — the line now reads `{{ counter }}`.
+3. **`components.md:252` and `components/base.py:572`** — `GreetingWidget.descriptor()` documented as the class-level pattern; the method never existed (M8). **Fixed** — both mentions removed.
+4. **`components.md:236-266`** — the "auto-promotion gap" section's workaround appended to `_components`, which is a dict (M11), so it raised. **Fixed** — the section is replaced by class-level component documentation that cites this ADR.
 
 ## Decision Drivers
 
@@ -189,7 +196,7 @@ descriptor, this view's `State`, and the attribute name as `component_id`, store
 it at the existing `obj.__dict__[_component_<name>]` slot, and returns it
 thereafter. After a round trip (the slot holds a plain dict) it rebuilds the
 bound component around the rehydrated `State`, as `__get__` rehydrates today.
-Descriptors without a `State` class keep returning the component itself (`:721`).
+Descriptors without a `State` class keep returning the component itself (`:931`).
 
 **D2 — The bound component registers in `view._components`** under its
 `component_id`, on creation and on rebuild, so `runtime.py:3709` resolves it,
@@ -209,8 +216,8 @@ descriptors keep their `_handle_event` unchanged.
 
 **D5 — `str(bound)` renders when the component declares a template.**
 `template` or `template_name` → render with `dict(state) + component_id`
-through `_render_template_with_fallback` (`components/base.py:42`), wrapped in
-`<div data-component-id="…">` exactly as `render()` wraps (`:842-857`), so a
+through `_render_template_with_fallback` (`components/base.py:44`), wrapped in
+`<div data-component-id="…">` exactly as `render()` wraps (`:1091-1093`), so a
 `dj-*` event inside it carries `component_id`. No template → `str(state)`, the
 dict repr, unchanged. `get_context_data()` is not called on this path: **State
 is the context** for a class-level component, a documented contract.
@@ -252,26 +259,27 @@ gets a documented `bound.state`.
 
 **Neutral.** Instance components are untouched.
 
-## Sequencing
+## Sequencing — as executed
 
-- **S0 — docs corrections** (items 1-4), independent, first.
-- **S1 (PR 1) — events and registration**: `BoundComponent` with D1-D4 and D7,
-  no render branch. Tests: per-view isolation across two views; a `component_id`
-  event reaching a handler with `self.state` bound; `Meta.event` alias; the
-  bound component present in a time-travel snapshot and in session save; the
-  eight descriptors' behaviour byte-identical; an undecorated method refused.
-- **S2 (PR 2) — rendering**: D5 and D6. Tests: `{{ nav }}` on the HTTP path and
-  the WebSocket path renders the template with this view's state; a
-  template-less descriptor still yields the dict repr (the opt-in gate-off);
-  a state whose hash is unchanged is not re-rendered (the cache gate-off);
-  a `dj-click` inside the rendered markup reaches the component's handler.
-- **S3 — docs** for the class-level form.
+- **S0 — docs corrections**, independent, first. **Shipped in #2897** (§The four things).
+- **S1 — events and registration** (D1-D4, D7): **#2895**. `BoundComponent`,
+  registered in `_components`, attribute forwarding, `@event_handler` dispatch
+  with `self.state`, `Meta.event` alias preserved. 28 cases; 12 gate-off
+  mutations, 12 caught.
+- **S2 — rendering** (D5, D6): **#2897**. `{{ nav }}` renders the template with
+  this view's state; template-less descriptors keep the dict repr; the state-hash
+  cache. 10 cases; 8 gate-off mutations, 8 caught. Filed #2896 (a snapshot
+  captures `__components__` that `_restore_snapshot` never applies — pre-existing,
+  surfaced by S1's review).
+- **S3 — docs** for the class-level form: **#2897**.
 
-No Rust step. M10 measured the bare engine; the LiveView path is different
-(M12): `get_context_data` drops a class-level value that is not JSON-serializable
-and `normalize_django_value` stringifies unknown objects, so PR 1 adds a
-`BoundComponent` arm to each (the same arms `Component` has) — the bound
-component crosses as its State until PR 2 gives it a rendered form.
+No Rust step. M10 measured the bare engine; the LiveView path differs (M12):
+`get_context_data` drops a class-level value that is not JSON-serializable and
+`normalize_django_value` stringifies unknown objects, so **S1 added a
+`BoundComponent` arm to each** (the same arms `Component` has).
+
+**This ADR was not on `main` when S1 and S2 merged.** Both PRs cite it, and
+`components.md` links it at a `main` URL — a dead link until this branch lands.
 
 ## Verification
 
