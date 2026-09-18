@@ -1714,6 +1714,14 @@ PYTHONPATH="$WT/python" "$MAIN/.venv/bin/python" -c "import djust; print(djust._
 Also copy the gitignored Rust extension into the worktree and symlink `node_modules`; do NOT
 symlink `target/` (concurrent cargo builds collide).
 
+**Installing a built extension into a checkout** (macOS 27, #2899 follow-up): never `cp` a
+`_rust*.so` over the one already there — `cp` rewrites the same inode, and when a dev server or
+daemon has it mapped the next `import djust._rust` is SIGKILLed (exit 137, no dyld message).
+Build a wheel from the worktree (`maturin build --release --out <dir> -i <venv>/bin/python`; not
+`maturin develop`, which needs a venv and repoints the editable install) and install it with
+`make install-ext SO=<wheel-or-so>` / `scripts/install-rust-ext.sh`, which re-signs the copy
+(`codesign -s - -f`) and moves it into place as a new inode. `make build` in place is always safe.
+
 **Failure classes**: `docs/patterns/` is this repo's pattern wiki — one page per class, each
 with an instance table whose `rule in force?` column `/pipeline-retro` Stage 3.7 counts to
 KEEP / HARDEN / DEMOTE the matching rule above. `scripts/check-retro-coverage.py` enforces
