@@ -360,6 +360,9 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
         # .append(card)`` changes the post-snapshot. The budget bounds the
         # cost; past it the remainder collapses to id() and we say so once.
         vid = id(v)
+        # Structural FIRST: ``_IMMUTABLE_TYPES`` holds ``tuple``, whose items
+        # need not be immutable (``([1],)``), so it must be walked before the
+        # value short-circuit below claims it (#2911 review, tried and reverted).
         if fingerprints_by_content(v):
             # A tuple is immutable but its ITEMS need not be (``([1],)``), so
             # it is walked like the other containers — the same set of types

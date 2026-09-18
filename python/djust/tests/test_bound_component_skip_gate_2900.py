@@ -139,6 +139,52 @@ class TestOneFingerprintRule:
         view.probe.active = "billing"
         assert view.label == "tab:billing", "@computed's dependency key walks the State"
 
+    def test_state_field_named_items_is_walked(self):
+        """Review 🟡3: ``items: list`` on a State is a property shadowing
+        ``dict.items``; the walk must not call it."""
+
+        class Menu(LiveComponent):
+            class State(TypedState):
+                items: list = []
+
+        class MenuView(LiveView):
+            menu = Menu()
+
+        view = MenuView()
+        view.menu.state["items"] = ["a"]
+        before = deep_fingerprint(view.menu)[0]
+        view.menu.state["items"].append("b")
+        assert deep_fingerprint(view.menu)[0] != before
+        _snapshot_assigns(view)  # the slot is walked here too; no crash is the pin
+
+    def test_fallback_sync_re_renders_a_nested_mutation(self):
+        """Review 🟡1: the ``rust_bridge`` arm decides on the no-``changed_keys``
+        fallback sync — an out-of-band mutation (a background task, a server
+        push) followed by a direct render. The component's own template must
+        show the new state."""
+
+        class Rows(LiveComponent):
+            class State(TypedState):
+                rows: list = []
+
+            template = "<b>{{ rows|length }}</b>"
+
+        class RowsView(LiveView):
+            template = '<div dj-root dj-id="0">{{ grid }}</div>'
+            grid = Rows()
+
+            def mount(self, request, **kwargs):
+                pass
+
+        view = RowsView()
+        view.mount(None)
+        view.grid.state["rows"] = []
+        html, _p, _v = view.render_with_diff()
+        assert ">0</b>" in html
+        view.grid.state["rows"].append("x")  # no dirty flag, same wrapper id()
+        html, _p, _v = view.render_with_diff()
+        assert ">1</b>" in html, html
+
     def test_instance_component_stays_a_leaf(self):
         """Only the descriptor slot changes meaning; an instance component is
         still compared by id() (a reassignment is seen, an attribute write is

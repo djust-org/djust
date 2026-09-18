@@ -144,7 +144,9 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
                 _TAG_DICT,
                 tuple(
                     (_walk(k, counter, depth + 1, inner), _walk(v, counter, depth + 1, inner))
-                    for k, v in value.items()
+                    # ``dict.items(value)``, not ``value.items()``: a TypedState
+                    # field named ``items`` is a property shadowing the method.
+                    for k, v in dict.items(value)
                 ),
             )
         if isinstance(value, (set, frozenset)):
