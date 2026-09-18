@@ -270,11 +270,16 @@ class StorybookSidebarMixin:
     def _init_sidebar(self, current_component: Optional[str] = None) -> None:
         from .storybook import build_storybook_index_context
 
-        #: Every component, unfiltered — the sidebar's denominator.
-        self.all_components = build_storybook_index_context().get("components", [])
+        #: Every component, unfiltered — the sidebar's denominator, and the
+        #: source `_refresh_sidebar` filters from. **Private on purpose**: no
+        #: template reads it, and a public assign is not free — it enters the
+        #: render context and the LiveView state on every render. At 175
+        #: components that was ~36 KB serialized per event, alongside
+        #: `sidebar_components`, which is the list the template actually reads.
+        self._all_components = build_storybook_index_context().get("components", [])
         #: What the sidebar actually renders. Kept as real state rather than a
         #: template-side filter so the server and the DOM cannot disagree.
-        self.sidebar_components = list(self.all_components)
+        self.sidebar_components = list(self._all_components)
         self.search_query = ""
         self.collapsed_categories: list = []
         self.current_component = current_component
@@ -299,11 +304,11 @@ class StorybookSidebarMixin:
     def _refresh_sidebar(self) -> None:
         q = self.search_query.lower()
         if not q:
-            self.sidebar_components = list(self.all_components)
+            self.sidebar_components = list(self._all_components)
             return
         self.sidebar_components = [
             c
-            for c in self.all_components
+            for c in self._all_components
             if q in c["display_name"].lower() or q in c["name"].lower()
         ]
 
@@ -504,7 +509,6 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
-        ctx["all_components"] = self.all_components
         ctx["current_component"] = self.current_component
         if self._base_ctx.get("component_type") == "python":
             ctx["python_examples_html"] = self._render_examples()
@@ -549,7 +553,7 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
         self.total_count = ctx["total_count"]
         self.components_by_category = ctx["components_by_category"]
         self.active_category = "all"
-        self.visible_components = list(self.all_components)
+        self.visible_components = list(self._all_components)
 
     @event_handler
     def set_category(self, value: str = "", **kwargs: Any) -> None:
@@ -568,7 +572,7 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
         category = self.active_category
         self.visible_components = [
             c
-            for c in self.all_components
+            for c in self._all_components
             if (category == "all" or c["category"] == category)
             and (not q or q in c["display_name"].lower() or q in c["name"].lower())
         ]
