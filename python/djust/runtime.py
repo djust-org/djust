@@ -1891,6 +1891,52 @@ def _template_is_component_opaque(source: str, name: str) -> bool:
     return _UNRESOLVED_TEMPLATE_RE.search(source) is None
 
 
+def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> Optional[str]:
+    """ADR-032 D1, verified rather than predicted (review of #2920 🔴1).
+
+    The template is not the only reader of a component's state: a view
+    ``@property``, a ``get_context_data`` override or a dep-less ``@computed``
+    can derive a value from ``self.nav.active`` that the template reads under
+    another name. Such a value lands in the render CONTEXT, so the context is
+    compared, key by key, against what the last render synced — the same
+    three-layer rule ``_sync_state_to_rust`` applies (identity, value for
+    immutables, structural fingerprint for containers; #2664) — and any key
+    other than the component's own that changed, appeared or vanished names
+    the reason the scoped path is not exact. Returns that key, or ``None``
+    when only the component changed.
+    """
+    from .change_detection import deep_fingerprint, fingerprints_by_content
+    from .mixins.rust_bridge import _FRAMEWORK_KEYS, _IMMUTABLE_TYPES_FOR_SYNC
+
+    prev_refs = getattr(view, "_prev_context_refs", None)
+    prev_immutables = getattr(view, "_prev_context_immutables", None)
+    prev_fps = getattr(view, "_prev_context_fingerprints", None)
+    if prev_refs is None or prev_immutables is None or prev_fps is None:
+        return "<no previous render>"
+    # The same keys the sync leaves untracked or never diffs: context-
+    # processor values, the request handle (re-assigned per event) and the
+    # framework keys (``csrf_token``, the settings-constant date formats …).
+    skip = set(getattr(view, "_context_processor_keys", ()))
+    skip.update(_FRAMEWORK_KEYS)
+    skip.add("request")
+    skip.add(name)
+    for key, value in context.items():
+        if key in skip:
+            continue
+        if isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value):
+            if key not in prev_fps or prev_fps[key] != deep_fingerprint(value)[0]:
+                return str(key)
+        elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
+            if key not in prev_immutables or prev_immutables[key] != value:
+                return str(key)
+        elif prev_refs.get(key) != id(value):
+            return str(key)
+    for key in prev_refs:
+        if key not in context and key not in skip:
+            return str(key)
+    return None
+
+
 def _view_is_component_opaque(view: Any, name: str) -> bool:
     """D2, decided once per (view class, template source, component) and
     cached on the class. Also false when a memoised ``@computed`` on the
@@ -4750,7 +4796,18 @@ class ViewRuntime:
         if not _view_is_component_opaque(view, name):
             return None
         try:
+            # Verify, do not predict: the page is exact only if nothing the
+            # template can read changed besides the component — including
+            # values DERIVED from it elsewhere on the view.
+            context = await sync_to_async(view.get_context_data)()
+            reason = _context_changed_besides(view, context, name)
+            if reason is not None:
+                logger.debug("Scoped render of %r: %r changed too; full render", name, reason)
+                return None
             html = await sync_to_async(component.render)()
+            # Component-sized parse + diff; runs inline on the event loop like
+            # the JSON decode of the patches. Route a large component through
+            # ``sync_to_async`` before making it larger.
             result = patch(name, html)
         except Exception:  # noqa: BLE001 — D6: fall back to the full render
             logger.debug("Scoped render of component %r failed; full render", name, exc_info=True)
@@ -4759,8 +4816,15 @@ class ViewRuntime:
             logger.debug("Scoped render of component %r not exact; full render", name)
             return None
         # The slot is now in step with the Rust state (D3 sets it), so the
-        # next sync starts from the same baseline a full render leaves.
+        # next sync starts from the same baseline a full render leaves — the
+        # component's fingerprint included, so it is not re-sent unchanged.
         view._changed_keys = None
+        try:
+            from .change_detection import deep_fingerprint
+
+            view._prev_context_fingerprints[name] = deep_fingerprint(context[name])[0]
+        except Exception:  # noqa: BLE001 — bookkeeping; a miss only costs a re-sync
+            pass
         timing = getattr(rust_view, "get_render_timing", None)
         if timing is not None:
             view._rust_render_timing = timing()
