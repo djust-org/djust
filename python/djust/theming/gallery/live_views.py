@@ -21,6 +21,7 @@ approach this module replaced.
 """
 
 import functools
+import json
 from typing import Any, Dict, Optional
 
 from django.http import Http404
@@ -240,7 +241,7 @@ def _make_demo_handler(event: str, effects: Any):
         values = dict(self.state.values)
         for key, transform in pairs:
             if key not in values:
-                values[key] = self._example_value(key)
+                values[key] = _example_value(self.state.examples, key)
             values[key] = transform(values[key], value)
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
@@ -249,6 +250,19 @@ def _make_demo_handler(event: str, effects: Any):
     handler.__name__ = event
     handler.__qualname__ = event
     return event_handler(handler)
+
+
+def _example_value(examples: Any, key: str) -> Any:
+    """The starting value for a state kwarg, read from the first example.
+
+    The examples already carry a sensible base for every kwarg a demo handler
+    drives, so the event table does not have to restate them. Module-level on
+    purpose: the handlers run with ``self`` bound to the preview's
+    ``BoundComponent``, which refuses ``_``-prefixed attribute lookups, so a
+    private method on the component class is unreachable from them (#2921
+    review 🔴1).
+    """
+    return examples[0].get(key) if examples else None
 
 
 def _make_descriptor_handler(descriptor_cls: Any):
@@ -277,6 +291,10 @@ def render_preview_examples(
 ) -> list[Dict[str, Any]]:
     """Render a component's examples against the CURRENT preview values.
 
+    Memoised on the arguments' JSON (a small LRU): a GET renders the examples
+    once for the page's `styles` and again through `{{ preview }}`; a click
+    renders them once for the new values.
+
     This is the whole trick. The examples are kwarg dicts, so merging the
     values into them and re-rendering is what turns a click into updated
     markup: `accordion_toggle` sets `active`, `active` lands in the kwargs,
@@ -287,6 +305,28 @@ def render_preview_examples(
     Template components go through their **tag**, not their template — those
     are different programs (`storybook._render_template_examples`).
     """
+    key = (
+        component_name,
+        component_type,
+        json.dumps(examples, sort_keys=True, default=str),
+        json.dumps(values, sort_keys=True, default=str),
+    )
+    cached = _PREVIEW_RENDER_CACHE.get(key)
+    if cached is not None:
+        return cached
+    rendered = _render_preview_examples(component_name, component_type, examples, values)
+    if len(_PREVIEW_RENDER_CACHE) >= 64:
+        _PREVIEW_RENDER_CACHE.clear()
+    _PREVIEW_RENDER_CACHE[key] = rendered
+    return rendered
+
+
+_PREVIEW_RENDER_CACHE: Dict[Any, list] = {}
+
+
+def _render_preview_examples(
+    component_name: str, component_type: str, examples: list, values: Dict[str, Any]
+) -> list[Dict[str, Any]]:
     if component_type == "python":
         from .component_registry import render_python_component_example
 
@@ -332,6 +372,9 @@ class Preview(LiveComponent):
         component_type: str = ""
         #: The example kwarg dicts (`PYTHON_COMPONENT_EXAMPLES[name]` for a
         #: python component, the contract's examples for a template one).
+        #: NOTE: these class-level `[]` / `{}` defaults are shared between
+        #: `State()` instances; `mount` replaces both with fresh containers
+        #: and the handlers reassign `values` rather than mutating it.
         examples: list = []
         #: Descriptor state + demo values, merged into every example.
         values: dict = {}
@@ -339,15 +382,6 @@ class Preview(LiveComponent):
     template = (
         "{% load theme_tags %}{% storybook_preview component_name component_type examples values %}"
     )
-
-    def _example_value(self, key: str) -> Any:
-        """The starting value for a state kwarg, read from the first example.
-
-        The examples already carry a sensible base for every kwarg a demo
-        handler drives, so the event table does not have to restate them.
-        """
-        examples = self.state.examples
-        return examples[0].get(key) if examples else None
 
 
 for _descriptor_cls in _INTERACTIVE.values():
@@ -378,7 +412,11 @@ def _make_forwarder(event: str):
 
 @functools.lru_cache(maxsize=1)
 def _all_storybook_components() -> list:
-    """The storybook index's component list, built once per process."""
+    """The storybook index's component list, built once per process.
+
+    The registry is static, so under `runserver` autoreload the list (and the
+    sidebar count) refresh with the process, not with a template edit.
+    """
     from .storybook import build_storybook_index_context
 
     return list(build_storybook_index_context().get("components", []))
@@ -518,7 +556,9 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
             raise Http404(f"Unknown component: {component_name}")
 
         try:
-            ctx = build_storybook_detail_context(component_name)
+            # The examples are the preview's; the static context must not
+            # render them a second time (#2921 review 🟡3).
+            ctx = build_storybook_detail_context(component_name, render_examples=False)
         except KeyError as exc:
             raise Http404(f"Unknown component: {component_name}") from exc
 
@@ -546,6 +586,15 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         preview.state.component_type = component_type
         preview.state.examples = examples
         preview.state.values = values
+        # `styles` ("what do I override?") is derived ONCE, at mount, from the
+        # examples as the preview first renders them — the memo makes this and
+        # the page's `{{ preview }}` one render. Not per event: an open item
+        # would change the table and, with it, force a page render for what
+        # is otherwise a preview-only click (ADR-032 D1).
+        from .storybook import styles_for
+
+        ctx.pop("styles", None)
+        self.styles = styles_for("".join(e["html"] for e in self._render_examples()))
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """The rendered examples, as the preview renders them now."""
@@ -558,10 +607,6 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
         ctx["current_component"] = self.current_component
-        # The examples are the preview's (`{{ preview }}` in the template);
-        # the static context's pre-rendered lists must not shadow it.
-        ctx.pop("python_examples_html", None)
-        ctx.pop("template_examples_html", None)
         return ctx
 
 

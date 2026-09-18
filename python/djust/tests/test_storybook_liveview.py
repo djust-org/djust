@@ -298,3 +298,35 @@ async def test_accordion_toggle_patches_only_the_preview(params):
     )
     assert updated["patches"], updated
     assert "accordion" in str(updated["patches"]).lower()
+
+
+@_SCOPED
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("component", "event", "params"),
+    [
+        ("rating", "set_rating", {"value": "4"}),
+        ("switch", "toggle_switch", {"value": True}),
+        ("model_selector", "select_model", {"value": "gpt"}),
+        ("date_picker", "date_next_month", {}),
+    ],
+)
+async def test_demo_events_answer_over_the_wire(component, event, params):
+    """#2921 review 🔴1: the hand-hosted demo events, on the component route,
+    with a bool value and a multi-kwarg event among them."""
+    communicator, _ = await _mount(component)
+    try:
+        await communicator.send_json_to(
+            {
+                "type": "event",
+                "event": event,
+                "params": {**params, "component_id": "preview"},
+                "ref": 1,
+            }
+        )
+        updated = await communicator.receive_json_from(timeout=5)
+    finally:
+        await communicator.disconnect()
+    assert updated.get("type") != "error", updated
+    assert updated.get("type") in ("patch", "noop", "html_update"), updated

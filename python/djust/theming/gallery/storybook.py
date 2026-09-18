@@ -467,7 +467,7 @@ def _first_class_name(component_name: str) -> str:
     return names[0] if names else ""
 
 
-def build_storybook_detail_context(component_name: str) -> dict:
+def build_storybook_detail_context(component_name: str, *, render_examples: bool = True) -> dict:
     """Build context data for a single component's storybook detail page.
 
     Handles both template-based (contracted) and Python components.
@@ -505,7 +505,11 @@ def build_storybook_detail_context(component_name: str) -> dict:
 
         builder = _EXAMPLE_BUILDERS.get(component_name)
         examples = builder() if builder else []
-        rendered_examples = _render_template_examples(component_name, examples)
+        # ``render_examples=False``: the LiveView's preview component renders
+        # them (and derives ``styles``); rendering here too doubled every GET.
+        rendered_examples = (
+            _render_template_examples(component_name, examples) if render_examples else []
+        )
 
         return {
             "name": component_name,
@@ -559,7 +563,7 @@ def build_storybook_detail_context(component_name: str) -> dict:
         # others are the example's kwargs), and without it `e["html"]` infers
         # as a collection rather than a str at the `join` below.
         python_examples_html: list[dict[str, Any]] = []
-        for kwargs in raw_examples:
+        for kwargs in raw_examples if render_examples else []:
             html = render_python_component_example(component_name, kwargs)
             # Pre-render kwargs display string in Python to avoid Django template
             # resolving .items as a dict-key lookup instead of dict.items().

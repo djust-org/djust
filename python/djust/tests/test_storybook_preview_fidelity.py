@@ -565,6 +565,71 @@ class TestPreviewOwnsTheDescriptorState:
         assert "examples_html" not in source
 
 
+class TestEveryDemoEventResolvesOnThePreview:
+    """#2921 review 🔴1: the demo handlers run with ``self`` bound to the
+    preview's ``BoundComponent``, which refuses ``_``-prefixed lookups — a
+    private helper on the component class raised ``AttributeError`` for 42 of
+    the 53 events the previews emit. Every ``_DEMO_EVENTS`` key is dispatched
+    here through the component itself (the route a real click takes)."""
+
+    @staticmethod
+    def _events() -> list:
+        from djust.theming.gallery.live_views import _DEMO_EVENTS
+
+        return sorted(_DEMO_EVENTS)
+
+    @pytest.mark.parametrize("event", _events.__func__())
+    def test_dispatches_through_the_preview(self, event: str):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        view = StorybookDetailView()
+        view.mount(RequestFactory().get("/"), component_name="rating")
+        getattr(view.preview, event)(value="4")
+        assert isinstance(view.preview.state.values, dict)
+
+    def test_a_demo_value_seeds_from_the_first_example_and_moves(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        view = StorybookDetailView()
+        view.mount(RequestFactory().get("/"), component_name="rating")
+        before = view._render_examples()[0]["html"]
+        view.preview.set_rating(value="4")
+        assert view.preview.state.values["value"] == "4"
+        assert view._render_examples()[0]["html"] != before
+
+    def test_the_get_renders_the_examples_once(self):
+        """#2921 review 🟡3: the static context used to render every example,
+        and the preview rendered them again."""
+        from django.test import RequestFactory
+
+        from djust.theming.gallery import live_views
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        live_views._PREVIEW_RENDER_CACHE.clear()
+        calls: list = []
+        real = live_views._render_preview_examples
+
+        def counting(*args, **kwargs):
+            calls.append(args[0])
+            return real(*args, **kwargs)
+
+        live_views._render_preview_examples = counting
+        try:
+            view = StorybookDetailView()
+            view.mount(RequestFactory().get("/"), component_name="switch")
+            assert not view._base_ctx.get("python_examples_html")
+            ctx = view.get_context_data()
+            assert ctx["styles"], "styles are derived from the preview's render"
+            str(view.preview)
+        finally:
+            live_views._render_preview_examples = real
+        assert calls == ["switch"], calls
+
+
 class TestPreviewTagNeedsNoDjangoTemplatesBackend:
     """A `djust new` project configures only `DjustTemplateBackend`; the
     preview tag's markup must compile without a `DjangoTemplates` engine
