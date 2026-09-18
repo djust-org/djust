@@ -163,6 +163,10 @@ dev-build: ## Build Rust extensions in development mode
 	@echo "$(GREEN)Building Rust extensions (dev mode)...$(NC)"
 	@uv run maturin develop
 
+install-ext: ## Install a built _rust .so or wheel into this checkout safely: make install-ext SO=path/to/file.{so,whl}
+	@test -n "$(SO)" || { echo "usage: make install-ext SO=path/to/_rust*.so|wheel.whl"; exit 2; }
+	@scripts/install-rust-ext.sh "$(SO)" "$(CURDIR)"
+
 # A self-contained environment for THIS checkout — the main clone or any
 # `git worktree` (#2526). `make build` from a worktree repoints the SHARED
 # venv's `djust.pth` at the worktree, so the next row's tests run against the
