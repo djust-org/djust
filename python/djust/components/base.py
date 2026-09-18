@@ -637,7 +637,75 @@ class BoundComponent:
     def _dirty(self, value: bool) -> None:
         object.__setattr__(self.state, "_dirty", value)
 
+    # -- rendering (ADR-031 D5/D6) -----------------------------------------
+
+    @property
+    def template(self) -> Optional[str]:
+        return cast(Optional[str], getattr(type(self._descriptor), "template", None))
+
+    @property
+    def template_name(self) -> Optional[str]:
+        return cast(Optional[str], getattr(type(self._descriptor), "template_name", None))
+
+    def _state_hash(self) -> str:
+        import hashlib
+        import json
+
+        payload = json.dumps(self.state, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def render(self) -> str:
+        """Render the component's ``template`` / ``template_name`` with this
+        view's State as the context (plus ``component_id``), wrapped in
+        ``<div data-component-id="…">`` so a ``dj-*`` event inside it carries
+        ``component_id``. The State **is** the context: ``get_context_data``
+        is not called on this path.
+
+        A render whose state hash matches the last one returns the cached
+        HTML (``_render_hash`` / ``_cached_html`` on the State). ``_dirty``
+        is never written here — it belongs to change detection.
+
+        Raises ``ValueError`` when the component declares no template; use
+        ``str(bound)`` for the dict repr fallback.
+        """
+        template, template_name = self.template, self.template_name
+        if not template and not template_name:
+            raise ValueError(
+                f"{type(self._descriptor).__name__} declares neither template nor template_name"
+            )
+        from django.utils.html import format_html
+        from django.utils.safestring import mark_safe
+
+        state = self.state
+        digest = self._state_hash()
+        cached = getattr(state, "_cached_html", None)
+        if cached is not None and getattr(state, "_render_hash", None) == digest:
+            return cast(str, cached)
+
+        context = dict(state)
+        context["component_id"] = self.component_id
+        if template:
+            html: Optional[str] = _render_template_with_fallback(template, context)
+        else:
+            assert template_name is not None
+            html = _render_template_name_with_markers(template_name, context)
+            if html is None:
+                from django.template.loader import render_to_string
+
+                html = render_to_string(template_name, context)
+        wrapped = cast(
+            str,
+            format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)),
+        )
+        object.__setattr__(state, "_render_hash", digest)
+        object.__setattr__(state, "_cached_html", wrapped)
+        return wrapped
+
     def __str__(self) -> str:
+        """``{{ nav }}``: the rendered template when one is declared,
+        otherwise the State's dict repr (unchanged from before ADR-031)."""
+        if self.template or self.template_name:
+            return self.render()
         return str(self.state)
 
     def __repr__(self) -> str:
@@ -694,40 +762,22 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         When declared as a class attribute, LiveComponent acts as a Python descriptor:
         - ``__set_name__``: registers component in ``_component_descriptors`` on the owner class,
           auto-registers event handlers
-        - ``__get__``: returns the component's State (a TypedState dict subclass) for the instance
+        - ``__get__``: returns this view's :class:`BoundComponent` (its State is ``.state``)
         - ``__set__``: accepts a plain dict and converts to the State class
 
         The attribute name becomes the component_id. State is stored in
         ``obj.__dict__["_component_{name}"]`` (underscore prefix excludes it from
         djust's context pipeline; the public attribute via ``__get__`` is included).
 
-    Descriptor-pattern auto-promotion gap (#1165):
-        Currently, descriptor-pattern components are NOT auto-promoted into
-        ``view._components`` by the framework. The
-        :func:`djust.mixins.components.ComponentManagementMixin._assign_component_ids`
-        walker only inspects instance-level (``self.__dict__``) attributes,
-        so a class-level descriptor never lands in ``_components`` unless
-        the view explicitly appends it during ``mount()``.
-
-        Framework features that walk ``_components`` (time-travel snapshots
-        in :mod:`djust.time_travel`, the component-state session save path,
-        etc.) will silently miss descriptor-pattern components otherwise.
-
-        **Workaround** — register manually in ``mount()``::
-
-            class MyView(LiveView):
-                greeting = MyComponent.descriptor()  # class-level descriptor
-
-                def mount(self, request, **kwargs):
-                    # Required until auto-promotion ships: include the
-                    # descriptor's instance in ``self._components`` so
-                    # snapshot machinery and other framework walkers can
-                    # see it.
-                    self._components.append(self.greeting)
-
-        Auto-promotion is tracked separately as future framework work.
-        Until it ships, document the gap so users aren't surprised when
-        time-travel or session-restore appears to "lose" a component.
+    Class-level components are bound per view (ADR-031):
+        ``view.nav`` is a :class:`BoundComponent` — this view's ``State`` as
+        ``view.nav.state`` (attribute access forwards to it), the attribute
+        name as ``component_id``, registered in ``view._components`` on first
+        access. ``@event_handler`` methods on the component class run with the
+        bound component as ``self`` when an event carries ``component_id``;
+        ``{{ nav }}`` renders the declared ``template`` with the State as the
+        context. Time-travel and session save/restore see it like any other
+        registered component.
     """
 
     # Component configuration
