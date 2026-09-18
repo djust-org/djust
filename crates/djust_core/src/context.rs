@@ -330,8 +330,20 @@ fn next_frame_stamp() -> u64 {
 // `{% url %}` per sidebar row paid O(context) × rows per render — 75 % of a
 // storybook toggle. A frame's contents only change through `DerefMut`, which
 // re-stamps it, so a converted frame can be reused verbatim until then. The
-// loop frame `{% for %}` rebinds each iteration misses; every frame above it
-// hits. Bounded: cleared past 64 entries.
+// loop frame `{% for %}` rebinds each iteration is re-stamped and misses;
+// every frame above it hits.
+//
+// Lifetime (review of #2916): the memo never holds more than the frames of
+// the context that last called it — `bridged_py_dict` drops every entry
+// whose stamp is not on its stack — and the render entries hold a
+// [`BridgeFrameCacheGuard`] so nothing converted for a render outlives the
+// render. A converted dict is a full copy of the frame's values (and pins
+// any live Python handle among them), so an unbounded or render-spanning
+// cache would keep state alive that the view has already released.
+//
+// The `Py<PyDict>` values are dropped with the GIL held in practice (the
+// guard drops inside a pymethod); a drop at thread exit without it relies on
+// PyO3's reference pool, which this workspace leaves enabled.
 //
 // One visible consequence, which is Django's own behaviour: a tag that
 // mutates a nested value it received (a list inside the context) is seen by
@@ -340,6 +352,27 @@ fn next_frame_stamp() -> u64 {
 thread_local! {
     static BRIDGE_FRAME_CACHE: std::cell::RefCell<AHashMap<u64, Py<pyo3::types::PyDict>>> =
         std::cell::RefCell::new(AHashMap::new());
+}
+
+/// Drop every memoised frame dict (#2914). Safe to call from any thread at
+/// any time — a later call simply converts again.
+pub fn clear_bridge_frame_cache() {
+    let _ = BRIDGE_FRAME_CACHE.try_with(|cache| {
+        if let Ok(mut cache) = cache.try_borrow_mut() {
+            cache.clear();
+        }
+    });
+}
+
+/// Clears the bridged-frame memo when dropped. Every render entry holds one
+/// so the memo cannot outlive the render it served, on any exit path.
+#[must_use = "the guard clears the memo when it is dropped"]
+pub struct BridgeFrameCacheGuard;
+
+impl Drop for BridgeFrameCacheGuard {
+    fn drop(&mut self) {
+        clear_bridge_frame_cache();
+    }
 }
 
 impl std::ops::Deref for ScopeFrame {
@@ -2617,9 +2650,9 @@ impl Context {
         let out = pyo3::types::PyDict::new(py);
         let result: Result<(), String> = BRIDGE_FRAME_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            if cache.len() > 64 {
-                cache.clear();
-            }
+            // Only this context's frames may stay memoised: a popped loop
+            // frame, or a frame that was re-stamped, leaves at once.
+            cache.retain(|stamp, _| self.stack.iter().any(|f| f.stamp == *stamp));
             for frame in &self.stack {
                 if frame.values.is_empty() {
                     continue;

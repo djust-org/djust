@@ -10,6 +10,8 @@ changed is that two calls in one render receive the SAME converted objects.
 
 from __future__ import annotations
 
+import gc
+
 import django
 import pytest
 from django.conf import settings
@@ -101,6 +103,54 @@ class TestMemo:
         first = seen["ids"][0]
         assert first[0].grouper == 1
         assert all(g is first for g in seen["ids"]), "the base frame was re-converted per call"
+
+    @pytest.mark.parametrize(
+        ("tpl", "ctx", "calls"),
+        [
+            (
+                "{% regroup rows by a as groups %}{% for i in items %}{% probe_rows %}{% endfor %}",
+                {"rows": [{"a": 1}], "items": list(range(200))},
+                200,
+            ),
+            (
+                "{% regroup rows by a as groups %}"
+                "{% for i in xs %}{% for j in ys %}{% probe_rows %}{% endfor %}{% endfor %}",
+                {"rows": [{"a": 1}], "xs": list(range(20)), "ys": list(range(20))},
+                400,
+            ),
+        ],
+        ids=["200-items", "nested-20x20"],
+    )
+    def test_base_frame_is_converted_exactly_once_however_many_calls(self, lib, tpl, ctx, calls):
+        """Review of #2916: the first cut cleared the memo past 64 entries, so a
+        loop of 200 re-converted the base frame four times and a nested 20×20
+        seven. Popped loop frames leave the memo on the next call instead, so
+        it never holds more than the live stack and the base frame converts
+        once."""
+        _, seen = lib
+        render_template(tpl, ctx)
+        assert len(seen["ids"]) == calls
+        first = seen["ids"][0]
+        assert all(g is first for g in seen["ids"]), (
+            f"base frame re-converted: {len({id(g) for g in seen['ids']})} distinct conversions"
+        )
+
+    def test_nothing_converted_for_a_render_outlives_the_render(self, lib):
+        """Review of #2916 🔴: the memo held a full converted copy of the state
+        (pinning any live Python object in it) until 64 more frames came by —
+        per thread. Every render entry now clears the memo on exit, so the
+        converted objects a tag received are collectable as soon as the tag
+        lets go of them."""
+        _, seen = lib
+        render_template(
+            "{% regroup rows by a as groups %}{% for i in items %}{% probe_rows %}{% endfor %}",
+            {"rows": [{"a": 1}, {"a": 2}], "items": [1, 2]},
+        )
+        groups = seen["ids"][0]  # Rust-born; a memoised frame dict would hold it
+        seen["ids"].clear()
+        gc.collect()
+        holders = [type(r).__name__ for r in gc.get_referrers(groups) if isinstance(r, dict)]
+        assert holders == [], f"a converted frame dict still holds the value: {holders}"
 
     def test_loop_variable_is_fresh_every_iteration(self, lib):
         """The `{% for %}` frame is rebound each iteration — a miss by design."""

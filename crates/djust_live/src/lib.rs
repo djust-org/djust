@@ -735,6 +735,7 @@ impl RustLiveViewBackend {
             // at ALL THREE render entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
+            let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
@@ -782,6 +783,7 @@ impl RustLiveViewBackend {
             // at ALL THREE render entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
+            let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
@@ -1213,6 +1215,7 @@ impl RustLiveViewBackend {
             // at ALL THREE render entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
+            let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
@@ -2238,6 +2241,7 @@ fn render_template(
         // Get template from cache or parse and cache it (#2669).
         let template_arc = cached_template(&template_source)?;
 
+        let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
         let mut ctx = Context::from_dict(state);
         ctx.set_autoescape(autoescape);
         // ADR-024 kill-switch. `None` keeps `Context::from_dict`'s default of
@@ -2471,6 +2475,7 @@ fn render_template_with_dirs(
             cached_template(&template_source)?
         };
 
+        let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
         let mut ctx = Context::from_dict(state);
         ctx.set_autoescape(autoescape);
         // See `render_template` for why `None` means ON.
