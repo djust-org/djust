@@ -2195,12 +2195,12 @@ class ViewRuntime:
                 await sync_to_async(view_instance._assign_component_ids)()
 
                 # Restore component state.
-                from .components.base import Component, LiveComponent
+                from .components.base import SESSION_COMPONENT_TYPES
 
                 component_state = await session.aget(f"{view_key}_components", {})
                 for key, state in component_state.items():
                     component = getattr(view_instance, key, None)
-                    if component and isinstance(component, (Component, LiveComponent)):
+                    if component and isinstance(component, SESSION_COMPONENT_TYPES):
                         await sync_to_async(view_instance._restore_component_state)(
                             component, state
                         )

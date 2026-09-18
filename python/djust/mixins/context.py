@@ -169,7 +169,7 @@ class ContextMixin:
         if callable(clear_providers):
             clear_providers()
 
-        from ..components.base import Component, LiveComponent
+        from ..components.base import BoundComponent, Component, LiveComponent
         from django.db.models import QuerySet
 
         context: Dict[str, Any] = {}
@@ -248,6 +248,12 @@ class ContextMixin:
             if isinstance(value, (Component, LiveComponent)):
                 if isinstance(value, LiveComponent):
                     self._register_component(value, attr_name=key)
+                context[key] = value
+            elif isinstance(value, BoundComponent):
+                # ADR-031: a class-level component resolved through ``__get__``
+                # above. It is not JSON-serializable itself (the #694 gate
+                # below would drop it); ``normalize_django_value`` carries it
+                # as its State.
                 context[key] = value
             elif not isinstance(value, _SKIP_TYPES):
                 # For class-level attributes, skip values that are not

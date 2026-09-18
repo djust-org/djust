@@ -825,6 +825,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             # Skip callables (bound methods, lambdas stored as attrs)
             if callable(value):
                 continue
+            # ADR-031: a class-level component's slot holds a BoundComponent;
+            # persist its State (a dict) so ``__get__`` rehydrates it on restore.
+            from .components.base import BoundComponent
+
+            if isinstance(value, BoundComponent):
+                value = dict(value.state)
             # #1994: encode Django models to a re-hydratable ref so a private
             # model attr survives the session round-trip AS A MODEL (re-fetched
             # on restore) instead of the lossy client dict normalize_django_value
@@ -1032,10 +1038,18 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         if not registry:
             return {}
         components_state: Dict[str, Dict[str, Any]] = {}
+        from .components.base import BoundComponent
+
         for component_id, component in registry.items():
             try:
                 comp_state: Dict[str, Any] = {}
-                for key, value in component.__dict__.items():
+                # ADR-031: a bound component's public state IS its State dict.
+                items = (
+                    component.state.items()
+                    if isinstance(component, BoundComponent)
+                    else component.__dict__.items()
+                )
+                for key, value in items:
                     if key.startswith("_"):
                         continue
                     if key in _COMPONENT_INTERNAL_ATTRS:

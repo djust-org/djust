@@ -595,7 +595,7 @@ class RequestMixin:
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
-        from ..components.base import Component, LiveComponent
+        from ..components.base import LiveComponent, SESSION_COMPONENT_TYPES
 
         # Referenced by the ``except`` at the end of this method, which must not
         # raise its own UnboundLocalError when the failure precedes their
@@ -701,7 +701,7 @@ class RequestMixin:
             component_state = request.session.get(f"{view_key}_components", {})
             for key, state in component_state.items():
                 component = getattr(self, key, None)
-                if component and isinstance(component, (Component, LiveComponent)):
+                if component and isinstance(component, SESSION_COMPONENT_TYPES):
                     self._restore_component_state(component, state)
 
             # --- Authorization layer 3 of 3: object-level (ADR-017) ----------

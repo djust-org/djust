@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from django.http import Http404
 
 from djust import LiveView
+from djust.components.base import BoundComponent
 from djust.decorators import event_handler
 
 from djust.components.descriptors import (
@@ -119,6 +120,8 @@ class GalleryCategoryMixin(_GalleryMixinBase):
         if comp_name not in descriptors:
             return {}
         state = getattr(self, comp_name, None)
+        if isinstance(state, BoundComponent):
+            state = state.state
         if state is None or not isinstance(state, dict):
             return {}
         return dict(state)

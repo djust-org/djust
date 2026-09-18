@@ -2032,10 +2032,17 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
 
     # Components -> rendered HTML string
     try:
-        from .components.base import Component, LiveComponent
+        from .components.base import BoundComponent, Component, LiveComponent
 
         if isinstance(value, (Component, LiveComponent)):
             return str(value)
+        # ADR-031 (PR 1): a class-level component crosses as its State, so the
+        # eager map answers ``{{ nav.active }}`` exactly as the bare State did
+        # before the bound wrapper existed. Template rendering is PR 2.
+        if isinstance(value, BoundComponent):
+            return normalize_django_value(
+                dict(value.state), _depth + 1, state_roundtrip=state_roundtrip
+            )
     except ImportError:
         pass  # components module is optional; skip check if not installed
 
