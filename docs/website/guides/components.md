@@ -224,44 +224,79 @@ class DashboardView(LiveView):
 ```html
 <div dj-root>
     <h2>Counter</h2>
-    {{ counter|safe }}
+    {{ counter }}
 </div>
 ```
 
 `{{ counter }}` is the recommended spelling (see the note on component
-rendering below) -- `|safe` is needed until [#2501](https://github.com/djust-org/djust/issues/2501)'s
-escaping fix lands.
+rendering below); the markup is inserted as safe HTML on every render path.
 
 The `component_id` is automatically set to the attribute name (`"counter"`) by the framework. No manual ID management needed.
 
-### Descriptor-pattern auto-promotion gap
+### Class-level components
 
-When LiveComponents are declared as **class-level descriptors** (the preferred
-pattern shown above), the framework's component-id walker (`_assign_component_ids`)
-only inspects instance-level attributes. As a result, **descriptor-pattern
-components are NOT auto-registered in `view._components`** today. Framework
-features that walk `_components` -- including time-travel snapshots, session-based
-component-state save/restore, and other introspection paths -- will silently miss
-descriptor-pattern components unless the view appends them manually during
-`mount()`.
-
-**Workaround** -- register the descriptor's instance in `_components` explicitly:
+A component can also be declared **on the view class** with a `State` class
+instead of `mount()`/`get_context_data()`. Each view instance gets its own
+state; the attribute name is the `component_id`
+([ADR-031](https://github.com/djust-org/djust/blob/main/docs/adr/031-class-level-component-rendering.md)):
 
 ```python
-class MyView(LiveView):
-    greeting = GreetingWidget.descriptor()  # class-level descriptor
+from djust import LiveView
+from djust.components.descriptors.base import LiveComponent, TypedState
+from djust.decorators import event_handler
 
-    def mount(self, request, **kwargs):
-        # Required until auto-promotion ships: makes the descriptor's
-        # instance visible to time-travel snapshots and other framework
-        # walkers that iterate self._components.
-        self._components.append(self.greeting)
+
+class Tabs(LiveComponent):
+    class State(TypedState):
+        active: str = "overview"
+
+    template = """
+        <nav>
+          <button dj-click="select" dj-value="overview">Overview</button>
+          <button dj-click="select" dj-value="billing">Billing</button>
+        </nav>
+        <p>{{ active }}</p>
+    """
+
+    @event_handler()
+    def select(self, value: str = "", **kwargs):
+        self.state.active = value
+
+
+class SettingsView(LiveView):
+    template = "<div dj-root>{{ nav }}</div>"
+
+    nav = Tabs(active="overview")
 ```
 
-Auto-promotion is planned future framework work (tracked separately). Until it
-ships, document this gap in any code that mixes descriptor-pattern components
-with time-travel or session restore -- otherwise the component will appear to
-"vanish" from snapshots even though its public state is intact on the view.
+What this gives you:
+
+- **`view.nav`** is a *bound component*: `view.nav.active` reads and writes
+  this view's state (`view.nav.state` is the `State` itself), and it is
+  registered in `view._components` on first access, so it is routed, captured
+  in time-travel snapshots and saved/restored with the session like any other
+  component (the signed back-navigation snapshot captures but does not yet
+  restore component state -- [#2896](https://github.com/djust-org/djust/issues/2896)).
+- **Handlers are ordinary `@event_handler` methods** on the component; inside
+  one, `self.state` is the state of the view that received the event. Clicks
+  inside the rendered markup carry the `component_id` automatically because
+  `{{ nav }}` wraps the output in `<div data-component-id="nav">`.
+- **The State is the template context.** `{{ nav }}` renders `template` (or
+  `template_name`) with the state keys plus `component_id`; there is no
+  `get_context_data()` on this path. A component without a template renders
+  as its state's dict repr.
+- Re-rendering is cached on the state's hash, so an unchanged component costs
+  one hash per render. On the LiveView path `{{ nav }}` is the rendered HTML
+  string, so string filters (`{{ nav|length }}`, `|upper`) act on the markup.
+
+The eight built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
+`djust.components.descriptors`) declare no template: they use the same
+mechanism with a `Meta.event` alias registered on the view, and the
+`djust_components` template tags (`{% tabs %}`, `{% accordion %}`, ...) draw
+their markup from the state.
+
+Note that `isinstance(view.nav, Tabs.State)` is `False` -- the state is
+`view.nav.state`.
 
 ### Lifecycle
 
@@ -640,7 +675,7 @@ template = '{% if size == "lg" %}big{% endif %}{% if size == "sm" %}small{% endi
 
 **Components in templates render via `{{ component }}`** -- the `__str__` method calls `render()` automatically, and this is the canonical spelling for both `Component` and `LiveComponent`; every example in these docs uses it ([#2634](https://github.com/djust-org/djust/issues/2634)). `{{ component.render }}` still resolves (it's the same underlying call) but isn't preferred: it depends on Django's nullary auto-call, which `LIVEVIEW_CONFIG['template_auto_call'] = False` switches off -- `{{ component }}` then still renders, while `{{ component.render }}` prints a bound-method repr. As of [#2503](https://github.com/djust-org/djust/issues/2503), the two spellings render **identical output** on every render path -- verified directly, not assumed.
 
-> **A component's markup is currently escaped on all four render paths** (`DjustTemplateBackend`, the two standalone `render_template` entry points, and the LiveView path), so it shows as literal text without `|safe`. Add it -- `{{ component|safe }}` or `{{ component.render|safe }}`, either spelling -- until the second half of [#2501](https://github.com/djust-org/djust/issues/2501) lands. An earlier version of this note claimed the LiveView path was unaffected; measured false -- it needs `|safe` exactly like the other three.
+> A component's markup is inserted **unescaped on all four render paths** (`DjustTemplateBackend`, the two standalone `render_template` entry points, and the LiveView path) -- no `|safe` needed. An earlier version of this note said the opposite while [#2501](https://github.com/djust-org/djust/issues/2501) was open; it is closed, and the four paths were re-measured for ADR-031.
 
 ## djust-components (Template Tag Library)
 

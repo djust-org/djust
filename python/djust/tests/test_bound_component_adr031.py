@@ -252,7 +252,7 @@ class TestBoundComponentBinding:
         with pytest.raises(AttributeError):
             bound.no_such_key  # noqa: B018
         with pytest.raises(AttributeError):
-            bound.render  # noqa: B018 — framework methods are not forwarded
+            bound.update  # noqa: B018 — framework methods are not forwarded
         assert bound.shout() == "Q", "component methods bind to the bound component"
 
     def test_dirty_flag_is_the_states_flag(self):
@@ -280,7 +280,7 @@ class TestBoundComponentBinding:
         assert bound.as_static() == 1
         assert bound.as_class() == "Toggle"
         assert bound.State is Toggle.State
-        for name in ("mount", "get_context_data", "render", "update"):
+        for name in ("mount", "get_context_data", "update", "trigger_update"):
             with pytest.raises(AttributeError):
                 getattr(bound, name)
 

@@ -2036,10 +2036,14 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
 
         if isinstance(value, (Component, LiveComponent)):
             return str(value)
-        # ADR-031 (PR 1): a class-level component crosses as its State, so the
-        # eager map answers ``{{ nav.active }}`` exactly as the bare State did
-        # before the bound wrapper existed. Template rendering is PR 2.
+        # ADR-031: a class-level component crosses as its rendered HTML when it
+        # declares a template (``{{ nav }}`` — ``{{ nav.active }}`` still
+        # resolves through the raw-object sidecar), otherwise as its State so
+        # the eager map answers ``{{ nav.active }}``. The session round trip
+        # (``state_roundtrip=True``) always carries the State.
         if isinstance(value, BoundComponent):
+            if not state_roundtrip and (value.template or value.template_name):
+                return str(value)
             return normalize_django_value(
                 dict(value.state), _depth + 1, state_roundtrip=state_roundtrip
             )

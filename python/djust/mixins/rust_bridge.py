@@ -781,9 +781,20 @@ class RustBridgeMixin:
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
 
+            # ADR-031: a class-level component is an opaque wrapper whose
+            # State is the thing that changes — fingerprint the State, never
+            # the wrapper's id() (a nested in-place mutation such as
+            # ``self.state["rows"].append(x)`` sets no dirty flag).
+            from ..components.base import BoundComponent
+
+            def _is_structural(value: Any) -> bool:
+                return isinstance(value, (dict, list, tuple, BoundComponent))
+
             def _fp_of(key: str, value: Any) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
+                    if isinstance(value, BoundComponent):
+                        value = value.state
                     fp, truncated = deep_fingerprint(value)
                     new_fps[key] = fp
                     if truncated:
@@ -838,7 +849,7 @@ class RustBridgeMixin:
                             context[key] = value  # TypedState dirty flag
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
-                        elif isinstance(value, (dict, list, tuple)):
+                        elif _is_structural(value):
                             if prev_fps.get(key, _MISSING) != _fp_of(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
@@ -860,7 +871,7 @@ class RustBridgeMixin:
                             context[key] = value  # new key
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
-                        elif isinstance(value, (dict, list, tuple)):
+                        elif _is_structural(value):
                             if prev_fps.get(key, _MISSING) != _fp_of(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
@@ -897,7 +908,7 @@ class RustBridgeMixin:
             self._prev_context_fingerprints = {
                 k: _fp_of(k, v)
                 for k, v in full_context.items()
-                if k not in _request_scoped_keys and isinstance(v, (dict, list, tuple))
+                if k not in _request_scoped_keys and _is_structural(v)
             }
             self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear
