@@ -38,9 +38,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import logging
+import re
 import time
 from typing import (
     Any,
@@ -51,6 +53,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Tuple,
     runtime_checkable,
 )
 
@@ -1006,9 +1009,14 @@ class WSConsumerTransport:
             # render duration the runtime stamped on the frame under ``_timing_render_ms``
             # (popped here so it never leaks onto the wire when the gate is closed).
             render_ms = frame.pop("_timing_render_ms", None)
+            # ADR-032 D4: ``scope == "component"`` marks a scoped patch so the
+            # debug panel and ``benchmark_event`` can tell it from a page render.
+            scope = frame.pop("_timing_scope", None)
             if _should_expose_timing():
                 if render_ms is not None:
                     frame["timing"] = {"render": render_ms}
+                    if scope is not None:
+                        frame["timing"]["scope"] = scope
                 if performance:
                     frame["performance"] = performance
 
@@ -1818,6 +1826,168 @@ class SSESessionTransport:
 # ------------------------------------------------------------------ #
 # ViewRuntime
 # ------------------------------------------------------------------ #
+
+
+# --------------------------------------------------------------------------- #
+# ADR-032 — component-scoped rendering (#2917)
+# --------------------------------------------------------------------------- #
+
+#: ``LiveComponent._bind`` stores a view's bound component under this
+#: prefix + the attribute name (``_component_nav``); that is the key the
+#: change-detection snapshot sees when only the component's State changed.
+_COMPONENT_SLOT_PREFIX = "_component_"
+
+_TEMPLATE_TOKEN_RE = re.compile(r"{{.*?}}|{%.*?%}|{#.*?#}", re.S)
+_UNRESOLVED_TEMPLATE_RE = re.compile(r"{%\s*(include|extends)\b")
+
+
+def _scoped_component_for(view: Any, changed_keys: Optional[Any]) -> Optional[Any]:
+    """ADR-032 D1(a)(c): the ONE assign the handler changed is a bound
+    component's slot, and that component declares a template.
+
+    Returns the :class:`~djust.components.base.BoundComponent`, or ``None``
+    when the event changed nothing, several things, a plain assign, an
+    instance component (D7 — no per-view slot), or a component without a
+    template (``{{ nav }}`` is then its dict repr, not markup).
+    """
+    if not changed_keys or len(changed_keys) != 1:
+        return None
+    key = next(iter(changed_keys))
+    if not isinstance(key, str) or not key.startswith(_COMPONENT_SLOT_PREFIX):
+        return None
+    name = key[len(_COMPONENT_SLOT_PREFIX) :]
+    registry = getattr(view, "_components", None)
+    component = registry.get(name) if isinstance(registry, dict) else None
+    if component is None:
+        return None
+    from .components.base import BoundComponent
+
+    if not isinstance(component, BoundComponent) or component.component_id != name:
+        return None
+    if getattr(component._descriptor, "_descriptor_storage_key", None) != key:
+        return None
+    if not (component.template or component.template_name):
+        return None
+    return component
+
+
+def _template_is_component_opaque(source: str, name: str) -> bool:
+    """ADR-032 D2 on a template SOURCE: every reference to ``name`` is the bare
+    ``{{ name }}`` — never ``name.active``, ``name|length``, ``{% for x in
+    name %}``, ``{% with name.state as s %}`` — and no ``{% include %}`` /
+    ``{% extends %}`` is left that could read it elsewhere. Any other read of
+    the component's state would have to re-render too, so such a template
+    never takes the scoped path. Conservative by construction: the name
+    inside a string literal or a comment tag also says "not opaque".
+    """
+    word = re.compile(rf"(?<![\w.]){re.escape(name)}(?!\w)")
+    for match in _TEMPLATE_TOKEN_RE.finditer(source):
+        token = match.group(0)
+        if not word.search(token):
+            continue
+        if token.startswith("{{") and token[2:-2].strip() == name:
+            continue
+        return False
+    return _UNRESOLVED_TEMPLATE_RE.search(source) is None
+
+
+def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> Optional[str]:
+    """ADR-032 D1, verified rather than predicted (review of #2920 🔴1).
+
+    The template is not the only reader of a component's state: a view
+    ``@property``, a ``get_context_data`` override or a dep-less ``@computed``
+    can derive a value from ``self.nav.active`` that the template reads under
+    another name. Such a value lands in the render CONTEXT, so the context is
+    compared, key by key, against what the last render synced — the same
+    three-layer rule ``_sync_state_to_rust`` applies (identity, value for
+    immutables, structural fingerprint for containers; #2664) — and any key
+    other than the component's own that changed, appeared or vanished names
+    the reason the scoped path is not exact. Returns that key, or ``None``
+    when only the component changed.
+    """
+    from .change_detection import deep_fingerprint, fingerprints_by_content
+    from .mixins.rust_bridge import _FRAMEWORK_KEYS, _IMMUTABLE_TYPES_FOR_SYNC
+
+    prev_refs = getattr(view, "_prev_context_refs", None)
+    prev_immutables = getattr(view, "_prev_context_immutables", None)
+    prev_fps = getattr(view, "_prev_context_fingerprints", None)
+    if prev_refs is None or prev_immutables is None or prev_fps is None:
+        return "<no previous render>"
+    # The same keys the sync leaves untracked or never diffs: context-
+    # processor values, the request handle (re-assigned per event) and the
+    # framework keys (``csrf_token``, the settings-constant date formats …).
+    skip = set(getattr(view, "_context_processor_keys", ()))
+    skip.update(_FRAMEWORK_KEYS)
+    skip.add("request")
+    skip.add(name)
+    for key, value in context.items():
+        if key in skip:
+            continue
+        if isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value):
+            if key not in prev_fps or prev_fps[key] != deep_fingerprint(value)[0]:
+                return str(key)
+        elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
+            if key not in prev_immutables or prev_immutables[key] != value:
+                return str(key)
+        elif prev_refs.get(key) != id(value):
+            return str(key)
+    for key in prev_refs:
+        if key not in context and key not in skip:
+            return str(key)
+    return None
+
+
+def _view_is_component_opaque(view: Any, name: str) -> bool:
+    """D2, decided once per (view class, template source, component) and
+    cached on the class. Also false when a memoised ``@computed`` on the
+    class lists the component among its dependencies — its value would
+    change with the component's state and the template may read it."""
+    cls = type(view)
+    cache = cls.__dict__.get("_djust_component_opaque")
+    if cache is None:
+        cache = {}
+        setattr(cls, "_djust_component_opaque", cache)
+    # A file template (``template_name``) is resolved through the loader —
+    # and the Rust inheritance resolver when it extends — on every
+    # ``get_template()``; outside DEBUG the files do not change under a
+    # running process, so the verdict is keyed by name and the source is
+    # read once per class. In DEBUG (hot reload) the source is re-read and
+    # hashed every time, so an edit that adds ``{{ nav.active }}`` is seen.
+    from django.conf import settings as _dj_settings
+
+    template_name = getattr(view, "template_name", None)
+    inline = getattr(view, "template", None)
+    key: Tuple[str, str]
+    source: Any = None
+    if isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG:
+        key = (f"name:{template_name}", name)
+        verdict = cache.get(key)
+        if verdict is not None:
+            return bool(verdict)
+    try:
+        source = view.get_template()
+    except Exception:  # noqa: BLE001 — no template, no scoped path
+        return False
+    if not isinstance(source, str):
+        return False
+    if source is not None and not (
+        isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG
+    ):
+        key = (hashlib.sha1(source.encode("utf-8", "surrogatepass")).hexdigest(), name)
+    verdict = cache.get(key)
+    if verdict is None:
+        verdict = _template_is_component_opaque(source, name)
+        if verdict:
+            for attr in dir(cls):
+                prop = getattr(cls, attr, None)
+                deps = getattr(prop, "_computed_deps", None)
+                if deps and name in deps:
+                    verdict = False
+                    break
+        if len(cache) > 256:
+            cache.clear()
+        cache[key] = verdict
+    return verdict
 
 
 class ViewRuntime:
@@ -3140,13 +3310,15 @@ class ViewRuntime:
             await self._flush_deferred_activity_events()
             return
 
-        # Render
+        # Render — scoped to one bound component when that is all that
+        # changed (ADR-032 D1/D5); ``_render_and_send`` checks the other gates.
         await self._render_and_send(
             event_name=event_name,
             cache_request_id=cache_request_id,
             has_async=has_async,
             force_html=force_html,
             event_ref=event_ref,
+            scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
         )
 
         # Dispatch background work UNCONDITIONALLY after the render (WS parity,
@@ -3324,6 +3496,7 @@ class ViewRuntime:
             has_async=has_async,
             force_html=force_html,
             event_ref=event_ref,
+            scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
         )
         self._dispatch_async_work(event_name)
 
@@ -3762,6 +3935,14 @@ class ViewRuntime:
         _tt_snapshot = record_event_start(view, event_name, params, event_ref)
         _tt_error: Optional[str] = None
 
+        # ADR-032: a bound component's event may patch only its own subtree
+        # when the handler changed nothing else — decided from the snapshot,
+        # not from the template alone (decision driver 2).
+        from .components.base import BoundComponent
+        from .websocket import _compute_changed_keys, _snapshot_assigns
+
+        pre_assigns = _snapshot_assigns(view) if isinstance(component, BoundComponent) else None
+
         try:
             try:
                 await _call_handler(handler, coerced_event_data if coerced_event_data else None)
@@ -3798,6 +3979,25 @@ class ViewRuntime:
                     sanitize_for_log(str(component_id)),
                     exc,
                 )
+
+        # ADR-032 D5: the scoped path first. Same helper as the runtime event
+        # path; the frame is the ``patch`` frame that path emits.
+        if pre_assigns is not None and not getattr(view, "_force_full_html", False):
+            changed = _compute_changed_keys(pre_assigns, _snapshot_assigns(view))
+            if _scoped_component_for(view, changed) is component:
+                _scoped_start = time.perf_counter()
+                scoped = await self._render_scoped_component(view, component)
+                if scoped is not None:
+                    await self._send_scoped_patch_frame(
+                        view,
+                        scoped,
+                        (time.perf_counter() - _scoped_start) * 1000,
+                        event_name=event_name,
+                        event_ref=event_ref,
+                    )
+                    await self._flush_all_pending()
+                    self._dispatch_async_work(event_name)
+                    return True
 
         # Component VDOM is separate from the parent's, so re-render the parent
         # to full HTML and emit a ``component_event`` frame (websocket.py:4024-4032).
@@ -4256,8 +4456,16 @@ class ViewRuntime:
         has_async: bool = False,
         force_html: bool = False,
         event_ref: Optional[int] = None,
+        scoped_component: Optional[Any] = None,
     ) -> None:
         """Re-render after an event handler and emit the appropriate frame.
+
+        ``scoped_component`` (ADR-032 D5): the bound component the event
+        resolved to — the ONE assign that changed, per
+        :func:`_scoped_component_for`. When the remaining gates hold
+        (:meth:`_render_scoped_component`) only its subtree is diffed and the
+        same ``patch`` frame goes out with ``timing.scope == "component"``;
+        otherwise this is today's page render, unchanged.
 
         Decides between ``patch`` (VDOM diff available) and ``html_update``
         (no diff or compression fallback). Mirrors the legacy
@@ -4293,18 +4501,27 @@ class ViewRuntime:
         # pops it, only re-attaching a top-level ``timing`` when ``_should_expose_timing()``
         # is true. Cheap (one ``perf_counter`` pair) so it stays unconditional.
         _render_start = time.perf_counter()
-        try:
-            html, patches, version = await sync_to_async(view.render_with_diff)()
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="render",
-                view_class=view.__class__.__name__,
-                logger=logger,
-                log_message="Runtime: render error",
-            )
-            await self.transport.send(response)
-            return
+        scoped: Optional[Tuple[str, str, int]] = None
+        if scoped_component is not None and not force_html:
+            scoped = await self._render_scoped_component(view, scoped_component)
+        html: str
+        patches: Optional[str]
+        version: int
+        if scoped is not None:
+            html, patches, version = scoped
+        else:
+            try:
+                html, patches, version = await sync_to_async(view.render_with_diff)()
+            except Exception as exc:
+                response = handle_exception(
+                    exc,
+                    error_type="render",
+                    view_class=view.__class__.__name__,
+                    logger=logger,
+                    log_message="Runtime: render error",
+                )
+                await self.transport.send(response)
+                return
         _render_ms = (time.perf_counter() - _render_start) * 1000
 
         def _send_event_frame(frame: Dict[str, Any]) -> Dict[str, Any]:
@@ -4313,20 +4530,14 @@ class ViewRuntime:
             internal ``_timing_render_ms`` marker is ALWAYS popped before the frame
             leaves this helper (the WS hook consumes it; SSE / partial test transports
             have a no-op or no hook), so it can never leak onto the wire."""
-            frame["_timing_render_ms"] = _render_ms
-            _hook = getattr(self.transport, "on_event_frame", None)
-            if _hook is not None:
-                _hook(
-                    view,
-                    frame,
-                    event_name=event_name,
-                    event_ref=event_ref,
-                )
-            # Unconditional cleanup: the marker is internal to this fold; whether the
-            # transport hook popped it (WS, when the timing gate is open) or ignored
-            # it (SSE no-op, prod-gated WS, no hook), it must NOT reach the client.
-            frame.pop("_timing_render_ms", None)
-            return frame
+            return self._stamp_event_frame(
+                view,
+                frame,
+                event_name=event_name,
+                event_ref=event_ref,
+                render_ms=_render_ms,
+                scope="component" if scoped is not None else None,
+            )
 
         should_reset_form = getattr(view, "_should_reset_form", False)
         if should_reset_form:
@@ -4353,10 +4564,12 @@ class ViewRuntime:
                 fast_json_loads(patches) if isinstance(patches, str) else patches
             )
 
-            # Patch compression (mirror sse.py legacy)
+            # Patch compression (mirror sse.py legacy). A scoped patch is
+            # never compressed: its patches are a component's worth, and the
+            # fallback would ship the whole page for a subtree change.
             PATCH_THRESHOLD = 100
             _compressed_patch_count: Optional[int] = None
-            if patch_list and len(patch_list) > PATCH_THRESHOLD:
+            if scoped is None and patch_list and len(patch_list) > PATCH_THRESHOLD:
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:
@@ -4490,6 +4703,137 @@ class ViewRuntime:
         # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues
         # in canonical order, not just push_events/navigation/deferred.
         await self._flush_all_pending()
+
+    def _stamp_event_frame(
+        self,
+        view: Any,
+        frame: Dict[str, Any],
+        *,
+        event_name: str,
+        event_ref: Optional[int],
+        render_ms: float,
+        scope: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Stamp the render duration (+ ADR-032 ``scope``) and invoke the DEBUG
+        ``on_event_frame`` fold (#1908) in place, then return the frame for
+        ``transport.send``. The internal markers are ALWAYS popped before the
+        frame leaves (the WS hook consumes them; SSE / partial test transports
+        have a no-op or no hook), so they can never leak onto the wire."""
+        frame["_timing_render_ms"] = render_ms
+        if scope is not None:
+            frame["_timing_scope"] = scope
+        _hook = getattr(self.transport, "on_event_frame", None)
+        if _hook is not None:
+            _hook(
+                view,
+                frame,
+                event_name=event_name,
+                event_ref=event_ref,
+            )
+        frame.pop("_timing_render_ms", None)
+        frame.pop("_timing_scope", None)
+        return frame
+
+    async def _render_scoped_component(
+        self, view: Any, component: Any
+    ) -> Optional[Tuple[str, str, int]]:
+        """ADR-032 D1(d)(e) + D3: render ONE bound component and splice its
+        subtree into the view's VDOM.
+
+        Returns the ``render_with_diff`` triple ``(html, patches_json,
+        version)`` — ``html`` is the page as the patched tree serialises, so
+        recovery is armed with current markup (D4) — or ``None`` when any
+        gate fails, in which case the caller takes today's page render in the
+        same event (D6: not an error, DEBUG-logged).
+
+        Gates beyond the caller's "only this slot changed":
+        * the view's template is component-opaque for it (D2, cached);
+        * no pending push events, the default HTML renderer (ADR-019:
+          another renderer owns its own frame shape) — the callers have
+          already read ``_force_full_html``;
+        * the Rust view exists and finds exactly one node for the component.
+        """
+        rust_view = getattr(view, "_rust_view", None)
+        patch = getattr(rust_view, "patch_component_subtree", None)
+        if patch is None:
+            return None
+        # (``_force_full_html`` is read by both callers before they get here.)
+        if getattr(view, "_pending_push_events", None):
+            return None
+        if getattr(view, "_djust_renderer", None) is not None:
+            return None
+        name = component.component_id
+        if not _view_is_component_opaque(view, name):
+            return None
+        try:
+            # Verify, do not predict: the page is exact only if nothing the
+            # template can read changed besides the component — including
+            # values DERIVED from it elsewhere on the view.
+            context = await sync_to_async(view.get_context_data)()
+            reason = _context_changed_besides(view, context, name)
+            if reason is not None:
+                logger.debug("Scoped render of %r: %r changed too; full render", name, reason)
+                return None
+            html = await sync_to_async(component.render)()
+            # Component-sized parse + diff; runs inline on the event loop like
+            # the JSON decode of the patches. Route a large component through
+            # ``sync_to_async`` before making it larger.
+            result = patch(name, html)
+        except Exception:  # noqa: BLE001 — D6: fall back to the full render
+            logger.debug("Scoped render of component %r failed; full render", name, exc_info=True)
+            return None
+        if result is None:
+            logger.debug("Scoped render of component %r not exact; full render", name)
+            return None
+        # The slot is now in step with the Rust state (D3 sets it), so the
+        # next sync starts from the same baseline a full render leaves — the
+        # component's fingerprint included, so it is not re-sent unchanged.
+        view._changed_keys = None
+        try:
+            from .change_detection import deep_fingerprint
+
+            view._prev_context_fingerprints[name] = deep_fingerprint(context[name])[0]
+        except Exception:  # noqa: BLE001 — bookkeeping; a miss only costs a re-sync
+            pass
+        timing = getattr(rust_view, "get_render_timing", None)
+        if timing is not None:
+            view._rust_render_timing = timing()
+        html_out, patches_json, version = result
+        return (str(html_out), str(patches_json), int(version))
+
+    async def _send_scoped_patch_frame(
+        self,
+        view: Any,
+        triple: Tuple[str, str, int],
+        render_ms: float,
+        *,
+        event_name: str,
+        event_ref: Optional[int],
+    ) -> None:
+        """Emit the ``patch`` frame for a scoped render on the component
+        dispatch path — the same shape ``_render_and_send`` emits (D4), with
+        the wire version stamped from the page markup so recovery is current."""
+        html, patches, version = triple
+        wire_version = self.transport.next_client_version(html, version)
+        msg: Dict[str, Any] = {
+            "type": "patch",
+            "patches": fast_json_loads(patches) if isinstance(patches, str) else patches,
+            "version": wire_version,
+            "event_name": event_name,
+            "source": "event",
+        }
+        if event_ref is not None:
+            msg["ref"] = event_ref
+        await self.transport.send(
+            self._stamp_event_frame(
+                view,
+                msg,
+                event_name=event_name,
+                event_ref=event_ref,
+                render_ms=render_ms,
+                scope="component",
+            )
+        )
 
     def _flush_push_events(self, view: Optional[Any] = None) -> None:
         """Drain push_events and send via the transport (sync-safe — pushes
