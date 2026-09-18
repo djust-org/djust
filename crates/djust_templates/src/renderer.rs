@@ -1068,18 +1068,29 @@ fn call_custom_tag(
     // TOKENS instead (#2423); both rules apply, in that order, through
     // `resolve_custom_tag_args`.
     let resolved_args = resolve_custom_tag_args(name, args, context);
-    // #2710: through the ONE bridge, so a deferred `block.super` is
-    // materialised for the flat map Python resolves against.
-    let context_map = bridged_context_map(context)?;
-    // The optional raw-Python sidecar (``request``, ``view``, …) so handlers
-    // like ``live_render`` (#1145) can reach Python objects from the parent's
-    // render context. Existing handlers ignore extra keys.
     let raw_py = context.render_raw_py_objects();
-    if crate::registry::tag_handler_returns_bindings(name) {
+    let returns_bindings = crate::registry::tag_handler_returns_bindings(name);
+    if returns_bindings && !context.block_super_is_armed() {
+        // #2914: the live frames, memoised per frame version. Gated on the
+        // SAME condition as `bridged_context_map`'s own fast path (#2710): an
+        // armed `block.super` binds a synthetic `block` key on a clone, which
+        // only the flattened map below carries.
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
             &resolved_args,
-            &context_map,
+            crate::registry::ContextSource::Live(context),
+            raw_py.as_deref(),
+            &context.safe_key_paths(),
+            context.autoescape(),
+        )?;
+        return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
+    }
+    let context_map = bridged_context_map(context)?;
+    if returns_bindings {
+        let (html, bindings) = crate::registry::call_handler_with_bindings(
+            name,
+            &resolved_args,
+            crate::registry::ContextSource::Flat(&context_map),
             raw_py.as_deref(),
             &context.safe_key_paths(),
             context.autoescape(),
