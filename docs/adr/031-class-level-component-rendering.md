@@ -133,7 +133,7 @@ a non-dict object on the context, which is the same object events need.
 | M9 | `{{ nav }}` with `State.__str__` returning `mark_safe("<b>…</b>")`, both engine paths | the dict repr; `__str__` never called |
 | M10 | `{{ nav }}\|{{ nav.active }}` with a non-dict object forwarding attribute access and rendering on `str()`, both engine paths | `<nav>overview</nav>\|overview` |
 | M11 | `view._components` type; the documented workaround `self._components.append(...)` (`components.md:258`) | `dict` (`live_view.py:556`) — the workaround raises `AttributeError` |
-| M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:257` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2035` stringifies an unknown object before Rust sees it |
+| M12 | the M10 object as a class attribute on a `LiveView`, rendered through `render_with_diff` (PR 1) | dropped: `mixins/context.py:259-262` keeps a class-level value only if it is JSON-serializable (#694), and `serialization.py:2155` (`return str(value)`, warning at `:2104`) stringifies an unknown object before Rust sees it |
 
 ## The four things the docs say that this tree does not
 
