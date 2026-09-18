@@ -519,8 +519,10 @@ class BoundComponent:
     * Methods the component class defines (below the framework base) resolve
       with the bound component as ``self``, so an ``@event_handler`` reads
       per-view state as ``self.state.active``.
-    * ``str(bound)`` is the state's repr, as ``{{ nav }}`` rendered before;
-      template rendering is ADR-031 PR 2.
+    * ``str(bound)`` renders the component's ``template`` / ``template_name``
+      with the State as the context (D5), cached on the state's hash (D6);
+      without a template it is the state's repr, as ``{{ nav }}`` rendered
+      before ADR-031.
 
     The object lives only in the view's ``__dict__`` slot and
     ``view._components``; nothing serializes it — every save path writes
@@ -641,17 +643,20 @@ class BoundComponent:
 
     @property
     def template(self) -> Optional[str]:
-        return cast(Optional[str], getattr(type(self._descriptor), "template", None))
+        return cast(Optional[str], getattr(self._descriptor, "template", None))
 
     @property
     def template_name(self) -> Optional[str]:
-        return cast(Optional[str], getattr(type(self._descriptor), "template_name", None))
+        return cast(Optional[str], getattr(self._descriptor, "template_name", None))
 
     def _state_hash(self) -> str:
         import hashlib
         import json
 
-        payload = json.dumps(self.state, sort_keys=True, default=str)
+        # ``dict(...)``: a State field named ``items`` shadows ``dict.items``
+        # (TypedState makes every field a property) and the C encoder would
+        # call it; a plain dict copy sidesteps every such shadow.
+        payload = json.dumps(dict(self.state), sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def render(self) -> str:
@@ -850,6 +855,12 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         """
         # Check if this is being used as a descriptor (no owner yet)
         # vs direct instantiation (legacy pattern)
+        # ``template`` / ``template_name`` passed to a class-level declaration
+        # (``nav = Tabs(template="...")``) configure the component; they are
+        # not State defaults (ADR-031).
+        for _cfg in ("template", "template_name"):
+            if _cfg in kwargs:
+                setattr(self, _cfg, kwargs.pop(_cfg))
         self._descriptor_defaults = kwargs
         self._descriptor_attr_name: Optional[str] = None
         self._descriptor_storage_key: Optional[str] = None

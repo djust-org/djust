@@ -273,8 +273,10 @@ What this gives you:
 
 - **`view.nav`** is a *bound component*: `view.nav.active` reads and writes
   this view's state (`view.nav.state` is the `State` itself), and it is
-  registered in `view._components` on first access, so time-travel snapshots
-  and session save/restore see it like any other component.
+  registered in `view._components` on first access, so it is routed, captured
+  in time-travel snapshots and saved/restored with the session like any other
+  component (the signed back-navigation snapshot captures but does not yet
+  restore component state -- [#2896](https://github.com/djust-org/djust/issues/2896)).
 - **Handlers are ordinary `@event_handler` methods** on the component; inside
   one, `self.state` is the state of the view that received the event. Clicks
   inside the rendered markup carry the `component_id` automatically because
@@ -284,11 +286,14 @@ What this gives you:
   `get_context_data()` on this path. A component without a template renders
   as its state's dict repr.
 - Re-rendering is cached on the state's hash, so an unchanged component costs
-  one hash per render.
+  one hash per render. On the LiveView path `{{ nav }}` is the rendered HTML
+  string, so string filters (`{{ nav|length }}`, `|upper`) act on the markup.
 
 The eight built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
-`djust.components.descriptors`) use the same mechanism with a `Meta.event`
-alias registered on the view; the theming template tags draw their markup.
+`djust.components.descriptors`) declare no template: they use the same
+mechanism with a `Meta.event` alias registered on the view, and the
+`djust_components` template tags (`{% tabs %}`, `{% accordion %}`, ...) draw
+their markup from the state.
 
 Note that `isinstance(view.nav, Tabs.State)` is `False` -- the state is
 `view.nav.state`.

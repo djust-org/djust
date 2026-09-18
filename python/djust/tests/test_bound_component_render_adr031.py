@@ -285,6 +285,115 @@ class TestBoundComponentRenderRoundTrip:
         assert other.nav.active == "overview"
         assert "<p>overview" in str(other.nav)
 
+    @pytest.mark.asyncio
+    async def test_nested_in_place_mutation_re_renders_over_the_runtime(self):
+        """Review 🔴2: ``self.state["rows"].append(...)`` sets no dirty flag
+        and keeps the wrapper's id(); change detection must fingerprint the
+        State so the re-render is not stale (it was, vs ``main``)."""
+
+        class Rows(LiveComponent):
+            class State(TypedState):
+                rows: list = []
+
+            template = "<i>{{ rows|length }}</i>"
+
+            @event_handler()
+            def push(self, **kwargs: Any) -> None:
+                self.state["rows"].append("x")
+
+        class RowsPage(LiveView):
+            template = '<div dj-root dj-id="0">{{ grid }}</div>'
+            grid = Rows()
+
+            def mount(self, request: Any, **kwargs: Any) -> None:
+                pass
+
+        view = RowsPage()
+        view.mount(None)
+        view.grid.state["rows"] = []  # own list per view
+        runtime, transport = _runtime(view)
+        view.render_with_diff()
+        for expected in ("1", "2"):
+            transport.sent.clear()
+            await runtime.dispatch_event(
+                {"type": "event", "event": "push", "params": {"component_id": "grid"}}
+            )
+            assert transport.errors == []
+            assert f">{expected}</i>" in _html(transport), _html(transport)
+
+    def test_state_field_named_items_renders(self):
+        """Review 🔴1: a field shadowing ``dict.items`` must not break the hash."""
+
+        class Menu(LiveComponent):
+            class State(TypedState):
+                items: list = []
+                active: str = "a"
+
+            template = "<p>{{ active }}:{{ items|length }}</p>"
+
+        class MenuPage(LiveView):
+            menu = Menu(items=["x", "y"])
+
+        view = MenuPage()
+        assert "<p>a:2</p>" in str(view.menu)
+        assert normalize_django_value(view.menu) == str(view.menu)
+
+    def test_template_name_component_renders_from_a_file(self, tmp_path, settings):
+        """Review 🟡8: the ``template_name`` branch."""
+        (tmp_path / "bound_nav.html").write_text("<em>{{ active }}/{{ component_id }}</em>")
+        settings.TEMPLATES = [
+            {
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+                "DIRS": [str(tmp_path)],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        ]
+
+        class FileTabs(LiveComponent):
+            class State(TypedState):
+                active: str = "f"
+
+            template_name = "bound_nav.html"
+
+        class FilePage(LiveView):
+            nav = FileTabs()
+
+        view = FilePage()
+        html = str(view.nav)
+        assert html.startswith('<div data-component-id="nav">')
+        assert "<em>f/nav</em>" in html
+
+        # ``{% extends %}`` is resolved by the loader chain, not the marker
+        # entry, so this takes the ``render_to_string`` fallback.
+        (tmp_path / "bound_base.html").write_text("<s>{% block body %}{% endblock %}</s>")
+        (tmp_path / "bound_child.html").write_text(
+            '{% extends "bound_base.html" %}{% block body %}{{ active }}!{% endblock %}'
+        )
+
+        class ExtTabs(FileTabs):
+            template_name = "bound_child.html"
+
+        class ExtPage(LiveView):
+            nav = ExtTabs()
+
+        assert "<s>f!</s>" in str(ExtPage().nav)
+
+    def test_template_passed_to_the_declaration_is_config_not_state(self):
+        """Review 🟡3: ``nav = Tabs(template=...)`` configures the component."""
+
+        class Bare(LiveComponent):
+            class State(TypedState):
+                active: str = "z"
+
+        class InlinePage(LiveView):
+            nav = Bare(template="<q>{{ active }}</q>", active="k")
+
+        view = InlinePage()
+        assert view.nav.template == "<q>{{ active }}</q>"
+        assert "template" not in view.nav.state
+        assert "<q>k</q>" in str(view.nav)
+
     def test_shipped_descriptor_without_template_is_unchanged(self):
         class ShippedPage(LiveView):
             template = '<div dj-root dj-id="0">{{ tabs }}</div>'
