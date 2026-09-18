@@ -255,8 +255,10 @@ _SETATTR_WHITELIST = {
     # -1 (1378/1380 → 1377/1379) by #2739: ``_template_deps`` removed from
     # ``_FRAMEWORK_INTERNAL_ATTRS`` with the never-firing context filter
     # that was its only writer. Still the same two sites.
-    ("live_view.py", 1377),
-    ("live_view.py", 1379),
+    # +14 (1377/1379 → 1391/1393) by ADR-031 PR 1: the ``BoundComponent`` arms
+    # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
+    ("live_view.py", 1391),
+    ("live_view.py", 1393),
 }
 
 

@@ -7,11 +7,13 @@ reusable, reactive components with automatic performance optimization.
 
 import logging
 import re
+import types
 from typing import Callable, Dict, Any, List, Optional, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
 
 from djust._template_guards import TemplateMutatorGuard, alters_data
+from djust.decorators import is_event_handler
 
 from .assigns import (
     Assign,
@@ -500,6 +502,151 @@ class Component(TemplateMutatorGuard, ABC):
 from djust._context_provider import ContextProviderMixin
 
 
+_MISSING = object()
+
+
+class BoundComponent:
+    """A class-level :class:`LiveComponent` bound to one view instance (ADR-031).
+
+    ``LiveComponent.__get__`` returns one of these per view for a descriptor
+    that declares a ``State`` class. It owns three things: the shared
+    descriptor (never mutated), this view's ``State`` (``self.state``) and
+    the attribute name as ``component_id``.
+
+    * Attribute reads and writes forward to the state: ``bound.active`` is
+      ``bound.state["active"]``; ``bound.active = x`` writes through
+      ``TypedState.__setitem__`` so dirty tracking is intact.
+    * Methods the component class defines (below the framework base) resolve
+      with the bound component as ``self``, so an ``@event_handler`` reads
+      per-view state as ``self.state.active``.
+    * ``str(bound)`` is the state's repr, as ``{{ nav }}`` rendered before;
+      template rendering is ADR-031 PR 2.
+
+    The object lives only in the view's ``__dict__`` slot and
+    ``view._components``; nothing serializes it — every save path writes
+    ``dict(bound.state)``.
+    """
+
+    _OWN_ATTRS = frozenset({"_descriptor", "_view", "state", "component_id"})
+
+    def __init__(
+        self, descriptor: "LiveComponent", view: Any, state: Any, component_id: str
+    ) -> None:
+        object.__setattr__(self, "_descriptor", descriptor)
+        object.__setattr__(self, "_view", view)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "component_id", component_id)
+
+    # -- forwarding ---------------------------------------------------------
+
+    def _component_member(self, name: str) -> Any:
+        """Resolve ``name`` from the component class, below the framework
+        bases, bound to this object: a method binds with the bound component
+        as ``self``, a ``@property`` / ``staticmethod`` / ``classmethod``
+        resolves through its descriptor, a plain class attribute is returned
+        as is. Framework methods (``render``, ``mount``, ``update`` ...) are
+        not forwarded — the walk stops at :class:`LiveComponent` and at any
+        class marked ``_djust_framework_component_base`` (the descriptors'
+        base). Returns :data:`_MISSING` when the class does not define it.
+
+        An ``@event_handler`` is stamped ``alters_data`` so neither template
+        engine calls it from ``{{ nav.set_active }}``.
+        """
+        for cls in type(self._descriptor).__mro__:
+            if cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base"):
+                return _MISSING
+            if name not in cls.__dict__:
+                continue
+            member = cls.__dict__[name]
+            if isinstance(member, types.FunctionType) and is_event_handler(member):
+                member.alters_data = True  # type: ignore[attr-defined]
+            getter = getattr(type(member), "__get__", None)
+            if getter is not None and not isinstance(member, type):
+                return getter(member, self, type(self._descriptor))
+            return member
+        return _MISSING
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached when normal lookup fails (own attrs, class attrs).
+        state = self.__dict__.get("state")
+        if state is None or name.startswith("_"):
+            raise AttributeError(name)
+        member = self._component_member(name)
+        if member is not _MISSING:
+            return member
+        meta = getattr(type(self._descriptor), "Meta", None)
+        if meta is not None and name == getattr(meta, "event", None):
+            return self._meta_event_handler(name)
+        if name in state:
+            return state[name]
+        raise AttributeError(
+            f"{type(self._descriptor).__name__} component {self.component_id!r} "
+            f"has no state key or method {name!r}"
+        )
+
+    def _meta_event_handler(self, name: str) -> Callable[..., Any]:
+        """``Meta.event`` as a component-level handler: an event carrying this
+        component's ``component_id`` reaches ``_handle_event`` with the State,
+        the same call the view-level alias (``_make_event_handler``) makes."""
+        descriptor = self._descriptor
+        state = self.state
+
+        def handler(value: Any = "", **kwargs: Any) -> None:
+            descriptor._handle_event(state, value=value, **kwargs)
+
+        handler.__name__ = name
+        handler.__qualname__ = name
+        from djust.decorators import event_handler as eh_decorator
+
+        return eh_decorator(handler)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "state":
+            state_cls = getattr(type(self._descriptor), "State", None)
+            if (
+                state_cls is not None
+                and isinstance(value, dict)
+                and not isinstance(value, state_cls)
+            ):
+                value = state_cls.from_dict(value)
+            if isinstance(value, dict):
+                value["component_id"] = self.component_id
+            object.__setattr__(self, "state", value)
+        elif name in self._OWN_ATTRS or name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            self.state[name] = value
+
+    def __getitem__(self, key: str) -> Any:
+        return self.state[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.state
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.state.get(key, default)
+
+    # ``_dirty`` is what ``rust_bridge._sync_state_to_rust`` reads to decide
+    # whether a context value changed and clears afterwards with
+    # ``object.__setattr__``; a property forwards both to the state.
+    @property
+    def _dirty(self) -> bool:
+        return bool(getattr(self.state, "_dirty", False))
+
+    @_dirty.setter
+    def _dirty(self, value: bool) -> None:
+        object.__setattr__(self.state, "_dirty", value)
+
+    def __str__(self) -> str:
+        return str(self.state)
+
+    def __repr__(self) -> str:
+        return (
+            f"<BoundComponent {type(self._descriptor).__name__} "
+            f"component_id={self.component_id!r} state={dict(self.state)!r}>"
+        )
+
+
 class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
     """
     Base class for creating reusable, reactive components.
@@ -707,11 +854,13 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             setattr(owner, event_name, self._make_event_handler(event_name))
 
     def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
-        """Return the component's State for this view instance.
+        """Return this view's :class:`BoundComponent` (ADR-031 D1).
 
-        On first access, creates the State with defaults. On subsequent access,
-        returns the cached State. After djust deserialization (state becomes a
-        plain dict), rehydrates it back to the State class.
+        On first access, creates the State with defaults and wraps it. On
+        subsequent access, returns the cached bound component. After djust
+        deserialization (the slot holds a plain dict), rehydrates the State
+        and rebuilds the bound component around it. Each build registers the
+        bound component in ``obj._components`` (D2).
         """
         if obj is None:
             return self  # Class-level access returns the descriptor
@@ -721,26 +870,50 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             # No State inner class — legacy component, return self
             return self
 
-        state = obj.__dict__.get(self._descriptor_storage_key)
-        if state is None:
+        slot = obj.__dict__.get(self._descriptor_storage_key)
+        if isinstance(slot, BoundComponent):
+            return slot
+        if slot is None:
             # First access — create State with defaults
             state = state_cls(**self._descriptor_defaults)
-            state["component_id"] = self._descriptor_attr_name
-            obj.__dict__[self._descriptor_storage_key] = state
-        elif isinstance(state, dict) and not isinstance(state, state_cls):
+        elif isinstance(slot, dict):
             # Rehydrate from plain dict after djust deserialization
-            state = state_cls.from_dict(state)
-            state["component_id"] = self._descriptor_attr_name
-            obj.__dict__[self._descriptor_storage_key] = state
-        return state
+            state = state_cls.from_dict(slot)
+        else:
+            return slot
+        return self._bind(obj, state)
+
+    def _bind(self, obj: Any, state: Any) -> "BoundComponent":
+        """Wrap ``state`` for ``obj``, store it in the slot and register it."""
+        name = self._descriptor_attr_name or "component"
+        state["component_id"] = name
+        bound = BoundComponent(self, obj, state, name)
+        obj.__dict__[self._descriptor_storage_key or f"_component_{name}"] = bound
+        registry = getattr(obj, "_components", None)
+        if isinstance(registry, dict):
+            registry[name] = bound
+        return bound
 
     def __set__(self, obj: Any, value: Any) -> None:
-        """Accept a plain dict and convert to the component's State class."""
+        """Accept a plain dict and convert to the component's State class.
+
+        When the view already holds a bound component, its state is replaced
+        in place so ``view._components`` keeps pointing at the same object.
+        """
         state_cls = getattr(self.__class__, "State", None)
         if state_cls is not None and isinstance(value, dict) and not isinstance(value, state_cls):
             value = state_cls.from_dict(value)
-            if self._descriptor_attr_name:
-                value["component_id"] = self._descriptor_attr_name
+        if state_cls is not None and isinstance(value, dict):
+            slot = (
+                obj.__dict__.get(self._descriptor_storage_key)
+                if self._descriptor_storage_key
+                else None
+            )
+            if isinstance(slot, BoundComponent):
+                slot.state = value
+                return
+            self._bind(obj, value)
+            return
         if self._descriptor_storage_key:
             obj.__dict__[self._descriptor_storage_key] = value
         else:
@@ -762,6 +935,8 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
                 return
 
             state = getattr(view_self, component_id, None)
+            if isinstance(state, BoundComponent):
+                state = state.state
             if state is None:
                 return
 
@@ -992,3 +1167,9 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
     def __str__(self) -> str:
         """Allow {{ component }} in templates and JSON serialization"""
         return self.render()
+
+
+#: Types the session-save / session-restore component paths accept
+#: (``_save_components_to_session`` and both ``_restore_component_state``
+#: callers). One tuple so the gates cannot drift apart (ADR-031 D7).
+SESSION_COMPONENT_TYPES = (Component, LiveComponent, BoundComponent)

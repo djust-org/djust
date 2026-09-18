@@ -48,7 +48,7 @@ class ComponentMixin:
             component_id: ID of the component to update
             **props: New prop values to pass to component
         """
-        from ..components.base import LiveComponent
+        from ..components.base import BoundComponent, LiveComponent
 
         component = self._components.get(component_id)
         if component and isinstance(component, LiveComponent):
@@ -56,6 +56,9 @@ class ComponentMixin:
             # attribute; subclasses may override it for coercion or
             # selective-prop logic. See #1947.
             component.update(**props)
+        elif isinstance(component, BoundComponent):
+            for key, value in props.items():
+                setattr(component, key, value)
 
     def _register_component(self, component: Any, attr_name: Optional[str] = None) -> None:
         """
@@ -92,6 +95,12 @@ class ComponentMixin:
         Extract state from a component for session storage.
         """
         import json as json_module
+
+        from ..components.base import BoundComponent
+
+        if isinstance(component, BoundComponent):
+            # ADR-031 D7: a bound component is saved as its State, nothing else.
+            return dict(component.state)
 
         state: Dict[str, Any] = {}
         for key in dir(component):
@@ -144,13 +153,13 @@ class ComponentMixin:
         """
         Save component state to session with stable IDs.
         """
-        from ..components.base import Component, LiveComponent
+        from ..components.base import SESSION_COMPONENT_TYPES
 
         view_key = f"liveview_{request.path}"
         component_state: Dict[str, Any] = {}
 
         for key, component in context.items():
-            if isinstance(component, (Component, LiveComponent)):
+            if isinstance(component, SESSION_COMPONENT_TYPES):
                 # component_id is declared on LiveComponent; on the plain
                 # Component branch it is set dynamically here (stable session ID).
                 component.component_id = key  # type: ignore[union-attr]
