@@ -2358,35 +2358,48 @@ let liveViewWS = null;
 /**
  * The back/forward cache, which closes our socket for us.
  *
- * A page is only eligible for the bfcache with no open WebSocket, so the
- * browser closes ours on the way out and reports it as a connection failure.
- * Going back is not an error: `_inBackForwardCache` tells `onerror` to stay
- * quiet, and the restore reconnects at once instead of serving out an
- * exponential backoff the page never earned.
+ * A page is only eligible for the cache with no open WebSocket, so the browser
+ * closes ours on the way out and reports it as a connection failure. Going
+ * back is not an error.
  *
- * `pageshow` fires for an ordinary load too (`persisted` false), which is
- * where the flag is cleared for pages that were never cached.
+ * The ordering is the whole difficulty. The browser does not deliver that
+ * close while the page is frozen; it dispatches `error` and `close` on the
+ * restored page, immediately AFTER `pageshow`. So the flag that tells
+ * `onerror` to stay quiet cannot be cleared in the `pageshow` handler — doing
+ * that lets the close through as an error on every back navigation. It is
+ * cleared once the replacement socket is up, with a timer as a backstop so a
+ * failed reconnect cannot leave real errors suppressed for good.
  */
+const BFCACHE_QUIET_MS = 1500;
+
 window.addEventListener('pagehide', (event) => {
+    window.djust = window.djust || {};
     if (event.persisted) {
-        window.djust = window.djust || {};
         window.djust._inBackForwardCache = true;
     }
 });
 
 window.addEventListener('pageshow', (event) => {
     window.djust = window.djust || {};
-    if (!window.djust._inBackForwardCache) return;
-    window.djust._inBackForwardCache = false;
-    if (!event.persisted || !liveViewWS) return;
-    // Restored from the cache with a socket the browser closed. The backoff
-    // exists for a server that is struggling; this one is simply not
-    // connected yet, so reconnect on the next tick.
-    if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) return;
-    liveViewWS.reconnectAttempts = 0;
-    if (typeof liveViewWS.connect === 'function') {
-        setTimeout(() => liveViewWS.connect(), 0);
+    if (!event.persisted) {
+        window.djust._inBackForwardCache = false;
+        return;
     }
+    const stopSuppressing = () => {
+        if (window.djust) window.djust._inBackForwardCache = false;
+    };
+    document.addEventListener('djust:ws-reconnected', stopSuppressing, { once: true });
+    setTimeout(stopSuppressing, BFCACHE_QUIET_MS);
+
+    if (!liveViewWS || typeof liveViewWS.connect !== 'function') return;
+    // `readyState` cannot be trusted here: a socket the browser has already
+    // closed to make the page eligible still reads OPEN until the close is
+    // dispatched a moment later. Treating that as a healthy connection was
+    // what let the error through. Just ask to connect — `connect()` refuses
+    // a duplicate, so this is a no-op if the socket really is up, and the
+    // backoff timer the close schedules is a no-op once this one is.
+    liveViewWS.reconnectAttempts = 0;
+    setTimeout(() => liveViewWS.connect(), 0);
 });
 
 // ============================================================================

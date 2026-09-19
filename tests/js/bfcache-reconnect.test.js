@@ -81,11 +81,73 @@ describe('Back/forward cache', () => {
         expect(dom.window.djust._inBackForwardCache).toBeFalsy();
     });
 
-    it('restoring clears the flag so later errors are reported again', () => {
+    it('stays quiet for the close the browser delivers after the restore', () => {
+        // The browser does not dispatch the close while the page is frozen.
+        // It arrives on the restored page, right after `pageshow`, which is
+        // why the suppression cannot end inside that handler.
+        const dom = createDom();
+        const ws = new dom.window.djust.LiveViewWebSocket();
+        ws.connect('ws://localhost/ws/live/');
+        const spy = vi.spyOn(dom.window.console, 'error').mockImplementation(() => {});
+
+        pageEvent(dom, 'pagehide', true);
+        pageEvent(dom, 'pageshow', true);
+        ws.ws.onerror(new dom.window.Event('error'));
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('a socket still reading OPEN at restore is not treated as healthy', () => {
+        // The browser closes the socket to make the page eligible but does
+        // not dispatch the close until after `pageshow`, so `readyState`
+        // still reads OPEN at that moment. Believing it ended the
+        // suppression one tick before the error arrived.
+        const dom = createDom();
+        const ws = new dom.window.djust.LiveViewWebSocket();
+        ws.connect('ws://localhost/ws/live/');
+        ws.ws.readyState = dom.window.WebSocket.OPEN;
+        const spy = vi.spyOn(dom.window.console, 'error').mockImplementation(() => {});
+
+        pageEvent(dom, 'pagehide', true);
+        pageEvent(dom, 'pageshow', true);
+        ws.ws.onerror(new dom.window.Event('error'));
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('reports errors again once the replacement socket is up', () => {
         const dom = createDom();
         pageEvent(dom, 'pagehide', true);
-        expect(dom.window.djust._inBackForwardCache).toBe(true);
         pageEvent(dom, 'pageshow', true);
+        expect(dom.window.djust._inBackForwardCache).toBe(true);
+
+        dom.window.document.dispatchEvent(
+            new dom.window.CustomEvent('djust:ws-reconnected'),
+        );
+
         expect(dom.window.djust._inBackForwardCache).toBe(false);
+    });
+
+    it('a reconnect that never lands cannot suppress errors for good', async () => {
+        const dom = createDom();
+        pageEvent(dom, 'pagehide', true);
+        pageEvent(dom, 'pageshow', true);
+        expect(dom.window.djust._inBackForwardCache).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 1600));
+
+        expect(dom.window.djust._inBackForwardCache).toBe(false);
+    });
+
+    it('a page that was never cached reports errors immediately', () => {
+        const dom = createDom();
+        const ws = new dom.window.djust.LiveViewWebSocket();
+        ws.connect('ws://localhost/ws/live/');
+        const spy = vi.spyOn(dom.window.console, 'error').mockImplementation(() => {});
+
+        pageEvent(dom, 'pageshow', false);
+        ws.ws.onerror(new dom.window.Event('error'));
+
+        expect(spy).toHaveBeenCalled();
     });
 });
