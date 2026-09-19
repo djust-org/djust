@@ -44,17 +44,15 @@ class Tabs(Component):
         cls = "dj-tabs"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_event = html.escape(self.event)
         nav_items = []
         for tab in tabs:
             if not isinstance(tab, dict):
                 continue
-            tid = html.escape(str(tab.get("id", "")))
             label = html.escape(str(tab.get("label", "")))
-            active_cls = " dj-tab--active" if str(tab.get("id", "")) == self.active else ""
+            active_cls = " dj-tab--active" if str(tab.get("id", "")) == str(self.active) else ""
             nav_items.append(
                 f'<button class="dj-tab{active_cls}" '
-                f'dj-click="{e_event}" data-value="{tid}">{label}</button>'
+                f"{self.event_attrs(self.event, value=tab.get('id', ''))}>{label}</button>"
             )
         nav = f'<nav class="dj-tabs__nav">{"".join(nav_items)}</nav>'
         pane = f'<div class="dj-tabs__pane">{self.content}</div>' if self.content else ""

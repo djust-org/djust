@@ -202,6 +202,9 @@ _SETATTR_WHITELIST = {
     # ``for key, value in result.items(): setattr(view, key, value)``), NOT from a
     # client frame — so they don't need safe_setattr's client-key guard. Two
     # adjacent lines (callable vs not).
+    # Line numbers shifted +25 in ADR-033 S2 when ``_is_serializable`` learned
+    # to accept a plain ``Component`` and the strict snapshot learned to look
+    # inside its state (its state persists).
     # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
     # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
     # in ``LiveView.__init__``; shifted +8 again in ADR-023 M2 when type
@@ -259,8 +262,8 @@ _SETATTR_WHITELIST = {
     # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
     # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
     # import in live_view.py.
-    ("live_view.py", 1392),
-    ("live_view.py", 1394),
+    ("live_view.py", 1417),
+    ("live_view.py", 1419),
 }
 
 

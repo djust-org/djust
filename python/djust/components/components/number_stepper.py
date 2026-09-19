@@ -56,7 +56,7 @@ class NumberStepper(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
-        dj_event = html.escape(self.event or self.name)
+        event = self.event or self.name
         label_html = (
             f'<label class="form-label" for="{e_name}">{e_label}</label>' if self.label else ""
         )
@@ -66,10 +66,11 @@ class NumberStepper(Component):
             f'<div class="{cls}">{label_html}'
             f'<div class="number-stepper-controls">'
             f'<button type="button" class="number-stepper-btn number-stepper-dec" '
-            f'dj-click="{dj_event}" data-value="dec">&minus;</button>'
+            f"{self.event_attrs(event, value='dec')}>&minus;</button>"
             f'<input type="number" class="number-stepper-input" name="{e_name}" '
-            f'value="{self.value}" step="{self.step}"{min_attr}{max_attr} dj-change="{dj_event}">'
+            f'value="{self.value}" step="{self.step}"{min_attr}{max_attr} '
+            f"{self.event_attrs(event, trigger='change')}>"
             f'<button type="button" class="number-stepper-btn number-stepper-inc" '
-            f'dj-click="{dj_event}" data-value="inc">&plus;</button>'
+            f"{self.event_attrs(event, value='inc')}>&plus;</button>"
             f"</div></div>"
         )

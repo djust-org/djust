@@ -98,7 +98,6 @@ class TruncatedList(Component):
 
         overflow_html = ""
         if hidden_count > 0:
-            e_event = html.escape(self.toggle_event)
             if self.expanded:
                 overflow_text = html.escape("Show less")
             else:
@@ -106,7 +105,7 @@ class TruncatedList(Component):
                     self.overflow_label.replace("{count}", str(hidden_count))
                 )
             overflow_html = (
-                f'<button class="dj-truncated-list__overflow" dj-click="{e_event}">'
+                f'<button class="dj-truncated-list__overflow" {self.event_attrs(self.toggle_event)}>'
                 f"{overflow_text}</button>"
             )
 

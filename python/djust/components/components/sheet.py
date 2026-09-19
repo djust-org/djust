@@ -45,7 +45,7 @@ class Sheet(Component):
         """Render the sheet HTML."""
         e_side = html.escape(self.side)
         e_title = html.escape(self.title)
-        e_close = html.escape(self.close_event)
+        close_attrs = self.event_attrs(self.close_event)
         open_attr = ' data-open="true"' if self.is_open else ""
         cls = f"sheet sheet-{e_side}"
         if self.custom_class:
@@ -53,15 +53,15 @@ class Sheet(Component):
         title_html = (
             f'<div class="sheet-header">'
             f'<h3 class="sheet-title">{e_title}</h3>'
-            f'<button class="sheet-close" dj-click="{e_close}">&times;</button>'
+            f'<button class="sheet-close" {close_attrs}>&times;</button>'
             f"</div>"
             if self.title
             else f'<div class="sheet-header-close">'
-            f'<button class="sheet-close" dj-click="{e_close}">&times;</button>'
+            f'<button class="sheet-close" {close_attrs}>&times;</button>'
             f"</div>"
         )
         return (
-            f'<div class="sheet-overlay" dj-click="{e_close}"{open_attr}></div>'
+            f'<div class="sheet-overlay" {close_attrs}{open_attr}></div>'
             f'<div class="{cls}"{open_attr}>'
             f"{title_html}"
             f'<div class="sheet-body">{self.content}</div>'

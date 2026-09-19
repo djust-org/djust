@@ -68,30 +68,28 @@ class FeedbackWidget(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
 
-        e_event = html.escape(self.event)
-
         if self.mode == "thumbs":
-            buttons = self._render_thumbs(e_event)
+            buttons = self._render_thumbs()
         elif self.mode == "stars":
-            buttons = self._render_stars(e_event)
+            buttons = self._render_stars()
         else:
-            buttons = self._render_emoji(e_event)
+            buttons = self._render_emoji()
 
         return f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>'
 
-    def _render_thumbs(self, e_event: str) -> str:
+    def _render_thumbs(self) -> str:
         up_cls = "dj-feedback__btn--active" if self.value == "up" else ""
         down_cls = "dj-feedback__btn--active" if self.value == "down" else ""
         return (
             f'<button class="dj-feedback__btn {up_cls}" '
-            f'dj-click="{e_event}" data-value="up" aria-label="Thumbs up">'
+            f'{self.event_attrs(self.event, value="up")} aria-label="Thumbs up">'
             f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             f'stroke-width="2" width="18" height="18">'
             f'<path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/>'
             f'<path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>'
             f"</svg></button>"
             f'<button class="dj-feedback__btn {down_cls}" '
-            f'dj-click="{e_event}" data-value="down" aria-label="Thumbs down">'
+            f'{self.event_attrs(self.event, value="down")} aria-label="Thumbs down">'
             f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             f'stroke-width="2" width="18" height="18">'
             f'<path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/>'
@@ -99,14 +97,14 @@ class FeedbackWidget(Component):
             f"</svg></button>"
         )
 
-    def _render_stars(self, e_event: str) -> str:
+    def _render_stars(self) -> str:
         parts = []
         current = int(self.value) if self.value and self.value.isdigit() else 0
         for i in range(1, 6):
             active = "dj-feedback__star--active" if i <= current else ""
             parts.append(
                 f'<button class="dj-feedback__btn dj-feedback__star {active}" '
-                f'dj-click="{e_event}" data-value="{i}" aria-label="{i} star">'
+                f'{self.event_attrs(self.event, value=i)} aria-label="{i} star">'
                 f'<svg viewBox="0 0 24 24" fill="{("currentColor" if i <= current else "none")}" '
                 f'stroke="currentColor" stroke-width="2" width="18" height="18">'
                 f'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
@@ -114,7 +112,7 @@ class FeedbackWidget(Component):
             )
         return "".join(parts)
 
-    def _render_emoji(self, e_event: str) -> str:
+    def _render_emoji(self) -> str:
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),
@@ -127,7 +125,7 @@ class FeedbackWidget(Component):
             active = "dj-feedback__btn--active" if self.value == val else ""
             parts.append(
                 f'<button class="dj-feedback__btn {active}" '
-                f'dj-click="{e_event}" data-value="{val}" aria-label="{val}">'
+                f'{self.event_attrs(self.event, value=val)} aria-label="{val}">'
                 f"{emoji}</button>"
             )
         return "".join(parts)

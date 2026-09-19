@@ -92,10 +92,7 @@ class ContentLoader(Component):
             e_error = html.escape(self.error)
             retry_html = ""
             if self.error_event:
-                e_retry = html.escape(self.error_event)
-                retry_html = (
-                    f'<button class="dj-content-loader__retry" dj-click="{e_retry}">Retry</button>'
-                )
+                retry_html = f'<button class="dj-content-loader__retry" {self.event_attrs(self.error_event)}>Retry</button>'
             return (
                 f'<div class="{cls}" data-loading-event="{e_event}">'
                 f'<div class="dj-content-loader__error" role="alert">'

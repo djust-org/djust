@@ -81,8 +81,8 @@ class ExportDialog(Component):
         class_str = " ".join(classes)
 
         e_title = html.escape(self.title)
-        e_event = html.escape(self.event)
-        e_close = html.escape(self.close_event)
+        ea_submit = self.event_attrs(self.event)
+        ea_close = self.event_attrs(self.close_event)
 
         # Format picker
         format_options = []
@@ -119,16 +119,16 @@ class ExportDialog(Component):
         )
 
         return (
-            f'<div class="dj-export-dialog__backdrop" dj-click="{e_close}">'
+            f'<div class="dj-export-dialog__backdrop" {ea_close}>'
             f'<div class="{class_str}" onclick="event.stopPropagation()">'
             f'<div class="dj-export-dialog__header">'
             f"<h3>{e_title}</h3>"
-            f'<button class="dj-export-dialog__close" dj-click="{e_close}">&times;</button>'
+            f'<button class="dj-export-dialog__close" {ea_close}>&times;</button>'
             f"</div>"
             f'<div class="dj-export-dialog__body">'
             f"{format_section}{col_section}</div>"
             f'<div class="dj-export-dialog__footer">'
-            f'<button class="dj-export-dialog__cancel" dj-click="{e_close}">Cancel</button>'
-            f'<button class="dj-export-dialog__submit" dj-click="{e_event}">Export</button>'
+            f'<button class="dj-export-dialog__cancel" {ea_close}>Cancel</button>'
+            f'<button class="dj-export-dialog__submit" {ea_submit}>Export</button>'
             f"</div></div></div>"
         )

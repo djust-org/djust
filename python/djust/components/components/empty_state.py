@@ -59,7 +59,9 @@ class EmptyState(Component):
         )
         action_html = ""
         if self.action_label:
-            e_event = html.escape(self.action_event)
             e_label = html.escape(self.action_label)
-            action_html = f'<button class="btn btn-primary empty-state-action" dj-click="{e_event}">{e_label}</button>'
+            action_html = (
+                f'<button class="btn btn-primary empty-state-action" '
+                f"{self.event_attrs(self.action_event)}>{e_label}</button>"
+            )
         return f'<div class="{cls}">{icon_html}{title_html}{desc_html}{action_html}</div>'

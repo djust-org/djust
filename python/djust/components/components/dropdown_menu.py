@@ -71,11 +71,10 @@ class DropdownMenu(Component):
         class_str = " ".join(classes)
 
         e_label = html.escape(self.label)
-        e_toggle = html.escape(self.toggle_event)
 
         trigger = (
             f'<button class="dj-dropdown-menu__trigger" '
-            f'dj-click="{e_toggle}" '
+            f"{self.event_attrs(self.toggle_event)} "
             f'aria-expanded="{"true" if self.open else "false"}" '
             f'aria-haspopup="true">{e_label}</button>'
         )
@@ -96,10 +95,11 @@ class DropdownMenu(Component):
                 item_cls += " dj-dropdown-menu__item--disabled"
 
             e_item_label = html.escape(str(item.get("label", "")))
-            e_event = html.escape(str(item.get("event", "")))
+            item_event = str(item.get("event", ""))
 
             disabled_attr = " disabled" if item.get("disabled") else ""
-            event_attr = f' dj-click="{e_event}"' if e_event else ""
+            ea = self.event_attrs(item_event)
+            event_attr = f" {ea}" if ea else ""
 
             icon_html = ""
             if item.get("icon"):

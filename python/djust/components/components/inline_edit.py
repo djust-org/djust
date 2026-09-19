@@ -49,16 +49,15 @@ class InlineEdit(Component):
         e_value = html.escape(self.value)
         e_name = html.escape(self.name)
         if self.editing:
-            e_event = html.escape(self.event or self.name)
             return (
                 f'<span class="{cls} dj-inline-edit--editing">'
                 f'<input class="dj-inline-edit__input" type="text" '
-                f'name="{e_name}" value="{e_value}" dj-input="{e_event}" autofocus>'
+                f'name="{e_name}" value="{e_value}" '
+                f"{self.event_attrs(self.event or self.name, trigger='input')} autofocus>"
                 f"</span>"
             )
-        e_edit = html.escape(self.edit_event)
         return (
             f'<span class="{cls}">'
-            f'<span class="dj-inline-edit__value" dj-click="{e_edit}">{e_value}</span>'
+            f'<span class="dj-inline-edit__value" {self.event_attrs(self.edit_event)}>{e_value}</span>'
             f"</span>"
         )

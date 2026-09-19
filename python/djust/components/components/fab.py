@@ -54,7 +54,8 @@ class Fab(Component):
         cls = f"fab{size_cls}{variant_cls}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        click_attr = f' dj-click="{html.escape(self.event)}"' if self.event else ""
+        ea = self.event_attrs(self.event)
+        click_attr = f" {ea}" if ea else ""
         aria_label = f' aria-label="{html.escape(self.label)}"' if self.label else ""
         e_icon = html.escape(self.icon)
         return (

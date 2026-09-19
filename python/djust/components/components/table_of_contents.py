@@ -46,7 +46,6 @@ class TableOfContents(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_title = html.escape(self.title)
-        e_event = html.escape(self.event) if self.event else ""
         items_html = ""
         for item in self.items:
             if not isinstance(item, dict):
@@ -54,8 +53,9 @@ class TableOfContents(Component):
             iid = html.escape(str(item.get("id", "")))
             lbl = html.escape(str(item.get("label", "")))
             level = int(item.get("level", 1))
-            active_cls = " toc-item-active" if str(item.get("id", "")) == self.active else ""
-            event_attr = f' dj-click="{e_event}" data-value="{iid}"' if e_event else ""
+            active_cls = " toc-item-active" if str(item.get("id", "")) == str(self.active) else ""
+            ea = self.event_attrs(self.event, value=item.get("id", ""))
+            event_attr = f" {ea}" if ea else ""
             items_html += f'<a href="#{iid}" class="toc-item toc-level-{level}{active_cls}"{event_attr}>{lbl}</a>'
         title_html = f'<div class="toc-title">{e_title}</div>' if self.title else ""
         return f'<nav class="{cls}">{title_html}<div class="toc-list">{items_html}</div></nav>'

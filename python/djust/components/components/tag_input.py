@@ -59,15 +59,16 @@ class TagInput(Component):
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
         e_placeholder = html.escape(self.placeholder)
-        dj_event = html.escape(self.event or self.name)
+        dj_event = self.event or self.name
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         tag_parts = []
         for tag in tags:
             e_tag = html.escape(str(tag))
+            remove_attrs = self.event_attrs(dj_event, value=f"remove:{tag}")
             tag_parts.append(
                 f'<span class="tag-input-tag">{e_tag}'
                 f'<button type="button" class="tag-input-remove" '
-                f'dj-click="{dj_event}" data-value="remove:{e_tag}">&times;</button>'
+                f"{remove_attrs}>&times;</button>"
                 f"</span>"
             )
         # Hidden input carries the serialized tag list under the field name

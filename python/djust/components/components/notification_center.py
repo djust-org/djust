@@ -14,6 +14,10 @@ class NotificationCenter(Component):
         unread_count: number of unread notifications
         open_event, mark_read_event, clear_event: dj-click events"""
 
+    #: ADR-033 D3: the walked state keys; ``notifications`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         notifications: Optional[list] = None,
@@ -46,8 +50,6 @@ class NotificationCenter(Component):
         cls = "notif-center"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_open = html.escape(self.open_event)
-        e_read = html.escape(self.mark_read_event)
         badge_html = (
             f'<span class="notif-badge">{self.unread_count}</span>' if self.unread_count > 0 else ""
         )
@@ -55,20 +57,20 @@ class NotificationCenter(Component):
         for n in notifications:
             if not isinstance(n, dict):
                 continue
-            nid = html.escape(str(n.get("id", "")))
+            nid = n.get("id", "")
             msg = html.escape(str(n.get("message", "")))
             time_ = html.escape(str(n.get("time", "")))
             unread_cls = " notif-item-unread" if n.get("unread", False) else ""
             time_html = f'<span class="notif-item-time">{time_}</span>' if time_ else ""
             items_html += (
-                f'<div class="notif-item{unread_cls}" dj-click="{e_read}" data-value="{nid}">'
+                f'<div class="notif-item{unread_cls}" {self.event_attrs(self.mark_read_event, value=nid)}>'
                 f'<div class="notif-item-msg">{msg}</div>{time_html}</div>'
             )
         if not items_html:
             items_html = '<div class="notif-empty">No notifications</div>'
         return (
             f'<div class="{cls}">'
-            f'<button class="notif-trigger" dj-click="{e_open}">'
+            f'<button class="notif-trigger" {self.event_attrs(self.open_event)}>'
             f'<span class="notif-bell">&#128276;</span>{badge_html}</button>'
             f'<div class="notif-dropdown">'
             f'<div class="notif-list">{items_html}</div>'

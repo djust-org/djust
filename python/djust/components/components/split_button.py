@@ -52,21 +52,20 @@ class SplitButton(Component):
         """Render the splitbutton HTML."""
         options = self.options or []
         e_label = html.escape(self.label)
-        e_event = html.escape(self.event)
-        e_toggle = html.escape(self.toggle_event)
         variant_cls = f" split-btn-{html.escape(self.variant)}"
         size_cls = f" split-btn-{html.escape(self.size)}" if self.size != "md" else ""
         cls = f"split-btn{variant_cls}{size_cls}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        click_attr = f' dj-click="{e_event}"' if self.event else ""
+        ea = self.event_attrs(self.event)
+        click_attr = f" {ea}" if ea else ""
         option_items = []
         for opt in options:
             if not isinstance(opt, dict):
                 continue
             ol = html.escape(str(opt.get("label", "")))
-            oe = html.escape(str(opt.get("event", "")))
-            opt_click = f' dj-click="{oe}"' if oe else ""
+            oe = self.event_attrs(opt.get("event", ""))
+            opt_click = f" {oe}" if oe else ""
             option_items.append(f'<button class="split-btn-option"{opt_click}>{ol}</button>')
         open_data = "true" if self.is_open else "false"
         menu_html = ""
@@ -77,7 +76,7 @@ class SplitButton(Component):
         return (
             f'<div class="{cls}">'
             f'<button class="split-btn-primary"{click_attr}>{e_label}</button>'
-            f'<button class="split-btn-toggle" dj-click="{e_toggle}">'
+            f'<button class="split-btn-toggle" {self.event_attrs(self.toggle_event)}>'
             f'<span class="split-btn-caret">&#9662;</span></button>'
             f"{menu_html}"
             f"</div>"

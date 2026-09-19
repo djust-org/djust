@@ -73,7 +73,6 @@ class PromptEditor(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
 
-        e_event = html.escape(self.event)
         e_placeholder = html.escape(self.placeholder)
         template = self.template or ""
         e_template = html.escape(template)
@@ -112,9 +111,8 @@ class PromptEditor(Component):
                 f'<mark class="dj-prompt-editor__highlight">{html.escape(str(val))}</mark>',
             )
 
-        event_attr = ""
-        if e_event:
-            event_attr = f' dj-click="{e_event}"'
+        ea = self.event_attrs(self.event)
+        event_attr = f" {ea}" if ea else ""
 
         return (
             f'<div class="{cls}">'

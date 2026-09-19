@@ -14,6 +14,10 @@ class KanbanBoard(Component):
         move_event: dj-click event for drag-drop
         add_card_event: dj-click event for adding cards"""
 
+    #: ADR-033 D3: the walked state keys; ``columns`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         columns: Optional[list] = None,
@@ -42,12 +46,12 @@ class KanbanBoard(Component):
         cls = "kanban"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_add = html.escape(self.add_card_event)
         cols_html = ""
         for col in columns:
             if not isinstance(col, dict):
                 continue
-            col_id = html.escape(str(col.get("id", "")))
+            col_id_raw = col.get("id", "")
+            col_id = html.escape(str(col_id_raw))
             col_title = html.escape(str(col.get("title", "")))
             cards = col.get("cards", [])
             cards_html = ""
@@ -60,7 +64,8 @@ class KanbanBoard(Component):
                 f'<div class="kanban-col" data-col-id="{col_id}">'
                 f'<div class="kanban-col-header"><span class="kanban-col-title">{col_title}</span></div>'
                 f'<div class="kanban-cards">{cards_html}</div>'
-                f'<button class="kanban-add-card" dj-click="{e_add}" data-value="{col_id}">+ Add card</button>'
+                f'<button class="kanban-add-card" '
+                f"{self.event_attrs(self.add_card_event, value=col_id_raw)}>+ Add card</button>"
                 f"</div>"
             )
         return f'<div class="{cls}">{cols_html}</div>'

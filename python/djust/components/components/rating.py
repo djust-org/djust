@@ -47,7 +47,6 @@ class Rating(Component):
         cls = f"rating{size_cls}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_event = html.escape(self.event)
         parts = []
         for i in range(1, self.max_stars + 1):
             if i <= self.value:
@@ -60,7 +59,7 @@ class Rating(Component):
                 parts.append(f'<span class="{star_cls}">&#9733;</span>')
             else:
                 parts.append(
-                    f'<button class="{star_cls}" dj-click="{e_event}" '
-                    f'data-value="{i}">&#9733;</button>'
+                    f'<button class="{star_cls}" {self.event_attrs(self.event, value=i)}>'
+                    f"&#9733;</button>"
                 )
         return f'<div class="{cls}">{"".join(parts)}</div>'

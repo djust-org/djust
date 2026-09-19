@@ -20,7 +20,7 @@ class Card(Component):
         self.full = Card(
             header="<h3>Card Title</h3>",
             content="<p>Main content</p>",
-            footer='<button dj-click="action">Action</button>',
+            footer='<button class="dj-btn">Action</button>',
         )
 
         # Elevated card with hover effect
@@ -138,8 +138,9 @@ class Card(Component):
         attrs = [f'class="{class_str}"']
 
         # Add dj-click action for clickable cards
-        if self.action:
-            attrs.append(f'dj-click="{html.escape(self.action)}"')
+        ea = self.event_attrs(self.action)
+        if ea:
+            attrs.append(ea)
 
         # Add data attributes
         for k, v in self.data.items():

@@ -48,9 +48,6 @@ class Carousel(Component):
         cls = "carousel"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_prev = html.escape(self.prev_event)
-        e_next = html.escape(self.next_event)
-        e_go = html.escape(self.go_event)
         slides = ""
         dots = ""
         for i, img in enumerate(images):
@@ -68,12 +65,12 @@ class Carousel(Component):
             )
             slides += f'<div class="carousel-slide{active_cls}"><img src="{src}" alt="{alt}" class="carousel-img">{caption_html}</div>'
             dot_cls = " carousel-dot-active" if i == self.active else ""
-            dots += f'<button class="carousel-dot{dot_cls}" dj-click="{e_go}" data-value="{i}"></button>'
+            dots += f'<button class="carousel-dot{dot_cls}" {self.event_attrs(self.go_event, value=i)}></button>'
         return (
             f'<div class="{cls}">'
             f'<div class="carousel-track">{slides}</div>'
-            f'<button class="carousel-btn carousel-btn-prev" dj-click="{e_prev}">&#8249;</button>'
-            f'<button class="carousel-btn carousel-btn-next" dj-click="{e_next}">&#8250;</button>'
+            f'<button class="carousel-btn carousel-btn-prev" {self.event_attrs(self.prev_event)}>&#8249;</button>'
+            f'<button class="carousel-btn carousel-btn-next" {self.event_attrs(self.next_event)}>&#8250;</button>'
             f'<div class="carousel-dots">{dots}</div>'
             f"</div>"
         )

@@ -79,6 +79,16 @@ def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[st
                 expected_type = args[0]
                 origin = get_origin(expected_type)
 
+        # A typed wire value (ADR-033 D4: ``dj-value-value:int="4"`` arrives
+        # as ``4``) for a handler annotated ``str`` is the text the untyped
+        # attribute used to carry — never a rejection of a pre-existing
+        # handler over a bool/int/float.
+        if expected_type is str and isinstance(value, (bool, int, float)):
+            coerced[name] = (
+                ("true" if value else "false") if isinstance(value, bool) else str(value)
+            )
+            continue
+
         # Only coerce if value is a string
         if not isinstance(value, str):
             coerced[name] = value

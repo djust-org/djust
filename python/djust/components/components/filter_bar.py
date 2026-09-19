@@ -38,14 +38,14 @@ class FilterBar(Component):
         cls = "dj-filter-bar"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_clear = html.escape(self.clear_event)
         badge_html = (
             f' <span class="dj-filter-bar__badge">{self.active_count}</span>'
             if self.active_count > 0
             else ""
         )
         clear_html = (
-            f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters{badge_html}</button>'
+            f'<button class="dj-filter-bar__clear" '
+            f"{self.event_attrs(self.clear_event)}>Clear filters{badge_html}</button>"
             if self.active_count > 0
             else ""
         )

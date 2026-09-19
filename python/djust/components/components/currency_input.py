@@ -96,7 +96,6 @@ class CurrencyInput(Component):
         e_currency = html_mod.escape(self.currency)
         e_symbol = html_mod.escape(self.symbol)
         e_value = html_mod.escape(self.value)
-        e_event = html_mod.escape(self.event)
 
         cls = "dj-currency-input"
         if self.error:
@@ -104,6 +103,8 @@ class CurrencyInput(Component):
         if self.custom_class:
             cls += f" {html_mod.escape(self.custom_class)}"
 
+        ea = self.event_attrs(self.event, trigger="input")
+        event_attr = f"{ea} " if ea else ""
         disabled_attr = " disabled" if self.disabled else ""
         required_attr = " required" if self.required else ""
         min_attr = f' min="{html_mod.escape(str(self.min))}"' if self.min is not None else ""
@@ -132,7 +133,7 @@ class CurrencyInput(Component):
             f'value="{e_value}" placeholder="{html_mod.escape(self.placeholder)}" '
             f'step="{html_mod.escape(str(self.step))}"{min_attr}{max_attr} '
             f'data-currency="{e_currency}" '
-            f'dj-input="{e_event}" '
+            f"{event_attr}"
             f'class="dj-currency-input__field"'
             f"{disabled_attr}{required_attr}>"
             f'<span class="dj-currency-input__code">{e_currency}</span>'

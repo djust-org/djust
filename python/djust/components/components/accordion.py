@@ -40,20 +40,18 @@ class Accordion(Component):
         cls = "dj-accordion"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_event = html.escape(self.event)
         parts = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            iid = html.escape(str(item.get("id", "")))
             title = html.escape(str(item.get("title", "")))
             content = item.get("content", "")
-            is_open = str(item.get("id", "")) == self.active
+            is_open = str(item.get("id", "")) == str(self.active)
             open_cls = " dj-accordion-item--open" if is_open else ""
             content_html = f'<div class="dj-accordion__content">{content}</div>' if is_open else ""
             parts.append(
                 f'<div class="dj-accordion-item{open_cls}">'
-                f'<button class="dj-accordion__trigger" dj-click="{e_event}" data-value="{iid}">'
+                f'<button class="dj-accordion__trigger" {self.event_attrs(self.event, value=item.get("id", ""))}>'
                 f"<span>{title}</span>"
                 f'<span class="dj-accordion__chevron">&#9662;</span>'
                 f"</button>"

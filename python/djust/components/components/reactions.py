@@ -69,8 +69,6 @@ class Reactions(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
 
-        e_event = html.escape(str(self.event))
-
         buttons = []
         for emoji in self.options:
             e_emoji = html.escape(str(emoji))
@@ -93,7 +91,7 @@ class Reactions(Component):
 
             buttons.append(
                 f'<button type="button" class="{btn_cls}" '
-                f'dj-click="{e_event}" dj-value-emoji="{e_emoji}" '
+                f"{self.event_attrs(self.event, emoji=str(emoji))} "
                 f'aria-pressed="{aria_pressed}" '
                 f'aria-label="{e_emoji} {count}">'
                 f'<span class="dj-reactions__emoji">{e_emoji}</span>'

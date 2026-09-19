@@ -65,6 +65,10 @@ class FileTree(Component):
     FOLDER_OPEN_ICON = "&#x1F4C2;"
     DEFAULT_FILE_ICON = "&#x1F4C4;"
 
+    #: ADR-033 D3: the walked state keys; ``nodes`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         nodes: Optional[list] = None,
@@ -117,8 +121,6 @@ class FileTree(Component):
 
         indent_style = f' style="padding-left:{depth * 1.25}rem"'
 
-        e_event = html.escape(self.event)
-
         if node_type == "folder" and isinstance(children, list) and children:
             expand_cls = " dj-file-tree__node--expanded" if expanded else ""
             toggle = (
@@ -142,7 +144,7 @@ class FileTree(Component):
         return (
             f'<div class="dj-file-tree__node{type_cls}{selected_cls}"'
             f'{indent_style} data-name="{e_name}" data-type="{html.escape(node_type)}" '
-            f'dj-click="{e_event}" role="treeitem" tabindex="0">'
+            f'{self.event_attrs(self.event)} role="treeitem" tabindex="0">'
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )
 

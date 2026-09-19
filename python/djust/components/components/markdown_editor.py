@@ -106,10 +106,8 @@ class MarkdownEditor(Component):
         e_placeholder = html.escape(self.placeholder)
 
         disabled_attr = " disabled" if self.disabled else ""
-        event_attr = ""
-        if self.event:
-            e_event = html.escape(self.event)
-            event_attr = f' dj-input="{e_event}"'
+        ea = self.event_attrs(self.event, trigger="input")
+        event_attr = f" {ea}" if ea else ""
 
         toolbar_html = ""
         if self.toolbar:

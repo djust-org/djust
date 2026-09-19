@@ -1017,8 +1017,107 @@ def decimal_for_state_roundtrip(value: Decimal) -> Dict[str, str]:
     return {STATE_DECIMAL_TAG: str(value)}
 
 
+#: Tag a plain :class:`~djust.components.base.Component` is written under on
+#: the state round trip (ADR-033 D6): ``{"__djust_component__": "<module>.
+#: <qualname>", "state": {...}}`` — the same shape a descriptor's ``State``
+#: dict already takes, so ``self.rating.value = 5`` survives a reconnect
+#: exactly as ``self.nav.active = x`` does. Before this a component crossed
+#: as its rendered HTML string and came back as a ``str``.
+STATE_COMPONENT_TAG = "__djust_component__"
+
+#: State keys a rehydrated component never takes from a payload: they are the
+#: class's rendering configuration, not instance state.
+_COMPONENT_RESERVED_KEYS = frozenset({"state", "template", "template_name", "component_id"})
+
+
+def component_for_state_roundtrip(component: Any, *, normalize: bool = True) -> Dict[str, Any]:
+    """The tagged, JSON-ready form of a plain component's state (ADR-033 D6).
+
+    The state itself is normalised with ``state_roundtrip=True`` so a
+    ``Decimal`` or a nested component inside it takes its own tagged form.
+    An explicit ``id=`` is carried so the rendered element keeps it.
+    """
+    cls = type(component)
+    state = {k: v for k, v in dict(component.state).items() if not k.startswith("_")}
+    if not normalize and any(callable(v) for v in state.values()):
+        # The snapshot skips a view attribute that is callable; a component
+        # whose state holds one is skipped the same way (the encoder turns
+        # this into "attribute not persisted").
+        raise TypeError(f"{cls.__name__} state holds a callable; not persistable")
+    tagged: Dict[str, Any] = {
+        STATE_COMPONENT_TAG: f"{cls.__module__}.{cls.__qualname__}",
+        # Normalised for the session (the lossy path a view's own state takes
+        # there); ``StateRoundtripJSONEncoder`` asks for the raw dict instead
+        # so a value that cannot be serialised makes the attribute SKIP, as a
+        # view's own does, rather than come back as ``str()`` garbage.
+        "state": normalize_django_value(state, state_roundtrip=True) if normalize else state,
+    }
+    explicit_id = getattr(component, "_explicit_id", None)
+    if explicit_id:
+        tagged["id"] = explicit_id
+    return tagged
+
+
+def _rehydrate_component(tagged: Dict[str, Any]) -> Any:
+    """A component instance for a :data:`STATE_COMPONENT_TAG` map, or the map
+    itself when it cannot be honoured.
+
+    The class is looked up in modules this process has ALREADY imported —
+    never imported from the payload — and must subclass ``Component``; the
+    instance is rebuilt through its own constructor with the saved state as
+    kwargs, so a subclass ``__init__`` computes what it computes. Anything
+    else (a module not yet imported, a class that is not a component, a
+    constructor that refuses the kwargs) leaves the map untouched and logs
+    once, the fail-soft rule the Decimal tag follows: a restore must not
+    crash a reconnect, and the signed-snapshot caller falls back to
+    ``mount()`` when the attribute is not what it expects.
+    """
+    import sys
+
+    path = tagged.get(STATE_COMPONENT_TAG)
+    state = tagged.get("state")
+    if not isinstance(path, str) or not isinstance(state, dict) or "." not in path:
+        return dict(tagged)
+    module_name, _, qualname = path.rpartition(".")
+    module = sys.modules.get(module_name)
+    cls: Any = module
+    for part in qualname.split("."):
+        cls = getattr(cls, part, None) if cls is not None else None
+    from .components.base import Component
+
+    decoded = {k: decode_state_roundtrip(v) for k, v in tagged.items()}
+    if not (isinstance(cls, type) and issubclass(cls, Component) and cls is not Component):
+        logger.warning(
+            "state round trip: %r is not an imported Component subclass; leaving the tag as a dict",
+            path,
+        )
+        return decoded
+    # Only public, non-configuration keys reach the constructor: a payload
+    # must not set ``_explicit_id``/``_rust_instance``, nor swap the class's
+    # ``template`` for its own (review 🟡5).
+    kwargs = {
+        k: v
+        for k, v in decoded["state"].items()
+        if isinstance(k, str) and not k.startswith("_") and k not in _COMPONENT_RESERVED_KEYS
+    }
+    explicit_id = tagged.get("id")
+    if isinstance(explicit_id, str):
+        kwargs["id"] = explicit_id
+    try:
+        return cls(**kwargs)
+    except Exception as exc:  # noqa: BLE001 — any constructor refusal is fail-soft
+        logger.warning(
+            "state round trip: %s(**state) refused the saved kwargs %s (%s); leaving the tag as a dict",
+            path,
+            sorted(kwargs),
+            type(exc).__name__,
+        )
+        return decoded
+
+
 def decode_state_roundtrip(obj: Any) -> Any:
-    """Inverse of :func:`decimal_for_state_roundtrip` (#2252).
+    """Inverse of :func:`decimal_for_state_roundtrip` (#2252) and of
+    :func:`component_for_state_roundtrip` (ADR-033 D6).
 
     Recursively replaces every ``{"__djust_decimal__": "<digits>"}`` map with
     the ``Decimal`` it stands for. Call this on ANY state read back from the
@@ -1045,6 +1144,8 @@ def decode_state_roundtrip(obj: Any) -> Any:
                     # A colliding user dict whose payload is not a number.
                     # Leave it alone rather than raise — see the docstring.
                     return dict(obj)
+        if STATE_COMPONENT_TAG in obj and "state" in obj and len(obj) <= 3:
+            return _rehydrate_component(obj)
         return {k: decode_state_roundtrip(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [decode_state_roundtrip(v) for v in obj]
@@ -1095,6 +1196,11 @@ class StateRoundtripJSONEncoder(DjangoJSONEncoder):
     def _default_impl(self, obj: Any) -> Any:
         if isinstance(obj, Decimal):
             return decimal_for_state_roundtrip(obj)
+        from .components.base import Component
+
+        if isinstance(obj, Component):
+            # ADR-033 D6: state, not HTML, so it comes back a component.
+            return component_for_state_roundtrip(obj, normalize=False)
         return super()._default_impl(obj)
 
 
@@ -2050,6 +2156,10 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     try:
         from .components.base import BoundComponent, Component, LiveComponent
 
+        if isinstance(value, Component) and state_roundtrip:
+            # ADR-033 D6: the session carries a plain component as its
+            # tagged state, never as the HTML it rendered.
+            return component_for_state_roundtrip(value)
         if isinstance(value, (Component, LiveComponent)):
             return str(value)
         # ADR-031: a class-level component crosses as its rendered HTML when it

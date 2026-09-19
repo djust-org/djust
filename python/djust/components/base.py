@@ -5,10 +5,12 @@ Provides Component (stateless) and LiveComponent (stateful) base classes for cre
 reusable, reactive components with automatic performance optimization.
 """
 
+import html as _html
+import json as _json
 import logging
 import re
 import types
-from typing import Callable, Dict, Any, List, Optional, Type, cast
+from typing import Callable, Dict, Any, List, Optional, Tuple, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
 
@@ -175,6 +177,34 @@ def _render_template_name_with_markers(
     return cast(str, rust_view.render())
 
 
+_DECLARES_NAME: Dict[type, bool] = {}
+
+
+def _declares_name(cls: type) -> bool:
+    """Does *cls* (or a base below ``Component``) take ``name`` as its own
+    constructor parameter? Then ``name`` is that class's concept — the HTML
+    field name for the form components — not the ADR-033 instance identity."""
+    cached = _DECLARES_NAME.get(cls)
+    if cached is None:
+        import inspect
+
+        cached = False
+        for klass in cls.__mro__:
+            if klass is Component:
+                break
+            init = klass.__dict__.get("__init__")
+            if init is None:
+                continue
+            try:
+                if "name" in inspect.signature(init).parameters:
+                    cached = True
+                    break
+            except (TypeError, ValueError):  # pragma: no cover — C-level init
+                continue
+        _DECLARES_NAME[cls] = cached
+    return cached
+
+
 class Component(TemplateMutatorGuard, ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
@@ -254,6 +284,21 @@ class Component(TemplateMutatorGuard, ABC):
     # Class-level counter for auto-generating component keys
     _component_counter = 0
 
+    #: ADR-033 D1: a plain component is compared by its ``state`` in every
+    #: change-detection snapshot (``change_detection.STATE_MARKER``), so a
+    #: handler that writes ``self.rating.value = 5`` re-renders. A subclass
+    #: may set this to ``False`` to be compared by ``id()`` again, with the
+    #: documented consequence: reassign the component to re-render.
+    _djust_fingerprint_state = True
+
+    #: ADR-033 D3: the state keys the snapshots walk structurally. ``None``
+    #: walks all of them (under ``change_detection.DEFAULT_BUDGET``); a tuple
+    #: narrows the walk to those keys, every other key becoming a one-node
+    #: leaf (scalars by value, containers by identity — reassigning ``rows``
+    #: is still seen, appending to it in place is not). Components that hold
+    #: data declare theirs so a click never pays a ten-thousand-row walk.
+    fingerprint_fields: Optional[Tuple[str, ...]] = None
+
     def _create_rust_instance(self, **props: Any) -> None:
         """
         Create a Rust instance with fallback for missing framework parameter.
@@ -282,7 +327,11 @@ class Component(TemplateMutatorGuard, ABC):
             self._rust_instance = None
 
     def __init__(
-        self, _component_key: Optional[str] = None, id: Optional[str] = None, **kwargs: Any
+        self,
+        _component_key: Optional[str] = None,
+        id: Optional[str] = None,
+        name: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize component.
@@ -293,9 +342,39 @@ class Component(TemplateMutatorGuard, ABC):
         Args:
             _component_key: Optional unique key for VDOM matching (like React key)
             id: Optional explicit ID for the component (used in HTML id attribute)
+            name: Optional instance identity (ADR-033 D5). Every event the
+                component emits through :meth:`event_attrs` carries it as
+                ``dj-value-name``, so one handler can serve several instances:
+                ``def set_rating(self, value, name=None, **kwargs)``. The
+                word HTML forms use for the same thing; ``event=`` stays a
+                rename of the verb.
             **kwargs: Component properties
         """
         self._rust_instance = None
+
+        # ADR-033 D1: the constructor kwargs ARE the component's state — the
+        # dict every snapshot fingerprints and the session persists. Public
+        # attribute writes go through to it (``__setattr__``) so rendering,
+        # which reads attributes, and change detection, which walks state,
+        # never disagree. Set before anything public so the write-through
+        # below sees it.
+        if "state" in kwargs:
+            raise TypeError(
+                f"{type(self).__name__}: 'state' is reserved — it is the component's "
+                "own state dict (ADR-033); name the kwarg something else"
+            )
+        # ``name`` is the instance's identity ONLY for a class that does not
+        # declare a ``name`` parameter of its own: a form-field component
+        # (``DatePicker(name="date")``, 26 of the shipped ones) means the HTML
+        # field name by it and defaults it non-empty, and stamping THAT on
+        # every trigger as ``dj-value-name`` would hand an unexpected param to
+        # every pre-existing handler without ``**kwargs`` (review 🔴1).
+        object.__setattr__(
+            self, "_identity", name if name is not None and not _declares_name(type(self)) else None
+        )
+        if name is not None:
+            kwargs["name"] = name
+        self.state: Dict[str, Any] = dict(kwargs)
 
         # Store explicit ID if provided (used by id property)
         self._explicit_id = id
@@ -315,6 +394,74 @@ class Component(TemplateMutatorGuard, ABC):
         if self._rust_instance is None:
             for key, value in kwargs.items():
                 setattr(self, key, value)
+
+    def event_attrs(self, event: Optional[str], trigger: str = "click", **params: Any) -> str:
+        """The attributes an element emits an event with (ADR-033 D4/D5).
+
+        ``dj-<trigger>="<event>"`` followed by one typed ``dj-value-*`` per
+        keyword: an ``int`` renders ``dj-value-value:int="4"``, a ``bool``
+        ``:bool``, a ``float`` ``:float``, a ``str`` untyped, anything else
+        ``:json``, and any other object (a UUID, a date, a Decimal) its
+        ``str()`` untyped; ``None`` is omitted. The client's typed-param parser
+        (``08-event-parsing.js``) hands the handler a real ``int``/``bool``,
+        so the ``int(value)`` line disappears from handlers. Underscores in a
+        key become hyphens (``item_id`` → ``dj-value-item-id``; the client
+        maps them back). When the instance was given an identity ``name``
+        (a class without a ``name`` parameter of its own — see ``__init__``)
+        it is appended as ``dj-value-name`` unless the caller passed one. A falsy *event*
+        renders nothing, so ``f"<button {self.event_attrs(self.event)}>"``
+        is the whole conditional. Every value is HTML-escaped here; pass raw
+        Python values, not pre-escaped strings.
+        """
+        if not event:
+            return ""
+        parts = [f'dj-{trigger}="{_html.escape(str(event), quote=True)}"']
+        instance_name = self.__dict__.get("_identity")
+        if instance_name and "name" not in params:
+            params["name"] = instance_name
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                suffix, text = ":bool", "true" if value else "false"
+            elif isinstance(value, int):
+                suffix, text = ":int", str(value)
+            elif isinstance(value, float):
+                suffix, text = ":float", repr(value)
+            elif isinstance(value, str):
+                suffix, text = "", value
+            elif isinstance(value, (list, tuple, dict)):
+                suffix, text = ":json", _json.dumps(value, separators=(",", ":"), default=str)
+            else:
+                # A UUID, a date, a Decimal, a model: what ``html.escape(str(x))``
+                # rendered before — untyped, so the handler receives the string
+                # it always did (review 🔴3).
+                suffix, text = "", str(value)
+            attr = "dj-value-" + str(key).replace("_", "-")
+            parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
+        return " ".join(parts)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Write a public attribute through to ``state`` (ADR-033 D2).
+
+        Only keys the state already holds — the constructor kwargs — or a
+        declared ``fingerprint_fields`` entry are state; a private attribute,
+        ``state`` itself, ``template``/``template_name`` and anything a
+        subclass computes for itself in ``__init__`` stay plain attributes.
+        A Rust-backed component is rebuilt from the new state so its render
+        agrees with the write, as ``update()`` does.
+        """
+        object.__setattr__(self, name, value)
+        if name[:1] == "_" or name == "state":
+            return
+        state = self.__dict__.get("state")
+        if state is None:
+            return
+        fields = self.fingerprint_fields
+        if name in state or (fields is not None and name in fields):
+            state[name] = value
+            if self.__dict__.get("_rust_instance") is not None:
+                self._create_rust_instance(**state)
 
     @alters_data
     def update(self, **kwargs: Any) -> "Component":

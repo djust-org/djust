@@ -144,7 +144,7 @@ class DependentSelect(Component):
             f'<select name="{e_name}" id="{e_name}" '
             f'data-parent="{e_parent}" '
             f'data-source-event="{e_event}" '
-            f'dj-change="{e_event}"'
+            f"{self.event_attrs(self.source_event, trigger='change')}"
             f"{disabled_attr}{required_attr}>"
             f"{''.join(opt_parts)}"
             f"</select>"

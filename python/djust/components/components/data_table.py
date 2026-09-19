@@ -18,6 +18,10 @@ class DataTable(Component):
         striped: alternating row backgrounds
         compact: reduced padding"""
 
+    #: ADR-033 D3: the walked state keys; ``rows`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ("columns",)
+
     def __init__(
         self,
         columns: Optional[list] = None,
@@ -61,18 +65,18 @@ class DataTable(Component):
             cls += " dj-data-table--compact"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_sort = html.escape(self.sort_event)
         # Header
         headers = ""
         for col in columns:
             if not isinstance(col, dict):
                 continue
-            key = html.escape(str(col.get("key", "")))
+            key = str(col.get("key", ""))
             label = html.escape(str(col.get("label", col.get("key", ""))))
-            sort_cls = (
-                " dj-data-table__th--sorted" if str(col.get("key", "")) == self.sort_by else ""
+            sort_cls = " dj-data-table__th--sorted" if key == self.sort_by else ""
+            headers += (
+                f'<th class="dj-data-table__th{sort_cls}" '
+                f"{self.event_attrs(self.sort_event, value=key)}>{label}</th>"
             )
-            headers += f'<th class="dj-data-table__th{sort_cls}" dj-click="{e_sort}" data-value="{key}">{label}</th>'
         # Body
         body_rows = ""
         for row in rows:

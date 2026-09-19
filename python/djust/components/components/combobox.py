@@ -18,6 +18,10 @@ class Combobox(Component):
         search_event: dj-input event for search
         placeholder: search input placeholder"""
 
+    #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         name: str = "",
@@ -59,25 +63,26 @@ class Combobox(Component):
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
         e_value = html.escape(self.value)
-        e_event = html.escape(self.event or self.name)
-        e_search = html.escape(self.search_event or (self.name + "_search"))
+        event = self.event or self.name
+        search_event = self.search_event or (self.name + "_search")
         e_placeholder = html.escape(self.placeholder)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         options_html = ""
         for opt in options:
             if isinstance(opt, dict):
-                ov = html.escape(str(opt.get("value", "")))
+                ov = opt.get("value", "")
                 ol = html.escape(str(opt.get("label", "")))
             else:
-                ov = ol = html.escape(str(opt))
+                ov = opt
+                ol = html.escape(str(opt))
             options_html += (
-                f'<div class="combobox-option" dj-click="{e_event}" data-value="{ov}">{ol}</div>'
+                f'<div class="combobox-option" {self.event_attrs(event, value=ov)}>{ol}</div>'
             )
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
             f'<input class="combobox-input form-input" type="text" name="{e_name}" '
-            f'placeholder="{e_placeholder}" value="{e_value}" dj-input="{e_search}">'
+            f'placeholder="{e_placeholder}" value="{e_value}" {self.event_attrs(search_event, trigger="input")}>'
             f'<div class="combobox-dropdown">{options_html}</div>'
             f"</div></div>"
         )

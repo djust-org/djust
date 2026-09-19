@@ -44,10 +44,9 @@ class Collapsible(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_trigger = html.escape(self.trigger)
-        e_event = html.escape(self.event)
         return (
             f'<div class="{cls}">'
-            f'<button class="collapsible-trigger" dj-click="{e_event}">'
+            f'<button class="collapsible-trigger" {self.event_attrs(self.event)}>'
             f'<span class="collapsible-label">{e_trigger}</span>'
             f'<span class="collapsible-icon">&#9662;</span>'
             f"</button>"

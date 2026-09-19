@@ -102,7 +102,6 @@ class TimePicker(Component):
         hour, minute = self._parse_time(self.value)
 
         e_name = html.escape(self.name)
-        e_event = html.escape(self.event) if self.event else ""
 
         parts = []
         if self.label:
@@ -111,7 +110,8 @@ class TimePicker(Component):
                 f"{html.escape(self.label)}</label>"
             )
 
-        event_attr = f' dj-change="{e_event}"' if e_event else ""
+        ea = self.event_attrs(self.event, trigger="change")
+        event_attr = f" {ea}" if ea else ""
         disabled_attr = " disabled" if self.disabled else ""
 
         # Hidden input for form value

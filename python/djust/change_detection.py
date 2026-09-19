@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from typing import Any, Hashable, List, Tuple
 
-__all__ = ["deep_fingerprint", "warn_fingerprint_truncated", "DEFAULT_BUDGET"]
+__all__ = ["deep_fingerprint", "warn_fingerprint_truncated", "DEFAULT_BUDGET", "FINGERPRINT_FIELDS"]
 
 #: Maximum container nodes + leaves visited per top-level value before the
 #: walk degrades to identity for whatever remains.
@@ -97,11 +97,20 @@ CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
 STATE_MARKER = "_djust_fingerprint_state"
 
 
-def _unwrap(value: Any) -> Any:
-    """The object a snapshot should fingerprint for *value*."""
-    if getattr(type(value), STATE_MARKER, False):
-        return getattr(value, "state", value)
-    return value
+#: Name of the optional class attribute that narrows the walk of a
+#: state-marked object (ADR-033 D3). A tuple of state keys: those are walked
+#: structurally; every OTHER key is a leaf — compared by value when it is a
+#: scalar, by ``id()`` otherwise — so a data table's ``rows`` cost one node
+#: instead of a ten-thousand-row walk, and reassigning them is still seen.
+#: ``None`` (the default) walks the whole state under the budget.
+FINGERPRINT_FIELDS = "fingerprint_fields"
+
+
+def _leaf(value: Any) -> Hashable:
+    """The one-node fingerprint of *value*: scalars by value, else identity."""
+    if value is None or isinstance(value, _IMMUTABLE_LEAVES):
+        return (_TAG_VALUE, type(value), value)
+    return (_TAG_ID, id(value))
 
 
 def fingerprints_by_content(value: Any) -> bool:
@@ -127,7 +136,12 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
 
 
 def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]) -> Hashable:
-    value = _unwrap(value)
+    fields: Any = None
+    if getattr(type(value), STATE_MARKER, False):
+        fields = getattr(type(value), FINGERPRINT_FIELDS, None)
+        if isinstance(fields, str):  # ``fingerprint_fields = "columns"`` — one key, not chars
+            fields = (fields,)
+        value = getattr(value, "state", value)
     counter[0] -= 1
     if counter[0] < 0:
         return (_TAG_TRUNCATED, id(value))
@@ -140,6 +154,19 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
             return (_TAG_ID, vid)
         inner = path_ids + (vid,)
         if isinstance(value, dict):
+            if fields is not None:
+                # ADR-033 D3: a narrowed component state — the declared keys
+                # are walked, the rest are one-node leaves.
+                return (
+                    _TAG_DICT,
+                    tuple(
+                        (
+                            _walk(k, counter, depth + 1, inner),
+                            _walk(v, counter, depth + 1, inner) if k in fields else _leaf(v),
+                        )
+                        for k, v in dict.items(value)
+                    ),
+                )
             return (
                 _TAG_DICT,
                 tuple(

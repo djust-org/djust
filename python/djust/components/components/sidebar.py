@@ -47,14 +47,13 @@ class Sidebar(Component):
         cls = f"dj-sidebar{collapsed_cls}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_toggle = html.escape(self.toggle_event)
         header_html = ""
         if self.title:
             e_title = html.escape(self.title)
             header_html = (
                 f'<div class="dj-sidebar__header">'
                 f'<span class="dj-sidebar__title">{e_title}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{e_toggle}">&#9776;</button>'
+                f'<button class="dj-sidebar__toggle" {self.event_attrs(self.toggle_event)}>&#9776;</button>'
                 f"</div>"
             )
         if self.items:

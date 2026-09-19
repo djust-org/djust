@@ -76,7 +76,6 @@ class CookieConsent(Component):
         class_str = " ".join(classes)
 
         e_msg = html.escape(self.message)
-        e_accept_event = html.escape(self.accept_event)
         e_accept_label = html.escape(self.accept_label)
 
         privacy_html = ""
@@ -86,15 +85,14 @@ class CookieConsent(Component):
 
         buttons = [
             f'<button class="dj-cookie-consent__accept" '
-            f'dj-click="{e_accept_event}">{e_accept_label}</button>'
+            f"{self.event_attrs(self.accept_event)}>{e_accept_label}</button>"
         ]
 
         if self.show_reject and self.reject_event:
-            e_reject_event = html.escape(self.reject_event)
             e_reject_label = html.escape(self.reject_label)
             buttons.append(
                 f'<button class="dj-cookie-consent__reject" '
-                f'dj-click="{e_reject_event}">{e_reject_label}</button>'
+                f"{self.event_attrs(self.reject_event)}>{e_reject_label}</button>"
             )
 
         return (
