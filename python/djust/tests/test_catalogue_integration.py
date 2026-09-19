@@ -198,6 +198,54 @@ class TestDescribeComponent:
         assert [p["name"] for p in described["params"]]
         assert any(label == "template" for label, _path in described["style_paths"])
 
+    def test_parameter_descriptions_come_from_the_components_own_docstring(self):
+        """Neither the signature nor the template contract records what a
+        parameter MEANS; the class's Args block does, and both the catalogue's
+        props table and the generated reference were showing an em dash in
+        every row until this read it."""
+        described = describe_component("rating")
+        docs = {param["name"]: param["doc"] for param in described["params"]}
+        assert "current rating value" in docs["value"]
+        assert docs["max_stars"]
+
+        # A contracted component has no descriptions of its own, but most are
+        # also a Python class whose docstring documents the same names.
+        contracted = describe_component("alert")
+        assert contracted["component_type"] == "template"
+        assert (
+            "Alert text content" in {p["name"]: p["doc"] for p in contracted["params"]}["message"]
+        )
+
+    def test_a_contracted_component_names_its_python_class_too(self):
+        """`{% theme_alert %}` and `Alert` are two ways to render ONE
+        component, and a reader who found either needs to know about the
+        other."""
+        described = describe_component("alert")
+        python_class = described["python_class"]
+        assert python_class["class_name"] == "Alert"
+        assert python_class["import_line"] == "from djust.components import Alert"
+        assert [p["name"] for p in python_class["params"]][:2] == ["message", "variant"]
+        # A component that IS a class carries it in its own keys instead.
+        assert describe_component("rating")["python_class"] is None
+
+    def test_a_sentinel_default_is_named_rather_than_addressed(self):
+        """`repr(object())` carries a memory address, so a page generated
+        from it changes on every run and tells a reader nothing."""
+        from djust.theming.gallery.component_registry import NOT_SUPPLIED
+
+        defaults = {p["name"]: p["default"] for p in describe_component("status_dot")["params"]}
+        assert defaults["animate"] == NOT_SUPPLIED
+        assert "object at 0x" not in " ".join(str(v) for v in defaults.values())
+
+    def test_required_and_kind_are_read_not_guessed(self):
+        """A parameter defaulting to `None` is not required, and `**kwargs`
+        is a VAR_KEYWORD rather than a parameter named "kwargs"."""
+        params = {p["name"]: p for p in describe_component("alert")["python_class"]["params"]}
+        assert params["message"]["required"] is True
+        assert params["variant"]["required"] is False
+        assert params["icon"]["required"] is False, "a None default is not a missing default"
+        assert params["kwargs"]["kind"] == "VAR_KEYWORD"
+
     def test_an_unknown_component_raises(self):
         with pytest.raises(KeyError):
             describe_component("no_such_component")

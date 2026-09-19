@@ -13,6 +13,7 @@ Provides:
 import importlib
 import inspect
 import logging
+import re
 from typing import Any
 
 from django.utils.html import escape
@@ -636,6 +637,27 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         )
 
 
+#: What ``get_python_component_signature`` writes for a parameter with no
+#: default. Read rather than re-derived, so a legitimate ``None`` default is
+#: never mistaken for a required parameter.
+_NO_DEFAULT = "—"
+
+#: What a component writes for "the caller did not pass this", when its
+#: default is a private sentinel rather than a value. The repr of such an
+#: object carries its memory address, which is different on every run — a
+#: documentation page generated from it is not reproducible, and a props
+#: table showing ``<object object at 0x102743770>`` tells a reader nothing.
+NOT_SUPPLIED = "NOT_SUPPLIED"
+
+
+def _default_source(default: Any) -> str:
+    """A parameter's default, as source a reader could type."""
+    if default is inspect.Parameter.empty:
+        return _NO_DEFAULT
+    text = repr(default)
+    return NOT_SUPPLIED if " object at 0x" in text else text
+
+
 def get_python_component_signature(component_name: str) -> list[dict] | None:
     """Return parameter info for a Python component's __init__ method.
 
@@ -655,9 +677,7 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
                 {
                     "name": param_name,
                     "kind": str(param.kind.name),
-                    "default": (
-                        repr(param.default) if param.default is not inspect.Parameter.empty else "—"
-                    ),
+                    "default": _default_source(param.default),
                     "annotation": (
                         str(param.annotation)
                         if param.annotation is not inspect.Parameter.empty
@@ -1301,6 +1321,7 @@ COMPONENT_DESCRIPTION_KEYS = (
     "accessibility",
     "slots",
     "style_paths",
+    "python_class",
 )
 
 
@@ -1329,6 +1350,13 @@ def describe_component(component_name: str) -> dict:
     ``style_paths``
         ``[(label, path)]`` — where to override it: the module or template,
         and the stylesheet that defines its classes.
+    ``python_class``
+        ``{"class_name", "import_line", "params"}`` when a Python class of the
+        same name ALSO exists, which is the case for most contracted
+        components: ``{% theme_alert %}`` and ``Alert`` are two ways to render
+        one component, and a reader on either side needs to know the other is
+        there. ``None`` when there is no such class, and for a component that
+        IS a class (its own keys carry it).
 
     Raises ``KeyError`` for an unknown component, as
     ``build_catalogue_detail_context`` does.
@@ -1343,13 +1371,22 @@ def describe_component(component_name: str) -> dict:
     is_template = ctx.get("component_type") == "template"
 
     if is_template:
+        # A template contract records a variable's name, type and whether it
+        # is required, but never what it MEANS. Most contracted components
+        # are also a Python class whose docstring documents exactly these
+        # names, so that is where the descriptions come from — otherwise both
+        # this page and the catalogue's props table show an em dash in every
+        # row.
+        contract_cls, _contract_class_name = _load_component_class(component_name)
+        contract_docs = _docstring_args(contract_cls)
         params = [
             {
                 "name": p.get("name", ""),
                 "type": str(p.get("type", "") or ""),
                 "default": p.get("default"),
-                "doc": p.get("description", "") or "",
+                "doc": p.get("description") or contract_docs.get(p.get("name", ""), ""),
                 "required": required,
+                "kind": "",
             }
             for required, group in (
                 (True, ctx.get("required_context") or []),
@@ -1358,14 +1395,17 @@ def describe_component(component_name: str) -> dict:
             for p in group
         ]
     else:
+        cls, _class_name = _load_component_class(component_name)
+        arg_docs = _docstring_args(cls)
         params = [
             {
                 "name": p.get("name", ""),
                 # ``<class 'float'>`` is the repr of a type, not a type name.
                 "type": _annotation_name(p.get("annotation")),
                 "default": p.get("default"),
-                "doc": p.get("description", "") or "",
-                "required": p.get("default", _MISSING_DEFAULT) is _MISSING_DEFAULT,
+                "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
+                "required": p.get("default") == _NO_DEFAULT,
+                "kind": p.get("kind", ""),
             }
             for p in ctx.get("python_params") or []
         ]
@@ -1396,6 +1436,28 @@ def describe_component(component_name: str) -> dict:
     if ctx.get("css_path"):
         style_paths.append(("css", str(ctx["css_path"])))
 
+    python_class = None
+    if is_template:
+        cls, class_name = _load_component_class(component_name)
+        if cls is not None:
+            arg_docs = _docstring_args(cls)
+            signature = get_python_component_signature(component_name) or []
+            python_class = {
+                "class_name": class_name,
+                "import_line": f"from djust.components import {class_name}",
+                "params": [
+                    {
+                        "name": p.get("name", ""),
+                        "type": _annotation_name(p.get("annotation")),
+                        "default": p.get("default"),
+                        "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
+                        "required": p.get("default") == _NO_DEFAULT,
+                        "kind": p.get("kind", ""),
+                    }
+                    for p in signature
+                ],
+            }
+
     return {
         "name": component_name,
         "display_name": ctx.get("display_name", component_name.replace("_", " ").title()),
@@ -1413,12 +1475,34 @@ def describe_component(component_name: str) -> dict:
         "accessibility": list(ctx.get("accessibility") or []),
         "slots": list(ctx.get("available_slots") or []),
         "style_paths": style_paths,
+        "python_class": python_class,
     }
 
 
-#: Sentinel for "this parameter has no default", so a legitimate ``None``
-#: default is not read as a required parameter.
-_MISSING_DEFAULT = object()
+def _docstring_args(cls: Any) -> dict:
+    """``{parameter: description}`` from a class's ``Args:`` block.
+
+    The parameter descriptions a component's author wrote. Neither the
+    signature nor the registry carries them, so both the catalogue's
+    parameters table and the generated reference showed an em dash for every
+    row until this read them off the docstring.
+    """
+    if cls is None:
+        return {}
+    doc = inspect.getdoc(cls) or ""
+    match = re.search(r"(?:^|\n)Args:\n(.*?)(?=\n\S|\Z)", doc, re.S)
+    if not match:
+        return {}
+    described: dict = {}
+    current = None
+    for line in match.group(1).splitlines():
+        entry = re.match(r"^\s+(\w+)(?:\s*\([^)]*\))?:\s*(.*)", line)
+        if entry:
+            current = entry[1]
+            described[current] = entry[2].strip()
+        elif current and line.strip():
+            described[current] += " " + line.strip()
+    return described
 
 
 def _annotation_name(annotation: Any) -> str:

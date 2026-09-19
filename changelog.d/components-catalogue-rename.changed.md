@@ -33,3 +33,14 @@
   `{% storybook_preview %}` / `{% storybook_thumbnail %}` →
   `{% component_preview %}` / `{% component_thumbnail %}`, the URL names
   `storybook*` → `components*`, and the pages' CSS prefix `sb-` → `dc-`.
+- **`describe_component` carries what the class alone cannot.** Parameter
+  descriptions now come from the component's own `Args:` block (the signature
+  and the template contract record a name and a type, never a meaning, so
+  every row read `—`); a contracted component also names its Python class and
+  constructor under `python_class`, because `{% theme_alert %}` and `Alert`
+  are two ways to render one component; a private sentinel default is
+  reported as `NOT_SUPPLIED` rather than `<object object at 0x…>`, whose
+  address changed on every run; and `required` / `kind` are read from the
+  signature, so a `None` default is not a missing one and `**kwargs` is not a
+  parameter named "kwargs". `docs.djust.org` generates its component
+  reference from this call.
