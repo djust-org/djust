@@ -428,6 +428,12 @@ class LiveViewWebSocket {
             // Suppress error when disconnect() was called intentionally
             // (e.g. TurboNav navigation while WS is still connecting)
             if (this._intentionalDisconnect) return;
+            // A page entering the back/forward cache MUST have its sockets
+            // closed — the browser requires it for the page to be eligible,
+            // and it reports the close as a connection failure. Going back
+            // is not an error, and logging one made an ordinary back
+            // navigation read as a broken page in the console.
+            if (window.djust && window.djust._inBackForwardCache) return;
             console.error('[LiveView] WebSocket error:', error);
         };
 
@@ -1660,3 +1666,37 @@ window.LiveViewWebSocket = LiveViewWebSocket;
 // can't see the cross-file reassignment from per-file analysis.
 // eslint-disable-next-line prefer-const
 let liveViewWS = null;
+
+/**
+ * The back/forward cache, which closes our socket for us.
+ *
+ * A page is only eligible for the bfcache with no open WebSocket, so the
+ * browser closes ours on the way out and reports it as a connection failure.
+ * Going back is not an error: `_inBackForwardCache` tells `onerror` to stay
+ * quiet, and the restore reconnects at once instead of serving out an
+ * exponential backoff the page never earned.
+ *
+ * `pageshow` fires for an ordinary load too (`persisted` false), which is
+ * where the flag is cleared for pages that were never cached.
+ */
+window.addEventListener('pagehide', (event) => {
+    if (event.persisted) {
+        window.djust = window.djust || {};
+        window.djust._inBackForwardCache = true;
+    }
+});
+
+window.addEventListener('pageshow', (event) => {
+    window.djust = window.djust || {};
+    if (!window.djust._inBackForwardCache) return;
+    window.djust._inBackForwardCache = false;
+    if (!event.persisted || !liveViewWS) return;
+    // Restored from the cache with a socket the browser closed. The backoff
+    // exists for a server that is struggling; this one is simply not
+    // connected yet, so reconnect on the next tick.
+    if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) return;
+    liveViewWS.reconnectAttempts = 0;
+    if (typeof liveViewWS.connect === 'function') {
+        setTimeout(() => liveViewWS.connect(), 0);
+    }
+});

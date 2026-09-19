@@ -1,0 +1,1 @@
+- **Back/forward cache**: going back to a djust page no longer logs a WebSocket error. Closing every socket is a requirement of entering the browser's back/forward cache, not a fault, so djust now stays quiet about that close and reconnects immediately on restore instead of waiting out a backoff delay.
