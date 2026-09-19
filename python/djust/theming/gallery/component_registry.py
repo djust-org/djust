@@ -787,7 +787,41 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "button": [{"label": "Example"}],
-        "calendar_heatmap": [{}],
+        # Without data every cell sits at the empty level, so the preview was
+        # an empty grid. One month of commit-shaped activity gives the scale
+        # something to colour.
+        "calendar_heatmap": [
+            {
+                "data": {
+                    "2026-01-02": 1,
+                    "2026-01-03": 3,
+                    "2026-01-05": 5,
+                    "2026-01-06": 8,
+                    "2026-01-07": 2,
+                    "2026-01-09": 4,
+                    "2026-01-10": 11,
+                    "2026-01-11": 6,
+                    "2026-01-12": 1,
+                    "2026-01-14": 2,
+                    "2026-01-15": 7,
+                    "2026-01-16": 9,
+                    "2026-01-17": 3,
+                    "2026-01-19": 1,
+                    "2026-01-20": 5,
+                    "2026-01-21": 12,
+                    "2026-01-22": 8,
+                    "2026-01-23": 4,
+                    "2026-01-25": 2,
+                    "2026-01-26": 6,
+                    "2026-01-27": 10,
+                    "2026-01-28": 3,
+                    "2026-01-29": 1,
+                    "2026-01-31": 7,
+                },
+                "year": 2026,
+                "title": "Contributions",
+            }
+        ],
         "calendar_view": [{}],
         "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
         "carousel": [
@@ -989,7 +1023,8 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "gauge": [{}],
+        # A gauge at 0 with no label shows nothing about what a gauge is.
+        "gauge": [{"value": 72, "max_value": 100, "label": "Disk used"}],
         "heatmap": [
             {
                 "data": [[1, 4, 2], [3, 0, 5], [2, 6, 1]],
