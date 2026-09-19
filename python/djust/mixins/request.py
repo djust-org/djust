@@ -38,6 +38,7 @@ from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
+from .._exposure import uses_legacy_exposure
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -264,20 +265,28 @@ class RequestMixin:
         # It is also pure bloat: the documented 500-item example persists ~45 KB
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
-        _session_state = {
-            k: v for k, v in _cached.items() if not isinstance(v, LiveComponent) and k != "streams"
-        }
-        request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
+        if uses_legacy_exposure(self):
+            _session_state = {
+                k: v
+                for k, v in _cached.items()
+                if not isinstance(v, LiveComponent) and k != "streams"
+            }
+            request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
-        # Persist user-defined _private attributes so they survive reconnects
-        private_state = self._get_private_state()
-        if private_state:
-            request.session[f"{view_key}__private"] = normalize_django_value(
-                private_state, state_roundtrip=True
-            )
+            # Legacy private/component persistence is separate from explicit
+            # declared server fields. Never let it run as an explicit fallback.
+            private_state = self._get_private_state()
+            if private_state:
+                request.session[f"{view_key}__private"] = normalize_django_value(
+                    private_state, state_roundtrip=True
+                )
+            t0_sc = time.perf_counter()
+            self._save_components_to_session(request, _cached)
+        else:
+            from .._exposure_sessions import save_server_state
 
-        t0_sc = time.perf_counter()
-        self._save_components_to_session(request, _cached)
+            t0_sc = time.perf_counter()
+            save_server_state(self, request)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -665,7 +674,8 @@ class RequestMixin:
 
             # Restore state from session
             view_key = f"liveview_{request.path}"
-            saved_state = request.session.get(view_key, {})
+            legacy_exposure = uses_legacy_exposure(self)
+            saved_state = request.session.get(view_key, {}) if legacy_exposure else {}
 
             # #2252: the write side tagged every Decimal
             # (``normalize_django_value(..., state_roundtrip=True)`` above), so
@@ -678,7 +688,9 @@ class RequestMixin:
                     safe_setattr(self, key, value, allow_private=False)
 
             # Restore user-defined _private attributes
-            private_state = request.session.get(f"{view_key}__private", {})
+            private_state = (
+                request.session.get(f"{view_key}__private", {}) if legacy_exposure else {}
+            )
             if private_state:
                 self._restore_private_state(private_state)
 
@@ -689,7 +701,18 @@ class RequestMixin:
             if hook_redirect:
                 return JsonResponse({"redirect": hook_redirect}, status=403)
 
-            if not saved_state:
+            if not legacy_exposure:
+                from .._exposure_sessions import load_server_state
+
+                # Reconstruct transient server services for this HTTP request.
+                # The persisted projection is validated separately and overlays
+                # only declared server fields, never render/context attributes.
+                self.mount(request, **kwargs)
+                restored = load_server_state(self, request)
+                if restored is not None:
+                    for key, value in restored.items():
+                        setattr(self, key, value)
+            elif not saved_state:
                 self.mount(request, **kwargs)
                 self._snapshot_user_private_attrs()
             else:
@@ -698,7 +721,9 @@ class RequestMixin:
             self._assign_component_ids()
 
             # Restore component state
-            component_state = request.session.get(f"{view_key}_components", {})
+            component_state = (
+                request.session.get(f"{view_key}_components", {}) if legacy_exposure else {}
+            )
             for key, state in component_state.items():
                 component = getattr(self, key, None)
                 if component and isinstance(component, SESSION_COMPONENT_TYPES):
@@ -808,21 +833,25 @@ class RequestMixin:
             # Persist user-defined _private attributes BEFORE get_context_data()
             # because get_context_data() sets render-cycle internals that we
             # don't want to accidentally capture.
-            private_state = self._get_private_state()
-            if private_state:
-                request.session[f"{view_key}__private"] = normalize_django_value(
-                    private_state, state_roundtrip=True
-                )
+            if legacy_exposure:
+                private_state = self._get_private_state()
+                if private_state:
+                    request.session[f"{view_key}__private"] = normalize_django_value(
+                        private_state, state_roundtrip=True
+                    )
+                else:
+                    request.session.pop(f"{view_key}__private", None)
+
+                updated_context = self.get_context_data()
+                state = {
+                    k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)
+                }
+                request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
+                self._save_components_to_session(request, updated_context)
             else:
-                # Clean up if no private attrs remain
-                request.session.pop(f"{view_key}__private", None)
+                from .._exposure_sessions import save_server_state
 
-            # Save updated state back to session
-            updated_context = self.get_context_data()
-            state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
-
-            self._save_components_to_session(request, updated_context)
+                save_server_state(self, request)
 
             # Apply context processors so the render includes auth context
             # (user, perms, messages, etc.). Without this, template conditionals

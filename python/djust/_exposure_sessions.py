@@ -1,4 +1,4 @@
-"""Internal ADR-038 server persistence, not yet connected to LiveView exporters.
+"""ADR-038 server persistence, connected to the staged explicit HTTP path.
 
 Only audited, concrete Django server session implementations are supported.
 Their opaque session identifier is the browser's handle; state stays in storage.
@@ -17,6 +17,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from django.contrib.sessions.backends.base import SessionBase
 from django.contrib.sessions.backends.cache import SessionStore as CacheSession
@@ -28,6 +29,96 @@ from ._exposure import ExposureContract, ExposureError, clone_json_state
 
 _SERVER_SESSION_TYPES = (DBSession, CachedDBSession, CacheSession, FileSession)
 _VERSION = 1
+
+
+def _identity(value: Any) -> str:
+    """Encode an approved identifier without invoking a model/service's str()."""
+    if type(value) is str and value and len(value) <= 1024:
+        return "str:" + value
+    if type(value) is int and -(2**63) <= value < 2**63:
+        return "int:" + str(value)
+    if type(value) is UUID:
+        return "uuid:" + str(value)
+    raise ExposureError("Unsupported request identity type")
+
+
+def request_binding(request: Any) -> "StateBinding":
+    """Derive identity from middleware/routing state, never event/restore data.
+
+    AuthenticationMiddleware is required even for anonymous views. TenantInfo
+    is djust's resolver result; model-based tenant middleware is also supported
+    via its primary key. Configured tenant resolution may not silently disappear.
+    A missing session handle must be established by the transport before saving.
+    """
+    from django.conf import settings
+    from django.db.models import Model
+
+    from .tenants.resolvers import TenantInfo
+
+    user = getattr(request, "user", None)
+    authenticated = getattr(user, "is_authenticated", None)
+    if user is None or type(authenticated) is not bool:
+        raise ExposureError("Explicit persistence requires request authentication middleware")
+    user_id = "anonymous" if not authenticated else "user:" + _identity(user.pk)
+    tenant = getattr(request, "tenant", None)
+    if tenant is None:
+        configured = bool(getattr(settings, "DJUST_TENANTS", None)) or (
+            "TENANT_RESOLVER" in (getattr(settings, "DJUST_CONFIG", None) or {})
+        )
+        if configured and not hasattr(request, "tenant"):
+            raise ExposureError("Configured tenant resolution is missing from the request")
+        tenant_id = "none"
+    elif isinstance(tenant, TenantInfo):
+        tenant_id = "tenant:" + _identity(tenant.id)
+    elif isinstance(tenant, Model):
+        tenant_id = "model:" + tenant._meta.label_lower + ":" + _identity(tenant.pk)
+    else:
+        raise ExposureError("Unsupported request tenant identity")
+    return StateBinding(request.session.session_key, user_id, tenant_id, request.path)
+
+
+def server_state_adapter(
+    view: Any, request: Any, *, create: bool = False
+) -> "ServerStateSession | None":
+    """Build the explicit adapter; no server grants means no server persistence."""
+    policy = getattr(view, "exposure_policy", None)
+    if type(policy) is not str or policy != "explicit":
+        raise ExposureError("Explicit server persistence requires the explicit policy")
+    contract = ExposureContract.from_view_class(type(view))
+    if not any(field.persist == "server" for field in contract.fields.values()):
+        return None
+    session = getattr(request, "session", None)
+    if session is None or type(session) not in _SERVER_SESSION_TYPES:
+        raise ExposureError("Explicit persistence requires a supported server-side session")
+    if not session.session_key:
+        if not create:
+            return None
+        session.create()
+    return ServerStateSession(session, contract, request_binding(request))
+
+
+def save_server_state(view: Any, request: Any) -> None:
+    """Persist only declared server fields after the transport's authorization."""
+    adapter = server_state_adapter(view, request, create=True)
+    if adapter is not None:
+        adapter.save(adapter.contract.project_view(view, "server"))
+
+
+def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
+    """Validate current server state or request a fresh mount for rejected data.
+
+    Invalid configuration and storage failures still propagate. Only a rejected
+    envelope (schema/identity/expiry) becomes a cache miss. Never hydrate a legacy
+    session dictionary or log rejected values. Caller performs fresh object auth
+    before dispatch/render after applying these declared values.
+    """
+    adapter = server_state_adapter(view, request)
+    if adapter is None:
+        return None
+    try:
+        return adapter.load()
+    except ExposureError:
+        return None
 
 
 @dataclass(frozen=True)

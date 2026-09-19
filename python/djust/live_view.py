@@ -549,8 +549,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # INITIALIZATION & SETUP
     # ============================================================================
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def _validate_exposure_configuration(self) -> None:
+        """Keep staged explicit runtime paths unavailable until every gate passes."""
         from django.core.exceptions import ImproperlyConfigured
 
         if type(self.exposure_policy) is not str or self.exposure_policy != "legacy":
@@ -581,6 +581,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                         "state() exposure grants require ADR-038's explicit policy, "
                         "which is not yet available. Legacy views cannot honor these grants."
                     )
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._validate_exposure_configuration()
         self._rust_view: Optional[RustLiveView] = None
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None

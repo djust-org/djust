@@ -32,8 +32,8 @@ The ADRs remain Proposed until their transport and security gates pass.
 - Internal server-session adapter with sync/async parity, exact supported Django
   storage implementations, required session/user/tenant/route binding, envelope
   expiry, and a total envelope resource budget. Cookie sessions and unreviewed
-  custom backends are rejected. Actual database round trips are tested; this is
-  not yet wired into HTTP, WebSocket, or actor LiveView persistence.
+  custom backends are rejected. The staged HTTP GET/POST path uses this adapter;
+  WebSocket, sticky-child and actor persistence integration remains pending.
 - Debug integration now consumes the explicit projection in observability
   assigns, initial/event debug-panel variables and sizes, runtime no-patch
   context diagnostics, and time-travel recording. Time-travel parameters and
@@ -45,8 +45,8 @@ The ADRs remain Proposed until their transport and security gates pass.
   state declarations. Native deliberately supplied ORM objects remain renderer
   inputs. Context processors use a copied rendering dictionary, preserve view
   precedence, and reject reserved provider collisions instead of overwriting.
-  This branch remains behind the construction guard; persistence integration
-  must stop saving render context before it can be enabled.
+  This branch remains behind the construction guard; all remaining persistence
+  paths must stop saving render context before it can be enabled.
 
 These changes **do not enable explicit exposure at runtime**. LiveView rejects
 `exposure_policy="explicit"` and nondefault state exposure grants until automatic
@@ -111,9 +111,35 @@ nested provider inheritance remain acceptance work.
 reserved-name collisions, context-processor precedence, per-view component
 binding, stale registries and deliberate native-model rendering in Django and
 Rust template backends. These are direct context/renderer tests with deliberately
-uninitialized gated views, not full HTTP/WS explicit-policy coverage. In
-particular, existing HTTP/WS persistence still consumes render context and must
-be replaced before removing the explicit construction guard.
+uninitialized gated views, not full HTTP/WS explicit-policy coverage. The separate
+HTTP integration tests below use real initialized views; WebSocket persistence
+still consumes render context and must be replaced before removing the guard.
+
+### HTTP persistence integration
+
+Explicit HTTP GET/POST saves only descriptor-selected `persist="server"` values
+through the server-session adapter, not render context, tracked private attrs,
+or legacy component snapshots. Trusted identity derives from the session handle,
+middleware user and tenant, and request path. Missing authentication middleware,
+missing configured tenant resolution, and unsupported identity types fail closed.
+TenantInfo and Django model tenants use stable identifiers, not object strings.
+
+On explicit HTTP POST, request-level authorization and mount hooks run first.
+`mount()` reconstructs transient server dependencies on the new HTTP view;
+validated stored fields overlay its defaults. Rejected schema/identity/expiry or
+legacy dictionaries leave the fresh mount state in place. Existing object-level
+authorization runs before handler dispatch/render. This reconstruction lifecycle
+is explicit-policy-only; legacy restore still skips mount as before. Managed
+object/form lifecycle ordering still requires ADR-035, and no claim is made that
+mount side effects are transactional or exactly once.
+
+`test_exposure_http.py` bypasses only the construction guard and exercises actual
+GET/POST, rendering, authentication and database session storage. It checks
+sentinels at HTML/JSON and persisted destinations, declared-counter restoration,
+cross-user/tenant and schema rejection, legacy-state isolation, denied requests,
+and cookie-backend rejection. This does not prove complete WS/actor/sticky-child
+parity or enable the policy. Server state currently uses the adapter's one-hour
+lifetime; configurable schema-version/codec and provider persistence work remains.
 
 ## Readiness audit
 
@@ -136,7 +162,7 @@ Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
 `test_exposure_contract.py`, `test_exposure_policy_guard.py`, and
 `test_exposure_sessions.py`, `test_exposure_debug.py`, and
-`test_exposure_context.py`. Run these with
+`test_exposure_context.py`, and `test_exposure_http.py`. Run these with
 the existing form, decorator, state and WebSocket regression suites. This slice
 does not change browser JavaScript and does not establish browser, cross-worker,
 or complete explicit-exposure parity.
