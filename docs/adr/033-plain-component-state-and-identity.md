@@ -51,6 +51,7 @@ What Django developers already know covers all three. Identity is a *name*, not 
 | M5 | Storybook Rating page, demo handler rebuilding `Rating(value="4")` from the wire string | `TypeError: '<=' not supported between instances of 'int' and 'str'` |
 | M6 | Python components taking an `event=` kwarg | 88 of 169 |
 | M7 | Storybook accordion toggle, whole-page render vs scoped (ADR-032 M10) | 200 → 19 ms; the snapshot pair is ~4.6 ms of what remains (ADR-032 M4) |
+| M8 | *(S1, measured)* snapshot pair for a 10 000-row `DataTable`: with its `fingerprint_fields` vs walked under the budget | 15 µs vs 16.3 ms (truncated at 20 000 nodes) |
 
 M7 is the cost model: content fingerprinting of components lands on the same snapshot pair.
 
@@ -113,7 +114,7 @@ No new surface. `name` is server-assigned and rendered escaped like every attrib
 
 - `python/djust/tests/test_storybook_ux.py` today pins M3's *workaround*; S1 flips it to pin the direct write.
 - A component-per-row view with three `Rating(name=…)` and one handler; a click on the second changes only the second (wire test on a `WebsocketCommunicator`).
-- A data table with 10 000 rows and `fingerprint_fields = ("sort_by", "page")`: the snapshot pair stays under 1 ms (benchmarked, ADR-032's harness).
+- A data table with 10 000 rows and its `fingerprint_fields`: the snapshot pair stays under 1 ms — measured 15 µs (M8).
 - Reconnect after `self.rating.value = 5`: the restored view renders five stars.
 
 ## Non-goals
