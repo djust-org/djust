@@ -92,10 +92,19 @@ class TestThumbnails:
         html = component_thumbnail("button")
         assert "Primary" in html and "btn" in html
 
-    def test_python_component_has_none(self):
+    def test_python_component_has_one_too(self):
+        """This asserted `== ""`, from when the registry carried examples for
+        the contracted components only. It carries them for the python ones
+        now, and a card that shows the component is the point of the page."""
         from djust.theming.templatetags.theme_tags import component_thumbnail
 
-        assert component_thumbnail("accordion") == ""
+        assert "dj-accordion" in component_thumbnail("accordion")
+
+    def test_a_component_that_opens_on_demand_stays_blank(self):
+        """A preview of a closed modal is a preview of nothing."""
+        from djust.theming.templatetags.theme_tags import component_thumbnail
+
+        assert component_thumbnail("tour") == ""
 
 
 # ---------------------------------------------------------------------------

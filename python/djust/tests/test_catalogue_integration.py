@@ -172,6 +172,73 @@ class TestAHostSuppliesItsOwnChrome:
 
 
 # ---------------------------------------------------------------------------
+# The index cards
+# ---------------------------------------------------------------------------
+
+
+class TestCardThumbnails:
+    """A card shows the component, not just its name.
+
+    The thumbnail used to answer "" for anything outside
+    ``COMPONENT_CONTRACTS``, because the registry once carried examples for
+    the contracted components only. It now carries them for the python ones
+    too, so that rule was blanking nine cards out of ten on a page whose job
+    is to let someone recognise a component by looking at it.
+    """
+
+    #: Renders nothing until opened, so a blank card is the honest answer.
+    #: A preview of a closed modal would be a preview of nothing.
+    OPENS_ON_DEMAND = {
+        "bottom_sheet",
+        "export_dialog",
+        "image_lightbox",
+        "server_event_toast",
+        "tour",
+    }
+    #: Known gaps: no registry example yet. Kept explicit so the number
+    #: cannot creep up unnoticed.
+    NO_EXAMPLE_YET = {"form_validation", "prompt_editor"}
+
+    def _names(self):
+        from djust.theming.gallery.component_registry import COMPONENT_CATEGORIES
+
+        seen, names = set(), []
+        for group in COMPONENT_CATEGORIES.values():
+            for name in group:
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        return names
+
+    def test_almost_every_card_shows_its_component(self):
+        from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+        blank = [n for n in self._names() if not (_thumbnail_html(n) or "").strip()]
+        assert set(blank) <= self.OPENS_ON_DEMAND | self.NO_EXAMPLE_YET, (
+            "these cards render no preview and are not accounted for: "
+            f"{sorted(set(blank) - self.OPENS_ON_DEMAND - self.NO_EXAMPLE_YET)}"
+        )
+
+    def test_a_python_component_gets_a_thumbnail(self):
+        """The specific regression: `rating` is not a template contract."""
+        from djust.theming.contracts import COMPONENT_CONTRACTS
+        from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+        assert "rating" not in COMPONENT_CONTRACTS
+        assert "rating-star" in _thumbnail_html("rating")
+
+    def test_a_contracted_component_still_gets_one(self):
+        from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+        assert _thumbnail_html("alert").strip()
+
+    def test_an_unknown_component_is_blank_not_an_error(self):
+        from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+        assert _thumbnail_html("no_such_component") == ""
+
+
+# ---------------------------------------------------------------------------
 # The data contract the documentation generator consumes
 # ---------------------------------------------------------------------------
 

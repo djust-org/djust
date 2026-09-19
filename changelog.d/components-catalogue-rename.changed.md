@@ -51,3 +51,11 @@
   page's `<title>` still in the tab. Nothing errors. `guides/navigation.md`
   now names the symptom and says to link such pages with a plain `href`, and
   `guides/components.md` says it for the catalogue specifically.
+- **Index cards show the component again.** The card thumbnail answered ""
+  for anything outside `COMPONENT_CONTRACTS`, from when the registry carried
+  examples for the 24 contracted components only. It carries them for 149
+  python components too, so the rule was blanking nine cards out of ten on a
+  page whose job is to let someone recognise a component by looking at it.
+  172 of 179 cards now render a preview; the rest are components that render
+  nothing until opened (a tour, a bottom sheet), where a blank is the honest
+  answer, and two that still have no example. `table_of_contents` gained one.

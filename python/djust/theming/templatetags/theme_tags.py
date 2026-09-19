@@ -759,25 +759,45 @@ def component_preview(
 
 @functools.lru_cache(maxsize=256)
 def _thumbnail_html(component_name: str) -> str:
-    """A template component's first example, rendered once per process, for
-    the index cards. Python components get "" — their examples need runtime
-    context the card cannot supply, and a blank beats a broken box."""
+    """A component's first example, rendered once per process, for the cards.
+
+    Both kinds: a contracted component through its template, a python one
+    through its class. This used to answer "" for anything not in
+    ``COMPONENT_CONTRACTS``, on the grounds that a python component's
+    examples "need runtime context the card cannot supply" — true when the
+    registry had examples for the contracted 24 only. It now carries them for
+    149 python components as well, and they render, so that rule was hiding a
+    preview on 9 cards out of 10.
+
+    Still "" when there is genuinely nothing to show: no example, or a
+    component that renders nothing until opened (a modal, a tour). A blank
+    beats a broken box, and a card without a preview still carries its name,
+    type, category and description.
+    """
     from djust.theming.contracts import COMPONENT_CONTRACTS
 
     from ..gallery.catalogue import _render_template_examples, build_catalogue_detail_context
+    from ..gallery.component_registry import (
+        PYTHON_COMPONENT_EXAMPLES,
+        render_python_component_example,
+    )
 
-    if component_name not in COMPONENT_CONTRACTS:
-        return ""
     try:
-        examples = build_catalogue_detail_context(component_name, render_examples=False).get(
-            "examples"
-        )
+        if component_name in COMPONENT_CONTRACTS:
+            examples = build_catalogue_detail_context(component_name, render_examples=False).get(
+                "examples"
+            )
+            if not examples:
+                return ""
+            rendered = _render_template_examples(component_name, [examples[0]])
+            return rendered[0]["html"] if rendered else ""
+
+        examples = PYTHON_COMPONENT_EXAMPLES.get(component_name)
         if not examples:
             return ""
-        rendered = _render_template_examples(component_name, [examples[0]])
+        return render_python_component_example(component_name, dict(examples[0])) or ""
     except Exception:  # noqa: BLE001 — a card thumbnail is never worth a 500
         return ""
-    return rendered[0]["html"] if rendered else ""
 
 
 @register.simple_tag

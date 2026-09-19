@@ -251,6 +251,16 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
             "active": "1",
         },
     ],
+    "table_of_contents": [
+        {
+            "items": [
+                {"id": "intro", "label": "Introduction"},
+                {"id": "usage", "label": "Usage"},
+                {"id": "props", "label": "Parameters"},
+            ],
+            "active": "usage",
+        },
+    ],
     "dropdown_menu": [
         {
             "label": "Actions",
