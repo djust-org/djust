@@ -242,6 +242,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = [
     "djust.security.*",
+    "djust._exposure",
+    "djust._exposure_sessions",
     "djust._rust",
 ]
 ignore_errors = false

@@ -115,6 +115,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # djust LiveView base config
         "sync_safe",
         "use_actors",
+        "exposure_policy",
         "view_is_async",
         "tick_interval",
         "login_required",
@@ -433,6 +434,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
     enable_state_snapshot: bool = False
 
+    # ADR-038: reserve the policy name now, but never silently claim that
+    # explicit exposure is active before all persistence/export paths use it.
+    exposure_policy: str = "legacy"
+
     # Streaming initial render (v0.6.1 — Phase 1).
     #
     # Opt-in per-view flag that returns a ``StreamingHttpResponse`` from the
@@ -546,6 +551,36 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        from django.core.exceptions import ImproperlyConfigured
+
+        if type(self.exposure_policy) is not str or self.exposure_policy != "legacy":
+            if type(self.exposure_policy) is str and self.exposure_policy == "explicit":
+                raise ImproperlyConfigured(
+                    "exposure_policy='explicit' is not yet available. ADR-038's "
+                    "persistence and browser-export boundaries are still being implemented; "
+                    "this view cannot run with implicit legacy exposure instead."
+                )
+            raise ImproperlyConfigured(
+                "Invalid exposure_policy. Only 'legacy' is currently supported; "
+                "unknown policies cannot fall back to legacy exposure."
+            )
+        from ._state import StateProperty
+
+        # Inspect class dictionaries only: checking configuration must not
+        # evaluate properties, factories, ORM queries or component descriptors.
+        seen_state_names: set[str] = set()
+        for owner in type(self).__mro__:
+            for name, declaration in vars(owner).items():
+                if name in seen_state_names:
+                    continue
+                seen_state_names.add(name)
+                if isinstance(declaration, StateProperty) and (
+                    declaration.exposure.persist is not None or declaration.exposure.client
+                ):
+                    raise ImproperlyConfigured(
+                        "state() exposure grants require ADR-038's explicit policy, "
+                        "which is not yet available. Legacy views cannot honor these grants."
+                    )
         self._rust_view: Optional[RustLiveView] = None
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None

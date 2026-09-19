@@ -25,11 +25,45 @@ The ADRs remain Proposed until their transport and security gates pass.
 - Public form construction hooks, empty-mapping binding, Django field initial
   values, prefixes and the `_create_form` compatibility bridge. Mount, reset,
   validation, submission and cache reconstruction use the hooks.
+- Internal immutable exposure contracts compiled from state descriptors, with
+  separate server/client/snapshot/debug projections, bounded JSON primitives,
+  detached schema-checked restoration, and explicit inherited exposure grants.
+  Defaults and unrelated properties are not evaluated during compilation.
+- Internal server-session adapter with sync/async parity, exact supported Django
+  storage implementations, required session/user/tenant/route binding, envelope
+  expiry, and a total envelope resource budget. Cookie sessions and unreviewed
+  custom backends are rejected. Actual database round trips are tested; this is
+  not yet wired into HTTP, WebSocket, or actor LiveView persistence.
 
-These changes **do not** implement exposure permissions, backend capabilities,
-managed `self.object`, strict event mode, scoped subscriptions, or no-op client
-observations. Legacy exposure and event policies are unchanged. No generators
-should use the proposed APIs yet.
+These changes **do not enable explicit exposure at runtime**. LiveView rejects
+`exposure_policy="explicit"` and nondefault state exposure grants until automatic
+exporters enforce the contracts. Legacy exposure and event policies are unchanged.
+Managed `self.object`, strict event mode, scoped subscriptions and no-op client
+observations remain pending. No generators should use the proposed APIs yet.
+
+### Server persistence adapter boundary
+
+`python/djust/_exposure_sessions.py` reuses Django's opaque session handle and
+server storage rather than storing Python state inside the Rust view backend.
+Supported concrete stores are Django database, cached database, cache, and file
+sessions. The gate checks actual implementation identity, not `SESSION_ENGINE`
+text, inheritance, or a self-asserted confidentiality flag. Custom stores require
+a reviewed adapter; they currently fail closed. Deployment still determines
+whether file/cache storage is shared across workers and durable.
+
+The adapter validates current session identity before and after lazy loading,
+requires explicit user/tenant/route identifiers, rejects legacy dictionaries and
+changed schemas, and never restores attributes itself. Its digest is not a
+signature: storage authenticity comes from the supported server-side session.
+Transport integration must derive identifiers from trusted request/routing state,
+perform fresh authorization, and remount on rejected restores. Permission checks
+and managed-object resolution are **not** implemented by this storage helper.
+Envelope expiry is separate from login-session expiry; Django remains responsible
+for session cleanup. No client-storage fallback exists on write failure.
+
+The initial codec only accepts bounded, exact JSON primitives. Additional codecs,
+framework provider manifests, authenticated client snapshots, migration inventory,
+and all runtime exporter integrations remain required before ADR-038 acceptance.
 
 ## Readiness audit
 
@@ -49,7 +83,9 @@ reflection fallback. These are implementation gates, not completed guarantees.
 ## Verification boundaries
 
 Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
-`test_state_descriptor_typing.py`, and `test_form_hooks_adr035.py`. Run these with
+`test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
+`test_exposure_contract.py`, `test_exposure_policy_guard.py`, and
+`test_exposure_sessions.py`. Run these with
 the existing form, decorator, state and WebSocket regression suites. This slice
 does not change browser JavaScript and does not establish browser, cross-worker,
 or complete explicit-exposure parity.

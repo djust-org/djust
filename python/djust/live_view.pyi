@@ -48,6 +48,7 @@ class LiveView(
 
     template_name: Optional[str] = None
     template: Optional[str] = None
+    exposure_policy: str = "legacy"
 
     # LiveView lifecycle methods
     def mount(self, request: Any, **kwargs: Any) -> None: ...

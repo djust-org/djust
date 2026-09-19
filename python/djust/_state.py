@@ -4,6 +4,8 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, Generic, TypeVar, cast, overload
 
+from ._exposure import FieldExposure, Persistence
+
 T = TypeVar("T")
 
 
@@ -27,6 +29,8 @@ class StateProperty(Generic[T]):
         default: Any = _MISSING,
         *,
         default_factory: Callable[[], T] | None = None,
+        persist: Persistence = None,
+        client: bool = False,
     ) -> None:
         if default is not _MISSING and default_factory is not None:
             raise TypeError("state accepts either default or default_factory, not both")
@@ -34,6 +38,7 @@ class StateProperty(Generic[T]):
             raise TypeError("state default_factory must be callable")
         self.default = None if default is _MISSING else default
         self.default_factory = default_factory
+        self.exposure = FieldExposure(persist=persist, client=client)
         self.attr_name: str | None = None
         self.public_name: str | None = None
 
@@ -73,19 +78,25 @@ class StateProperty(Generic[T]):
 
 
 @overload
-def state(default: T) -> StateProperty[T]: ...
+def state(default: T, *, persist: Persistence = None, client: bool = False) -> StateProperty[T]: ...
 
 
 @overload
-def state(*, default_factory: Callable[[], T]) -> StateProperty[T]: ...
+def state(
+    *, default_factory: Callable[[], T], persist: Persistence = None, client: bool = False
+) -> StateProperty[T]: ...
 
 
 @overload
-def state() -> StateProperty[Any]: ...
+def state(*, persist: Persistence = None, client: bool = False) -> StateProperty[Any]: ...
 
 
 def state(
-    default: Any = _MISSING, *, default_factory: Callable[[], T] | None = None
+    default: Any = _MISSING,
+    *,
+    default_factory: Callable[[], T] | None = None,
+    persist: Persistence = None,
+    client: bool = False,
 ) -> StateProperty[T]:
     """Declare reactive state with a typed, instance-owned default.
 
@@ -94,7 +105,12 @@ def state(
     its item type when needed). Literal defaults are deep-copied on first read;
     factories run once per instance, unless a value was assigned first.
 
-    Existing legacy context/persistence behavior is unchanged. This API does not
-    yet implement ADR-038's proposed explicit exposure or persistence options.
+    ``persist`` and ``client`` currently declare experimental ADR-038 metadata
+    only. LiveView rejects non-default grants until its explicit-policy runtime
+    is implemented; they must never imply protection under the legacy policy.
+    Existing calls without these options retain legacy context/persistence.
     """
-    return cast(StateProperty[T], StateProperty(default, default_factory=default_factory))
+    return cast(
+        StateProperty[T],
+        StateProperty(default, default_factory=default_factory, persist=persist, client=client),
+    )

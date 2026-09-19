@@ -241,6 +241,9 @@ class ContextMixin:
         for key, value in _all_items:
             if key.startswith("_"):
                 continue
+            if key == "exposure_policy":
+                # Policy configuration is never an inferred rendering assign.
+                continue
             if key in _static_skip:
                 continue
             if callable(value):
