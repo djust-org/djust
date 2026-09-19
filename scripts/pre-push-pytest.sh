@@ -135,7 +135,11 @@ PARALLEL=()
 if bash scripts/run-with-venv-python.sh -c 'import xdist' >/dev/null 2>&1; then
     PARALLEL=(-n auto)
 fi
-bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" --benchmark-disable 2>&1 | tee "$REPORT"
+NIGHTLY_FILTER=()
+if [ "${DJUST_PREPUSH_NIGHTLY:-}" != "1" ]; then
+    NIGHTLY_FILTER=(-m "not nightly")
+fi
+bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" ${NIGHTLY_FILTER[@]+"${NIGHTLY_FILTER[@]}"} --benchmark-disable 2>&1 | tee "$REPORT"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] && exit 0
 

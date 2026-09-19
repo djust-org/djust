@@ -99,6 +99,8 @@ import differential_corpus_2723 as corpus_runs
 import pytest
 from differential_corpus_2723 import REPO, SCRIPT, CorpusCache, _env
 
+pytestmark = pytest.mark.nightly
+
 
 def rows(data: dict) -> dict[str, dict]:
     return {row["axis"]: row for row in data["axes"]}

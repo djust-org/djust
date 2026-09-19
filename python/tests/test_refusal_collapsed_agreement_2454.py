@@ -67,6 +67,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.nightly
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "filter-parity-differential.py"
 
