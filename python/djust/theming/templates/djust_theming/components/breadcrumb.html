@@ -5,7 +5,7 @@
         {% for item in items %}
         <li class="{{ css_prefix }}breadcrumb-item">
             {% if not forloop.last %}
-            <a href="{{ item.url }}" class="{{ css_prefix }}breadcrumb-link">{{ item.label }}</a>
+            <a href="{{ item.url }}" class="{{ css_prefix }}breadcrumb-link"{% if item.navigate and item.url %} dj-navigate="{{ item.url }}"{% endif %}>{{ item.label }}</a>
             {% if slot_separator %}
             <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ slot_separator|safe }}</span>
             {% else %}

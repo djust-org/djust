@@ -1,16 +1,16 @@
-{% extends "djust_theming/gallery/storybook_base.html" %}
+{% extends "djust_theming/catalogue/base.html" %}
 {% load theme_tags theme_components djust_components %}
 
-{% block title %}{{ display_name }} — Component Storybook{% endblock %}
-{% block content_class %}sb-content--with-rail{% endblock %}
+{% block title %}{{ display_name }} — Components{% endblock %}
+{% block catalogue_content_class %}dc-content--with-rail{% endblock %}
 
-{% block content %}
+{% block catalogue_content %}
 <article>
 {% theme_breadcrumb items=crumbs %}
 
-<h1 class="sb-comp-title">{{ display_name }}</h1>
-{% if description %}<p class="sb-comp-desc">{{ description }}</p>{% endif %}
-<div class="sb-comp-meta">
+<h1 class="dc-comp-title">{{ display_name }}</h1>
+{% if description %}<p class="dc-comp-desc">{{ description }}</p>{% endif %}
+<div class="dc-comp-meta">
   {% theme_badge component_type variant=component_type %}
   {% if component_type == "template" %}
     <span>{{ required_context|length }} required</span>
@@ -23,6 +23,17 @@
 </div>
 
 {% comment %}
+This page renders a component on a live server; the reference entry is the
+same component written down, generated from the same registry and pinned to
+whatever djust version the docs site builds from. Link both ways so a reader
+never has to guess which one they are looking at.
+{% endcomment %}
+<p class="dc-doc-links">
+  <a href="{{ docs_component_url }}" rel="noopener">Reference</a>
+  <a href="{{ docs_guide_url }}" rel="noopener">Guide</a>
+</p>
+
+{% comment %}
 ===== Preview — one bound component (ADR-032) =====
 `{{ preview }}` is the only read of the component on this page, so an event
 that changes only its state (a playground chip, an accordion toggle) patches
@@ -31,38 +42,38 @@ variable.
 {% endcomment %}
 {{ preview }}
 
-<section id="sb-usage" class="sb-section">
+<section id="dc-usage" class="dc-section">
   {% card title="Usage" %}
     {% comment %}
     The two-file example a developer actually writes: the LiveView that owns
     the component and the template line that renders it (`_usage_snippet`).
     {% endcomment %}
-    <div class="sb-subtitle">views.py</div>
+    <div class="dc-subtitle">views.py</div>
     {{ usage_html.view }}
-    <div class="sb-subtitle">my_template.html</div>
+    <div class="dc-subtitle">my_template.html</div>
     {{ usage_html.template }}
     {% if events %}
-    <p class="sb-note">Events this component sends to the view: {% for ev in events %}<code>{{ ev }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+    <p class="dc-note">Events this component sends to the view: {% for ev in events %}<code>{{ ev }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
     {% endif %}
   {% endcard %}
 </section>
 
 {% if props_rows %}
-<section id="sb-props" class="sb-section">
+<section id="dc-props" class="dc-section">
   {% card title="Props" %}
-    {% theme_table headers=props_headers rows=props_rows class="sb-props" %}
+    {% theme_table headers=props_headers rows=props_rows class="dc-props" %}
   {% endcard %}
 </section>
 {% elif params_rows %}
-<section id="sb-props" class="sb-section">
+<section id="dc-props" class="dc-section">
   {% card title="Parameters" %}
-    {% theme_table headers=params_headers rows=params_rows class="sb-props" %}
+    {% theme_table headers=params_headers rows=params_rows class="dc-props" %}
   {% endcard %}
 </section>
 {% endif %}
 
 {% if a11y_rows %}
-<section id="sb-a11y" class="sb-section">
+<section id="dc-a11y" class="dc-section">
   {% card title="Accessibility" %}
     {% theme_table headers=a11y_headers rows=a11y_rows %}
   {% endcard %}
@@ -70,9 +81,9 @@ variable.
 {% endif %}
 
 {% if available_slots %}
-<section id="sb-slots" class="sb-section">
+<section id="dc-slots" class="dc-section">
   {% card title="Slots" %}
-    <div class="sb-badges">{% for slot in available_slots %}{% theme_badge slot variant="secondary" %}{% endfor %}</div>
+    <div class="dc-badges">{% for slot in available_slots %}{% theme_badge slot variant="secondary" %}{% endfor %}</div>
   {% endcard %}
 </section>
 {% endif %}
@@ -82,27 +93,27 @@ Collapsed by default: the paths to override and the template source are for
 the reader who has decided to change the component, not the one choosing it.
 A native `details` — the framework has no block-form collapsible yet.
 {% endcomment %}
-<details id="sb-source" class="sb-section sb-details">
+<details id="dc-source" class="dc-section dc-details">
   <summary>Source &amp; styles</summary>
   {% card %}
     {% theme_table headers=styles_headers rows=styles_rows %}
     {% if css_variables %}
-    <div class="sb-subtitle" id="sb-css-variables">CSS variables</div>
-    <div class="sb-badges">{% for var in css_variables %}{% theme_badge var variant="secondary" %}{% endfor %}</div>
+    <div class="dc-subtitle" id="dc-css-variables">CSS variables</div>
+    <div class="dc-badges">{% for var in css_variables %}{% theme_badge var variant="secondary" %}{% endfor %}</div>
     {% endif %}
     {% if template_source %}
-    <div class="sb-subtitle">Template source — {{ name }}.html</div>
+    <div class="dc-subtitle">Template source — {{ name }}.html</div>
     {{ template_source_html }}
     {% endif %}
   {% endcard %}
 </details>
 
-<nav class="sb-pager" aria-label="Previous and next component">
-  {% for item in pager_items %}{% theme_nav_item item.label item.url class="sb-pager-link" %}{% endfor %}
+<nav class="dc-pager" aria-label="Previous and next component">
+  {% for item in pager_items %}{% theme_nav_item item.label item.url class="dc-pager-link" navigate=True %}{% endfor %}
 </nav>
 </article>
 
-<aside class="sb-rail" aria-label="On this page">
+<aside class="dc-rail" aria-label="On this page">
   {% table_of_contents items=toc_items title="On this page" %}
 </aside>
 {% endblock %}

@@ -1,0 +1,1 @@
+- **CI**: the per-shard test-duration artifact now uploads even when that shard's tests fail. The drift gate lives in the pytest step, and its documented repair needs all four shard artifacts, so the shard that failed the gate was the one shard that uploaded nothing and the repair deadlocked on the run that needed it.

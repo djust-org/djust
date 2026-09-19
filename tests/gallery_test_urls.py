@@ -1,9 +1,10 @@
-"""URL configuration for djust.theming gallery / storybook / editor tests.
+"""URL configuration for djust.theming gallery / catalogue / editor tests.
 
 Tests reference ``ROOT_URLCONF="tests.gallery_test_urls"`` via
 ``@override_settings`` — this file mounts the theming URLs at
 ``/theming/`` so ``reverse("djust_theming:gallery")`` resolves to
-``/theming/gallery/`` as the tests expect.
+``/theming/themes/`` as the tests expect (the theme gallery moved from
+``gallery/`` to ``themes/`` when the catalogue took ``components/``).
 
 See also ``tests/test_critical_css.py`` for a critical-CSS-specific mount.
 """

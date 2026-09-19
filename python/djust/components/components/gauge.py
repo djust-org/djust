@@ -69,7 +69,10 @@ class Gauge(Component):
         label_html = f'<div class="gauge-label">{e_label}</div>' if self.label else ""
         return (
             f'<div class="{cls}" style="width:{px}px;height:{px}px;">'
-            f'<svg width="{px}" height="{px}" viewBox="0 0 {px} {px}">'
+            # `__svg` marks a component's own drawing surface, which a theme
+            # pack's icon style must leave alone — without it the ring was
+            # repainted as an outline icon.
+            f'<svg class="dj-gauge__svg" width="{px}" height="{px}" viewBox="0 0 {px} {px}">'
             f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" class="gauge-track" '
             f'stroke-width="8" fill="none"/>'
             f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" class="gauge-fill gauge-fill-{e_color}" '

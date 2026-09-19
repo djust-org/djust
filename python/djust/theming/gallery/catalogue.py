@@ -1,5 +1,5 @@
 """
-Component storybook -- auto-generated documentation for each theme component.
+Component catalogue -- auto-generated documentation for each theme component.
 
 Reads component contracts, template source, and CSS variable usage to build
 rich per-component detail pages.
@@ -192,8 +192,8 @@ def playground_options(examples: list[dict]) -> list[dict]:
     return options
 
 
-def build_storybook_index_context() -> dict:
-    """Build context data for the storybook index page.
+def build_catalogue_index_context() -> dict:
+    """Build context data for the catalogue index page.
 
     Returns a dict with:
     - ``components``: flat list of all component dicts (for sidebar)
@@ -243,13 +243,13 @@ def build_storybook_index_context() -> dict:
 #: Most components carry their own control: `tabs` has tab buttons, `dropdown`
 #: has a trigger, `collapsible` has a header. A `modal` does not — by design,
 #: its trigger belongs to the page that opens it, not to the dialog — so on a
-#: storybook page the preview was a closed dialog with nothing to open it and
-#: no way to tell the component worked. The storybook supplies the missing
+#: catalogue page the preview was a closed dialog with nothing to open it and
+#: no way to tell the component worked. The catalogue supplies the missing
 #: control here.
 #:
 #: The markup dispatches the same event the component's descriptor listens for,
 #: so this is the real server path rather than a demo-only shim.
-_STORYBOOK_TRIGGERS = {
+_CATALOGUE_TRIGGERS = {
     "modal": (
         '<button type="button" dj-click="toggle_modal" '
         'style="font: inherit; padding: 0.375rem 0.75rem; border-radius: 0.375rem; '
@@ -316,12 +316,12 @@ def _render_template_examples(component_name: str, examples: list[dict]) -> list
         # The trigger goes before the component's own markup, not inside it: a
         # modal's backdrop is `position: fixed`, so a control rendered within it
         # would be covered once the dialog opened.
-        trigger = _STORYBOOK_TRIGGERS.get(component_name, "")
+        trigger = _CATALOGUE_TRIGGERS.get(component_name, "")
         rendered.append({"html": f"{trigger}{html}", "kwargs": example})
     return rendered
 
 
-#: The stylesheets a storybook page loads, with the label to show for each.
+#: The stylesheets a catalogue page loads, with the label to show for each.
 #: Derived from disk rather than hand-listed: a component's styling moves
 #: between files, and a list maintained by hand is one that goes stale quietly.
 _CSS_TREES: list[tuple[str, Path]] = [
@@ -426,7 +426,7 @@ def usage_with_events(
     * every event, the descriptor-backed ones included: an ``@event_handler`` stub on the view that writes the
       new value to the component held in ``mount()`` (ADR-033 — the write
       goes through to its state), the kwarg it drives named when the
-      storybook knows it (``demo_stubs``).
+      catalogue knows it (``demo_stubs``).
     """
     if not events and not descriptor_class:
         return snippet
@@ -609,8 +609,8 @@ def _first_class_name(component_name: str) -> str:
     return names[0] if names else ""
 
 
-def build_storybook_detail_context(component_name: str, *, render_examples: bool = True) -> dict:
-    """Build context data for a single component's storybook detail page.
+def build_catalogue_detail_context(component_name: str, *, render_examples: bool = True) -> dict:
+    """Build context data for a single component's catalogue detail page.
 
     Handles both template-based (contracted) and Python components.
 

@@ -1,7 +1,7 @@
 """#2914 — the context a bridged inline tag receives is memoised per frame.
 
 Every bridged tag call converted the WHOLE context into a fresh Python dict
-(`build_py_context`), O(context) per call — 75 % of a storybook render with a
+(`build_py_context`), O(context) per call — 75 % of a catalogue render with a
 `{% url %}` per sidebar row. A frame's contents change only through
 `DerefMut`, which re-stamps it, so a converted frame is now reused until then.
 What the tag sees is the same dict with the same names and values; what

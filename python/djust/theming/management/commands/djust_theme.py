@@ -1067,7 +1067,7 @@ SOFTWARE.
 
         from django.conf import settings as django_settings
 
-        from djust.theming.gallery.storybook import get_component_coverage
+        from djust.theming.gallery.catalogue import get_component_coverage
         from djust.theming.manager import get_theme_config
         from djust.theming.manifest import ThemeManifest
 

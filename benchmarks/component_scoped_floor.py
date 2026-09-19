@@ -1,4 +1,4 @@
-"""ADR-032 §Measured — floor for a component-scoped render on the storybook accordion page: what a component-scoped
+"""ADR-032 §Measured — floor for a component-scoped render on the catalogue accordion page: what a component-scoped
 render would cost vs the full-page render it replaces. Sequential; run alone."""
 
 import asyncio, contextlib, statistics, time, uuid
@@ -32,7 +32,7 @@ django.setup()
 from django.test import RequestFactory
 from djust.runtime import ViewRuntime
 from djust._rust import diff_html
-from djust.theming.gallery.live_views import StorybookDetailView
+from djust.theming.gallery.live_views import ComponentsDetailView
 from djust.theming.gallery.component_registry import render_python_component_example
 
 
@@ -73,8 +73,8 @@ def ms(samples):
 
 
 async def main():
-    v = StorybookDetailView()
-    v.request = RequestFactory().get("/theme/gallery/storybook/accordion/")
+    v = ComponentsDetailView()
+    v.request = RequestFactory().get("/theme/components/accordion/")
     v.mount(v.request, component_name="accordion")
     v.render_with_diff()
     tr = T()

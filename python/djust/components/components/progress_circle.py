@@ -92,7 +92,8 @@ class ProgressCircle(Component):
         return (
             f'<div class="{class_str}" role="progressbar" '
             f'aria-valuenow="{self.value}" aria-valuemin="0" aria-valuemax="100">'
-            f'<svg width="{dim}" height="{dim}" viewBox="0 0 {dim} {dim}">'
+            # `__svg`: a drawing surface, not an icon (see gauge.py).
+            f'<svg class="dj-progress-circle__svg" width="{dim}" height="{dim}" viewBox="0 0 {dim} {dim}">'
             f'<circle class="dj-progress-circle__track" '
             f'cx="{dim / 2}" cy="{dim / 2}" r="{radius}" '
             f'fill="none" stroke-width="{stroke_w}"/>'

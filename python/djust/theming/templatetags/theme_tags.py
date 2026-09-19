@@ -19,6 +19,7 @@ Usage:
 
 import functools
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -589,7 +590,7 @@ def theme_asset_version() -> str:
 
     `theme_head` stamps its own links itself. A page that adds a stylesheet of
     its own has no way to reach that token, and so links it bare — which is how
-    the storybook came to load `djust_components/components.css` twice, once
+    the catalogue came to load `djust_components/components.css` twice, once
     versioned and once not, with the unversioned copy second and therefore
     winning. A bare link is a link that goes stale on the next edit.
 
@@ -600,42 +601,42 @@ def theme_asset_version() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Storybook preview (ADR-032)
+# Catalogue preview (ADR-032)
 # ---------------------------------------------------------------------------
 
 # Compiled lazily through a private ``Engine``: ``django.template.Template``
 # needs a configured ``DjangoTemplates`` backend, and a ``djust new`` project
 # configures only ``DjustTemplateBackend`` — a module-level ``Template(...)``
 # here broke the import of every theme tag in such a project.
-_STORYBOOK_PREVIEW_SOURCE = """{% load djust_components %}<section class="sb-section" id="sb-preview">
+_PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="dc-preview">
 {% card title="Preview" %}
   {% if options %}
-  <div class="sb-options">
+  <div class="dc-options">
     {% for opt in options %}
-    <div class="sb-option-row">
-      <span class="sb-option-key">{{ opt.key }}</span>
+    <div class="dc-option-row">
+      <span class="dc-option-key">{{ opt.key }}</span>
       {% toggle_group name=opt.key options=opt.choices value=opt.current event="set_option" size="sm" %}
     </div>
     {% endfor %}
   </div>
-  <div class="sb-preview">{{ playground_html|safe }}</div>
+  <div class="dc-preview">{{ playground_html|safe }}</div>
   {{ playground_code_html }}
   {% else %}
     {% for ex in examples_html %}
-    <div class="sb-example">
-      <div class="sb-preview">{{ ex.html|safe }}</div>
-      {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
+    <div class="dc-example">
+      <div class="dc-preview">{{ ex.html|safe }}</div>
+      {% if ex.kwargs_display %}<details class="dc-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
     </div>
     {% empty %}
-    <div class="sb-preview sb-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+    <div class="dc-preview dc-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
     {% endfor %}
   {% endif %}
   {% if more_examples %}
-  <div class="sb-subtitle">More examples</div>
+  <div class="dc-subtitle">More examples</div>
   {% for ex in more_examples %}
-  <div class="sb-example">
-    <div class="sb-preview">{{ ex.html|safe }}</div>
-    {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
+  <div class="dc-example">
+    <div class="dc-preview">{{ ex.html|safe }}</div>
+    {% if ex.kwargs_display %}<details class="dc-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
   </div>
   {% endfor %}
   {% endif %}
@@ -644,13 +645,13 @@ _STORYBOOK_PREVIEW_SOURCE = """{% load djust_components %}<section class="sb-sec
 
 
 @functools.lru_cache(maxsize=1)
-def _storybook_preview_template() -> Any:
+def _preview_template() -> Any:
     from django.template import Engine
 
     return Engine(
         autoescape=True,
         libraries={"djust_components": "djust.components.templatetags.djust_components"},
-    ).from_string(_STORYBOOK_PREVIEW_SOURCE)
+    ).from_string(_PREVIEW_SOURCE)
 
 
 def _highlighted_python(code: str) -> str:
@@ -662,14 +663,14 @@ def _highlighted_python(code: str) -> str:
 
 
 @register.simple_tag
-def storybook_preview(
+def component_preview(
     component_name: str,
     component_type: str,
     examples: Any,
     values: Any,
     playground: Any = None,
 ) -> SafeString:
-    """The storybook page's preview, rendered from the preview component's
+    """The catalogue page's preview, rendered from the preview component's
     State (`live_views.Preview`, ADR-032), out of the components it shows.
 
     One Preview card. When the examples expose enumerable kwargs (a token
@@ -681,7 +682,7 @@ def storybook_preview(
     as "More examples". Without options the examples are the preview.
     """
     from ..gallery.live_views import render_preview_examples
-    from ..gallery.storybook import playground_options
+    from ..gallery.catalogue import playground_options
 
     examples = list(examples or [])
     values = dict(values or {})
@@ -737,7 +738,7 @@ def storybook_preview(
                 ):
                     more_examples.append(html)
     return mark_safe(
-        _storybook_preview_template().render(
+        _preview_template().render(
             Context(
                 {
                     "name": component_name,
@@ -757,30 +758,82 @@ def storybook_preview(
     )
 
 
+#: Tags that must not survive into a card thumbnail. An ``<a>`` inside the
+#: card's own ``<a>`` is INVALID HTML: the parser closes the outer anchor
+#: before the inner one, which lifts the card out of its link and leaves an
+#: empty anchor holding a grid cell — a visible hole in the index. Thirteen
+#: components render links (breadcrumb, nav, pagination, a table of
+#: contents…), so thirteen cells were empty.
+#:
+#: The same substitution answers an accessibility fault: the thumbnail is
+#: ``aria-hidden``, and a focusable control inside an aria-hidden region is
+#: reachable by keyboard but invisible to a screen reader. Classes are kept,
+#: so a ``span.dj-btn`` still looks exactly like the button it previews.
+_INERT_TAG_RE = re.compile(r"<(/?)(?:a|button)(\s[^>]*)?>", re.IGNORECASE)
+
+
+#: ``href`` and ``type`` mean nothing on a ``span`` and are not valid there,
+#: so they go with the tag. Everything else stays: the classes are what make
+#: the preview look like the component.
+_DEAD_ATTR_RE = re.compile(r"""\s(?:href|type)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+
+
+def _inert_markup(html: str) -> str:
+    """A component's markup with its interactive tags turned into spans."""
+    if not html:
+        return ""
+
+    def to_span(match: "re.Match[str]") -> str:
+        attrs = _DEAD_ATTR_RE.sub("", match.group(2) or "")
+        return f"<{match.group(1)}span{attrs}>"
+
+    return _INERT_TAG_RE.sub(to_span, html)
+
+
 @functools.lru_cache(maxsize=256)
-def _storybook_thumbnail_html(component_name: str) -> str:
-    """A template component's first example, rendered once per process, for
-    the index cards. Python components get "" — their examples need runtime
-    context the card cannot supply, and a blank beats a broken box."""
+def _thumbnail_html(component_name: str) -> str:
+    """A component's first example, rendered once per process, for the cards.
+
+    Both kinds: a contracted component through its template, a python one
+    through its class. This used to answer "" for anything not in
+    ``COMPONENT_CONTRACTS``, on the grounds that a python component's
+    examples "need runtime context the card cannot supply" — true when the
+    registry had examples for the contracted 24 only. It now carries them for
+    149 python components as well, and they render, so that rule was hiding a
+    preview on 9 cards out of 10.
+
+    Still "" when there is genuinely nothing to show: no example, or a
+    component that renders nothing until opened (a modal, a tour). A blank
+    beats a broken box, and a card without a preview still carries its name,
+    type, category and description.
+    """
     from djust.theming.contracts import COMPONENT_CONTRACTS
 
-    from ..gallery.storybook import _render_template_examples, build_storybook_detail_context
+    from ..gallery.catalogue import _render_template_examples, build_catalogue_detail_context
+    from ..gallery.component_registry import (
+        PYTHON_COMPONENT_EXAMPLES,
+        render_python_component_example,
+    )
 
-    if component_name not in COMPONENT_CONTRACTS:
-        return ""
     try:
-        examples = build_storybook_detail_context(component_name, render_examples=False).get(
-            "examples"
-        )
+        if component_name in COMPONENT_CONTRACTS:
+            examples = build_catalogue_detail_context(component_name, render_examples=False).get(
+                "examples"
+            )
+            if not examples:
+                return ""
+            rendered = _render_template_examples(component_name, [examples[0]])
+            return _inert_markup(rendered[0]["html"]) if rendered else ""
+
+        examples = PYTHON_COMPONENT_EXAMPLES.get(component_name)
         if not examples:
             return ""
-        rendered = _render_template_examples(component_name, [examples[0]])
+        return _inert_markup(render_python_component_example(component_name, dict(examples[0])))
     except Exception:  # noqa: BLE001 — a card thumbnail is never worth a 500
         return ""
-    return rendered[0]["html"] if rendered else ""
 
 
 @register.simple_tag
-def storybook_thumbnail(component_name: str) -> SafeString:
-    """`{% storybook_thumbnail comp.name as thumb %}` — the card's preview."""
-    return mark_safe(_storybook_thumbnail_html(str(component_name)))
+def component_thumbnail(component_name: str) -> SafeString:
+    """`{% component_thumbnail comp.name as thumb %}` — the card's preview."""
+    return mark_safe(_thumbnail_html(str(component_name)))

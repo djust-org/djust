@@ -1,0 +1,66 @@
+{% load theme_tags theme_components live_tags static %}<!DOCTYPE html>
+<html lang="en">
+{% comment %}
+The document the component catalogue renders inside, and the ONE file a host
+site replaces to wrap these pages in its own chrome.
+
+Django resolves ``djust_theming/catalogue/_document.html`` through the app
+template loader, so an app listed BEFORE ``djust.theming`` in
+``INSTALLED_APPS`` that ships a file at the same path shadows this one. That
+is the whole override mechanism: no setting, no subclassing, and it works on
+djust's Rust engine, which resolves ``{% extends %}`` targets literally and
+cannot take one from a variable.
+
+A replacement must:
+
+* include ``djust_theming/catalogue/_assets.html`` in its ``<head>`` (the
+  catalogue's stylesheets and the theme tokens the components read);
+* define ``{% block title %}``, which the page templates set;
+* render ``{% block body %}`` — ``base.html`` fills it with the mount root,
+  the sidebar and the content column, all of which must stay inside it;
+* load ``djust_theming/js/catalogue.js`` (presentation only: the ``/``
+  shortcut, the narrow-screen sidebar, the table-of-contents scroll-spy);
+* render ``{% djust_client_config %}`` in its ``<head>``. That emits the
+  route map, which is what lets the catalogue's ``dj-navigate`` links
+  resolve a path to a LiveView and travel over the open socket instead of
+  reloading the document. Without it every card click is a full page load
+  that tears the socket down and re-mounts the view. Most host sites already
+  render it in their own base template, in which case there is nothing to
+  add here;
+* set ``--dc-topbar-h`` to the height of its own fixed header, if it has one.
+  The catalogue offsets its fixed sidebar, its content column and its
+  table-of-contents rail by that one variable, so a host never has to
+  re-style any of them.
+
+Anything else — the topbar below, the theme switcher, the version badge — is
+this file's own chrome, and a host that replaces the file replaces that too,
+which is what keeps a host page from rendering two navigations.
+{% endcomment %}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Components{% endblock %}</title>
+  {% include "djust_theming/catalogue/_assets.html" %}
+  {% comment %}
+  The route map and the client flags. The catalogue's own links carry
+  dj-navigate, and a dj-navigate is only honoured for a path the route map
+  resolves — so without this the pages full-load between themselves.
+  {% endcomment %}
+  {% djust_client_config %}
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="dc-body">
+  <header class="dc-topbar">
+    <button type="button" class="dc-menu-btn" data-dc-menu aria-expanded="false" aria-controls="dc-sidebar" aria-label="Toggle navigation">☰</button>
+    {% theme_nav brand="djust" items=section_items class="dc-nav" %}
+    <div class="dc-topbar-tools">
+      {% if djust_version %}<span class="dc-version" title="djust version">v{{ djust_version }}</span>{% endif %}
+      {% theme_switcher show_labels=False %}
+    </div>
+  </header>
+
+  {% block body %}{% endblock %}
+
+  <script src="{% static 'djust_theming/js/catalogue.js' %}?v={% theme_asset_version %}" defer></script>
+</body>
+</html>

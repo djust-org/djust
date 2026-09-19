@@ -31,17 +31,17 @@ class TestGalleryURLResolution:
     def test_gallery_url_resolves(self):
         """URL reverse for 'djust_theming:gallery' resolves correctly."""
         url = reverse("djust_theming:gallery")
-        assert url == "/theming/gallery/"
+        assert url == "/theming/themes/"
 
     @override_settings(ROOT_URLCONF="tests.gallery_test_urls")
     def test_gallery_url_resolves_to_view(self):
-        match = resolve("/theming/gallery/")
+        match = resolve("/theming/themes/")
         assert match.func is gallery_view
 
     @override_settings(ROOT_URLCONF="tests.gallery_test_urls")
     def test_gallery_url_name(self):
         """Gallery URL name is 'gallery' within djust_theming namespace."""
-        match = resolve("/theming/gallery/")
+        match = resolve("/theming/themes/")
         assert match.url_name == "gallery"
 
 
@@ -57,7 +57,7 @@ class TestGalleryAccessControl:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_gallery_view_accessible_in_debug(self, rf):
         """Returns 200 when DEBUG=True (no auth needed)."""
-        request = rf.get("/theming/gallery/")
+        request = rf.get("/theming/themes/")
         request.session = {}
         response = gallery_view(request)
         assert response.status_code == 200
@@ -70,7 +70,7 @@ class TestGalleryAccessControl:
             is_staff = False
             is_authenticated = False
 
-        request = rf.get("/theming/gallery/")
+        request = rf.get("/theming/themes/")
         request.user = _AnonUser()
         request.session = {}
         response = gallery_view(request)
@@ -84,7 +84,7 @@ class TestGalleryAccessControl:
             is_staff = True
             is_authenticated = True
 
-        request = rf.get("/theming/gallery/")
+        request = rf.get("/theming/themes/")
         request.user = _StaffUser()
         request.session = {}
         response = gallery_view(request)

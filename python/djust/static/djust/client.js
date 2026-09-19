@@ -1116,6 +1116,12 @@ class LiveViewWebSocket {
             // Suppress error when disconnect() was called intentionally
             // (e.g. TurboNav navigation while WS is still connecting)
             if (this._intentionalDisconnect) return;
+            // A page entering the back/forward cache MUST have its sockets
+            // closed — the browser requires it for the page to be eligible,
+            // and it reports the close as a connection failure. Going back
+            // is not an error, and logging one made an ordinary back
+            // navigation read as a broken page in the console.
+            if (window.djust && window.djust._inBackForwardCache) return;
             console.error('[LiveView] WebSocket error:', error);
         };
 
@@ -2348,6 +2354,53 @@ window.LiveViewWebSocket = LiveViewWebSocket;
 // can't see the cross-file reassignment from per-file analysis.
 // eslint-disable-next-line prefer-const
 let liveViewWS = null;
+
+/**
+ * The back/forward cache, which closes our socket for us.
+ *
+ * A page is only eligible for the cache with no open WebSocket, so the browser
+ * closes ours on the way out and reports it as a connection failure. Going
+ * back is not an error.
+ *
+ * The ordering is the whole difficulty. The browser does not deliver that
+ * close while the page is frozen; it dispatches `error` and `close` on the
+ * restored page, immediately AFTER `pageshow`. So the flag that tells
+ * `onerror` to stay quiet cannot be cleared in the `pageshow` handler — doing
+ * that lets the close through as an error on every back navigation. It is
+ * cleared once the replacement socket is up, with a timer as a backstop so a
+ * failed reconnect cannot leave real errors suppressed for good.
+ */
+const BFCACHE_QUIET_MS = 1500;
+
+window.addEventListener('pagehide', (event) => {
+    window.djust = window.djust || {};
+    if (event.persisted) {
+        window.djust._inBackForwardCache = true;
+    }
+});
+
+window.addEventListener('pageshow', (event) => {
+    window.djust = window.djust || {};
+    if (!event.persisted) {
+        window.djust._inBackForwardCache = false;
+        return;
+    }
+    const stopSuppressing = () => {
+        if (window.djust) window.djust._inBackForwardCache = false;
+    };
+    document.addEventListener('djust:ws-reconnected', stopSuppressing, { once: true });
+    setTimeout(stopSuppressing, BFCACHE_QUIET_MS);
+
+    if (!liveViewWS || typeof liveViewWS.connect !== 'function') return;
+    // `readyState` cannot be trusted here: a socket the browser has already
+    // closed to make the page eligible still reads OPEN until the close is
+    // dispatched a moment later. Treating that as a healthy connection was
+    // what let the error through. Just ask to connect — `connect()` refuses
+    // a duplicate, so this is a no-op if the socket really is up, and the
+    // backoff timer the close schedules is a no-op once this one is.
+    liveViewWS.reconnectAttempts = 0;
+    setTimeout(() => liveViewWS.connect(), 0);
+});
 
 // ============================================================================
 // SSE (Server-Sent Events) Transport for djust LiveView
@@ -11589,6 +11642,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
@@ -11718,6 +11772,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         // Move the active-nav highlight immediately (the URL is now current),
         // rather than waiting for the WS mount round-trip. (#1756)
@@ -11874,14 +11929,28 @@ window.djust.getActiveStreams = getActiveStreams;
         // Keep the active-nav highlight in sync on back/forward (the URL is
         // already current here), regardless of WS state. (#1756)
         updateAriaCurrent();
+        // These two returns leave `_renderedPathname` on the previous value,
+        // which is deliberate and safe: nothing was re-rendered, so the
+        // tracker still names what is on screen. It is also self-correcting —
+        // a stale tracker can only make a later popstate look like a path
+        // change, and the worst that costs is a remount that was not needed.
+        // The reverse (a missed remount, the old view left under a new URL)
+        // cannot happen, because every cross-path entry djust pushes also
+        // carries `redirect: true` and that flag is OR'd in below.
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
 
-        // Check if this is a redirect (different path) vs patch (same path, different params)
-        const isRedirect = event.state && event.state.redirect;
+        // Redirect (different path → remount) vs patch (same path, different
+        // params → url_change). The pathname is the thing that decides it. The
+        // `redirect` flag is still honoured so an explicit same-path
+        // live_redirect still remounts, but it is no longer the only signal:
+        // the entry the browser created on load has no state at all.
+        const cameFrom = _renderedPathname;
+        _setRenderedPathname(url.pathname);
+        const isRedirect = (event.state && event.state.redirect) || url.pathname !== cameFrom;
 
         if (isRedirect) {
             // Different view — need to remount. STRICT resolution (#1934): the
@@ -11999,6 +12068,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // WebSocket patch — pushState + url_change for selects, inputs, links, buttons
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         window.history.pushState({ djust: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         const allParams = Object.fromEntries(newUrl.searchParams);
         liveViewWS.sendMessage({
@@ -12026,16 +12096,43 @@ window.djust.getActiveStreams = getActiveStreams;
         installDjPatchChangeHandler();
     })();
 
+    /**
+     * Which elements already carry a click listener from this module.
+     *
+     * This used to be a data attribute on the element, and that is wrong for
+     * anything inside the mount root. The server's HTML never contains the
+     * attribute, so a morph or a patch that reuses the DOM node strips the
+     * flag while the listener it recorded stays attached. The next bind pass
+     * then saw an unflagged element and added a SECOND listener, so one click
+     * pushed two identical history entries and the back button looked dead —
+     * it was stepping between duplicates of the same page. Every further
+     * patch added another. Element identity is the thing being tracked, so
+     * track it by identity: a WeakSet survives attribute stripping, and a
+     * node the morph genuinely replaces is a different key and binds once.
+     */
+    const _patchBound = new WeakSet();
+    const _navigateBound = new WeakSet();
+
+    /**
+     * A click the browser should handle itself: any mouse button but the
+     * primary one, or a modifier that means open-in-new-tab / new-window /
+     * download. Intercepting these is how an SPA router breaks Cmd+click.
+     */
+    function _isModifiedClick(e) {
+        return e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
+    }
+
     function bindNavigationDirectives() {
         // dj-patch: Update URL params without remount
         // Select/input elements are handled by the delegated document listener above.
         document.querySelectorAll('[dj-patch]').forEach(function (el) {
-            if (el.dataset.djustPatchBound) return;
-            el.dataset.djustPatchBound = 'true';
+            if (_patchBound.has(el)) return;
+            _patchBound.add(el);
 
             // Only bind click for non-select elements (links/buttons)
             if (el.tagName !== 'SELECT' && el.tagName !== 'INPUT') {
                 el.addEventListener('click', function (e) {
+                    if (_isModifiedClick(e)) return;
                     e.preventDefault();
                     // When dj-patch is used as a boolean attribute on <a> tags
                     // (e.g. <a href="?tab=docs" dj-patch>), the attribute value
@@ -12052,10 +12149,17 @@ window.djust.getActiveStreams = getActiveStreams;
 
         // dj-navigate: Navigate to a different view
         document.querySelectorAll('[dj-navigate]').forEach(function (el) {
-            if (el.dataset.djustNavigateBound) return;
-            el.dataset.djustNavigateBound = 'true';
+            if (_navigateBound.has(el)) return;
+            _navigateBound.add(el);
 
             el.addEventListener('click', function (e) {
+                // A modified or middle click means "open this somewhere else",
+                // and the browser can only honour that if we leave the default
+                // alone. This used to call preventDefault() first and swallow
+                // it, so Cmd/Ctrl+click opened nothing. The delegated
+                // auto-navigate listener has always got this right; the
+                // directive now uses the same rule.
+                if (_isModifiedClick(e) || !el.getAttribute('dj-navigate')) return;
                 e.preventDefault();
                 if (!liveViewWS || !liveViewWS.ws) return;
 
@@ -12104,7 +12208,7 @@ window.djust.getActiveStreams = getActiveStreams;
      * auto_navigate (#1734, ADR-021 Stage 2): opt-in Turbo-Drive-style link
      * interception. When enabled (server emits
      * ``<meta name="djust-auto-navigate" content="1">`` from
-     * ``LIVEVIEW_CONFIG['auto_navigate']``, default OFF), a SINGLE delegated
+     * ``LIVEVIEW_CONFIG['auto_navigate']``, default ON since v1.1), a SINGLE delegated
      * click listener on ``document`` SPA-navigates plain ``<a href>`` links —
      * but ONLY when the path resolves in the (auth-filtered, #1758) route map.
      * Everything else falls through to normal browser navigation, so non-djust
@@ -12178,6 +12282,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 return;
             }
             window.history.pushState({ djust: true }, '', url.pathname + url.search);
+            _setRenderedPathname(url.pathname);
             liveViewWS.sendMessage({
                 type: 'url_change',
                 params: Object.fromEntries(url.searchParams),
@@ -12187,6 +12292,31 @@ window.djust.getActiveStreams = getActiveStreams;
             // Cross-view → live_redirect over the existing WebSocket.
             handleLiveRedirect({ path: url.pathname + url.search, replace: false });
         }
+    }
+
+    /**
+     * The pathname the mounted view is currently showing.
+     *
+     * `popstate` fires AFTER the address bar has changed, so the handler
+     * cannot read where it came from — and that is the one thing it needs, to
+     * tell "back to a different view, remount" from "back to different query
+     * parameters on this view, patch". It used to read a `redirect` flag off
+     * the history entry instead, which fails for the entry the BROWSER
+     * created on load: that one carries `null`, so the first back after a
+     * navigation took the patch branch and left the old view on screen.
+     *
+     * Stamping that entry would have fixed the symptom and broken `dj-patch`:
+     * a patch pushes `{djust: true}` with no `redirect`, so a back from a
+     * patched URL to a stamped load entry would take the REMOUNT branch and
+     * throw away scroll, inputs and view state where a cheap `url_change`
+     * was right. So track the pathname and compare, which is what the
+     * handler's own comment always said it was doing.
+     */
+    let _renderedPathname =
+        typeof window !== 'undefined' && window.location ? window.location.pathname : '';
+
+    function _setRenderedPathname(pathname) {
+        _renderedPathname = pathname;
     }
 
     let _autoNavigateInstalled = false;
@@ -12204,11 +12334,15 @@ window.djust.getActiveStreams = getActiveStreams;
         _autoNavigateInstalled = true;
     }
 
+    function _installNavigation() {
+        installAutoNavigate();
+    }
+
     if (typeof document !== 'undefined') {
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', installAutoNavigate);
+            document.addEventListener('DOMContentLoaded', _installNavigation);
         } else {
-            installAutoNavigate();
+            _installNavigation();
         }
     }
 

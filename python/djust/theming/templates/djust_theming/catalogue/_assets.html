@@ -1,0 +1,19 @@
+{% load theme_tags static %}{% comment %}
+The catalogue's stylesheets. A host site that supplies its own document —
+by shadowing ``djust_theming/catalogue/_document.html`` through the template
+loader, which is the override mechanism; there is no setting — includes this
+in its ``<head>`` so the pages keep their layout and the components their
+tokens. The framework's own ``_document.html`` includes it too, so there is
+one list.
+
+``theme_head`` already links ``djust_components/components.css``, versioned.
+Repeating it unversioned loaded the same file twice and let the cacheable
+copy win — the stale one, on the next edit to it.
+
+Only assets the FRAMEWORK ships are listed. Two ``theme_demo/css/`` links
+used to sit here, inherited from the page this template grew out of; they
+belong to the demo project, not to djust, so they 404ed on every host —
+including the framework's own harness — and were doing nothing.
+{% endcomment %}{% theme_head %}
+<link href="{% static 'djust_components/components-classes.css' %}?v={% theme_asset_version %}" rel="stylesheet">
+<link href="{% static 'djust_theming/css/catalogue.css' %}?v={% theme_asset_version %}" rel="stylesheet">

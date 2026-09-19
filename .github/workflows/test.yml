@@ -328,8 +328,14 @@ jobs:
       # merge (#1534 applied to a new step on an existing blocking job).
       # One interpreter only — the shards are dealt from one file, and three
       # interpreters' worth of 4 MB artifacts buys nothing.
+      # `always()` matters more than it looks. The pytest step above is what
+      # fails when `.test_durations` has drifted, and the documented repair is
+      # `make test-durations-from-ci RUN=<id>` — which needs all FOUR shard
+      # artifacts and refuses to merge three. Without `always()` the shard
+      # that fails the drift gate is exactly the shard that uploads nothing,
+      # so the repair deadlocks on the one run that needed it.
       - name: Upload this shard's runner-recorded durations (#2584)
-        if: matrix.python-version == '3.12'
+        if: always() && matrix.python-version == '3.12'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
