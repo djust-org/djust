@@ -124,6 +124,18 @@ def _detail(component_name: str, session: dict | None = None):
     return view
 
 
+def _index():
+    from django.test import RequestFactory
+
+    from djust.theming.gallery.live_views import StorybookIndexView
+
+    request = RequestFactory().get("/theme/gallery/storybook/")
+    view = StorybookIndexView()
+    view.request = request
+    view.mount(request)
+    return view
+
+
 class _Session(dict):
     """The parts of a Django session the sidebar reads and writes."""
 
@@ -143,7 +155,9 @@ class TestPlaygroundState:
         assert 'id="sb-preview"' in html
         playground = html.split('id="sb-preview"')[1].split("</section>")[0]
         assert "btn-ghost" in playground
-        assert "variant=&#x27;ghost&#x27;" in playground  # the (escaped) call under the playground
+        assert (
+            "ghost" in playground and 'class="hl-' in playground
+        )  # the highlighted call under the playground
 
     def test_bools_are_parsed(self):
         view = _detail("alert")
@@ -295,12 +309,53 @@ class TestDemoEventsTakeTypedValues:
 
 
 class TestUsageWithEvents:
-    def test_a_descriptor_component_shows_the_class_level_form(self):
+    def test_a_descriptor_backed_component_shows_the_plain_form(self):
+        """#2926 review 🔴1: the preview renders the plain ``Accordion``; the
+        class-level descriptor of the same name is state-only and rendered
+        its state dict as text. The snippet is the plain form with the
+        handler the descriptor would have run."""
         snippet = _detail("accordion")._base_ctx["usage_snippet"]
-        assert "component = Accordion()" in snippet
-        assert "accordion_toggle" in snippet
-        assert "def mount" not in snippet
+        assert "self.component = Accordion(items=" in snippet
+        assert "def accordion_toggle(self, value, **kwargs):" in snippet
+        assert 'self.component.active = "" if self.component.active == value else value' in snippet
+        assert "component = Accordion()" not in snippet
         assert "{{ component }}" in snippet and "|safe" not in snippet
+
+    def test_every_python_usage_snippet_compiles(self):
+        """The served ``views.py`` must be Python (a removed ``def mount(``
+        line once left its body behind: IndentationError)."""
+        from djust.theming.gallery.component_registry import PYTHON_COMPONENT_EXAMPLES
+
+        for name in sorted(PYTHON_COMPONENT_EXAMPLES):
+            try:
+                view = _detail(name)
+            except Exception:  # noqa: BLE001 — a registry example that does not build
+                continue
+            src = view._base_ctx["usage_parts"]["view"]
+            compile(src, f"{name}.views.py", "exec")
+
+    def test_set_option_only_accepts_offered_keys_and_values(self):
+        """#2926 review 🟡3: the chip wire is client-controlled."""
+        view = _detail("alert")
+        before = dict(view.preview.state.playground)
+        view.preview.set_option(value="slot_icon:<img onerror=x>")
+        view.preview.set_option(value="dismissible:maybe")
+        view.preview.set_option(value="nope:1")
+        assert dict(view.preview.state.playground) == before
+        view.preview.set_option(value="dismissible:true")
+        assert view.preview.state.playground["dismissible"] is True
+
+    def test_the_playground_code_is_highlighted_and_copyable(self):
+        html = str(_detail("alert").preview)
+        assert 'class="hl-' in html and "dj-copy=" in html
+
+    def test_the_index_state_holds_names_not_component_dicts(self):
+        """#2926 review 🟡5: ~380 KB of state per event before."""
+        view = _index()
+        state = view.get_state()
+        assert "visible_components" not in state and "components_by_category" not in state
+        assert isinstance(state["visible_names"][0], str)
+        assert view.get_context_data()["visible_components"][0]["name"] == state["visible_names"][0]
 
     def test_a_demo_event_gets_a_handler_stub_with_the_kwarg_it_drives(self):
         view = _detail("rating")

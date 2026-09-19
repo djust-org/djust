@@ -59,6 +59,23 @@ _INTERACTIVE = {
 }
 
 
+#: What each descriptor's event does, as the line a handler on a view holding
+#: the PLAIN component writes (ADR-033). The preview renders the plain
+#: component (``djust.components.components.accordion.Accordion``), not the
+#: state-only descriptor, so the usage snippet shows the plain form for these
+#: eight too — the descriptor's ``_handle_event`` is the source of each line
+#: (#2926 review 🔴1).
+_DESCRIPTOR_STUBS: Dict[str, list] = {
+    "accordion_toggle": [("active", '"" if self.component.active == value else value')],
+    "carousel_go": [("active", "value")],
+    "toggle_collapsible": [("is_open", "not self.component.is_open")],
+    "toggle_dropdown": [("is_open", "not self.component.is_open")],
+    "toggle_modal": [("is_open", "not self.component.is_open")],
+    "set_tab": [("active", "value")],
+    "toggle_tooltip": [("is_visible", "not self.component.is_visible")],
+}
+
+
 # ---------------------------------------------------------------------------
 # Demo events — the storybook hosting its own previews
 # ---------------------------------------------------------------------------
@@ -397,12 +414,20 @@ class Preview(LiveComponent):
         ``:`` rather than ``=``: the client reads ``a=b`` in a ``dj-value`` as
         named params, so the handler would see an empty ``value``.
         """
+        from .storybook import playground_options
+
         key, sep, raw = str(value).partition(":")
         if not sep or not key:
             return
         parsed: Any = raw
         if raw in ("true", "false"):
             parsed = raw == "true"
+        # Only a key the chips offer, with one of the values they offer: the
+        # wire is client-controlled, and anything else would reach the
+        # component as an arbitrary kwarg (#2926 review 🟡3).
+        allowed = {opt["key"]: opt["values"] for opt in playground_options(self.state.examples)}
+        if key not in allowed or parsed not in allowed[key]:
+            return
         self.state.playground = {**self.state.playground, key: parsed}
 
 
@@ -447,6 +472,8 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
                 expr = f"...  # `{name.strip('_')}` — see this component's docs"
             stubs.append((key, expr, initial))
         out[event] = stubs
+    for event, pairs in _DESCRIPTOR_STUBS.items():
+        out.setdefault(event, [(key, expr, example.get(key)) for key, expr in pairs])
     return out
 
 
@@ -528,6 +555,10 @@ class StorybookSidebarMixin:
         """
         session = getattr(request, "session", None)
         if session is None or getattr(request, "method", "") != "GET":
+            return
+        # Only a session that already exists: a recents list is not worth
+        # creating one per anonymous hit once the gallery is public.
+        if hasattr(session, "session_key") and not session.session_key:
             return
         try:
             recent = [n for n in list(session.get(self._RECENT_KEY, [])) if n != component_name]
@@ -648,10 +679,10 @@ class StorybookAccessMixin:
     the same predicate onto the LiveView closes that without changing *who* can
     see the page — the rule is deliberately identical to `_check_access`.
 
-    Deliberately NOT on `StorybookSidebarMixin`. `StorybookDetailView` has never
-    been gated (it sets `login_required = False` and checks nothing), so putting
-    this on the shared mixin would silently change who can reach the detail page
-    — a separate defect, tracked on its own rather than fixed in passing here.
+    On all three storybook views. The routed function views on `main` called
+    `_check_access` for every page; when the detail page became a routed
+    LiveView it briefly lost the gate (#2926 review 🔴2), so the mixin is on
+    it too — one predicate, every page, every transport.
     """
 
     def check_permissions(self, request: Any) -> None:
@@ -671,7 +702,7 @@ class StorybookAccessMixin:
             raise PermissionDenied("Gallery is only available in DEBUG mode or for staff users.")
 
 
-class StorybookDetailView(StorybookSidebarMixin, LiveView):
+class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
     """One component's storybook page, with its examples actually working."""
 
     template_name = "djust_theming/gallery/storybook_detail.html"
@@ -943,17 +974,26 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
         ctx = build_storybook_index_context()
         self._init_sidebar()
         self.total_count = ctx["total_count"]
-        self.components_by_category = ctx["components_by_category"]
+        # State holds NAMES and counts; the enriched dicts (descriptions,
+        # example counts …) come from the process-wide cache at render time.
+        # Three copies of 175 dicts in state was ~380 KB per event (#2926
+        # review 🟡5).
+        self.category_counts = [
+            {"category": g["category"], "count": g["count"]} for g in ctx["components_by_category"]
+        ]
         self.active_category = "all"
-        self.visible_components = list(self._all_components)
+        self.visible_names = [c["name"] for c in self._all_components]
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
         self._components_gallery_url = ctx.get("components_gallery_url")
         ctx.update(self._chrome_context())
+        by_name = {c["name"]: c for c in self._all_components}
+        ctx["visible_components"] = [by_name[n] for n in self.visible_names if n in by_name]
+        ctx["components_by_category"] = self.category_counts
         ctx["category_options"] = [{"value": "all", "label": f"All ({self.total_count})"}] + [
             {"value": g["category"], "label": f"{g['category']} ({g['count']})"}
-            for g in self.components_by_category
+            for g in self.category_counts
         ]
         return ctx
 
@@ -972,8 +1012,8 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
     def _filter_components(self) -> None:
         q = self.search_query.lower()
         category = self.active_category
-        self.visible_components = [
-            c
+        self.visible_names = [
+            c["name"]
             for c in self._all_components
             if (category == "all" or c["category"] == category)
             and (not q or q in c["display_name"].lower() or q in c["name"].lower())

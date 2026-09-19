@@ -619,7 +619,7 @@ _STORYBOOK_PREVIEW_SOURCE = """{% load djust_components %}<section class="sb-sec
     {% endfor %}
   </div>
   <div class="sb-preview">{{ playground_html|safe }}</div>
-  {% code_snippet code=playground_call language="python" %}
+  {{ playground_code_html }}
   {% else %}
     {% for ex in examples_html %}
     <div class="sb-example">
@@ -651,6 +651,14 @@ def _storybook_preview_template() -> Any:
         autoescape=True,
         libraries={"djust_components": "djust.components.templatetags.djust_components"},
     ).from_string(_STORYBOOK_PREVIEW_SOURCE)
+
+
+def _highlighted_python(code: str) -> str:
+    if not code:
+        return ""
+    from djust.components.components.code_snippet import CodeSnippet
+
+    return str(CodeSnippet(code=code, language="python").render())
 
 
 @register.simple_tag
@@ -738,6 +746,10 @@ def storybook_preview(
                     "options": options,
                     "playground_html": playground_html,
                     "playground_call": playground_call,
+                    # The Python component, not the ``{% code_snippet %}`` tag:
+                    # the Rust engine renders the tag natively without the
+                    # highlighting or the ``dj-copy`` the usage card has.
+                    "playground_code_html": _highlighted_python(playground_call),
                     "more_examples": more_examples,
                 }
             )

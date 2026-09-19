@@ -423,10 +423,7 @@ def usage_with_events(
     answers it — that is the contract, and the part a reader copying the
     assignment alone would miss. Two shapes:
 
-    * a descriptor (``Accordion``, ``Tabs``, ``Modal`` …): the class-level
-      form owns per-view state and wires its ``Meta.event`` itself, so the
-      snippet shows that instead of a handler;
-    * any other event: an ``@event_handler`` stub on the view that writes the
+    * every event, the descriptor-backed ones included: an ``@event_handler`` stub on the view that writes the
       new value to the component held in ``mount()`` (ADR-033 — the write
       goes through to its state), the kwarg it drives named when the
       storybook knows it (``demo_stubs``).
@@ -435,20 +432,14 @@ def usage_with_events(
         return snippet
     views_part, sep, template_part = snippet.partition("\n\n\n# my_template.html\n")
     lines = views_part.splitlines()
-    if descriptor_class:
-        # Replace the instance assignment with the class-level slot.
-        lines = [ln for ln in lines if "self.component = " not in ln and "def mount(" not in ln]
-        while lines and lines[-1] == "":
-            lines.pop()
-        lines += [
-            "",
-            f"    # Per-view state; clicks inside it send `{descriptor_event}` and the",
-            "    # descriptor handles it — nothing to write. Read `self.component.state`.",
-            f"    component = {descriptor_class}()",
-        ]
-        others = [e for e in events if e != descriptor_event]
-    else:
-        others = list(events)
+    # ``descriptor_class`` / ``descriptor_event`` are accepted for the callers
+    # that pass them and ignored: the preview renders the PLAIN component
+    # (``djust.components.components.accordion.Accordion``), and the class-
+    # level descriptor of the same name is state-only — ``from
+    # djust.components import Accordion`` resolved to it and ``{{ component }}``
+    # rendered its state dict as text (#2926 review 🔴1). The plain form with
+    # a handler stub (``_DESCRIPTOR_STUBS``) is what works for these eight.
+    others = list(events)
     if others:
         if "from djust.decorators import event_handler" not in lines:
             lines.insert(2, "from djust.decorators import event_handler")

@@ -31,7 +31,12 @@ VIEW_PATH = "djust.theming.gallery.live_views.StorybookDetailView"
 # Two overrides, for two reasons documented above:
 #   LIVEVIEW_ALLOWED_MODULES  — #2889, so djust's own views may mount at all
 #   ROOT_URLCONF             — the gallery templates reverse `djust_theming:*`
-_BASE = override_settings(LIVEVIEW_ALLOWED_MODULES=None, ROOT_URLCONF="djust.tests.urls_theming")
+_BASE = override_settings(
+    LIVEVIEW_ALLOWED_MODULES=None,
+    ROOT_URLCONF="djust.tests.urls_theming",
+    # The detail view is gated like the index (#2926 review 🔴2).
+    DJUST_THEMING_GALLERY_PUBLIC=True,
+)
 
 
 async def _mount(component_name: str):
@@ -263,6 +268,7 @@ _SCOPED = override_settings(
     LIVEVIEW_ALLOWED_MODULES=None,
     ROOT_URLCONF="djust.tests.urls_theming",
     DJUST_EXPOSE_TIMING=True,
+    DJUST_THEMING_GALLERY_PUBLIC=True,
 )
 
 
