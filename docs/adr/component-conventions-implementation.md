@@ -33,7 +33,8 @@ The ADRs remain Proposed until their transport and security gates pass.
   storage implementations, required session/user/tenant/route binding, envelope
   expiry, and a total envelope resource budget. Cookie sessions and unreviewed
   custom backends are rejected. The staged HTTP GET/POST path uses this adapter;
-  WebSocket, sticky-child and actor persistence integration remains pending.
+  shared-runtime HTTP/WebSocket integration is described below. Sticky-child and
+  actor persistence integration remains pending.
 - Debug integration now consumes the explicit projection in observability
   assigns, initial/event debug-panel variables and sizes, runtime no-patch
   context diagnostics, and time-travel recording. Time-travel parameters and
@@ -218,6 +219,15 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The complete Python run at `c29858ab5` finished with 26,821 passed, 937 skipped,
+and one structural-test failure: its blanket DB-session import ban included the
+explicit adapter's class-identity capability allowlist. The exception is now
+limited to that module and pinned by an AST test proving the imported DB class
+is referenced only in the allowlist, not instantiated. A cache-only explicit
+save/restore test forbids all database access. The affected session-engine and
+exposure-adapter suites pass after this test correction; the full suite has not
+been rerun after it. This is not complete ADR acceptance or browser verification.
 
 Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
