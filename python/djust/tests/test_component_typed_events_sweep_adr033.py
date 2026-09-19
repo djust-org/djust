@@ -93,7 +93,10 @@ class TestEveryEmitterUsesEventAttrs:
         """D5: one handler serves several instances because every trigger the
         instance renders says which instance it is."""
         html = _render(_instance(name, kwargs, name="probe"))
-        triggers = len(_TRIGGER_ATTR.findall(html))
+        # A trigger the EXAMPLE itself hands in (a slot's raw HTML content) is
+        # the caller's markup, not an emitter of this component.
+        given = sum(len(_TRIGGER_ATTR.findall(v)) for v in kwargs.values() if isinstance(v, str))
+        triggers = len(_TRIGGER_ATTR.findall(html)) - given
         if not triggers:
             pytest.skip("this example renders no trigger")
         named = html.count('dj-value-name="probe"')

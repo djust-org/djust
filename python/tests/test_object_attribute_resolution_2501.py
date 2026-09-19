@@ -184,8 +184,10 @@ class TestCarrierPremises:
     def test_a_real_component_crosses_as_encoded_not_as_a_dict_dump(self):
         """#2501 says the ``__dict__`` bulk-dump arm; measured, it is ``Encoded``."""
         component = Alert()
-        assert all(k.startswith("_") for k in component.__dict__), (
-            "a Component's instance dict is entirely private, so the "
+        # ADR-033 D1: ``state`` (the constructor kwargs) is the one public key
+        # a bare component's instance dict holds; everything else is private.
+        assert {k for k in component.__dict__ if not k.startswith("_")} == {"state"}, (
+            "a Component's instance dict is private but for ``state``, so the "
             "`__dict__` bulk-dump arm cannot be the mechanism"
         )
         assert _rust.crosses_as_encoded(component) is True
