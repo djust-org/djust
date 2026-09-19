@@ -7,6 +7,7 @@
 **Related**:
 - [ADR-031](031-class-level-component-rendering.md) — class-level `LiveComponent` descriptors: per-view `State`, attribute write-through, events routed by attribute name. This ADR gives *plain* components the same three properties where they are missing.
 - [ADR-032](032-component-scoped-rendering.md) — component-scoped rendering; its storybook (S3) is the proving ground here.
+- [ADR-034](034-component-scoped-events-and-bindings.md) — proposed typed, instance-scoped interactive events and a replacement for D7's repeated-widget guidance; not yet accepted or implemented.
 - #2900 — the change-detection rule that fingerprints a `BoundComponent` as its State (`change_detection.STATE_MARKER`), reused verbatim.
 - #2664 — structural fingerprinting of containers and its budget (`change_detection.DEFAULT_BUDGET`), the cost model this ADR inherits.
 
