@@ -4,6 +4,7 @@
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
+**Implementation**: [Staged implementation ledger](component-conventions-implementation.md).
 **Related**:
 
 - [ADR-017](017-object-permission-lifecycle.md): object-level authorization.
@@ -22,8 +23,9 @@ Keep `FormMixin` for ordinary forms and create forms. Add an opt-in
 
 The public object is an authorized, request/event-local framework object, not an
 ordinary persisted reactive attribute. The existing object-permission lifecycle
-remains the authority. This proposal is not implemented; example imports and new
-hooks below describe the intended API, not the current release.
+remains the authority. The public form-construction hooks are implemented on this
+branch; the model adapter and authorized lifecycle remain proposed. The example
+`ModelFormMixin` import below is not available in the current release.
 
 ## Context
 

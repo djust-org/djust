@@ -1,0 +1,1 @@
+- Add Django-style `FormMixin` construction hooks (`get_form_class`, `get_initial`, `get_prefix`, `get_form_kwargs`, `get_form`) while preserving `_create_form` overrides. Empty submitted mappings now bind correctly, and initialization/reset use Django field values.

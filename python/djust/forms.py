@@ -44,6 +44,8 @@ class FormMixin:
     """
 
     form_class: Optional[Type[forms.Form]] = None
+    initial: Dict[str, Any] = {}
+    prefix: Optional[str] = None
     # Private: non-serializable form object, re-created as needed
     _form_instance: Optional[forms.Form] = None
     _model_instance: Any = None
@@ -98,7 +100,7 @@ class FormMixin:
         self._init_form_state()
 
         # Create initial form instance (private, not serialized)
-        if self.form_class:
+        if self._form_instance is None and self.get_form_class():
             self._form_instance = self._create_form()
 
     def _init_form_state(self) -> None:
@@ -113,11 +115,12 @@ class FormMixin:
         # it doesn't render missing keys as empty, which would clear user input
         self.form_data = {}
         self.form_choices = {}
-        if self.form_class:
-            form = self.form_class()
+        if self.get_form_class():
+            form = self._create_form()
+            self._form_instance = form
             # Initialize all fields with their initial values or empty string
             for field_name, field in form.fields.items():
-                initial = field.initial
+                initial = form[field_name].value()
                 if initial is None:
                     initial = ""
                 self.form_data[field_name] = initial
@@ -125,17 +128,6 @@ class FormMixin:
                 # Expose serializable choices for template iteration
                 if hasattr(field, "choices"):
                     self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
-
-            # If _model_instance is set and this is a ModelForm, populate from instance
-            if self._model_instance and issubclass(self.form_class, forms.ModelForm):
-                for field_name in form.fields:
-                    if hasattr(self._model_instance, field_name):
-                        val = getattr(self._model_instance, field_name)
-                        if val is not None:
-                            # For FK fields, store the PK not the related object
-                            if hasattr(val, "pk"):
-                                val = val.pk
-                            self.form_data[field_name] = val
 
         self.form_errors = {}
         self.field_errors = {}
@@ -219,7 +211,7 @@ class FormMixin:
     @property
     def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""
-        if self._form_instance is None and self.form_class:
+        if self._form_instance is None and self.get_form_class():
             self._ensure_model_instance()
             self._form_instance = self._create_form()
         return self._form_instance
@@ -248,27 +240,73 @@ class FormMixin:
             )
             self._model_instance = None
 
-    def _create_form(self, data: Optional[Dict[str, Any]] = None) -> forms.Form:
+    def get_form_class(self) -> Optional[Type[forms.Form]]:
+        """Return the configured form class; override for dynamic forms."""
+        return self.form_class
+
+    def get_initial(self) -> Dict[str, Any]:
+        """Return a fresh initial-value mapping, following Django's form hook."""
+        return self.initial.copy()
+
+    def get_prefix(self) -> Optional[str]:
+        """Return the HTML field-name prefix, if configured."""
+        return self.prefix
+
+    def get_form_kwargs(self) -> Dict[str, Any]:
+        """Build form arguments for initial rendering or the current event.
+
+        Event data is supplied by the compatibility bridge, not request.POST.
+        Overrides may add constructor arguments (including authorized files).
         """
-        Create a form instance with optional data.
-
-        Args:
-            data: Form data dictionary
-
-        Returns:
-            Django Form instance
-        """
-        if not self.form_class:
-            raise ValueError("form_class must be set to use FormMixin")
-
-        kwargs: Dict[str, Any] = {}
-        if self._model_instance and issubclass(self.form_class, forms.ModelForm):
+        kwargs: Dict[str, Any] = {"initial": self.get_initial(), "prefix": self.get_prefix()}
+        data = getattr(self, "_form_binding_data", None)
+        if data is not None:
+            kwargs["data"] = data
+        form_class = self.get_form_class()
+        if (
+            self._model_instance is not None
+            and form_class
+            and issubclass(form_class, forms.ModelForm)
+        ):
             kwargs["instance"] = self._model_instance
+        return kwargs
 
-        if data:
-            return self.form_class(data, **kwargs)
-        else:
-            return self.form_class(**kwargs)
+    def get_form(self, form_class: Optional[Type[forms.Form]] = None) -> forms.Form:
+        """Construct a form through the public class, initial, prefix and kwargs hooks."""
+        form_class = form_class or self.get_form_class()
+        if form_class is None:
+            raise ValueError("form_class must be set to use FormMixin")
+        return form_class(**self.get_form_kwargs())
+
+    def _create_form(self, data: Optional[Dict[str, Any]] = None) -> forms.Form:
+        """Compatibility entry point: existing overrides delegate to public hooks.
+
+        Preserve nested construction and remove transient binding data even when
+        a custom hook raises. An empty mapping deliberately creates a bound form.
+        """
+        had_binding = "_form_binding_data" in self.__dict__
+        previous = self.__dict__.get("_form_binding_data")
+        self._form_binding_data = data
+        try:
+            return self.get_form()
+        finally:
+            if had_binding:
+                self._form_binding_data = previous
+            else:
+                del self._form_binding_data
+
+    def _form_event_field_name(self, name: str) -> str:
+        """Map an HTML-prefixed field name back to reactive form state."""
+        prefix = self.get_prefix()
+        marker = f"{prefix}-" if prefix else ""
+        return name[len(marker) :] if marker and name.startswith(marker) else name
+
+    def _form_event_data(self) -> Dict[str, Any]:
+        """Bind logical state keys using Django's configured HTML prefix."""
+        prefix = self.get_prefix()
+        if not prefix:
+            return self.form_data
+        return {f"{prefix}-{name}": value for name, value in self.form_data.items()}
 
     @event_handler
     def validate_field(
@@ -317,7 +355,7 @@ class FormMixin:
         name = field or field_name
         if not name:
             return
-        field_name = name
+        field_name = self._form_event_field_name(name)
 
         # Ensure form state is initialized (defensive check — see #2667)
         self._ensure_form_state()
@@ -329,7 +367,7 @@ class FormMixin:
         self._ensure_model_instance()
 
         # Create form with current data
-        form = self._create_form(self.form_data)
+        form = self._create_form(self._form_event_data())
 
         # Clear previous error for this field
         if field_name in self.field_errors:
@@ -380,13 +418,15 @@ class FormMixin:
         self._ensure_form_state()
 
         # Merge kwargs into form_data (for fields submitted with the form)
-        self.form_data.update(kwargs)
+        self.form_data.update(
+            {self._form_event_field_name(name): value for name, value in kwargs.items()}
+        )
 
         # Re-hydrate model instance if lost after WS serialization
         self._ensure_model_instance()
 
         # Create form with all data
-        form = self._create_form(self.form_data)
+        form = self._create_form(self._form_event_data())
 
         # Validate entire form
         if form.is_valid():
@@ -448,11 +488,12 @@ class FormMixin:
         # Reset form_data with all field keys initialized (matching mount() behavior)
         # This ensures consistent VDOM state and prevents alternating patches/html_update
         self.form_data = {}
-        if self.form_class:
-            form = self.form_class()
+        if self.get_form_class():
+            form = self._create_form()
+            self._form_instance = form
             # Initialize all fields with their initial values or empty string
-            for field_name, field in form.fields.items():
-                initial = field.initial
+            for field_name in form.fields:
+                initial = form[field_name].value()
                 if initial is None:
                     initial = ""
                 self.form_data[field_name] = initial
@@ -462,9 +503,6 @@ class FormMixin:
         self.is_valid = False
         self.success_message = ""
         self.error_message = ""
-
-        if self.form_class:
-            self._form_instance = self._create_form()
 
         # Signal to WebSocket handler that we need to reset the form on client-side
         # This bypasses VDOM form value preservation

@@ -1,5 +1,23 @@
 # Form Handling
 
+## Public construction hooks (unreleased)
+
+`FormMixin` supplies Django-style `get_form_class()`, `get_initial()`,
+`get_prefix()`, `get_form_kwargs()` and `get_form(form_class=None)`. Customize
+these instead of adding another form factory. Event data reaches
+`get_form_kwargs()` as `data`; an empty mapping is bound, while `None` is unbound.
+Initial values use Django's field rules, including callable defaults and model
+values. `get_initial()` returns a fresh mapping. Prefixes affect HTML names;
+reactive `form_data` and `field_errors` retain logical field names.
+
+Existing `_create_form(data=None)` overrides remain supported and delegate to
+the public hooks. Do not call `_create_form()` from `get_form()` overrides:
+that would recurse. Uploaded files must come from the authorized upload
+lifecycle, not arbitrary JSON parameters.
+
+The proposed `ModelFormMixin` and managed `self.object` lifecycle are **not yet
+available**. These hooks do not change legacy model authorization or exposure.
+
 ## FormMixin Pattern
 
 ```python

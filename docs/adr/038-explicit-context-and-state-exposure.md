@@ -4,6 +4,7 @@
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
+**Implementation**: [Staged implementation ledger](component-conventions-implementation.md).
 **Related**:
 
 - [ADR-012](012-framework-internal-attrs-filter-vs-rename.md): the existing internal-attribute denylist.
