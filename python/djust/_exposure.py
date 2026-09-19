@@ -77,6 +77,35 @@ class StateLimits:
 _DEFAULT_LIMITS = StateLimits()
 
 
+def uses_legacy_exposure(view: Any) -> bool:
+    """Only the exact legacy policy may select a reflective export/restore path."""
+    try:
+        policy = getattr(view, "exposure_policy", "legacy")
+        return type(policy) is str and policy == "legacy"
+    except Exception:  # noqa: BLE001 — an unreadable policy cannot grant legacy access
+        return False
+
+
+def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
+    """Return bounded explicit debug data, or None only for the legacy policy.
+
+    Diagnostic failures must not retry using reflection, repr, or context. Even
+    a permitted field's factory can raise an exception containing secrets, so
+    this debug-only boundary deliberately emits neither exception text nor a
+    traceback. Invalid/unknown policies fail closed as unavailable debug state.
+    The ordinary runtime projection API still raises validation errors.
+    """
+    try:
+        policy = getattr(view, "exposure_policy", "legacy")
+        if type(policy) is str and policy == "legacy":
+            return None
+        if type(policy) is str and policy == "explicit":
+            return ExposureContract.from_view_class(type(view)).project_view(view, "debug")
+    except Exception:  # noqa: BLE001 — diagnostic boundary; never expose exception values
+        return {"_djust_projection_error": "State unavailable"}
+    return {"_djust_projection_error": "State unavailable"}
+
+
 def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> Any:
     """Detach bounded JSON primitives without inspecting arbitrary Python objects.
 

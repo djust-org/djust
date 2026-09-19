@@ -927,10 +927,12 @@ class WSConsumerTransport:
         # ``previous_html_snippet`` is inert on both paths.
         try:
             from .websocket import _build_context_snapshot
+            from ._exposure import explicit_debug_projection
 
             html_for_snapshot = getattr(view, "_previous_html", None)
+            explicit_debug = explicit_debug_projection(view)
             context_snapshot = (
-                _build_context_snapshot(context)
+                (explicit_debug if explicit_debug is not None else _build_context_snapshot(context))
                 if reason == "no_patches" and context is not None
                 else None
             )

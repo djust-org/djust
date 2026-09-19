@@ -34,6 +34,11 @@ The ADRs remain Proposed until their transport and security gates pass.
   expiry, and a total envelope resource budget. Cookie sessions and unreviewed
   custom backends are rejected. Actual database round trips are tested; this is
   not yet wired into HTTP, WebSocket, or actor LiveView persistence.
+- Debug integration now consumes the explicit projection in observability
+  assigns, initial/event debug-panel variables and sizes, runtime no-patch
+  context diagnostics, and time-travel recording. Time-travel parameters and
+  errors are redacted; observational records cannot restore, scrub components,
+  or replay handlers. Legacy debug behavior is preserved.
 
 These changes **do not enable explicit exposure at runtime**. LiveView rejects
 `exposure_policy="explicit"` and nondefault state exposure grants until automatic
@@ -65,6 +70,24 @@ The initial codec only accepts bounded, exact JSON primitives. Additional codecs
 framework provider manifests, authenticated client snapshots, migration inventory,
 and all runtime exporter integrations remain required before ADR-038 acceptance.
 
+### Debug integration boundary
+
+Explicit debug output reads only client-permitted descriptors; other declared
+fields are redacted without evaluating their values or reporting their sizes.
+It never falls back to attribute walks, rendering context, or object `repr` on
+codec/default-factory failure. Such failures produce an unavailable-state marker
+without logging exception text (which itself may contain private values).
+
+`test_exposure_debug.py` checks actual observability JSON, consumer debug/time-
+travel payloads, and the runtime diagnostic signal. Its explicit-view fixtures
+deliberately bypass construction: **normal explicit mounts are still rejected**.
+This does not prove full transport or browser coverage. Handler metadata is
+withheld in explicit debug mode pending the typed metadata contract, and
+debug restore/replay requires a future separate authorized restoration contract.
+Observability reset/eval operations, error tooling and historical bug captures
+still need a complete audit before enabling the policy. Display redaction alone
+must not be mistaken for acceptance of all debugging surfaces.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.
@@ -85,7 +108,7 @@ reflection fallback. These are implementation gates, not completed guarantees.
 Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
 `test_exposure_contract.py`, `test_exposure_policy_guard.py`, and
-`test_exposure_sessions.py`. Run these with
+`test_exposure_sessions.py`, plus `test_exposure_debug.py`. Run these with
 the existing form, decorator, state and WebSocket regression suites. This slice
 does not change browser JavaScript and does not establish browser, cross-worker,
 or complete explicit-exposure parity.

@@ -57,6 +57,11 @@ def _lenient_assigns(view: Any) -> Dict[str, Any]:
     framework's definition) and falls back to a direct json.dumps probe
     for anything that doesn't expose it (e.g. test doubles).
     """
+    from djust._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None:
+        return explicit
     checker = getattr(view, "_is_serializable", None)
 
     def _safe_check(val: Any) -> bool:

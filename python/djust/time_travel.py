@@ -60,6 +60,9 @@ class EventSnapshot:
     state_before: Dict[str, Any]
     state_after: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    # Explicit debug projections are observational, not restoration envelopes.
+    # Keep that property on the record even if the live view's policy changes.
+    restorable: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-safe dict view of the snapshot for wire transport.
@@ -74,7 +77,7 @@ class EventSnapshot:
         """
         from .serialization import decimal_tags_to_strings
 
-        return {
+        result = {
             "event_name": self.event_name,
             "params": self.params,
             "ref": self.ref,
@@ -83,6 +86,9 @@ class EventSnapshot:
             "state_after": decimal_tags_to_strings(self.state_after),
             "error": self.error,
         }
+        if not self.restorable:
+            result["restorable"] = False
+        return result
 
 
 class TimeTravelBuffer:
@@ -154,17 +160,24 @@ def record_event_start(
     buffer = getattr(view, "_time_travel_buffer", None)
     if buffer is None:
         return None
-    try:
-        state_before = view._capture_snapshot_state()
-    except Exception:  # noqa: BLE001 — dev-only, log + degrade
-        logger.exception("time_travel: _capture_snapshot_state failed (before)")
-        return None
+    from ._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None:
+        state_before = explicit
+    else:
+        try:
+            state_before = view._capture_snapshot_state()
+        except Exception:  # noqa: BLE001 — dev-only, log + degrade
+            logger.exception("time_travel: _capture_snapshot_state failed (before)")
+            return None
     return EventSnapshot(
         event_name=event_name,
-        params=dict(params) if params else {},
+        params={"_redacted": True} if explicit is not None else (dict(params) if params else {}),
         ref=ref,
         ts=time.time(),
         state_before=state_before,
+        restorable=explicit is None,
     )
 
 
@@ -192,6 +205,20 @@ def record_event_end(
         return
     buffer = getattr(view, "_time_travel_buffer", None)
     if buffer is None:
+        return
+    from ._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None or not snapshot.restorable:
+        # Policy changes mid-event cannot downgrade a record to legacy capture.
+        # If it started in legacy, discard the already-captured raw state too.
+        if snapshot.restorable:
+            snapshot.state_before = {}
+        snapshot.restorable = False
+        snapshot.params = {"_redacted": True}
+        snapshot.state_after = explicit if explicit is not None else {}
+        snapshot.error = "[redacted]" if error is not None else None
+        buffer.append(snapshot)
         return
     try:
         state_after = view._capture_snapshot_state()
@@ -240,6 +267,12 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        # Debug values are not authority to restore state, and redacted values
+        # must never replace server fields or trigger ghost-attribute deletion.
+        return False
     from djust.security import safe_setattr
     from djust.serialization import decode_state_roundtrip
 
@@ -370,6 +403,10 @@ def restore_component_snapshot(
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        return False
     from djust.security import safe_setattr
 
     state = snapshot.state_before if which == "before" else snapshot.state_after
@@ -492,6 +529,10 @@ def replay_event(
         when the handler is missing, time-travel is disabled, OR
         ``record_replay=False`` (dry-replay path always returns None).
     """
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        return None
     # Defense-in-depth: reject dunder / private event names. The
     # snapshot is normally produced by the framework's own dispatcher
     # which only records ``@event_handler``-decorated public methods,
