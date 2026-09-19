@@ -8,7 +8,7 @@ reusable, reactive components with automatic performance optimization.
 import logging
 import re
 import types
-from typing import Callable, Dict, Any, List, Optional, Type, cast
+from typing import Callable, Dict, Any, List, Optional, Tuple, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
 
@@ -254,6 +254,21 @@ class Component(TemplateMutatorGuard, ABC):
     # Class-level counter for auto-generating component keys
     _component_counter = 0
 
+    #: ADR-033 D1: a plain component is compared by its ``state`` in every
+    #: change-detection snapshot (``change_detection.STATE_MARKER``), so a
+    #: handler that writes ``self.rating.value = 5`` re-renders. A subclass
+    #: may set this to ``False`` to be compared by ``id()`` again, with the
+    #: documented consequence: reassign the component to re-render.
+    _djust_fingerprint_state = True
+
+    #: ADR-033 D3: the state keys the snapshots walk structurally. ``None``
+    #: walks all of them (under ``change_detection.DEFAULT_BUDGET``); a tuple
+    #: narrows the walk to those keys, every other key becoming a one-node
+    #: leaf (scalars by value, containers by identity — reassigning ``rows``
+    #: is still seen, appending to it in place is not). Components that hold
+    #: data declare theirs so a click never pays a ten-thousand-row walk.
+    fingerprint_fields: Optional[Tuple[str, ...]] = None
+
     def _create_rust_instance(self, **props: Any) -> None:
         """
         Create a Rust instance with fallback for missing framework parameter.
@@ -297,6 +312,14 @@ class Component(TemplateMutatorGuard, ABC):
         """
         self._rust_instance = None
 
+        # ADR-033 D1: the constructor kwargs ARE the component's state — the
+        # dict every snapshot fingerprints and the session persists. Public
+        # attribute writes go through to it (``__setattr__``) so rendering,
+        # which reads attributes, and change detection, which walks state,
+        # never disagree. Set before anything public so the write-through
+        # below sees it.
+        self.state: Dict[str, Any] = dict(kwargs)
+
         # Store explicit ID if provided (used by id property)
         self._explicit_id = id
 
@@ -315,6 +338,28 @@ class Component(TemplateMutatorGuard, ABC):
         if self._rust_instance is None:
             for key, value in kwargs.items():
                 setattr(self, key, value)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Write a public attribute through to ``state`` (ADR-033 D2).
+
+        Only keys the state already holds — the constructor kwargs — or a
+        declared ``fingerprint_fields`` entry are state; a private attribute,
+        ``state`` itself, ``template``/``template_name`` and anything a
+        subclass computes for itself in ``__init__`` stay plain attributes.
+        A Rust-backed component is rebuilt from the new state so its render
+        agrees with the write, as ``update()`` does.
+        """
+        object.__setattr__(self, name, value)
+        if name[:1] == "_" or name == "state":
+            return
+        state = self.__dict__.get("state")
+        if state is None:
+            return
+        fields = self.fingerprint_fields
+        if name in state or (fields is not None and name in fields):
+            state[name] = value
+            if self.__dict__.get("_rust_instance") is not None:
+                self._create_rust_instance(**state)
 
     @alters_data
     def update(self, **kwargs: Any) -> "Component":

@@ -1143,6 +1143,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         except ImportError:
             pass  # Django ORM not available; skip model/queryset check
 
+        # ADR-033 D6: a plain component is its state, and the state round
+        # trip carries it (``component_for_state_roundtrip``).
+        from .components.base import Component
+
+        if isinstance(value, Component):
+            return True
+
         # Non-serializable types: file handles, threads, locks, sockets
         _non_serializable: tuple[type, ...] = (io.IOBase, threading.Thread, socket.socket)
         try:

@@ -96,10 +96,14 @@ class ComponentMixin:
         """
         import json as json_module
 
-        from ..components.base import BoundComponent
+        from ..components.base import BoundComponent, Component
 
         if isinstance(component, BoundComponent):
             # ADR-031 D7: a bound component is saved as its State, nothing else.
+            return dict(component.state)
+        if isinstance(component, Component):
+            # ADR-033 D6: a plain component's kwargs are its state; the
+            # restore writes them back through ``__setattr__``.
             return dict(component.state)
 
         state: Dict[str, Any] = {}

@@ -47,6 +47,10 @@ class PieChart(Component):
         "#f97316",
     ]
 
+    #: ADR-033 D3: the walked state keys; ``segments`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         segments: Optional[list] = None,

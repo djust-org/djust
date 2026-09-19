@@ -16,6 +16,10 @@ class VirtualList(Component):
         page_size: items per page
         load_more_event: dj-click event for loading more"""
 
+    #: ADR-033 D3: the walked state keys; ``items`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         items: Optional[list] = None,

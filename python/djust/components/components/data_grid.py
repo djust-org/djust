@@ -48,6 +48,10 @@ class DataGrid(Component):
         custom_class: additional CSS classes
     """
 
+    #: ADR-033 D3: the walked state keys; ``rows`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ("columns",)
+
     def __init__(
         self,
         columns: Optional[list] = None,

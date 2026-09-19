@@ -18,6 +18,10 @@ class DataTable(Component):
         striped: alternating row backgrounds
         compact: reduced padding"""
 
+    #: ADR-033 D3: the walked state keys; ``rows`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ("columns",)
+
     def __init__(
         self,
         columns: Optional[list] = None,
