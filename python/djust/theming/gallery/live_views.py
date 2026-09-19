@@ -183,6 +183,13 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "date_next_month": ("month", _step(1)),
     "toggle_expand": ("expanded", _flip),
     "toggle_preview": ("preview", _flip),
+    "toggle_menu": ("open", _flip),
+    # Dropdown-menu item events are host callbacks in an application. In the
+    # catalogue, close the menu after each action so clicking an item still
+    # demonstrates a complete, error-free interaction.
+    "edit_item": ("open", lambda _c, _v: False),
+    "duplicate_item": ("open", lambda _c, _v: False),
+    "delete_item": ("open", lambda _c, _v: False),
     "inline_edit": ("editing", _flip),
     "toggle_split_menu": ("is_open", _flip),
     "toggle_notifications": ("is_open", _flip),
@@ -193,6 +200,11 @@ _DEMO_EVENTS: Dict[str, Any] = {
     # the example has static results, but typing still needs a hosted handler
     # so the preview does not report an event error.
     "palette_search": ("search", _text),
+    "language_search": ("search", _text),
+    "frameworks": ("selected", _text),
+    "code": ("value", _text),
+    "update_content": ("value", _text),
+    "upload_file": ("step", lambda _c, _v: "map"),
     "accept_cookies": ("accepted", lambda _c, _v: True),
     "dismiss_alert": ("dismissed", lambda _c, _v: True),
     "add_row": ("rows", _append_row),

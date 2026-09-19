@@ -316,6 +316,7 @@ async def test_accordion_toggle_patches_only_the_preview(params):
         ("switch", "toggle_switch", {"value": True}),
         ("model_selector", "select_model", {"value": "gpt"}),
         ("date_picker", "date_next_month", {}),
+        ("dropdown_menu", "toggle_menu", {}),
     ],
 )
 async def test_demo_events_answer_over_the_wire(component, event, params):

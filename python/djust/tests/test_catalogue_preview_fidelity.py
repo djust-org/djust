@@ -421,6 +421,7 @@ class TestPreviewHostsItsInteractions:
         "loading_overlay": "toggle_loading",
         "model_selector": "toggle_model_selector",
         "dropdown": "toggle_dropdown",
+        "dropdown_menu": "toggle_menu",
     }
 
     @pytest.mark.parametrize("component,event", sorted(REPORTED.items()))
@@ -447,6 +448,31 @@ class TestPreviewHostsItsInteractions:
 
         handler = ComponentsDetailView.toggle_switch
         assert handler.__annotations__.get("value") is not str
+
+    @pytest.mark.parametrize("event", ["edit_item", "duplicate_item", "delete_item"])
+    def test_dropdown_menu_item_events_are_hosted(self, event: str):
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        handler = getattr(ComponentsDetailView, event, None)
+        assert handler is not None
+        assert hasattr(handler, "_djust_decorators")
+
+    def test_every_rendered_preview_event_has_a_host_handler(self):
+        from djust.theming.gallery.catalogue import build_catalogue_detail_context, component_events
+        from djust.theming.gallery.component_registry import _COMPONENT_TO_CATEGORY
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        missing = []
+        for component in sorted(_COMPONENT_TO_CATEGORY):
+            context = build_catalogue_detail_context(component)
+            examples = context.get("python_examples_html") or context.get("template_examples_html")
+            markup = "".join(example.get("html", "") for example in examples or [])
+            for event in component_events(markup):
+                handler = getattr(ComponentsDetailView, event, None)
+                if handler is None or not hasattr(handler, "_djust_decorators"):
+                    missing.append(f"{component}: {event}")
+
+        assert not missing, "unhandled catalogue preview events: " + ", ".join(missing)
 
 
 class TestComponentsAssetsAreCacheBusted:
