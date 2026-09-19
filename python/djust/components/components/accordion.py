@@ -46,7 +46,7 @@ class Accordion(Component):
                 continue
             title = html.escape(str(item.get("title", "")))
             content = item.get("content", "")
-            is_open = str(item.get("id", "")) == self.active
+            is_open = str(item.get("id", "")) == str(self.active)
             open_cls = " dj-accordion-item--open" if is_open else ""
             content_html = f'<div class="dj-accordion__content">{content}</div>' if is_open else ""
             parts.append(

@@ -14,6 +14,10 @@ class NotificationCenter(Component):
         unread_count: number of unread notifications
         open_event, mark_read_event, clear_event: dj-click events"""
 
+    #: ADR-033 D3: the walked state keys; ``notifications`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         notifications: Optional[list] = None,

@@ -16,6 +16,10 @@ class MultiSelect(Component):
         selected: list of currently selected values
         event: dj-change event name"""
 
+    #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         name: str = "",

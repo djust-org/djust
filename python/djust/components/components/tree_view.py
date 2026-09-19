@@ -15,6 +15,10 @@ class TreeView(Component):
         select_event: dj-click event for selecting nodes
         selected: currently selected node id"""
 
+    #: ADR-033 D3: the walked state keys; ``nodes`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         nodes: Optional[list] = None,
@@ -47,7 +51,7 @@ class TreeView(Component):
         children = node.get("children", [])
         expanded = node.get("expanded", False)
         has_children = bool(children)
-        sel_cls = " tree-node-selected" if str(node.get("id", "")) == self.selected else ""
+        sel_cls = " tree-node-selected" if str(node.get("id", "")) == str(self.selected) else ""
         exp_cls = " tree-node-expanded" if expanded else ""
         indent = depth * 1.25
         toggle_html = (

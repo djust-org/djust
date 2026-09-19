@@ -13,6 +13,10 @@ class Timeline(Component):
         items: list of dicts with keys: title, time, content
         content: pre-rendered HTML (alternative to items list)"""
 
+    #: ADR-033 D3: the walked state keys; ``items`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         items: Optional[list] = None,

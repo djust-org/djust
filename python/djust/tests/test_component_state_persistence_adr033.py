@@ -137,6 +137,58 @@ class TestTaggedForm:
         assert decode_state_roundtrip(tagged) == tagged
         assert isinstance(decode_state_roundtrip({**tagged, "state": {"value": 3}}), Strict)
 
+    def test_the_base_class_and_reserved_keys_are_refused(self):
+        """Review 🟡5: a payload may not instantiate the abstract base with its
+        own template, nor set private / configuration attributes."""
+        base = {
+            STATE_COMPONENT_TAG: "djust.components.base.Component",
+            "state": {"template": "<i>x</i>"},
+        }
+        assert decode_state_roundtrip(base) == base
+        back = decode_state_roundtrip(
+            {
+                STATE_COMPONENT_TAG: "djust.components.components.rating.Rating",
+                "state": {"value": 2, "_explicit_id": "evil", "template": "<i>{{ value }}</i>"},
+            }
+        )
+        assert isinstance(back, Rating)
+        assert back._explicit_id is None and type(back).template is None
+        assert "_explicit_id" not in back.state and "template" not in back.state
+
+    def test_any_constructor_failure_is_fail_soft_and_decodes_nested_tags(self):
+        """Review 🟡4: a ValueError used to propagate into the session restore."""
+
+        class Picky(Component):
+            template = "<i></i>"
+
+            def __init__(self, value=0, **kwargs):
+                if value < 0:
+                    raise ValueError("no")
+                super().__init__(value=value, **kwargs)
+
+        import sys
+
+        sys.modules[__name__].Picky = Picky  # resolvable, like a module-level class
+        tagged = {
+            STATE_COMPONENT_TAG: f"{_ALLOWED}.Picky",
+            "state": {"value": -1, "amount": {"__djust_decimal__": "1.5"}},
+        }
+        back = decode_state_roundtrip(tagged)
+        assert back[STATE_COMPONENT_TAG] == tagged[STATE_COMPONENT_TAG]
+        assert back["state"]["amount"] == Decimal("1.5")
+
+    def test_a_non_serialisable_state_value_skips_the_attribute_in_the_snapshot(self):
+        """Review 🟡6: the snapshot path mirrors a view's own rule — skip, never ``str()``."""
+
+        class Holder(Component):
+            template = "<i></i>"
+
+        view = RatingView()
+        view.mount(None)
+        view.holder = Holder(fn=lambda: 1)
+        snap = view._capture_snapshot_state()
+        assert "rating" in snap and "holder" not in snap
+
     def test_a_user_dict_that_merely_has_a_state_key_is_untouched(self):
         plain = {"state": {"a": 1}, "other": 2}
         assert decode_state_roundtrip(plain) == plain

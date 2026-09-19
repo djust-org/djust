@@ -102,6 +102,10 @@ class RichSelect(Component):
                      its own ``variant`` key
     """
 
+    #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         name: str = "",

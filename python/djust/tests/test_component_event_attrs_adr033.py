@@ -82,6 +82,52 @@ class TestEventAttrs:
         out = Rating(value=1, name="service").event_attrs("set_rating", value=2)
         assert out == 'dj-click="set_rating" dj-value-value:int="2" dj-value-name="service"'
 
+    def test_a_form_field_name_is_not_an_identity(self):
+        """Review 🔴1: 26 components mean the HTML field name by ``name`` and
+        default it non-empty; stamping that on every trigger would hand an
+        unexpected param to every pre-existing handler without ``**kwargs``."""
+        from djust.components.components.date_picker import DatePicker
+
+        html = DatePicker().render()
+        assert "dj-click" in html and "dj-value-name" not in html
+        assert "dj-value-name" not in DatePicker(name="when").render()
+
+    def test_non_json_values_render_as_their_text(self):
+        """Review 🔴3: a UUID / date / Decimal id rendered ``str()`` before."""
+        import datetime
+        import uuid
+        from decimal import Decimal
+
+        u = uuid.UUID(int=7)
+        out = Chip().event_attrs("pick", id=u, day=datetime.date(2026, 9, 19), amt=Decimal("1.5"))
+        assert f'dj-value-id="{u}"' in out
+        assert 'dj-value-day="2026-09-19"' in out and 'dj-value-amt="1.5"' in out
+        assert ":json" not in out
+
+    def test_state_is_a_reserved_kwarg(self):
+        with pytest.raises(TypeError, match="reserved"):
+            Chip(state={"a": 1})
+
+    def test_a_str_annotated_handler_still_receives_text(self):
+        """Compat: a handler written for the untyped wire keeps working."""
+
+        def pick(self: Any, value: str) -> None:
+            pass
+
+        result = validate_handler_params(pick, {"value": 4}, "pick")
+        assert result["valid"], result
+        assert result["coerced_params"] == {"value": "4"}
+        result = validate_handler_params(pick, {"value": True}, "pick")
+        assert result["coerced_params"] == {"value": "true"}
+
+    def test_an_int_id_written_back_still_opens_the_item(self):
+        """Review 🔴2: ``str(id) == self.active`` never matched an int."""
+        from djust.components.components.accordion import Accordion
+
+        acc = Accordion(items=[{"id": 1, "title": "a", "content": "x"}], active=None)
+        acc.active = 1
+        assert "dj-accordion__item--open" in acc.render() or "open" in acc.render()
+
     def test_name_is_state(self):
         r = Rating(value=1, name="service")
         assert r.state["name"] == "service"
