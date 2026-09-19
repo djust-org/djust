@@ -1,4 +1,4 @@
-{% load theme_tags static %}<!DOCTYPE html>
+{% load theme_tags theme_components djust_components static %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -17,22 +17,16 @@
 </head>
 <body class="sb-body">
   {% comment %}
-  Topbar: brand, the section switcher (this gallery's four surfaces plus the
-  live components gallery), and the theme controls. The storybook is a docs
-  site for app developers, so every page can be checked in any preset and
-  mode without leaving it — the switcher is the framework's own, persisting
-  through `window.djustTheme` like every other theme control on the site.
+  The storybook is built from the components it documents. The topbar is
+  `theme_nav` (brand + the gallery's sections) with the framework's theme
+  switcher beside it, so every page can be checked in any preset and mode;
+  the sidebar is a `theme_input` search box and one `theme_nav_group` per
+  category, expanded state and filtering on the server. `storybook.css`
+  only lays these out (fixed topbar, fixed sidebar, content columns).
   {% endcomment %}
   <header class="sb-topbar">
     <button type="button" class="sb-menu-btn" data-sb-menu aria-expanded="false" aria-controls="sb-sidebar" aria-label="Toggle navigation">☰</button>
-    <a href="/" class="sb-topbar-brand">djust-theming <small>/ storybook</small></a>
-    <nav class="sb-sections" aria-label="Sections">
-      <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
-      <a href="{% url 'djust_theming:storybook' %}" class="active">Storybook</a>
-      <a href="{% url 'djust_theming:editor' %}">Editor</a>
-      <a href="{% url 'djust_theming:diff' %}">Diff</a>
-      {% if components_gallery_url %}<a href="{{ components_gallery_url }}">Live components</a>{% endif %}
-    </nav>
+    {% theme_nav brand="djust-theming" items=section_items class="sb-nav" %}
     <div class="sb-topbar-tools">
       {% theme_switcher show_labels=False %}
     </div>
@@ -42,79 +36,42 @@
   The mount root wraps the SIDEBAR as well as the content — that is the whole
   point of it. The sidebar's search box and category headers are `dj-input` /
   `dj-click` server events, and djust only binds and dispatches events for
-  elements inside the dj-root region. With the root around the content only,
-  the sidebar's controls rendered correctly, carried the right attributes, and
-  sent nothing: no `dj-id` was ever stamped on them and a click produced no
-  frame at all.
+  elements inside the dj-root region.
 
-  Wrapping outside `.sb-layout` is layout-neutral: `.sb-sidebar` is
-  `position: fixed` and so out of flow, and `.sb-content`'s `flex: 1` still
-  resolves against `.sb-layout`.
+  NOTE: none of these comments spell the mount tag out with angle brackets.
+  `_search_dj_root_open` scans the RAW template source, so a comment quoting
+  the tag is matched as if it were markup.
   {% endcomment %}
   <div dj-root>
   <div class="sb-layout">
     <nav class="sb-sidebar" id="sb-sidebar" aria-label="Components">
       {% comment %}
-      `dj-input` with a debounce, not an `addEventListener` writing
-      `style.display`. The list below is the *filtered* one the server holds, so
-      a search result is data rather than a hidden element — and grouping the
-      filtered list means a category with no matches disappears on its own.
-
-      `sidebar_components` is already ordered by category (the registry emits
-      them grouped, in canonical order), which `{% regroup %}` requires: it
-      groups *adjacent* runs, so an unsorted list would produce duplicate
-      headers. Filtering preserves that order.
+      `dj_input` with a debounce, not an `addEventListener` writing
+      `style.display`. The groups below are the *filtered* list the server
+      holds, so a search result is data rather than a hidden element, and a
+      category with no matches is simply not there.
       {% endcomment %}
       <div class="sb-sidebar-search">
-        <input type="search" id="sb-search" placeholder="Search components…" autocomplete="off"
-               aria-label="Search components" value="{{ search_query }}" dj-input="search" dj-debounce="300">
-        <span class="sb-kbd" aria-hidden="true">/</span>
+        {% theme_input "sb-search" type="search" placeholder="Search components…" value=search_query dj_input="search" dj_debounce="300" autocomplete="off" aria_label="Search components" %}
+        <span class="sb-kbd" aria-hidden="true">{% kbd "/" %}</span>
       </div>
-      {% if recent_components and not search_query %}
+      {% if recent_nav_items and not search_query %}
       <div class="sb-sidebar-recent">
-        <div class="sb-sidebar-label">Recently viewed</div>
-        {% for comp in recent_components %}
-        <a href="{% url 'djust_theming:storybook_detail' comp.name %}" class="sb-sidebar-link">{{ comp.display_name }}</a>
-        {% endfor %}
+        {% theme_nav_group "Recently viewed" items=recent_nav_items expanded=True %}
       </div>
       {% endif %}
       <div class="sb-sidebar-label">Components ({{ sidebar_components|length }})</div>
-      {% regroup sidebar_components by category as category_groups %}
-      {% for group in category_groups %}
-      <div class="sb-sidebar-category" data-category="{{ group.grouper }}">
-        <button type="button" class="sb-sidebar-cat-header"
-          dj-click="toggle_category" data-value="{{ group.grouper }}"
-          aria-expanded="{% if group.grouper in collapsed_categories %}false{% else %}true{% endif %}">
-          <span class="sb-cat-arrow" aria-hidden="true">▾</span>
-          <span>{{ group.grouper }}</span>
-          <span class="sb-cat-count">{{ group.list|length }}</span>
-        </button>
-        {% if group.grouper not in collapsed_categories %}
-        <div class="sb-cat-items">
-          {% for comp in group.list %}
-          <a href="{% url 'djust_theming:storybook_detail' comp.name %}"
-             class="sb-sidebar-link {% if current_component == comp.name %}active{% endif %}"
-             {% if current_component == comp.name %}aria-current="page"{% endif %}>
-            {{ comp.display_name }}
-          </a>
-          {% endfor %}
-        </div>
-        {% endif %}
-      </div>
+      {% for group in sidebar_groups %}
+        {% theme_nav_group group.category items=group.items expanded=group.expanded badge=group.count toggle_event="toggle_category" %}
       {% empty %}
-      <div class="sb-sidebar-empty">No components match “{{ search_query }}”.</div>
+        {% empty_state title="No components match" description=search_query %}
       {% endfor %}
     </nav>
 
     {% comment %}
     The view path is not named anywhere in this file. `mixins/request.py`
     derives it from the class that rendered the page and stamps the dj-view
-    attribute onto the mount root above, so a template-side string can only
-    ever be wrong.
-
-    NOTE: none of these comments spell the mount tag out with angle brackets.
-    `_search_dj_root_open` scans the RAW template source, so a comment quoting
-    the tag is matched as if it were markup.
+    attribute onto the mount root above.
     {% endcomment %}
     <main class="sb-content {% block content_class %}{% endblock %}">
       {% block content %}{% endblock %}
@@ -124,8 +81,9 @@
 
   {% comment %}
   `storybook.js` is presentation only: the `/` shortcut, the narrow-screen
-  sidebar, copy buttons and the "On this page" scroll-spy. Every piece of
-  state on these pages — search, filters, the preview — is a server event.
+  sidebar, and the table-of-contents scroll-spy. Every piece of state on
+  these pages — search, filters, the preview — is a server event; copying
+  code is the code snippet component's own `dj-copy`.
   {% endcomment %}
   <script src="{% static 'djust_theming/js/storybook.js' %}?v={% theme_asset_version %}" defer></script>
 </body>

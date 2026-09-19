@@ -503,6 +503,55 @@ class StorybookSidebarMixin:
         by_name = {c["name"]: c for c in self._all_components}
         return [by_name[n] for n in names if n in by_name and n != self.current_component]
 
+    def _chrome_context(self) -> Dict[str, Any]:
+        """What the page chrome renders — built for the theme components.
+
+        The sidebar is `theme_nav_group`s (one per category, the expanded
+        state on the server, items with `active`), the recents are one more
+        group, the topbar is `theme_nav` items. Derived per render from the
+        assigns, never stored: a rendered list of dicts is not state.
+        """
+        from django.urls import reverse
+
+        current = getattr(self, "current_component", None)
+        collapsed = set(getattr(self, "collapsed_categories", []) or [])
+
+        def nav_item(comp: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "label": comp["display_name"],
+                "url": reverse("djust_theming:storybook_detail", args=[comp["name"]]),
+                "active": comp["name"] == current,
+            }
+
+        groups: list = []
+        for comp in getattr(self, "sidebar_components", []) or []:
+            if not groups or groups[-1]["category"] != comp["category"]:
+                groups.append(
+                    {
+                        "category": comp["category"],
+                        "expanded": comp["category"] not in collapsed,
+                        "items": [],
+                    }
+                )
+            groups[-1]["items"].append(nav_item(comp))
+        for group in groups:
+            group["count"] = str(len(group["items"]))
+
+        section_items = [
+            {"label": "Gallery", "url": reverse("djust_theming:gallery")},
+            {"label": "Storybook", "url": reverse("djust_theming:storybook"), "active": True},
+            {"label": "Editor", "url": reverse("djust_theming:editor")},
+            {"label": "Diff", "url": reverse("djust_theming:diff")},
+        ]
+        live_url = getattr(self, "_components_gallery_url", None)
+        if live_url:
+            section_items.append({"label": "Live components", "url": live_url})
+        return {
+            "sidebar_groups": groups,
+            "recent_nav_items": [nav_item(c) for c in getattr(self, "recent_components", [])],
+            "section_items": section_items,
+        }
+
     def _init_sidebar(self, current_component: Optional[str] = None) -> None:
         #: What the sidebar actually renders. Kept as real state rather than a
         #: template-side filter so the server and the DOM cannot disagree.
@@ -663,11 +712,114 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
         ctx["current_component"] = self.current_component
+        self._components_gallery_url = ctx.get("components_gallery_url")
         ctx["prev_component"], ctx["next_component"] = self._neighbours()
         ctx["props_count"] = len(ctx.get("required_context") or []) + len(
             ctx.get("optional_context") or []
         )
+        ctx.update(self._chrome_context())
+        ctx.update(self._doc_context(ctx))
         return ctx
+
+    def _doc_context(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """The page's documentation blocks, shaped for the theme components:
+        breadcrumb items, table rows, table-of-contents entries, the
+        previous/next links."""
+        from django.urls import reverse
+
+        crumbs = [{"label": "Storybook", "url": reverse("djust_theming:storybook")}]
+        if ctx.get("category"):
+            crumbs.append(
+                {
+                    "label": ctx["category"],
+                    "url": reverse("djust_theming:storybook_category", args=[ctx["category"]]),
+                }
+            )
+        crumbs.append({"label": ctx.get("display_name", self.component_name), "url": ""})
+
+        def default_of(p: Any) -> str:
+            value = p.get("default")
+            return "—" if value in (None, "") else str(value)
+
+        props_rows = [
+            [p["name"], p["type"], "required", default_of(p)]
+            for p in ctx.get("required_context") or []
+        ] + [[p["name"], p["type"], "", default_of(p)] for p in ctx.get("optional_context") or []]
+        params_rows = [
+            [p["name"], p.get("annotation") or "—", str(p.get("default", ""))]
+            for p in ctx.get("python_params") or []
+        ]
+        a11y_rows = [
+            [a["description"], a["selector_hint"], a["attr"], a.get("value") or "(present)"]
+            for a in ctx.get("accessibility") or []
+        ]
+        styles_rows = []
+        if ctx.get("template_path"):
+            styles_rows.append(
+                [
+                    "template",
+                    ctx["template_path"],
+                    "Copy it to the same path in your project, or per theme under djust_theming/themes/<theme>/components/.",
+                ]
+            )
+        if ctx.get("module_path"):
+            styles_rows.append(
+                [
+                    "module",
+                    ctx["module_path"],
+                    "Subclass it, or pass custom_class, to change how it renders.",
+                ]
+            )
+        for sheet in ctx.get("styles") or []:
+            lines = ", ".join(str(n) for n in sheet.get("lines", []))
+            styles_rows.append(
+                [
+                    "css",
+                    sheet["path"],
+                    f"Defines {len(sheet.get('classes', []))} of this component's classes at line {lines}. Override those rules, or the custom properties they read, in a stylesheet loaded after it.",
+                ]
+            )
+
+        toc = [{"id": "sb-preview", "label": "Preview"}, {"id": "sb-usage", "label": "Usage"}]
+        if props_rows:
+            toc.append({"id": "sb-props", "label": "Props"})
+        elif params_rows:
+            toc.append({"id": "sb-props", "label": "Parameters"})
+        if a11y_rows:
+            toc.append({"id": "sb-a11y", "label": "Accessibility"})
+        if ctx.get("available_slots"):
+            toc.append({"id": "sb-slots", "label": "Slots"})
+        toc.append({"id": "sb-source", "label": "Source & styles"})
+
+        prev_c, next_c = ctx.get("prev_component"), ctx.get("next_component")
+        pager = []
+        if prev_c:
+            pager.append(
+                {
+                    "label": "← " + prev_c["display_name"],
+                    "url": reverse("djust_theming:storybook_detail", args=[prev_c["name"]]),
+                }
+            )
+        if next_c:
+            pager.append(
+                {
+                    "label": next_c["display_name"] + " →",
+                    "url": reverse("djust_theming:storybook_detail", args=[next_c["name"]]),
+                }
+            )
+        return {
+            "crumbs": crumbs,
+            "props_headers": ["Name", "Type", "Required", "Default"],
+            "params_headers": ["Name", "Type", "Default"],
+            "a11y_headers": ["Requirement", "Element", "Attribute", "Value"],
+            "styles_headers": ["File", "Path", "Notes"],
+            "props_rows": props_rows,
+            "params_rows": params_rows,
+            "a11y_rows": a11y_rows,
+            "styles_rows": styles_rows,
+            "toc_items": toc,
+            "pager_items": pager,
+        }
 
     def _neighbours(self) -> tuple:
         """The components before and after this one, in sidebar order."""
@@ -709,6 +861,16 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
         self.components_by_category = ctx["components_by_category"]
         self.active_category = "all"
         self.visible_components = list(self._all_components)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        ctx = super().get_context_data(**kwargs)
+        self._components_gallery_url = ctx.get("components_gallery_url")
+        ctx.update(self._chrome_context())
+        ctx["category_options"] = [{"value": "all", "label": f"All ({self.total_count})"}] + [
+            {"value": g["category"], "label": f"{g['category']} ({g['count']})"}
+            for g in self.components_by_category
+        ]
+        return ctx
 
     @event_handler
     def set_category(self, value: str = "", **kwargs: Any) -> None:
@@ -771,6 +933,18 @@ class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveVie
             enriched.append(comp)
 
         self.category_components = enriched
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        from django.urls import reverse
+
+        ctx = super().get_context_data(**kwargs)
+        self._components_gallery_url = ctx.get("components_gallery_url")
+        ctx.update(self._chrome_context())
+        ctx["crumbs"] = [
+            {"label": "Storybook", "url": reverse("djust_theming:storybook")},
+            {"label": self.category, "url": ""},
+        ]
+        return ctx
 
 
 # There is deliberately no `ThemeGalleryView` here.

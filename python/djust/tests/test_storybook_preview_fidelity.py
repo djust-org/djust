@@ -624,7 +624,10 @@ class TestEveryDemoEventResolvesOnThePreview:
             view = StorybookDetailView()
             view.mount(RequestFactory().get("/"), component_name="switch")
             assert not view._base_ctx.get("python_examples_html")
-            ctx = view.get_context_data()
+            from django.test import override_settings
+
+            with override_settings(ROOT_URLCONF="djust.tests.urls_theming"):
+                ctx = view.get_context_data()
             assert ctx["styles"], "styles are derived from the preview's render"
             str(view.preview)
         finally:

@@ -1,5 +1,5 @@
 {% extends "djust_theming/gallery/storybook_base.html" %}
-{% load theme_tags %}
+{% load theme_tags theme_components djust_components %}
 
 {% block title %}Component Storybook{% endblock %}
 
@@ -13,48 +13,36 @@
 </div>
 
 {% comment %}
-Category filter chips — server events. The chip's active state is the
-server's `active_category`, so it is rendered rather than toggled in JS.
+The category filter is a `toggle_group` bound to `set_category`; the pressed
+chip is the server's `active_category`, rendered rather than toggled in JS.
 {% endcomment %}
-<div id="sb-category-filters" class="sb-filters" role="group" aria-label="Filter by category">
-  <button type="button" class="sb-cat-btn" dj-click="set_category" data-value="all"
-    aria-pressed="{% if active_category == 'all' %}true{% else %}false{% endif %}">
-    All ({{ total_count }})
-  </button>
-  {% for cat_group in components_by_category %}
-  <button type="button" class="sb-cat-btn" dj-click="set_category" data-value="{{ cat_group.category }}"
-    aria-pressed="{% if active_category == cat_group.category %}true{% else %}false{% endif %}">
-    {{ cat_group.category }} ({{ cat_group.count }})
-  </button>
-  {% endfor %}
+<div class="sb-filters">
+  {% toggle_group name="category" options=category_options value=active_category event="set_category" size="sm" %}
 </div>
 
 {% comment %}
-Component grid — `visible_components` is the server's filtered list, so an
-empty result is a rendered state rather than every card being `display:none`.
-The thumbnail is a template tag over a process-wide cache, not state: putting
-24 rendered examples into `visible_components` would ship them on every event.
+One `card` per component — `visible_components` is the server's filtered
+list, so an empty result is an `empty_state`, not every card `display:none`.
+The thumbnail is a template tag over a process-wide cache, not state: 24
+rendered examples in `visible_components` would ship on every event.
 {% endcomment %}
 {% if visible_components %}
-<div id="sb-component-grid" class="sb-grid">
+<div class="sb-grid">
   {% for comp in visible_components %}
-  <a href="{{ comp.name }}/" class="sb-section sb-card">
-    <div class="sb-card-head">
-      <h2>{{ comp.display_name }}</h2>
-      <span class="sb-type sb-type--{{ comp.component_type }}">{{ comp.component_type }}</span>
-    </div>
-    {% if comp.description %}<p class="sb-card-desc">{{ comp.description }}</p>{% endif %}
-    {% storybook_thumbnail comp.name as thumb %}{% if thumb %}<div class="sb-card-thumb" aria-hidden="true"><div>{{ thumb }}</div></div>{% endif %}
-    <div class="sb-card-meta">
-      <span>{{ comp.category }}</span>
-      {% if comp.example_count %}<span>{{ comp.example_count }} example{{ comp.example_count|pluralize }}</span>{% endif %}
-    </div>
+  <a href="{{ comp.name }}/" class="sb-card-link">
+    {% card title=comp.display_name class="sb-card" %}
+      <div class="sb-card-head">
+        {% theme_badge comp.component_type variant=comp.component_type %}
+        <span class="sb-card-cat">{{ comp.category }}</span>
+      </div>
+      {% if comp.description %}<p class="sb-card-desc">{{ comp.description }}</p>{% endif %}
+      {% storybook_thumbnail comp.name as thumb %}{% if thumb %}<div class="sb-card-thumb" aria-hidden="true"><div>{{ thumb }}</div></div>{% endif %}
+      {% if comp.example_count %}<div class="sb-card-meta">{{ comp.example_count }} example{{ comp.example_count|pluralize }}</div>{% endif %}
+    {% endcard %}
   </a>
   {% endfor %}
 </div>
 {% else %}
-<p class="sb-empty">
-  No components match{% if search_query %} &ldquo;{{ search_query }}&rdquo;{% endif %}{% if active_category != 'all' %} in {{ active_category }}{% endif %}.
-</p>
+  {% empty_state title="No components match" description=search_query %}
 {% endif %}
 {% endblock %}

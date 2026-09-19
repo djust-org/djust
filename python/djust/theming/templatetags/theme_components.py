@@ -232,10 +232,32 @@ def theme_input(
         "placeholder": placeholder,
         "type": type,
         "attrs": remaining_attrs,
+        # Everything the template does not read by name — `dj_input`,
+        # `dj_debounce`, `autocomplete`, `aria_label` … — reaches the
+        # `<input>` as attributes (underscores become hyphens), so a live
+        # search box can be this component rather than a hand-written input.
+        "extra_attrs": _passthrough_attrs(
+            remaining_attrs, skip=("class", "id", "value", "required", "disabled", "readonly")
+        ),
         "css_prefix": _css_prefix(),
         **slots,
     }
     return mark_safe(tmpl.render(ctx))
+
+
+def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
+    """``key="value"`` pairs for the attrs a component template does not
+    handle itself. ``dj_input`` → ``dj-input``; values are escaped; ``True``
+    emits a bare attribute, ``False``/``None`` nothing."""
+    from django.utils.html import escape
+
+    parts = []
+    for key, value in attrs.items():
+        if key in skip or value is None or value is False:
+            continue
+        name = key.replace("_", "-")
+        parts.append(name if value is True else f'{name}="{escape(value)}"')
+    return mark_safe(" ".join(parts))
 
 
 @register.simple_tag(takes_context=True)
@@ -928,6 +950,8 @@ def theme_nav_group(
     items: Any = None,
     icon: Optional[str] = None,
     expanded: bool = True,
+    badge: Optional[str] = None,
+    toggle_event: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -952,6 +976,11 @@ def theme_nav_group(
         "items": items or [],
         "icon": icon,
         "expanded": expanded,
+        # A count on the heading, and an optional server event the heading
+        # click also sends (``data-value`` = the label) so the expanded state
+        # can live on the server and survive a re-render.
+        "badge": badge,
+        "toggle_event": toggle_event,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
         **slots,

@@ -14,7 +14,7 @@ from djust.theming.gallery.storybook import component_description, playground_op
 
 pytestmark = pytest.mark.django_db
 
-_BASE = override_settings(
+_SETTINGS = dict(
     LIVEVIEW_ALLOWED_MODULES=None,
     ROOT_URLCONF="djust.tests.urls_theming",
     DJUST_THEMING_GALLERY_PUBLIC=True,
@@ -103,6 +103,13 @@ class TestThumbnails:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _urlconf():
+    """The views reverse `djust_theming:*` URLs (breadcrumb, sidebar, pager)."""
+    with override_settings(**_SETTINGS):
+        yield
+
+
 def _detail(component_name: str, session: dict | None = None):
     from django.test import RequestFactory
 
@@ -133,8 +140,8 @@ class TestPlaygroundState:
         view.preview.set_option(value="variant:ghost")
         assert view.preview.state.playground == {"variant": "ghost"}
         html = str(view.preview)
-        assert 'id="sb-playground"' in html
-        playground = html.split('id="sb-playground"')[1].split("</section>")[0]
+        assert 'id="sb-preview"' in html
+        playground = html.split('id="sb-preview"')[1].split("</section>")[0]
         assert "btn-ghost" in playground
         assert "variant=&#x27;ghost&#x27;" in playground  # the (escaped) call under the playground
 
@@ -255,7 +262,6 @@ async def test_a_playground_chip_patches_only_the_preview():
     assert "btn-ghost" in str(updated["patches"])
 
 
-@_BASE
 def test_the_pages_render_over_http(client):
     for url in (
         "/theme/gallery/storybook/",
@@ -267,5 +273,5 @@ def test_the_pages_render_over_http(client):
         body = response.content.decode()
         assert "storybook.css" in body and "storybook.js" in body
     body = client.get("/theme/gallery/storybook/button/").content.decode()
-    assert 'id="sb-playground"' in body and 'class="sb-rail"' in body and "sb-pager" in body
-    assert 'Props <span class="sb-badge sb-badge-count">8</span>' in body
+    assert 'id="sb-preview"' in body and 'class="sb-rail"' in body and "sb-pager" in body
+    assert 'class="toc-item' in body and "toggle-group-btn" in body and "dj-code-snippet" in body

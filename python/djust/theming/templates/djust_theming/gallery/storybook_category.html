@@ -1,12 +1,10 @@
 {% extends "djust_theming/gallery/storybook_base.html" %}
-{% load theme_tags %}
+{% load theme_tags theme_components djust_components %}
 
 {% block title %}{{ category }} — Component Storybook{% endblock %}
 
 {% block content %}
-<nav class="sb-breadcrumb" aria-label="Breadcrumb">
-  <a href="{% url 'djust_theming:storybook' %}">Storybook</a> / <span>{{ category }}</span>
-</nav>
+{% theme_breadcrumb items=crumbs %}
 
 <div class="sb-hero">
   <h1 class="sb-comp-title">{{ category }}</h1>
@@ -15,17 +13,18 @@
 
 <div class="sb-grid">
   {% for comp in category_components %}
-  <a href="{% url 'djust_theming:storybook_detail' comp.name %}" class="sb-section sb-card">
-    <div class="sb-card-head">
-      <h2>{{ comp.display_name }}</h2>
-      <span class="sb-type sb-type--{{ comp.component_type }}">{{ comp.component_type }}</span>
-    </div>
-    {% if comp.description %}<p class="sb-card-desc">{{ comp.description }}</p>{% endif %}
-    {% storybook_thumbnail comp.name as thumb %}{% if thumb %}<div class="sb-card-thumb" aria-hidden="true"><div>{{ thumb }}</div></div>{% endif %}
-    <div class="sb-card-meta">
-      {% if comp.example_count %}<span>{{ comp.example_count }} example{{ comp.example_count|pluralize }}</span>{% endif %}
-      {% if comp.a11y_count %}<span>{{ comp.a11y_count }} a11y rule{{ comp.a11y_count|pluralize }}</span>{% endif %}
-    </div>
+  <a href="{% url 'djust_theming:storybook_detail' comp.name %}" class="sb-card-link">
+    {% card title=comp.display_name class="sb-card" %}
+      <div class="sb-card-head">
+        {% theme_badge comp.component_type variant=comp.component_type %}
+      </div>
+      {% if comp.description %}<p class="sb-card-desc">{{ comp.description }}</p>{% endif %}
+      {% storybook_thumbnail comp.name as thumb %}{% if thumb %}<div class="sb-card-thumb" aria-hidden="true"><div>{{ thumb }}</div></div>{% endif %}
+      <div class="sb-card-meta">
+        {% if comp.example_count %}{{ comp.example_count }} example{{ comp.example_count|pluralize }}{% endif %}
+        {% if comp.a11y_count %} · {{ comp.a11y_count }} a11y rule{{ comp.a11y_count|pluralize }}{% endif %}
+      </div>
+    {% endcard %}
   </a>
   {% endfor %}
 </div>

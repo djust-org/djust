@@ -1,33 +1,29 @@
 {% extends "djust_theming/gallery/storybook_base.html" %}
-{% load theme_tags theme_components %}
+{% load theme_tags theme_components djust_components %}
 
 {% block title %}{{ display_name }} — Component Storybook{% endblock %}
 {% block content_class %}sb-content--with-rail{% endblock %}
 
 {% block content %}
 <article>
-<nav class="sb-breadcrumb" aria-label="Breadcrumb">
-  <a href="{% url 'djust_theming:storybook' %}">Storybook</a>
-  {% if category %} / <a href="{% url 'djust_theming:storybook_category' category %}">{{ category }}</a>{% endif %}
-  / <span>{{ display_name }}</span>
-</nav>
+{% theme_breadcrumb items=crumbs %}
 
 <h1 class="sb-comp-title">{{ display_name }}</h1>
 {% if description %}<p class="sb-comp-desc">{{ description }}</p>{% endif %}
 <div class="sb-comp-meta">
-  <span class="sb-type sb-type--{{ component_type }}">{{ component_type }} component</span>
+  {% theme_badge component_type variant=component_type %}
   {% if component_type == "template" %}
     <span>{{ required_context|length }} required</span>
     <span>{{ optional_context|length }} optional</span>
     <span>{{ available_slots|length }} slot{{ available_slots|length|pluralize }}</span>
     <span>{{ accessibility|length }} a11y rule{{ accessibility|length|pluralize }}</span>
-  {% else %}
-    {% if python_params %}<span>{{ python_params|length }} param{{ python_params|length|pluralize }}</span>{% endif %}
+  {% elif python_params %}
+    <span>{{ python_params|length }} param{{ python_params|length|pluralize }}</span>
   {% endif %}
 </div>
 
 {% comment %}
-===== Live preview — one bound component (ADR-032) =====
+===== Preview — one bound component (ADR-032) =====
 `{{ preview }}` is the only read of the component on this page, so an event
 that changes only its state (a playground chip, an accordion toggle) patches
 the preview's subtree instead of re-rendering the page. Keep it the bare
@@ -35,186 +31,72 @@ variable.
 {% endcomment %}
 {{ preview }}
 
-{# ===== Usage ===== #}
-<section class="sb-section" id="sb-usage">
-  <div class="sb-section-title">Usage</div>
-  {% comment %}
-  The two-file example a developer actually writes: the LiveView that owns the
-  component and the template line that renders it. `usage_snippet` is built by
-  `storybook._usage_snippet` from the first example's own arguments.
-  {% endcomment %}
-  <div class="sb-code" data-copy>
-    <div class="sb-code-header">
-      <span>views.py + template</span>
-      <span>{% if component_type == "template" %}template{% else %}python{% endif %}</span>
-    </div>
-    <pre class="sb-code-body">{{ usage_snippet }}</pre>
-  </div>
+<section id="sb-usage" class="sb-section">
+  {% card title="Usage" %}
+    {% comment %}
+    The two-file example a developer actually writes: the LiveView that owns
+    the component and the template line that renders it (`_usage_snippet`).
+    {% endcomment %}
+    {% code_snippet code=usage_snippet language="python" %}
+  {% endcard %}
 </section>
 
-{# ===== Props / parameters ===== #}
-{% if component_type == "template" and required_context or component_type == "template" and optional_context %}
-<section class="sb-section" id="sb-props">
-  <div class="sb-section-title">Props <span class="sb-badge sb-badge-count">{{ props_count }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Name</th><th>Type</th><th>Required</th><th>Default</th></tr>
-    </thead>
-    <tbody>
-      {% for p in required_context %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.type }}</code></td>
-        <td><span class="sb-req">required</span></td>
-        <td>{{ p.default|default:"—" }}</td>
-      </tr>
-      {% endfor %}
-      {% for p in optional_context %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.type }}</code></td>
-        <td>—</td>
-        <td>{% if p.default is None %}<code>None</code>{% else %}<code>{{ p.default }}</code>{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% if props_rows %}
+<section id="sb-props" class="sb-section">
+  {% card title="Props" %}
+    {% theme_table headers=props_headers rows=props_rows class="sb-props" %}
+  {% endcard %}
 </section>
-{% elif component_type == "python" and python_params %}
-<section class="sb-section" id="sb-props">
-  <div class="sb-section-title">Parameters <span class="sb-badge sb-badge-count">{{ python_params|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Name</th><th>Type</th><th>Default</th></tr>
-    </thead>
-    <tbody>
-      {% for p in python_params %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.annotation|default:"—" }}</code></td>
-        <td>{{ p.default }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% elif params_rows %}
+<section id="sb-props" class="sb-section">
+  {% card title="Parameters" %}
+    {% theme_table headers=params_headers rows=params_rows class="sb-props" %}
+  {% endcard %}
 </section>
 {% endif %}
 
-{# ===== Accessibility ===== #}
-{% if accessibility %}
-<section class="sb-section" id="sb-a11y">
-  <div class="sb-section-title">Accessibility <span class="sb-badge sb-badge-count">{{ accessibility|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Requirement</th><th>Element</th><th>Attribute</th><th>Value</th></tr>
-    </thead>
-    <tbody>
-      {% for a in accessibility %}
-      <tr>
-        <td>{{ a.description }}</td>
-        <td><code>{{ a.selector_hint }}</code></td>
-        <td><code>{{ a.attr }}</code></td>
-        <td>{{ a.value|default:"(present)" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% if a11y_rows %}
+<section id="sb-a11y" class="sb-section">
+  {% card title="Accessibility" %}
+    {% theme_table headers=a11y_headers rows=a11y_rows %}
+  {% endcard %}
 </section>
 {% endif %}
 
-{# ===== Slots ===== #}
 {% if available_slots %}
-<section class="sb-section" id="sb-slots">
-  <div class="sb-section-title">Slots <span class="sb-badge sb-badge-count">{{ available_slots|length }}</span></div>
-  <div>
-    {% for slot in available_slots %}<span class="sb-pill">{{ slot }}</span>{% endfor %}
-  </div>
+<section id="sb-slots" class="sb-section">
+  {% card title="Slots" %}
+    <div class="sb-badges">{% for slot in available_slots %}{% theme_badge slot variant="secondary" %}{% endfor %}</div>
+  {% endcard %}
 </section>
 {% endif %}
 
-{# ===== Source & styles ===== #}
-<details class="sb-section" id="sb-source">
-  <summary><div class="sb-section-title">Source &amp; styles</div></summary>
-  <table class="sb-table">
-    <thead>
-      <tr><th>File</th><th>Path</th><th>Notes</th></tr>
-    </thead>
-    <tbody>
-      {% if template_path %}
-      <tr>
-        <td><code>template</code></td>
-        <td><code>{{ template_path }}</code></td>
-        <td>
-          Override it by placing a copy at the same path under your project's
-          templates, or per theme at
-          <code>djust_theming/themes/&lt;theme&gt;/components/{{ name }}.html</code>.
-        </td>
-      </tr>
-      {% endif %}
-      {% if module_path %}
-      <tr>
-        <td><code>module</code></td>
-        <td><code>{{ module_path }}</code></td>
-        <td>Subclass it, or pass <code>custom_class</code>, to change how it renders without forking the module.</td>
-      </tr>
-      {% endif %}
-      {% for sheet in styles %}
-      <tr>
-        <td><code>css</code></td>
-        <td><code>{{ sheet.path }}</code></td>
-        <td>
-          Defines {{ sheet.classes|length }} of this component's
-          class{{ sheet.classes|length|pluralize:"es" }} at
-          line{{ sheet.lines|length|pluralize }} {{ sheet.lines|join:", " }}.
-          Override those rules or the custom properties they read in a
-          stylesheet of your own, loaded after this one.
-        </td>
-      </tr>
-      {% empty %}
-      <tr>
-        <td colspan="3" class="sb-empty">
-          No rule in either stylesheet matches this component's classes — it
-          renders with browser defaults and whatever your own CSS supplies.
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% if css_variables %}
-  <div class="sb-section-title" id="sb-css-variables" style="margin-top: 1rem;">CSS variables <span class="sb-badge sb-badge-count">{{ css_variables|length }}</span></div>
-  <div>{% for var in css_variables %}<span class="sb-pill">{{ var }}</span>{% endfor %}</div>
-  {% endif %}
-  {% if template_source %}
-  <div class="sb-section-title" style="margin-top: 1rem;">Template source</div>
-  <div class="sb-code" data-copy>
-    <div class="sb-code-header"><span>{{ name }}.html</span></div>
-    <pre class="sb-code-body">{{ template_source }}</pre>
-  </div>
-  {% endif %}
+{% comment %}
+Collapsed by default: the paths to override and the template source are for
+the reader who has decided to change the component, not the one choosing it.
+A native `details` — the framework has no block-form collapsible yet.
+{% endcomment %}
+<details id="sb-source" class="sb-section sb-details">
+  <summary>Source &amp; styles</summary>
+  {% card %}
+    {% theme_table headers=styles_headers rows=styles_rows %}
+    {% if css_variables %}
+    <div class="sb-subtitle" id="sb-css-variables">CSS variables</div>
+    <div class="sb-badges">{% for var in css_variables %}{% theme_badge var variant="secondary" %}{% endfor %}</div>
+    {% endif %}
+    {% if template_source %}
+    <div class="sb-subtitle">Template source — {{ name }}.html</div>
+    {% code_snippet code=template_source language="django" %}
+    {% endif %}
+  {% endcard %}
 </details>
 
 <nav class="sb-pager" aria-label="Previous and next component">
-  {% if prev_component %}
-  <a href="{% url 'djust_theming:storybook_detail' prev_component.name %}" class="sb-pager-prev" rel="prev">
-    <small>Previous</small><strong>{{ prev_component.display_name }}</strong>
-  </a>
-  {% else %}<span></span>{% endif %}
-  {% if next_component %}
-  <a href="{% url 'djust_theming:storybook_detail' next_component.name %}" class="sb-pager-next" rel="next">
-    <small>Next</small><strong>{{ next_component.display_name }}</strong>
-  </a>
-  {% endif %}
+  {% for item in pager_items %}{% theme_nav_item item.label item.url class="sb-pager-link" %}{% endfor %}
 </nav>
 </article>
 
 <aside class="sb-rail" aria-label="On this page">
-  <div class="sb-rail-title">On this page</div>
-  <a href="#sb-playground">Playground</a>
-  <a href="#sb-examples">{% if component_type == "template" %}Live preview{% else %}Examples{% endif %}</a>
-  <a href="#sb-usage">Usage</a>
-  <a href="#sb-props">{% if component_type == "template" %}Props{% else %}Parameters{% endif %}</a>
-  <a href="#sb-a11y">Accessibility</a>
-  <a href="#sb-slots">Slots</a>
-  <a href="#sb-source">Source &amp; styles</a>
+  {% table_of_contents items=toc_items title="On this page" %}
 </aside>
 {% endblock %}

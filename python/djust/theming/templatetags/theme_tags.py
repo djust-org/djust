@@ -607,49 +607,50 @@ def theme_asset_version() -> str:
 # needs a configured ``DjangoTemplates`` backend, and a ``djust new`` project
 # configures only ``DjustTemplateBackend`` — a module-level ``Template(...)``
 # here broke the import of every theme tag in such a project.
-_STORYBOOK_PREVIEW_SOURCE = """{% if options %}
-<section class="sb-section" id="sb-playground">
-  <div class="sb-section-title">Playground</div>
+_STORYBOOK_PREVIEW_SOURCE = """{% load djust_components %}<section class="sb-section" id="sb-preview">
+{% card title="Preview" %}
+  {% if options %}
   <div class="sb-options">
     {% for opt in options %}
     <div class="sb-option-row">
       <span class="sb-option-key">{{ opt.key }}</span>
-      {% for v in opt.values %}
-      <button type="button" class="sb-chip{% if v == opt.current %} sb-chip--on{% endif %}"
-              dj-click="set_option" data-value="{{ opt.key }}:{{ v|lower }}">{{ v }}</button>
-      {% endfor %}
+      {% toggle_group name=opt.key options=opt.choices value=opt.current event="set_option" size="sm" %}
     </div>
     {% endfor %}
   </div>
-  <div class="sb-preview sb-preview--playground">{{ playground_html|safe }}</div>
-  <div class="sb-code sb-code--inline"><pre class="sb-code-body">{{ playground_call }}</pre></div>
-</section>
-{% endif %}
-{% if examples_html %}
-<section class="sb-section" id="sb-examples">
-  <div class="sb-section-title">{% if component_type == "template" %}Live preview{% else %}Examples{% endif %} <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
-  {% for ex in examples_html %}
+  <div class="sb-preview">{{ playground_html|safe }}</div>
+  {% code_snippet code=playground_call language="python" %}
+  {% else %}
+    {% for ex in examples_html %}
+    <div class="sb-example">
+      <div class="sb-preview">{{ ex.html|safe }}</div>
+      {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
+    </div>
+    {% empty %}
+    <div class="sb-preview sb-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+    {% endfor %}
+  {% endif %}
+  {% if more_examples %}
+  <div class="sb-subtitle">More examples</div>
+  {% for ex in more_examples %}
   <div class="sb-example">
-    {% if ex.html %}<div class="sb-preview">{{ ex.html|safe }}</div>{% endif %}
-    {% if ex.kwargs_display %}
-    <details class="sb-example-args"><summary>Arguments</summary><pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre></details>
-    {% endif %}
+    <div class="sb-preview">{{ ex.html|safe }}</div>
+    {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
   </div>
   {% endfor %}
-</section>
-{% else %}
-<section class="sb-section" id="sb-examples">
-  <div class="sb-section-title">Preview</div>
-  <div class="sb-preview sb-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
-</section>
-{% endif %}"""
+  {% endif %}
+{% endcard %}
+</section>"""
 
 
 @functools.lru_cache(maxsize=1)
 def _storybook_preview_template() -> Any:
     from django.template import Engine
 
-    return Engine(autoescape=True).from_string(_STORYBOOK_PREVIEW_SOURCE)
+    return Engine(
+        autoescape=True,
+        libraries={"djust_components": "djust.components.templatetags.djust_components"},
+    ).from_string(_STORYBOOK_PREVIEW_SOURCE)
 
 
 @register.simple_tag
@@ -660,13 +661,16 @@ def storybook_preview(
     values: Any,
     playground: Any = None,
 ) -> SafeString:
-    """The storybook page's live preview, rendered from the preview
-    component's State (`live_views.Preview`, ADR-032).
+    """The storybook page's preview, rendered from the preview component's
+    State (`live_views.Preview`, ADR-032), out of the components it shows.
 
-    Renders the playground (the first example with the reader's chip choices
-    applied, when the examples expose any enumerable kwargs) and the
-    component's examples merged with the current `values`. Living in the
-    component's own template is what lets a click re-render the preview alone.
+    One Preview card. When the examples expose enumerable kwargs (a token
+    string with two or more values across the examples, or a bool) the card
+    is a playground: a `toggle_group` per kwarg, the first example rendered
+    with the reader's choices, and the call that produces it in a
+    `code_snippet`. Examples the chips can reproduce are not repeated; the
+    ones that show something else (a slot, an icon, different content) follow
+    as "More examples". Without options the examples are the preview.
     """
     from ..gallery.live_views import render_preview_examples
     from ..gallery.storybook import playground_options
@@ -674,35 +678,67 @@ def storybook_preview(
     examples = list(examples or [])
     values = dict(values or {})
     playground = dict(playground or {})
-    examples_html = render_preview_examples(component_name, component_type, examples, values)
+    rendered = render_preview_examples(component_name, component_type, examples, values)
 
     options: list = []
     playground_html = ""
     playground_call = ""
+    more_examples: list = []
     if examples:
         base = {**examples[0], **values}
-        options = playground_options(examples)
-        for opt in options:
-            opt["current"] = playground.get(opt["key"], base.get(opt["key"]))
+        for opt in playground_options(examples):
+            current = playground.get(opt["key"], base.get(opt["key"]))
+            options.append(
+                {
+                    "key": opt["key"],
+                    "choices": [
+                        {"value": f"{opt['key']}:{str(v).lower()}", "label": str(v)}
+                        for v in opt["values"]
+                    ],
+                    "current": f"{opt['key']}:{str(current).lower()}",
+                }
+            )
         if options:
             chosen = {**base, **playground}
-            rendered = render_preview_examples(component_name, component_type, [chosen], {})
-            playground_html = rendered[0]["html"] if rendered else ""
+            shown = render_preview_examples(component_name, component_type, [chosen], {})
+            playground_html = shown[0]["html"] if shown else ""
             playground_call = (
                 f"{component_name}("
                 + ", ".join(f"{k}={v!r}" for k, v in chosen.items() if not k.startswith("slot_"))
                 + ")"
             )
+            # An example is "more" only if it shows something the chips cannot:
+            # a slot, a structural kwarg (items, columns …), a bool the chips
+            # do not cover. A different label or message alongside a different
+            # variant is the same example with other words.
+            option_keys = {o["key"] for o in options}
+            first = examples[0]
+
+            def shows_more(key: str, value: Any) -> bool:
+                if key in option_keys:
+                    return False
+                if key.startswith("slot_"):
+                    return True
+                return not isinstance(value, str)
+
+            for example, html in zip(examples, rendered):
+                keys = set(example) | set(first)
+                if any(
+                    example.get(k) != first.get(k) and shows_more(k, example.get(k, first.get(k)))
+                    for k in keys
+                ):
+                    more_examples.append(html)
     return mark_safe(
         _storybook_preview_template().render(
             Context(
                 {
                     "name": component_name,
                     "component_type": component_type,
-                    "examples_html": examples_html,
+                    "examples_html": rendered,
                     "options": options,
                     "playground_html": playground_html,
                     "playground_call": playground_call,
+                    "more_examples": more_examples,
                 }
             )
         )
