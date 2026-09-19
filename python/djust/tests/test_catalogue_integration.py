@@ -18,6 +18,7 @@ point at rather than an internal page:
 # Import conftest first to configure Django settings before we add ours.
 import tests.conftest  # noqa: F401
 
+import re
 from pathlib import Path
 
 import pytest
@@ -231,6 +232,39 @@ class TestCardThumbnails:
         from djust.theming.templatetags.theme_tags import _thumbnail_html
 
         assert _thumbnail_html("alert").strip()
+
+    def test_a_thumbnail_never_nests_a_link_inside_the_cards_link(self):
+        """The card is an ``<a>``. An ``<a>`` inside it is invalid HTML, and
+        the browser fixes it by closing the card's link early — which lifts
+        the card out of its own link and leaves an empty anchor holding a
+        grid cell. Thirteen components render links, so the index had
+        thirteen holes in it."""
+        from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+        offenders = []
+        for name in self._names():
+            html = _thumbnail_html(name) or ""
+            if re.search(r"<a\b", html) or re.search(r"<button\b", html):
+                offenders.append(name)
+        assert offenders == [], (
+            "these thumbnails still contain an interactive tag, which splits "
+            f"the card out of its link: {offenders}"
+        )
+
+    def test_a_thumbnail_keeps_the_classes_that_style_it(self):
+        """Neutralising the tag must not neutralise the look: a preview of a
+        breadcrumb still has to look like a breadcrumb."""
+        from djust.theming.templatetags.theme_tags import _inert_markup
+
+        html = _inert_markup('<a href="/" class="breadcrumb-link" aria-current="page">Home</a>')
+        assert html == '<span class="breadcrumb-link" aria-current="page">Home</span>'
+
+    def test_escaped_markup_in_a_code_preview_is_left_alone(self):
+        """`code_snippet` previews HTML as TEXT; it is not a tag to rewrite."""
+        from djust.theming.templatetags.theme_tags import _inert_markup
+
+        source = "<pre>&lt;a href=&quot;/&quot;&gt;link&lt;/a&gt;</pre>"
+        assert _inert_markup(source) == source
 
     def test_an_unknown_component_is_blank_not_an_error(self):
         from djust.theming.templatetags.theme_tags import _thumbnail_html

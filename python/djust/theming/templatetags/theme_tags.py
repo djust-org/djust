@@ -19,6 +19,7 @@ Usage:
 
 import functools
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -757,6 +758,38 @@ def component_preview(
     )
 
 
+#: Tags that must not survive into a card thumbnail. An ``<a>`` inside the
+#: card's own ``<a>`` is INVALID HTML: the parser closes the outer anchor
+#: before the inner one, which lifts the card out of its link and leaves an
+#: empty anchor holding a grid cell — a visible hole in the index. Thirteen
+#: components render links (breadcrumb, nav, pagination, a table of
+#: contents…), so thirteen cells were empty.
+#:
+#: The same substitution answers an accessibility fault: the thumbnail is
+#: ``aria-hidden``, and a focusable control inside an aria-hidden region is
+#: reachable by keyboard but invisible to a screen reader. Classes are kept,
+#: so a ``span.dj-btn`` still looks exactly like the button it previews.
+_INERT_TAG_RE = re.compile(r"<(/?)(?:a|button)(\s[^>]*)?>", re.IGNORECASE)
+
+
+#: ``href`` and ``type`` mean nothing on a ``span`` and are not valid there,
+#: so they go with the tag. Everything else stays: the classes are what make
+#: the preview look like the component.
+_DEAD_ATTR_RE = re.compile(r"""\s(?:href|type)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+
+
+def _inert_markup(html: str) -> str:
+    """A component's markup with its interactive tags turned into spans."""
+    if not html:
+        return ""
+
+    def to_span(match: "re.Match[str]") -> str:
+        attrs = _DEAD_ATTR_RE.sub("", match.group(2) or "")
+        return f"<{match.group(1)}span{attrs}>"
+
+    return _INERT_TAG_RE.sub(to_span, html)
+
+
 @functools.lru_cache(maxsize=256)
 def _thumbnail_html(component_name: str) -> str:
     """A component's first example, rendered once per process, for the cards.
@@ -790,12 +823,12 @@ def _thumbnail_html(component_name: str) -> str:
             if not examples:
                 return ""
             rendered = _render_template_examples(component_name, [examples[0]])
-            return rendered[0]["html"] if rendered else ""
+            return _inert_markup(rendered[0]["html"]) if rendered else ""
 
         examples = PYTHON_COMPONENT_EXAMPLES.get(component_name)
         if not examples:
             return ""
-        return render_python_component_example(component_name, dict(examples[0])) or ""
+        return _inert_markup(render_python_component_example(component_name, dict(examples[0])))
     except Exception:  # noqa: BLE001 — a card thumbnail is never worth a 500
         return ""
 

@@ -59,3 +59,11 @@
   172 of 179 cards now render a preview; the rest are components that render
   nothing until opened (a tour, a bottom sheet), where a blank is the honest
   answer, and two that still have no example. `table_of_contents` gained one.
+- **The index grid no longer has holes in it.** Each card is an `<a>`, and 13
+  components preview markup that contains links (breadcrumb, nav, pagination,
+  a table of contents). An `<a>` inside an `<a>` is invalid HTML: the browser
+  closes the card's link before the inner one, which lifts the card out of
+  its own link and leaves an empty anchor holding a grid cell. A card
+  thumbnail now renders `a` and `button` as `span`, keeping their classes so
+  the preview still looks like the component. The same change removes
+  keyboard-focusable controls from a region marked `aria-hidden`.
