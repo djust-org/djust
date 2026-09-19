@@ -285,7 +285,11 @@ def _serve_liveview(view_cls: Any, request: HttpRequest, **kwargs: Any) -> HttpR
     try:
         return view_cls.as_view()(request, **kwargs)
     except Http404 as exc:
-        return HttpResponseNotFound(str(exc))
+        # The message carries the requested name — user input — so it is
+        # escaped, as the function views always did (test_gallery_xss).
+        from django.utils.html import escape
+
+        return HttpResponseNotFound(escape(str(exc)))
 
 
 def storybook_index_view(request: HttpRequest) -> HttpResponse:
