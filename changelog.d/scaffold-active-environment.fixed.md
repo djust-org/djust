@@ -1,1 +1,0 @@
-- Make project scaffolding install into the newly created virtual environment even when another environment is active. Stop setup and report an error if environment creation, dependency installation, or migrations fail, instead of reporting success for an incomplete project.

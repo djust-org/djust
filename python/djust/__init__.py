@@ -86,7 +86,7 @@ if TYPE_CHECKING:
     from .markdown import render_markdown as render_markdown
     from . import rust_components  # noqa: F401
 
-__version__ = "1.2.0rc8"
+__version__ = "1.2.0rc9"
 
 # Import Rust functions
 try:

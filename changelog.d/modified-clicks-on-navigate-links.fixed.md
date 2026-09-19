@@ -1,1 +1,0 @@
-- **`dj-navigate` and `dj-patch` links**: a modified or middle click now opens a new tab or window as it should. Both directives called `preventDefault()` before looking at the event, so Cmd, Ctrl, Shift, Alt and middle clicks were swallowed. The delegated auto-navigate listener always got this right; the directives now use the same rule.

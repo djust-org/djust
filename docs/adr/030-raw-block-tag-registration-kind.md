@@ -1,6 +1,6 @@
 # ADR-030: Body-consuming template tags render through the bridge that already exists
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-09-19 in v1.2.0rc9 (PR #2888)
 **Date**: 2026-09-16
 **Citations**: `file:line` pinned to `main` at `b3d5d5ac`; every one asserted against its expected token at write time (see §7 for what the two earlier drafts got wrong, and how)
 **Deciders**: Project maintainers

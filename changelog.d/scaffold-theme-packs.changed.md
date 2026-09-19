@@ -1,1 +1,0 @@
-- The `djust new` starter page is now drawn entirely from the active theme pack: it uses the theming components (`.card`, `.btn`, `.input`, `.badge`), ships the `{% theme_panel %}` gear menu (mode, all packs, presets, design systems, layouts), eight quick-pick pack chips, and wires `djust.theming.urls` for `theme.css` and the component gallery at `/theme/gallery/`.
