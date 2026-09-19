@@ -37,7 +37,13 @@ variable.
     The two-file example a developer actually writes: the LiveView that owns
     the component and the template line that renders it (`_usage_snippet`).
     {% endcomment %}
-    {% code_snippet code=usage_snippet language="python" %}
+    <div class="sb-subtitle">views.py</div>
+    {{ usage_html.view }}
+    <div class="sb-subtitle">my_template.html</div>
+    {{ usage_html.template }}
+    {% if events %}
+    <p class="sb-note">Events this component sends to the view: {% for ev in events %}<code>{{ ev }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+    {% endif %}
   {% endcard %}
 </section>
 
@@ -86,7 +92,7 @@ A native `details` — the framework has no block-form collapsible yet.
     {% endif %}
     {% if template_source %}
     <div class="sb-subtitle">Template source — {{ name }}.html</div>
-    {% code_snippet code=template_source language="django" %}
+    {{ template_source_html }}
     {% endif %}
   {% endcard %}
 </details>

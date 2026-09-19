@@ -275,3 +275,76 @@ def test_the_pages_render_over_http(client):
     body = client.get("/theme/gallery/storybook/button/").content.decode()
     assert 'id="sb-preview"' in body and 'class="sb-rail"' in body and "sb-pager" in body
     assert 'class="toc-item' in body and "toggle-group-btn" in body and "dj-code-snippet" in body
+
+
+# ---------------------------------------------------------------------------
+# Usage: events, the class-level form, no |safe; highlighted code
+# ---------------------------------------------------------------------------
+
+
+class TestUsageWithEvents:
+    def test_a_descriptor_component_shows_the_class_level_form(self):
+        snippet = _detail("accordion")._base_ctx["usage_snippet"]
+        assert "component = Accordion()" in snippet
+        assert "accordion_toggle" in snippet
+        assert "def mount" not in snippet
+        assert "{{ component }}" in snippet and "|safe" not in snippet
+
+    def test_a_demo_event_gets_a_handler_stub_with_the_kwarg_it_drives(self):
+        view = _detail("rating")
+        snippet = view._base_ctx["usage_snippet"]
+        assert view._base_ctx["events"] == ["set_rating"]
+        assert "from djust.decorators import event_handler" in snippet
+        assert "@event_handler()" in snippet
+        assert 'def set_rating(self, value="", **kwargs):' in snippet
+        assert "self.component = Rating(value=value, max_stars=5)" in snippet
+
+    def test_a_component_without_events_is_unchanged(self):
+        view = _detail("button")
+        assert view._base_ctx["events"] == []
+        assert "@event_handler" not in view._base_ctx["usage_snippet"]
+
+    def test_the_component_renders_without_safe(self):
+        """`render()` marks the HTML safe and the LiveView path keeps the
+        mark, so the snippet's `{{ component }}` is the whole story."""
+        from djust import LiveView
+        from djust.components import Rating
+
+        class V(LiveView):
+            template = "<div dj-root>{{ component }}</div>"
+
+            def mount(self, request: object, **kwargs: object) -> None:
+                self.component = Rating(value=4, max_stars=5)
+
+        v = V()
+        v.mount(None)
+        html = v.render_with_diff()[0]
+        assert '<div class="rating"' in html and "&lt;div" not in html
+
+    def test_usage_is_split_and_highlighted(self):
+        ctx = _detail("rating")._base_ctx
+        assert ctx["usage_parts"]["view"].startswith("from djust import LiveView")
+        assert ctx["usage_parts"]["template"] == "{{ component }}"
+        assert 'class="hl-k"' in ctx["usage_html"]["view"]  # `class`, `def`, `import`
+        assert "dj-copy=" in ctx["usage_html"]["view"]
+
+
+class TestCodeHighlighting:
+    def test_code_snippet_highlights_known_languages(self):
+        from djust.components.components.code_snippet import CodeSnippet, highlight_code
+
+        out = highlight_code("def f():\n    return '<b>'", "python")
+        assert 'class="hl-k"' in out and "&lt;b&gt;" in out
+        html = CodeSnippet(code="x = 1", language="python").render()
+        assert 'class="hl-' in html and "dj-copy=" in html
+
+    def test_unknown_language_and_no_language_stay_plain(self):
+        from djust.components.components.code_snippet import highlight_code
+
+        assert highlight_code("<b>", "no-such-lexer") == "&lt;b&gt;"
+        assert highlight_code("<b>", "") == "&lt;b&gt;"
+
+    def test_django_alias_resolves(self):
+        from djust.components.components.code_snippet import highlight_code
+
+        assert 'class="hl-' in highlight_code("{% load x %}{{ y }}", "django")

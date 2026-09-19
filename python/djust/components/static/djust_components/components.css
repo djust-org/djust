@@ -2612,3 +2612,23 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* end djust-components base styles */
+
+/* ---- Code snippet / code block: syntax highlighting (server-side, Pygments) ----
+   Token colours from the theme's own properties so they follow preset and mode;
+   `--dj-code-*` lets a theme override any of them. */
+.dj-code-snippet .hl-c, .dj-code-snippet .hl-c1, .dj-code-snippet .hl-cm, .dj-code-snippet .hl-cp,
+.code-block .hl-c, .code-block .hl-c1, .code-block .hl-cm, .code-block .hl-cp { color: var(--dj-code-comment, hsl(var(--muted-foreground))); font-style: italic; }
+.dj-code-snippet .hl-k, .dj-code-snippet .hl-kn, .dj-code-snippet .hl-kd, .dj-code-snippet .hl-kc, .dj-code-snippet .hl-ow,
+.code-block .hl-k, .code-block .hl-kn, .code-block .hl-kd, .code-block .hl-kc, .code-block .hl-ow { color: var(--dj-code-keyword, hsl(var(--primary))); font-weight: 600; }
+.dj-code-snippet .hl-s, .dj-code-snippet .hl-s1, .dj-code-snippet .hl-s2, .dj-code-snippet .hl-sd, .dj-code-snippet .hl-sa,
+.code-block .hl-s, .code-block .hl-s1, .code-block .hl-s2, .code-block .hl-sd, .code-block .hl-sa { color: var(--dj-code-string, hsl(var(--success, 142 71% 35%))); }
+.dj-code-snippet .hl-nf, .dj-code-snippet .hl-fm, .dj-code-snippet .hl-nc, .dj-code-snippet .hl-nn,
+.code-block .hl-nf, .code-block .hl-fm, .code-block .hl-nc, .code-block .hl-nn { color: var(--dj-code-name, hsl(var(--info, 199 89% 40%))); }
+.dj-code-snippet .hl-nd, .dj-code-snippet .hl-nb, .dj-code-snippet .hl-bp,
+.code-block .hl-nd, .code-block .hl-nb, .code-block .hl-bp { color: var(--dj-code-builtin, hsl(var(--warning, 38 92% 40%))); }
+.dj-code-snippet .hl-mi, .dj-code-snippet .hl-mf, .dj-code-snippet .hl-m,
+.code-block .hl-mi, .code-block .hl-mf, .code-block .hl-m { color: var(--dj-code-number, hsl(var(--warning, 38 92% 40%))); }
+.dj-code-snippet .hl-nt, .code-block .hl-nt { color: var(--dj-code-tag, hsl(var(--primary))); }
+.dj-code-snippet .hl-na, .code-block .hl-na { color: var(--dj-code-attr, hsl(var(--info, 199 89% 40%))); }
+.dj-code-snippet .hl-o, .dj-code-snippet .hl-p, .code-block .hl-o, .code-block .hl-p { color: var(--dj-code-punct, hsl(var(--muted-foreground))); }
+.dj-code-snippet .hl-err, .code-block .hl-err { color: inherit; }

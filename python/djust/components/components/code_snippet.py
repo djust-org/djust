@@ -7,6 +7,44 @@ from djust import Component
 from typing import Any
 
 
+#: Pygments class prefix on the highlighted spans — `hl-k`, `hl-s`, `hl-c` …
+#: styled by `.dj-code-snippet .hl-*` in components.css from the theme's own
+#: custom properties, so the colours follow the preset and mode.
+_HIGHLIGHT_PREFIX = "hl-"
+
+
+def highlight_code(code: str, language: str = "") -> str:
+    """Escaped, and highlighted when Pygments is importable and knows the
+    language. Pygments is not a hard dependency of djust: without it, or for
+    an unknown language, the code is HTML-escaped exactly as before. The
+    element's ``textContent`` is unchanged either way, so ``dj-copy`` still
+    copies the raw code."""
+    if language:
+        try:
+            from pygments import highlight
+            from pygments.formatters import HtmlFormatter
+            from pygments.lexers import get_lexer_by_name
+        except ImportError:  # pragma: no cover — optional dependency absent
+            return html.escape(code)
+        try:
+            lexer = get_lexer_by_name(_LEXER_ALIASES.get(language, language), stripnl=False)
+        except Exception:  # noqa: BLE001 — unknown language: plain text
+            return html.escape(code)
+        formatter = HtmlFormatter(nowrap=True, classprefix=_HIGHLIGHT_PREFIX)
+        return str(highlight(code, lexer, formatter)).rstrip("\n")
+    return html.escape(code)
+
+
+#: Names the storybook and docs use that Pygments spells differently.
+_LEXER_ALIASES = {
+    "django": "html+django",
+    "template": "html+django",
+    "py": "python",
+    "js": "javascript",
+    "sh": "bash",
+}
+
+
 class CodeSnippet(Component):
     """Code block with copy button and language badge.
 
@@ -61,7 +99,7 @@ class CodeSnippet(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_code = html.escape(self.code)
+        e_code = highlight_code(self.code, self.language)
         e_lang = html.escape(self.language)
 
         lang_badge = ""

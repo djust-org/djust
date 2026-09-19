@@ -391,6 +391,91 @@ def styles_for(html: str) -> list[dict]:
     return found
 
 
+_EVENT_ATTR_RE = re.compile(
+    r'dj-(?:click|change|input|submit|keydown|keyup|blur|focus)="([A-Za-z_][\w]*)"'
+)
+
+
+def component_events(rendered_html: str) -> list[str]:
+    """The server events a component's markup emits, in the order they appear:
+    every ``dj-click`` / ``dj-change`` / ``dj-input`` / … name in the rendered
+    example. These are the handlers a host view has to answer."""
+    seen: list[str] = []
+    for name in _EVENT_ATTR_RE.findall(rendered_html or ""):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def usage_with_events(
+    snippet: str,
+    events: list[str],
+    *,
+    descriptor_class: str = "",
+    descriptor_event: str = "",
+    demo_keys: dict | None = None,
+    class_name: str = "",
+    example: dict | None = None,
+) -> str:
+    """Add the event side of the story to a usage snippet.
+
+    A component that renders ``dj-click="set_rating"`` needs a host that
+    answers it — that is the contract, and the part a reader copying the
+    assignment alone would miss. Two shapes:
+
+    * a descriptor (``Accordion``, ``Tabs``, ``Modal`` …): the class-level
+      form owns per-view state and wires its ``Meta.event`` itself, so the
+      snippet shows that instead of a handler;
+    * any other event: an ``@event_handler`` stub on the view that rebuilds
+      the component with the new value, the kwarg it drives named when the
+      storybook knows it (``demo_keys``).
+    """
+    if not events and not descriptor_class:
+        return snippet
+    views_part, sep, template_part = snippet.partition("\n\n\n# my_template.html\n")
+    lines = views_part.splitlines()
+    if descriptor_class:
+        # Replace the instance assignment with the class-level slot.
+        lines = [ln for ln in lines if "self.component = " not in ln and "def mount(" not in ln]
+        while lines and lines[-1] == "":
+            lines.pop()
+        lines += [
+            "",
+            f"    # Per-view state; clicks inside it send `{descriptor_event}` and the",
+            "    # descriptor handles it — nothing to write. Read `self.component.state`.",
+            f"    component = {descriptor_class}()",
+        ]
+        others = [e for e in events if e != descriptor_event]
+    else:
+        others = list(events)
+    if others:
+        if "from djust.decorators import event_handler" not in lines:
+            lines.insert(2, "from djust.decorators import event_handler")
+        for event in others:
+            key = (demo_keys or {}).get(event)
+            lines += ["", "    @event_handler()", f'    def {event}(self, value="", **kwargs):']
+            if key and class_name:
+                # The mount-time call again, with the kwarg this event drives
+                # bound to the incoming value — what the reader would write.
+                kwargs_src = ", ".join(
+                    f"{k}={'value' if k == key else repr(v)}"
+                    for k, v in (example or {}).items()
+                    if not k.startswith("slot_")
+                )
+                if key not in (example or {}):
+                    kwargs_src = f"{kwargs_src}, {key}=value" if kwargs_src else f"{key}=value"
+                lines.append(f"        self.component = {class_name}({kwargs_src})")
+            else:
+                lines.append("        ...  # update state; the re-render carries it")
+    return "\n".join(lines) + sep + template_part
+
+
+def split_usage(snippet: str) -> dict:
+    """``{"view": …, "template": …}`` — the two files the snippet shows."""
+    views_part, _, template_part = snippet.partition("\n\n\n# my_template.html\n")
+    return {"view": views_part.replace("# views.py\n", "", 1), "template": template_part}
+
+
 def _usage_snippet(
     component_name: str,
     component_type: str,
@@ -485,7 +570,9 @@ def _usage_snippet(
         "",
         "",
         "# my_template.html",
-        "{{ component|safe }}",
+        # `render()` marks the component's HTML safe, and the LiveView path
+        # carries that mark to the template — no `|safe` needed.
+        "{{ component }}",
     ]
     return "\n".join(lines)
 

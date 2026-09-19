@@ -274,7 +274,7 @@ class TestUsageSnippetIsRealCode:
 
     def test_python_snippet_interpolates_the_component(self):
         snippet = build_storybook_detail_context("switch")["usage_snippet"]
-        assert "{{ component|safe }}" in snippet
+        assert "{{ component }}" in snippet  # render() marks it safe; no filter needed
         assert "self.component = Switch(" in snippet
 
     @pytest.mark.parametrize(

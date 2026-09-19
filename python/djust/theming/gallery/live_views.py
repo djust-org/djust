@@ -696,10 +696,47 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         # the page's `{{ preview }}` one render. Not per event: an open item
         # would change the table and, with it, force a page render for what
         # is otherwise a preview-only click (ADR-032 D1).
-        from .storybook import styles_for
+        from .storybook import component_events, split_usage, styles_for, usage_with_events
 
         ctx.pop("styles", None)
-        self.styles = styles_for("".join(e["html"] for e in self._render_examples()))
+        rendered = self._render_examples()
+        self.styles = styles_for("".join(e["html"] for e in rendered))
+
+        # Usage with its events: what the first example's markup emits, the
+        # descriptor's class-level form when there is one, and for the
+        # hand-hosted demo events the kwarg each one drives.
+        events = component_events("".join(e["html"] for e in rendered[:1]))
+        demo_keys = {
+            ev: (effects[0][0] if isinstance(effects, list) else effects[0])
+            for ev, effects in _DEMO_EVENTS.items()
+        }
+        ctx["usage_snippet"] = usage_with_events(
+            ctx.get("usage_snippet", ""),
+            events,
+            descriptor_class=descriptor_cls.__name__ if descriptor_cls is not None else "",
+            descriptor_event=descriptor_cls.Meta.event if descriptor_cls is not None else "",
+            demo_keys=demo_keys,
+            class_name=ctx.get("class_name") or "",
+            example=examples[0] if examples else None,
+        )
+        ctx["usage_parts"] = split_usage(ctx["usage_snippet"])
+        ctx["events"] = events
+        # Rendered here through the Python component, not the `{% code_snippet %}`
+        # tag: the Rust engine renders that tag natively and its output is not
+        # highlighted (a gap noted for the docs pass). The component's own
+        # `render()` is what the reader gets — highlighted, with `dj-copy`.
+        from djust.components.components.code_snippet import CodeSnippet
+
+        if ctx.get("template_source"):
+            ctx["template_source_html"] = CodeSnippet(
+                code=ctx["template_source"], language="django"
+            ).render()
+        ctx["usage_html"] = {
+            "view": CodeSnippet(code=ctx["usage_parts"]["view"], language="python").render(),
+            "template": CodeSnippet(
+                code=ctx["usage_parts"]["template"], language="django"
+            ).render(),
+        }
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """The rendered examples, as the preview renders them now."""
