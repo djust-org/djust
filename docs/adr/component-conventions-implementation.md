@@ -156,11 +156,35 @@ restore or write, and internal sentinels stay out of emitted frames. This is not
 an actual WebSocket connection or complete SSE endpoint test.
 
 The existing event-save timeout and best-effort error handling are retained.
-Fresh event authorization is still optional in the transports, and SSE saves
-currently bind against the mount request rather than the current event request.
-These are unresolved activation gates, alongside actor/sticky-child/component
-persistence, explicit client snapshots, and provider contracts. The constructor
-guard remains in place; this integration does not enable explicit-mode apps.
+The constructor guard remains in place; this integration does not enable
+explicit-mode apps.
+
+### Fresh event authorization
+
+Explicit runtime events now require a fresh trusted transport request and compare
+its session/user/tenant/route against an immutable mount binding before dispatch.
+View permission checks run regardless of legacy `reauth_on_event` settings;
+identity changes, missing requests and provider exceptions discard the view and
+close with a static denial, without exception text. TenantMixin resolvers are
+rerun, not read from their mount cache. Existing object/handler authorization
+still runs downstream. Legacy views retain their optional reauthorization path.
+
+The socket adapter reloads a concrete supported server session and uses Django's
+`get_user` rather than the scope's cached principal. SSE consumes the current
+owner-checked POST request once, preserving the mounted route for persistence.
+The runtime captures each request before waiting on its explicit-event lock;
+authorization, handler/render and save are serialized, and temporary save-request
+state is cleared afterwards. Saves use the authorized event request and recheck
+its identity, not the mount request. Actor events are explicitly refused while
+their separate integration remains unfinished.
+
+Tests cover denied/throwing auth hooks, changed user/tenant, missing request,
+logout, inactive users, changed passwords, the SSE route/session boundary and
+concurrent SSE request isolation. A Channels WebSocket connection test proves
+save/reconnect restoration and rejection after session deletion with tenancy
+disabled. These do not prove configured tenant middleware parity, live browser
+behavior, complete SSE endpoints, actor/sticky-child/component persistence,
+explicit client snapshots or all provider contracts; those remain activation gates.
 
 ## Readiness audit
 

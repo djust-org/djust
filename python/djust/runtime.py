@@ -442,6 +442,10 @@ class Transport(Protocol):
         """
         raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
 
+    async def explicit_event_request(self, view: Any) -> Any:
+        """Return a fresh trusted event request; unsupported transports fail closed."""
+        raise NotImplementedError("Explicit event requests are not supported")
+
     async def recheck_event_auth(self, view: Any) -> bool:
         """Opt-in per-event auth re-check for a live event turn (#1777, T3).
 
@@ -1297,6 +1301,12 @@ class WSConsumerTransport:
             logger.debug("reauth_on_event re-check skipped (non-fatal, WS)", exc_info=True)
             return True
 
+    async def explicit_event_request(self, view: Any) -> Any:
+        """Supply freshly loaded session authentication for explicit events."""
+        from ._exposure_auth import fresh_socket_request
+
+        return await sync_to_async(fresh_socket_request)(view)
+
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
     # WS implementations. Each encapsulates the verbatim bespoke
@@ -1761,6 +1771,12 @@ class SSESessionTransport:
             logger.debug("reauth_on_event re-check skipped (non-fatal, SSE)", exc_info=True)
             return True
 
+    async def explicit_event_request(self, view: Any) -> Any:
+        """Use the current owner-checked POST; never fall back to mount auth."""
+        request = getattr(self._session, "_event_request", None)
+        self._session._event_request = None
+        return request
+
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
     # SSE implementations: no-op / raw / refuse. SSE has no consumer to
@@ -2036,6 +2052,10 @@ class ViewRuntime:
         # constructs inline. Type kept ``Any`` to avoid circular import
         # with ``djust.renderers``; runtime use-site will cast.
         self.renderer_factory = renderer_factory
+        self._explicit_mount_binding: Any = None
+        # SSE's legacy context is a no-op. Explicit request/auth/save state is
+        # per turn and must not be overwritten by a concurrent event POST.
+        self._explicit_event_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -2517,6 +2537,8 @@ class ViewRuntime:
                 if not legacy_exposure:
                     from ._exposure_sessions import load_server_state
 
+                    if callable(getattr(view_instance, "resolve_tenant", None)):
+                        request.tenant = getattr(view_instance, "_tenant", None)
                     restored = await sync_to_async(load_server_state)(view_instance, request)
                     if restored is not None:
                         for key, value in restored.items():
@@ -2593,6 +2615,12 @@ class ViewRuntime:
         # mount-stash net goes RED).
         view_instance._djust_mount_request = request
         view_instance._djust_mount_kwargs = mount_kwargs
+        if not legacy_exposure:
+            from ._exposure_sessions import request_binding
+
+            if callable(getattr(view_instance, "resolve_tenant", None)):
+                request.tenant = getattr(view_instance, "_tenant", None)
+            self._explicit_mount_binding = await sync_to_async(request_binding)(request)
 
         # _snapshot_user_private_attrs + _capture_dirty_baseline (WS
         # websocket.py:2598-2603): record the post-mount private-attr name set
@@ -2891,11 +2919,24 @@ class ViewRuntime:
         Wrapped in the tenant context (Finding #6) so the handler + render see
         the correct tenant in the tenant-scoped managers, cleared on exit.
         """
+        from ._exposure import uses_legacy_exposure
+
+        explicit_request = None
+        if self.view_instance is not None and not uses_legacy_exposure(self.view_instance):
+            try:
+                # Capture the current POST before waiting on another turn's
+                # lock. A later POST may replace the SSE session's request slot.
+                explicit_request = await self.transport.explicit_event_request(self.view_instance)
+            except Exception:
+                # The inner fail-closed gate emits a static denial for None.
+                explicit_request = None
         tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
         with _tenant_context(tenant):
-            await self._dispatch_event_inner(data)
+            await self._dispatch_event_inner(data, explicit_request=explicit_request)
 
-    async def _dispatch_event_inner(self, data: Dict[str, Any]) -> None:
+    async def _dispatch_event_inner(
+        self, data: Dict[str, Any], *, explicit_request: Any = None
+    ) -> None:
         """Event dispatch body (see :meth:`dispatch_event` for the tenant wrapper).
 
         The handler + render runs inside ``transport.event_context(view)`` (ADR-022
@@ -2942,8 +2983,14 @@ class ViewRuntime:
         # dispatches against the deauthorized view) is applied HERE,
         # UNCONDITIONALLY, regardless of whether the close fired — mirroring the WS
         # bespoke block which sets ``self.view_instance = None`` after the close.
+        from ._exposure import uses_legacy_exposure
+
         recheck = getattr(self.transport, "recheck_event_auth", None)
-        if recheck is not None and not await recheck(self.view_instance):
+        if (
+            uses_legacy_exposure(self.view_instance)
+            and recheck is not None
+            and not await recheck(self.view_instance)
+        ):
             self.view_instance = None  # unconditional state-clear (#291)
             return
 
@@ -2953,6 +3000,11 @@ class ViewRuntime:
             and uses_actors(self.view_instance)
             and not self._event_routes_to_sticky_child(data)
         ):
+            if not uses_legacy_exposure(self.view_instance):
+                self.view_instance = None
+                await self.transport.send_error("Explicit actor events are not yet supported")
+                await self.transport.close(code=4403)
+                return
             # Actor path: runs OUTSIDE event_context (no render lock), mirroring
             # the WS bespoke block. Parse ref / cache id the same way the WS event
             # handler does (websocket.py:3168-3172) so the framed actor result
@@ -2973,8 +3025,37 @@ class ViewRuntime:
             )
             return
 
-        async with self.transport.event_context(self.view_instance):
-            await self._dispatch_event_render(data)
+        explicit_lock = (
+            contextlib.nullcontext()
+            if uses_legacy_exposure(self.view_instance)
+            else self._explicit_event_lock
+        )
+        async with explicit_lock, self.transport.event_context(self.view_instance):
+            if self.view_instance is None:
+                return
+            if not uses_legacy_exposure(self.view_instance):
+                try:
+                    from ._exposure_auth import authorize_event
+
+                    authorized_request = await sync_to_async(authorize_event)(
+                        self.view_instance, explicit_request, self._explicit_mount_binding
+                    )
+                    self.view_instance._djust_event_request = authorized_request
+                except Exception:
+                    # No exception text/traceback: auth providers may include
+                    # credentials or other internal state in their exceptions.
+                    self.view_instance = None
+                    await self.transport.send_error(
+                        "Event authorization failed. Please reload the page.",
+                        code="permission_denied",
+                    )
+                    await self.transport.close(code=4403)
+                    return
+            try:
+                await self._dispatch_event_render(data)
+            finally:
+                if self.view_instance is not None:
+                    self.view_instance.__dict__.pop("_djust_event_request", None)
 
     def _event_routes_to_sticky_child(self, data: Dict[str, Any]) -> bool:
         """Return whether the event targets a sticky-child LiveView (not the top view).
@@ -3590,11 +3671,19 @@ class ViewRuntime:
             from ._exposure import ExposureError, uses_legacy_exposure
 
             if not uses_legacy_exposure(target_view):
-                from ._exposure_sessions import asave_server_state
+                from ._exposure_sessions import asave_server_state, request_binding
 
-                if mount_request is None:
-                    raise ExposureError("Explicit persistence requires the trusted mount request")
-                await asave_server_state(target_view, mount_request)
+                event_request = getattr(target_view, "_djust_event_request", None)
+                if event_request is None:
+                    raise ExposureError(
+                        "Explicit persistence requires the authorized event request"
+                    )
+                if (
+                    await sync_to_async(request_binding)(event_request)
+                    != self._explicit_mount_binding
+                ):
+                    raise ExposureError("Explicit event identity changed before persistence")
+                await asave_server_state(target_view, event_request)
                 return
             scope_session = (
                 (self.scope.get("session") if self.scope else None)

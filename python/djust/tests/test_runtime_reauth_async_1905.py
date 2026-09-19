@@ -301,7 +301,7 @@ class TestReauthHookShape291:
 
     @pytest.mark.asyncio
     async def test_runtime_clears_view_instance_even_if_close_is_gated(self):
-        view = MagicMock()
+        view = MagicMock(exposure_policy="legacy")
         view._view_id = None
 
         closed = {"called": False}
@@ -380,7 +380,7 @@ class TestReauthHookShape291:
                 return contextlib.nullcontext()
 
         runtime = ViewRuntime(_FakeTransport())
-        runtime.view_instance = MagicMock(_view_id=None)
+        runtime.view_instance = MagicMock(_view_id=None, exposure_policy="legacy")
 
         async def _fake_render(self, data):
             reached["render"] = True
