@@ -179,7 +179,7 @@ class TestExamplesAreNotCollapsedByDemoState:
 
         view = StorybookDetailView()
         view.mount(RequestFactory().get("/"), component_name="switch")
-        assert view._demo_values == {}
+        assert view.preview.state.values == {}
 
         rendered = view._render_examples()
         assert rendered[0]["html"] != rendered[1]["html"], (
@@ -500,18 +500,16 @@ class TestSegmentedProgressIsClickable:
         assert "dj-click" not in html
 
 
-class TestDescriptorStateUnwrapsBoundComponent:
-    """ADR-031 changed what a class-level descriptor attribute resolves to.
+class TestPreviewOwnsTheDescriptorState:
+    """ADR-032: the page's live preview is ONE bound component whose State
+    holds the descriptor state (accordion, tabs, modal, …) and the demo values.
 
-    It used to be the `State` — a `dict` — and `_descriptor_state` merged it in
-    with `isinstance(descriptor, dict)`. It is now a `BoundComponent`, whose
-    per-view state is `.state`. A `BoundComponent` is not a dict, so the
-    isinstance test failed and the merge silently contributed nothing: the
-    eight interactive previews lost their state and stopped responding.
-
-    The rebase onto ADR-031 is what surfaced it — the components gallery got the
-    same unwrap (`components/gallery/live_views.py:158`) and this one did not,
-    the parallel-path shape: one pattern, two galleries, one of them fixed.
+    Before, eight descriptor slots lived on the view and `_descriptor_state`
+    unwrapped the current one's `BoundComponent` (ADR-031) into the example
+    kwargs. Now the descriptor's defaults seed `preview.state.values` at mount,
+    its `_handle_event` runs against a State rebuilt from those values, and the
+    page reads the preview as the bare `{{ preview }}` — which is what lets an
+    event that changes only the preview patch the preview alone.
     """
 
     def _view(self, component_name: str):
@@ -523,28 +521,128 @@ class TestDescriptorStateUnwrapsBoundComponent:
         view.mount(RequestFactory().get("/"), component_name=component_name)
         return view
 
-    def test_the_attribute_really_is_a_bound_component(self):
-        """If this stops being true, the unwrap below is dead code."""
+    def test_the_preview_is_a_bound_component(self):
         from djust.components.base import BoundComponent
 
-        bound = getattr(self._view("accordion"), "accordion")
-        assert isinstance(bound, BoundComponent), (
-            "ADR-031's BoundComponent is gone — the unwrap in `_descriptor_state` "
-            "can be simplified, and this test with it"
+        bound = self._view("accordion").preview
+        assert isinstance(bound, BoundComponent)
+        assert bound.template, (
+            "the preview must declare a template for `{{ preview }}` to render it"
         )
 
-    def test_descriptor_state_is_the_bound_component_state(self):
-        bound = getattr(self._view("accordion"), "accordion")
-        assert self._view("accordion")._descriptor_state() == dict(bound.state)
-        # Not merely non-empty: the descriptor's own fields must be in there.
-        assert "active" in self._view("accordion")._descriptor_state()
+    def test_the_descriptor_fields_seed_the_preview_values(self):
+        from djust.components.descriptors import Accordion
 
-    def test_a_descriptor_event_moves_the_state_and_the_render(self):
-        """The unwrap is only useful if the change reaches the markup."""
+        values = self._view("accordion").preview.state.values
+        assert values == dict(Accordion.State())
+        assert "active" in values
+
+    def test_a_descriptor_event_moves_the_values_and_the_render(self):
+        """The forwarder on the view and the handler on the preview move the
+        same state, and the change reaches the markup."""
         view = self._view("accordion")
         before = view._render_examples()[0]["html"]
         view.accordion_toggle(value="2")
         after = view._render_examples()[0]["html"]
-        assert view._descriptor_state()["active"] == "2"
+        assert view.preview.state.values["active"] == "2"
         assert before != after
         assert "accordion-item--open" in after
+        # The component route reaches the same handler on the preview itself.
+        view.preview.accordion_toggle(value="2")
+        assert view.preview.state.values["active"] == ""
+
+    def test_the_page_reads_only_the_bare_preview(self):
+        """D2: any other read of the component would force a page render."""
+        from pathlib import Path
+
+        import djust.theming as theming
+
+        source = (
+            Path(theming.__file__).parent / "templates/djust_theming/gallery/storybook_detail.html"
+        ).read_text()
+        assert "{{ preview }}" in source
+        assert "preview." not in source and "preview|" not in source
+        assert "examples_html" not in source
+
+
+class TestEveryDemoEventResolvesOnThePreview:
+    """#2921 review 🔴1: the demo handlers run with ``self`` bound to the
+    preview's ``BoundComponent``, which refuses ``_``-prefixed lookups — a
+    private helper on the component class raised ``AttributeError`` for 42 of
+    the 53 events the previews emit. Every ``_DEMO_EVENTS`` key is dispatched
+    here through the component itself (the route a real click takes)."""
+
+    @staticmethod
+    def _events() -> list:
+        from djust.theming.gallery.live_views import _DEMO_EVENTS
+
+        return sorted(_DEMO_EVENTS)
+
+    @pytest.mark.parametrize("event", _events.__func__())
+    def test_dispatches_through_the_preview(self, event: str):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        view = StorybookDetailView()
+        view.mount(RequestFactory().get("/"), component_name="rating")
+        getattr(view.preview, event)(value="4")
+        assert isinstance(view.preview.state.values, dict)
+
+    def test_a_demo_value_seeds_from_the_first_example_and_moves(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        view = StorybookDetailView()
+        view.mount(RequestFactory().get("/"), component_name="rating")
+        before = view._render_examples()[0]["html"]
+        view.preview.set_rating(value="4")
+        assert view.preview.state.values["value"] == "4"
+        assert view._render_examples()[0]["html"] != before
+
+    def test_the_get_renders_the_examples_once(self):
+        """#2921 review 🟡3: the static context used to render every example,
+        and the preview rendered them again."""
+        from django.test import RequestFactory
+
+        from djust.theming.gallery import live_views
+        from djust.theming.gallery.live_views import StorybookDetailView
+
+        live_views._PREVIEW_RENDER_CACHE.clear()
+        calls: list = []
+        real = live_views._render_preview_examples
+
+        def counting(*args, **kwargs):
+            calls.append(args[0])
+            return real(*args, **kwargs)
+
+        live_views._render_preview_examples = counting
+        try:
+            view = StorybookDetailView()
+            view.mount(RequestFactory().get("/"), component_name="switch")
+            assert not view._base_ctx.get("python_examples_html")
+            ctx = view.get_context_data()
+            assert ctx["styles"], "styles are derived from the preview's render"
+            str(view.preview)
+        finally:
+            live_views._render_preview_examples = real
+        assert calls == ["switch"], calls
+
+
+class TestPreviewTagNeedsNoDjangoTemplatesBackend:
+    """A `djust new` project configures only `DjustTemplateBackend`; the
+    preview tag's markup must compile without a `DjangoTemplates` engine
+    (a module-level `django.template.Template(...)` broke the import of every
+    theme tag there — found by serving the gallery from such a project)."""
+
+    def test_storybook_preview_renders_with_only_the_djust_backend(self):
+        from django.test import override_settings
+
+        from djust.theming.templatetags.theme_tags import storybook_preview
+
+        with override_settings(
+            TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]
+        ):
+            html = storybook_preview("badge", "python", [{"text": "New"}], {})
+        assert "sb-preview" in html and "New" in html
