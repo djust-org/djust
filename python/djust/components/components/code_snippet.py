@@ -63,7 +63,7 @@ def _fold_whitespace(highlighted: str) -> str:
     return _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
 
 
-#: Names the storybook and docs use that Pygments spells differently.
+#: Names the catalogue and docs use that Pygments spells differently.
 _LEXER_ALIASES = {
     "django": "html+django",
     "template": "html+django",

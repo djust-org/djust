@@ -464,6 +464,43 @@ Note: When using `template_name`, the component ID wrapper `<div data-component-
 
 djust ships with a library of ready-to-use components. All adapt to your CSS framework automatically.
 
+### Browsing the catalogue
+
+Every component has a page that renders it live, on your own server, in your
+own theme. Include the theming URLs and open `/theme/components/`:
+
+```python
+# urls.py
+path("theme/", include("djust.theming.urls")),
+```
+
+Each page shows the component running, the option chips you can flip to see
+the variants, the two files you would write to use it (the view and the
+template line), its parameters, the events it sends to your view, its
+accessibility rules and where to override its styles. `/` focuses the search
+box. The pages are LiveViews, so the previews are the real component on a
+real server rather than a screenshot.
+
+The catalogue is gated like the theme gallery: `DEBUG`, or a staff user, or
+`DJUST_THEMING_GALLERY_PUBLIC = True` for a site that publishes it. The theme
+presets live beside it at `/theme/themes/`.
+
+Prefer to read rather than click? The same components are written up at
+[docs.djust.org/reference/components/](https://docs.djust.org/reference/components/),
+generated from the same registry, and every catalogue page links to its
+entry there.
+
+**Hosting the catalogue inside your own site.** The pages render inside
+`djust_theming/catalogue/_document.html`. Ship a template at that path from an
+app listed *before* `djust.theming` in `INSTALLED_APPS` and yours wins: put
+your own navigation in it, include
+`{% include "djust_theming/catalogue/_assets.html" %}` in the `<head>`, load
+`djust_theming/js/catalogue.js`, and render `{% block body %}` — that block is
+where the catalogue puts its mount root, sidebar and content, all of which
+must stay inside it. Everything else in the file is the framework's own
+chrome, so replacing the file replaces the topbar too and your page renders
+one navigation rather than two.
+
 ### UI Components
 
 | Component           | Type          | Description                                                                                                                                                                                                                         |

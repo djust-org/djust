@@ -50,8 +50,8 @@ _CATEGORY_SLUGS = [
 #: Pages that declare a `dj-view`, paired with the page URL. The `/lv/` routes
 #: are the LiveViews; `<slug>/` is still the static shim (see the module
 #: docstring of `urls.py`).
-_LIVE_PAGES = [("/theme/components/", "GalleryIndexView")] + [
-    (f"/theme/components/lv/{slug}/", None) for slug in _CATEGORY_SLUGS
+_LIVE_PAGES = [("/theme/components-legacy/", "GalleryIndexView")] + [
+    (f"/theme/components-legacy/lv/{slug}/", None) for slug in _CATEGORY_SLUGS
 ]
 
 _DJ_VIEW_RE = re.compile(r'dj-view="([^"]+)"')
@@ -116,9 +116,9 @@ def test_the_index_names_the_index_view_and_a_category_names_its_own():
     is exactly what this pins: the stamp is per-page, so a category page must
     not come back carrying the index's class (resolvable, and wrong).
     """
-    assert _rendered_view_path("/theme/components/").endswith(".GalleryIndexView")
-    assert _rendered_view_path("/theme/components/lv/form/").endswith(".FormGalleryView")
-    assert _rendered_view_path("/theme/components/lv/data/").endswith(".DataGalleryView")
+    assert _rendered_view_path("/theme/components-legacy/").endswith(".GalleryIndexView")
+    assert _rendered_view_path("/theme/components-legacy/lv/form/").endswith(".FormGalleryView")
+    assert _rendered_view_path("/theme/components-legacy/lv/data/").endswith(".DataGalleryView")
 
 
 # ---------------------------------------------------------------------------

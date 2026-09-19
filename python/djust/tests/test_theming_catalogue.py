@@ -1,4 +1,4 @@
-"""Tests for the component storybook (Phase 9.2)."""
+"""Tests for the component catalogue (Phase 9.2)."""
 
 # Import conftest first to configure Django settings before we add ours.
 import tests.conftest  # noqa: F401
@@ -9,14 +9,14 @@ from django.test import RequestFactory, override_settings
 from django.urls import resolve, reverse
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
-from djust.theming.gallery.storybook import (
-    build_storybook_detail_context,
-    build_storybook_index_context,
+from djust.theming.gallery.catalogue import (
+    build_catalogue_detail_context,
+    build_catalogue_index_context,
     extract_css_variables,
     get_component_template_source,
 )
-from djust.theming.gallery.live_views import StorybookIndexView
-from djust.theming.gallery.views import storybook_detail_view
+from djust.theming.gallery.live_views import ComponentsIndexView
+from djust.theming.gallery.views import components_detail_view
 
 pytestmark = pytest.mark.theming
 
@@ -34,43 +34,43 @@ def rf():
 _URL_SETTINGS = {"ROOT_URLCONF": "tests.gallery_test_urls"}
 
 
-class TestStorybookURLResolution:
+class TestComponentsURLResolution:
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_index_url_resolves(self):
-        """URL reverse for 'djust_theming:storybook' resolves correctly."""
-        url = reverse("djust_theming:storybook")
-        assert url == "/theming/gallery/storybook/"
+    def test_components_index_url_resolves(self):
+        """URL reverse for 'djust_theming:components' resolves correctly."""
+        url = reverse("djust_theming:components")
+        assert url == "/theming/components/"
 
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_index_url_resolves_to_view(self):
+    def test_components_index_url_resolves_to_view(self):
         """The index is a LiveView, like its siblings.
 
-        It resolved to `views.storybook_index_view` — a plain Django function —
+        It resolved to `views.components_index_view` — a plain Django function —
         which is why the index page had to re-implement its own filtering in a
         `<script>`: `dj-click` and `dj-input` are server events and a plain view
         has no server for them to reach.
         """
-        match = resolve("/theming/gallery/storybook/")
-        assert match.func.view_class is StorybookIndexView
+        match = resolve("/theming/components/")
+        assert match.func.view_class is ComponentsIndexView
 
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_detail_url_resolves(self):
-        """URL reverse for 'djust_theming:storybook_detail' resolves correctly."""
-        url = reverse("djust_theming:storybook_detail", kwargs={"component_name": "button"})
-        assert url == "/theming/gallery/storybook/button/"
+    def test_components_detail_url_resolves(self):
+        """URL reverse for 'djust_theming:components_detail' resolves correctly."""
+        url = reverse("djust_theming:components_detail", kwargs={"component_name": "button"})
+        assert url == "/theming/components/button/"
 
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_detail_url_resolves_to_the_liveview(self):
+    def test_components_detail_url_resolves_to_the_liveview(self):
         """It resolves to the LiveView, not the plain view it used to.
 
         The detail page has to be a `LiveView`: `dj-click` is a server event, and
         a plain view ships no server for it to reach, so the component previews
         rendered but did nothing when clicked.
         """
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        match = resolve("/theming/gallery/storybook/button/")
-        assert match.func.view_class is StorybookDetailView
+        match = resolve("/theming/components/button/")
+        assert match.func.view_class is ComponentsDetailView
         assert match.kwargs["component_name"] == "button"
 
 
@@ -79,19 +79,19 @@ class TestStorybookURLResolution:
 # ---------------------------------------------------------------------------
 
 
-class TestStorybookAccessControl:
+class TestComponentsAccessControl:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     @pytest.mark.django_db
-    def test_storybook_index_accessible_in_debug(self, client):
+    def test_components_index_accessible_in_debug(self, client):
         """Returns 200 when DEBUG=True."""
-        assert client.get("/theming/gallery/storybook/").status_code == 200
+        assert client.get("/theming/components/").status_code == 200
 
     @override_settings(DEBUG=False, **_URL_SETTINGS)
     @pytest.mark.django_db
-    def test_storybook_index_denied_when_not_staff(self, client):
+    def test_components_index_denied_when_not_staff(self, client):
         """Denied when DEBUG=False and the user is not staff.
 
-        The rule is unchanged — `StorybookAccessMixin.check_permissions` is the
+        The rule is unchanged — `ComponentsAccessMixin.check_permissions` is the
         same predicate the plain view's `_check_access` used, `DEBUG` (or
         `DJUST_THEMING_GALLERY_PUBLIC`) or `is_staff`. Only the shape of the
         refusal moved: the plain view returned a bare 403, and a LiveView
@@ -102,51 +102,51 @@ class TestStorybookAccessControl:
         HTTP GET, so the same page was reachable over the WebSocket without it.
         `check_permissions` is consulted on every transport.
         """
-        response = client.get("/theming/gallery/storybook/")
+        response = client.get("/theming/components/")
         assert response.status_code in (302, 403)
 
     @override_settings(DEBUG=True, **_URL_SETTINGS)
-    def test_storybook_detail_accessible_in_debug(self, rf):
+    def test_components_detail_accessible_in_debug(self, rf):
         """Returns 200 when DEBUG=True for a valid component."""
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         assert response.status_code == 200
 
     @override_settings(DEBUG=False)
-    def test_storybook_detail_forbidden_non_staff(self, rf):
+    def test_components_detail_forbidden_non_staff(self, rf):
         """Returns 403 when DEBUG=False and user is not staff."""
 
         class _AnonUser:
             is_staff = False
             is_authenticated = False
 
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.user = _AnonUser()
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         assert response.status_code == 403
 
     @override_settings(DEBUG=True, **_URL_SETTINGS)
-    def test_storybook_detail_404_unknown_component(self, rf):
+    def test_components_detail_404_unknown_component(self, rf):
         """Returns 404 for an unknown component name."""
-        request = rf.get("/theming/gallery/storybook/nonexistent/")
+        request = rf.get("/theming/components/nonexistent/")
         request.session = {}
-        response = storybook_detail_view(request, "nonexistent")
+        response = components_detail_view(request, "nonexistent")
         assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# Storybook index content
+# Catalogue index content
 # ---------------------------------------------------------------------------
 
 
-class TestStorybookIndexContent:
+class TestComponentsIndexContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     @pytest.mark.django_db
     def test_index_lists_all_components(self, client):
         """Index page contains all 24 component names."""
-        content = client.get("/theming/gallery/storybook/").content.decode()
+        content = client.get("/theming/components/").content.decode()
 
         for name in COMPONENT_CONTRACTS:
             display = name.replace("_", " ").title()
@@ -156,25 +156,25 @@ class TestStorybookIndexContent:
     @pytest.mark.django_db
     def test_index_has_links_to_detail_pages(self, client):
         """Index page contains links to detail pages."""
-        content = client.get("/theming/gallery/storybook/").content.decode()
+        content = client.get("/theming/components/").content.decode()
 
         # Should contain at least some hrefs to detail pages
-        assert "storybook/button/" in content
-        assert "storybook/card/" in content
+        assert "components/button/" in content
+        assert "components/card/" in content
 
 
 # ---------------------------------------------------------------------------
-# Storybook detail content
+# Catalogue detail content
 # ---------------------------------------------------------------------------
 
 
-class TestStorybookDetailContent:
+class TestComponentsDetailContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_detail_shows_contract_table(self, rf):
         """Detail page shows context variable names from the contract."""
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         content = response.content.decode()
 
         # Button contract has required context var "text"
@@ -185,9 +185,9 @@ class TestStorybookDetailContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_detail_shows_template_source(self, rf):
         """Detail page includes the raw template HTML source."""
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         content = response.content.decode()
 
         # The button template contains <button class=
@@ -196,9 +196,9 @@ class TestStorybookDetailContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_detail_shows_available_slots(self, rf):
         """Detail page lists available slots."""
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         content = response.content.decode()
 
         # Button has slot_icon, slot_content, slot_loading
@@ -208,9 +208,9 @@ class TestStorybookDetailContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_detail_shows_accessibility_reqs(self, rf):
         """Detail page shows accessibility requirements for components that have them."""
-        request = rf.get("/theming/gallery/storybook/alert/")
+        request = rf.get("/theming/components/alert/")
         request.session = {}
-        response = storybook_detail_view(request, "alert")
+        response = components_detail_view(request, "alert")
         content = response.content.decode()
 
         # Alert requires role=alert
@@ -220,9 +220,9 @@ class TestStorybookDetailContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_detail_shows_css_variables(self, rf):
         """Detail page shows CSS variables section."""
-        request = rf.get("/theming/gallery/storybook/button/")
+        request = rf.get("/theming/components/button/")
         request.session = {}
-        response = storybook_detail_view(request, "button")
+        response = components_detail_view(request, "button")
         content = response.content.decode()
 
         # Should have a CSS variables section heading (template renders in all-caps)
@@ -275,16 +275,16 @@ class TestExtractCssVariables:
         assert result.count("--primary") == 1
 
 
-class TestBuildStorybookIndexContext:
+class TestBuildCatalogueIndexContext:
     def test_returns_all_components(self):
-        ctx = build_storybook_index_context()
+        ctx = build_catalogue_index_context()
         assert "components" in ctx
         names = {c["name"] for c in ctx["components"]}
         for name in COMPONENT_CONTRACTS:
             assert name in names, f"Missing: {name}"
 
     def test_component_entries_have_required_fields(self):
-        ctx = build_storybook_index_context()
+        ctx = build_catalogue_index_context()
         for comp in ctx["components"]:
             assert "name" in comp
             assert "display_name" in comp
@@ -293,34 +293,34 @@ class TestBuildStorybookIndexContext:
             assert "slot_count" in comp
 
 
-class TestBuildStorybookDetailContext:
+class TestBuildCatalogueDetailContext:
     def test_returns_contract_info(self):
-        ctx = build_storybook_detail_context("button")
+        ctx = build_catalogue_detail_context("button")
         assert ctx["name"] == "button"
         assert "required_context" in ctx
         assert "optional_context" in ctx
         assert "available_slots" in ctx
 
     def test_returns_template_source(self):
-        ctx = build_storybook_detail_context("button")
+        ctx = build_catalogue_detail_context("button")
         assert "template_source" in ctx
         assert "<button" in ctx["template_source"]
 
     def test_returns_css_variables(self):
-        ctx = build_storybook_detail_context("button")
+        ctx = build_catalogue_detail_context("button")
         assert "css_variables" in ctx
         assert isinstance(ctx["css_variables"], list)
 
     def test_returns_examples(self):
-        ctx = build_storybook_detail_context("button")
+        ctx = build_catalogue_detail_context("button")
         assert "examples" in ctx
         assert len(ctx["examples"]) > 0
 
     def test_returns_accessibility(self):
-        ctx = build_storybook_detail_context("alert")
+        ctx = build_catalogue_detail_context("alert")
         assert "accessibility" in ctx
         assert len(ctx["accessibility"]) > 0
 
     def test_raises_for_unknown_component(self):
         with pytest.raises(KeyError):
-            build_storybook_detail_context("nonexistent_widget")
+            build_catalogue_detail_context("nonexistent_widget")

@@ -324,7 +324,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     # examples passed the wrong keys, so the star count and the value fell back
     # to defaults while the preview still looked plausible.
     #
-    # One example rather than two: every example on a storybook page is
+    # One example rather than two: every example on a catalogue page is
     # rendered against the *same* live state, so a second, deliberately
     # different rating (`readonly`, value 2) would silently mirror whatever the
     # first one was clicked to. `readonly` is documented in the PARAMETERS
@@ -571,7 +571,7 @@ def _load_component_class(component_name: str) -> tuple[Any, str]:
     The class is NOT always the snake→CamelCase of the module name: ``qr_code``
     defines ``QRCode``, and guessing ``QrCode`` silently produced an empty
     preview, an empty signature table and a broken import line. Reading the
-    module is what keeps the storybook's USAGE import, its PARAMETERS table and
+    module is what keeps the catalogue's USAGE import, its PARAMETERS table and
     its rendered example agreeing with each other.
 
     Never raises — callers decide what a missing class means.
@@ -1282,3 +1282,147 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "voice_input": [{"lang": "en-US"}],
     }
 )
+
+
+#: The keys :func:`describe_component` always returns. Pinned as a constant so
+#: a consumer in another repository (the documentation generator) can assert
+#: the shape it depends on rather than discovering a missing key at build time.
+COMPONENT_DESCRIPTION_KEYS = (
+    "name",
+    "display_name",
+    "category",
+    "component_type",
+    "description",
+    "import_line",
+    "class_name",
+    "params",
+    "examples",
+    "events",
+    "accessibility",
+    "slots",
+    "style_paths",
+)
+
+
+def describe_component(component_name: str) -> dict:
+    """Everything known about one component, as data.
+
+    This is the contract the component catalogue and the prose documentation
+    share. The catalogue renders it; ``docs.djust.org`` generates its reference
+    page from the same call, so the two cannot describe a component
+    differently — before this, the generator read constructor signatures only
+    and had no access to the descriptions, examples, events, accessibility
+    rules or slots the registry carries.
+
+    Returns a dict with exactly :data:`COMPONENT_DESCRIPTION_KEYS`:
+
+    ``params``
+        ``[{"name", "type", "default", "doc"}]`` — the constructor's own
+        parameters for a python component, the template contract's context
+        variables for a contracted one.
+    ``examples``
+        The kwarg dicts the catalogue previews, usable verbatim in a snippet.
+    ``events``
+        Server event names the component's markup emits, in the order they
+        appear. Derived by rendering the first example, which is the only way
+        to see what a component actually emits.
+    ``style_paths``
+        ``[(label, path)]`` — where to override it: the module or template,
+        and the stylesheet that defines its classes.
+
+    Raises ``KeyError`` for an unknown component, as
+    ``build_catalogue_detail_context`` does.
+    """
+    from .catalogue import (
+        build_catalogue_detail_context,
+        component_description,
+        component_events,
+    )
+
+    ctx = build_catalogue_detail_context(component_name, render_examples=False)
+    is_template = ctx.get("component_type") == "template"
+
+    if is_template:
+        params = [
+            {
+                "name": p.get("name", ""),
+                "type": str(p.get("type", "") or ""),
+                "default": p.get("default"),
+                "doc": p.get("description", "") or "",
+                "required": required,
+            }
+            for required, group in (
+                (True, ctx.get("required_context") or []),
+                (False, ctx.get("optional_context") or []),
+            )
+            for p in group
+        ]
+    else:
+        params = [
+            {
+                "name": p.get("name", ""),
+                # ``<class 'float'>`` is the repr of a type, not a type name.
+                "type": _annotation_name(p.get("annotation")),
+                "default": p.get("default"),
+                "doc": p.get("description", "") or "",
+                "required": p.get("default", _MISSING_DEFAULT) is _MISSING_DEFAULT,
+            }
+            for p in ctx.get("python_params") or []
+        ]
+
+    examples = list(ctx.get("examples") or []) or list(
+        PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
+    )
+
+    events: list[str] = []
+    if examples:
+        try:
+            if is_template:
+                from .catalogue import _render_template_examples
+
+                rendered = _render_template_examples(component_name, examples[:1])
+                html = "".join(e.get("html", "") for e in rendered)
+            else:
+                html = render_python_component_example(component_name, dict(examples[0]))
+            events = component_events(html)
+        except Exception:  # noqa: BLE001 — a component that cannot render has no events to report
+            logger.debug("could not scan events for %s", sanitize_for_log(component_name))
+
+    style_paths = []
+    if ctx.get("template_path"):
+        style_paths.append(("template", str(ctx["template_path"])))
+    if ctx.get("module_path"):
+        style_paths.append(("module", str(ctx["module_path"])))
+    if ctx.get("css_path"):
+        style_paths.append(("css", str(ctx["css_path"])))
+
+    return {
+        "name": component_name,
+        "display_name": ctx.get("display_name", component_name.replace("_", " ").title()),
+        "category": ctx.get("category", ""),
+        "component_type": ctx.get("component_type", "python"),
+        # The detail context does not carry the one-line description (the
+        # index page computes it); the reference entry leads with it, so it is
+        # part of this contract rather than something a consumer re-derives.
+        "description": ctx.get("description") or component_description(component_name) or "",
+        "import_line": ctx.get("import_line", "") or "",
+        "class_name": ctx.get("class_name", "") or "",
+        "params": params,
+        "examples": examples,
+        "events": events,
+        "accessibility": list(ctx.get("accessibility") or []),
+        "slots": list(ctx.get("available_slots") or []),
+        "style_paths": style_paths,
+    }
+
+
+#: Sentinel for "this parameter has no default", so a legitimate ``None``
+#: default is not read as a required parameter.
+_MISSING_DEFAULT = object()
+
+
+def _annotation_name(annotation: Any) -> str:
+    text = str(annotation or "")
+    if text.startswith("<class '") and text.endswith("'>"):
+        return text[8:-2]
+    return text

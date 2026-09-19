@@ -1,4 +1,4 @@
-"""The storybook's docs-first navigation and preview chrome.
+"""The catalogue's docs-first navigation and preview chrome.
 
 Descriptions and thumbnails on the cards, the playground over the preview
 component (ADR-032: a chip is a scoped patch), previous/next in sidebar
@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from django.test import override_settings
 
-from djust.theming.gallery.storybook import component_description, playground_options
+from djust.theming.gallery.catalogue import component_description, playground_options
 
 pytestmark = pytest.mark.django_db
 
@@ -61,9 +61,9 @@ class TestPlaygroundOptions:
         )
 
     def test_the_shipped_button_exposes_variant_and_size(self):
-        from djust.theming.gallery.storybook import build_storybook_detail_context
+        from djust.theming.gallery.catalogue import build_catalogue_detail_context
 
-        examples = build_storybook_detail_context("button", render_examples=False)["examples"]
+        examples = build_catalogue_detail_context("button", render_examples=False)["examples"]
         assert [o["key"] for o in playground_options(examples)] == ["variant", "size"]
 
 
@@ -78,24 +78,24 @@ class TestDescriptions:
         assert isinstance(component_description("button"), str)
 
     def test_index_cards_carry_it(self):
-        from djust.theming.gallery.storybook import build_storybook_index_context
+        from djust.theming.gallery.catalogue import build_catalogue_index_context
 
-        by_name = {c["name"]: c for c in build_storybook_index_context()["components"]}
+        by_name = {c["name"]: c for c in build_catalogue_index_context()["components"]}
         assert by_name["accordion"]["description"]
         assert "description" in by_name["button"]
 
 
 class TestThumbnails:
     def test_template_component_thumbnail_is_its_first_example(self):
-        from djust.theming.templatetags.theme_tags import storybook_thumbnail
+        from djust.theming.templatetags.theme_tags import component_thumbnail
 
-        html = storybook_thumbnail("button")
+        html = component_thumbnail("button")
         assert "Primary" in html and "btn" in html
 
     def test_python_component_has_none(self):
-        from djust.theming.templatetags.theme_tags import storybook_thumbnail
+        from djust.theming.templatetags.theme_tags import component_thumbnail
 
-        assert storybook_thumbnail("accordion") == ""
+        assert component_thumbnail("accordion") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -113,12 +113,12 @@ def _urlconf():
 def _detail(component_name: str, session: dict | None = None):
     from django.test import RequestFactory
 
-    from djust.theming.gallery.live_views import StorybookDetailView
+    from djust.theming.gallery.live_views import ComponentsDetailView
 
-    request = RequestFactory().get(f"/theme/gallery/storybook/{component_name}/")
+    request = RequestFactory().get(f"/theme/components/{component_name}/")
     if session is not None:
         request.session = session  # type: ignore[attr-defined]
-    view = StorybookDetailView()
+    view = ComponentsDetailView()
     view.request = request
     view.mount(request, component_name=component_name)
     return view
@@ -127,10 +127,10 @@ def _detail(component_name: str, session: dict | None = None):
 def _index():
     from django.test import RequestFactory
 
-    from djust.theming.gallery.live_views import StorybookIndexView
+    from djust.theming.gallery.live_views import ComponentsIndexView
 
-    request = RequestFactory().get("/theme/gallery/storybook/")
-    view = StorybookIndexView()
+    request = RequestFactory().get("/theme/components/")
+    view = ComponentsIndexView()
     view.request = request
     view.mount(request)
     return view
@@ -152,8 +152,8 @@ class TestPlaygroundState:
         view.preview.set_option(value="variant:ghost")
         assert view.preview.state.playground == {"variant": "ghost"}
         html = str(view.preview)
-        assert 'id="sb-preview"' in html
-        playground = html.split('id="sb-preview"')[1].split("</section>")[0]
+        assert 'id="dc-preview"' in html
+        playground = html.split('id="dc-preview"')[1].split("</section>")[0]
         assert "btn-ghost" in playground
         assert (
             "ghost" in playground and 'class="hl-' in playground
@@ -199,7 +199,7 @@ class TestRecentlyViewed:
     def test_a_get_records_the_visit_in_the_session(self):
         session = _Session()
         _detail("button", session)
-        assert session["djust_storybook_recent"] == ["button"]
+        assert session["djust_components_recent"] == ["button"]
         assert session.modified
 
     def test_the_sidebar_lists_the_others_most_recent_first(self):
@@ -207,14 +207,14 @@ class TestRecentlyViewed:
         _detail("button", session)
         _detail("alert", session)
         view = _detail("badge", session)
-        assert session["djust_storybook_recent"] == ["badge", "alert", "button"]
+        assert session["djust_components_recent"] == ["badge", "alert", "button"]
         assert [c["name"] for c in view.recent_components] == ["alert", "button"]
 
     def test_capped_at_five_and_deduplicated(self):
         session = _Session()
         for name in ["button", "alert", "badge", "avatar", "card", "kbd", "button"]:
             _detail(name, session)
-        assert session["djust_storybook_recent"] == ["button", "kbd", "card", "avatar", "badge"]
+        assert session["djust_components_recent"] == ["button", "kbd", "card", "avatar", "badge"]
 
     def test_without_a_session_nothing_breaks(self):
         view = _detail("button")
@@ -242,7 +242,7 @@ async def _mount(component_name: str):
     await communicator.send_json_to(
         {
             "type": "mount",
-            "view": "djust.theming.gallery.live_views.StorybookDetailView",
+            "view": "djust.theming.gallery.live_views.ComponentsDetailView",
             "params": {"component_name": component_name},
         }
     )
@@ -278,16 +278,16 @@ async def test_a_playground_chip_patches_only_the_preview():
 
 def test_the_pages_render_over_http(client):
     for url in (
-        "/theme/gallery/storybook/",
-        "/theme/gallery/storybook/button/",
-        "/theme/gallery/storybook/accordion/",
+        "/theme/components/",
+        "/theme/components/button/",
+        "/theme/components/accordion/",
     ):
         response = client.get(url)
         assert response.status_code == 200, url
         body = response.content.decode()
-        assert "storybook.css" in body and "storybook.js" in body
-    body = client.get("/theme/gallery/storybook/button/").content.decode()
-    assert 'id="sb-preview"' in body and 'class="sb-rail"' in body and "sb-pager" in body
+        assert "catalogue.css" in body and "catalogue.js" in body
+    body = client.get("/theme/components/button/").content.decode()
+    assert 'id="dc-preview"' in body and 'class="dc-rail"' in body and "dc-pager" in body
     assert 'class="toc-item' in body and "toggle-group-btn" in body and "dj-code-snippet" in body
 
 

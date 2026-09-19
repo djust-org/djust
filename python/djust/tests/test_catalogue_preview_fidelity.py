@@ -1,6 +1,6 @@
-"""What a storybook preview shows, and whether it is what a developer gets.
+"""What a catalogue preview shows, and whether it is what a developer gets.
 
-Six defects reported against the storybook on 2026-09-17 shared one property:
+Six defects reported against the catalogue on 2026-09-17 shared one property:
 the preview rendered *something*, so nothing looked broken. `progress` printed
 `style="width: %"`; `dropdown`'s menu was an empty div; `switch` could not
 toggle; `segmented_progress` had nothing to click; `loading_overlay` was an
@@ -32,7 +32,7 @@ from django.template import Context, Engine, RequestContext
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.gallery.context import _EXAMPLE_BUILDERS
-from djust.theming.gallery.storybook import build_storybook_detail_context
+from djust.theming.gallery.catalogue import build_catalogue_detail_context
 from djust.theming.templatetags import theme_components
 
 pytestmark = pytest.mark.theming
@@ -40,7 +40,7 @@ pytestmark = pytest.mark.theming
 
 def _preview(component_name: str) -> str:
     """Every example's preview HTML, concatenated."""
-    ctx = build_storybook_detail_context(component_name)
+    ctx = build_catalogue_detail_context(component_name)
     rendered = ctx.get("template_examples_html") or ctx.get("python_examples_html") or []
     return "".join(ex["html"] for ex in rendered)
 
@@ -51,7 +51,7 @@ def _preview(component_name: str) -> str:
 
 
 class TestTemplatePreviewGoesThroughTheTag:
-    """The storybook hands a template component's example to its **tag**.
+    """The catalogue hands a template component's example to its **tag**.
 
     The template alone is not the component. `progress.html` reads
     ``percentage``, which ``{% theme_progress %}`` computes; handing the raw
@@ -93,7 +93,7 @@ class TestTemplatePreviewGoesThroughTheTag:
             expected = str(
                 getattr(theme_components, f"theme_{name}")(RequestContext({}), **examples[0])
             )
-            ctx = build_storybook_detail_context(name)
+            ctx = build_catalogue_detail_context(name)
             preview = ctx["template_examples_html"][0]["html"]
             assert preview == expected, f"{name}: preview is not the tag's own render"
 
@@ -113,7 +113,7 @@ class TestTemplatePreviewGoesThroughTheTag:
         )
 
         import djust.theming.templatetags.theme_components as tc
-        from djust.theming.gallery.storybook import get_component_template_source
+        from djust.theming.gallery.catalogue import get_component_template_source
 
         original = tc.resolve_component_template
         offenders = []
@@ -175,9 +175,9 @@ class TestExamplesAreNotCollapsedByDemoState:
         """
         from django.test import RequestFactory
 
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        view = StorybookDetailView()
+        view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="switch")
         assert view.preview.state.values == {}
 
@@ -196,7 +196,7 @@ class TestExamplesAreNotCollapsedByDemoState:
 
     def test_switch_examples_name_an_action_so_the_input_can_dispatch(self):
         """`.dj-switch-checked` is server-rendered, so a switch needs a handler."""
-        ctx = build_storybook_detail_context("switch")
+        ctx = build_catalogue_detail_context("switch")
         for example in ctx["examples"] if "examples" in ctx else []:
             assert example.get("action")
 
@@ -228,7 +228,7 @@ class TestSlotsReachTheTemplate:
         marker = "<em>slot-content</em>"
 
         # Give whichever slot this template reads a value.
-        from djust.theming.gallery.storybook import get_component_template_source
+        from djust.theming.gallery.catalogue import get_component_template_source
 
         source = get_component_template_source(name) or ""
         slots = set(re.findall(r"{%\s*if\s+(slot_\w+)", source))
@@ -268,12 +268,12 @@ class TestUsageSnippetIsRealCode:
         )
 
     def test_snippet_shows_a_liveview_and_a_template(self):
-        snippet = build_storybook_detail_context("progress")["usage_snippet"]
+        snippet = build_catalogue_detail_context("progress")["usage_snippet"]
         assert "class MyView(LiveView)" in snippet
         assert "{% theme_progress" in snippet
 
     def test_python_snippet_interpolates_the_component(self):
-        snippet = build_storybook_detail_context("switch")["usage_snippet"]
+        snippet = build_catalogue_detail_context("switch")["usage_snippet"]
         assert "{{ component }}" in snippet  # render() marks it safe; no filter needed
         assert "self.component = Switch(" in snippet
 
@@ -281,7 +281,7 @@ class TestUsageSnippetIsRealCode:
         "name", sorted(n for n in COMPONENT_CONTRACTS if n in _EXAMPLE_BUILDERS)
     )
     def test_template_snippet_compiles_and_renders(self, name: str):
-        ctx = build_storybook_detail_context(name)
+        ctx = build_catalogue_detail_context(name)
         if ctx["component_type"] != "template":
             pytest.skip("python component")
         view_src, template_src = ctx["usage_snippet"].split("# my_template.html")
@@ -307,15 +307,15 @@ class TestSourceAndStylesAreReported:
     """ "What file is the template in, and what CSS styles it?" has an answer."""
 
     def test_template_component_names_its_template(self):
-        ctx = build_storybook_detail_context("card")
+        ctx = build_catalogue_detail_context("card")
         assert ctx["template_path"] == "djust_theming/components/card.html"
 
     def test_python_component_names_its_module(self):
-        ctx = build_storybook_detail_context("switch")
+        ctx = build_catalogue_detail_context("switch")
         assert ctx["module_path"] == "djust.components.components.switch"
 
     def test_styles_point_at_real_rules(self):
-        ctx = build_storybook_detail_context("switch")
+        ctx = build_catalogue_detail_context("switch")
         assert ctx["styles"], "no stylesheet rule reported for a styled component"
         top = ctx["styles"][0]
         assert top["lines"] and top["classes"]
@@ -326,11 +326,11 @@ class TestSourceAndStylesAreReported:
     def test_style_paths_resolve_to_files_on_disk(self):
         from pathlib import Path
 
-        from djust.theming.gallery.storybook import _CSS_TREES
+        from djust.theming.gallery.catalogue import _CSS_TREES
 
         roots = {label: tree for label, tree in _CSS_TREES}
         for name in ("switch", "card", "progress"):
-            for sheet in build_storybook_detail_context(name)["styles"]:
+            for sheet in build_catalogue_detail_context(name)["styles"]:
                 label, _, relative = sheet["path"].partition("/")
                 assert label in roots
                 assert Path(roots[label], relative).is_file(), sheet["path"]
@@ -345,7 +345,7 @@ class TestPreviewHostsItsInteractions:
     """Every event a preview emits resolves on the view that renders it.
 
     A component renders `dj-click="X"` because a host is expected to answer it.
-    On a storybook page this view is the host, and an unanswered event is a
+    On a catalogue page this view is the host, and an unanswered event is a
     server error rather than a no-op.
     """
 
@@ -359,9 +359,9 @@ class TestPreviewHostsItsInteractions:
 
     @pytest.mark.parametrize("component,event", sorted(REPORTED.items()))
     def test_view_answers_the_event(self, component: str, event: str):
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        handler = getattr(StorybookDetailView, event, None)
+        handler = getattr(ComponentsDetailView, event, None)
         assert handler is not None, f"{component}'s preview emits `{event}`, which nothing answers"
         assert hasattr(handler, "_djust_decorators"), f"`{event}` is not an event handler"
 
@@ -377,20 +377,21 @@ class TestPreviewHostsItsInteractions:
         event before it ran — "expected str, got bool (True)" — so the switch
         stayed stuck with its input wired to a handler that could not fire.
         """
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        handler = StorybookDetailView.toggle_switch
+        handler = ComponentsDetailView.toggle_switch
         assert handler.__annotations__.get("value") is not str
 
 
-class TestStorybookAssetsAreCacheBusted:
+class TestComponentsAssetsAreCacheBusted:
     """Django's static server sends no `Cache-Control`, so a bare link is cached.
 
-    The storybook linked `djust_components/components.css` a second time,
+    The catalogue linked `djust_components/components.css` a second time,
     unversioned, after `theme_head` had already linked it versioned — and the
     bare copy, coming second, won. An edit to that stylesheet was then
     invisible on the page it was made for, which reads as "the fix didn't
-    work". Every link the base adds of its own has to carry the token.
+    work". Every link the catalogue adds of its own has to carry the token;
+    they all live in the one `_assets.html` partial a host site includes.
     """
 
     BASE = (
@@ -398,8 +399,8 @@ class TestStorybookAssetsAreCacheBusted:
         / "theming"
         / "templates"
         / "djust_theming"
-        / "gallery"
-        / "storybook_base.html"
+        / "catalogue"
+        / "_assets.html"
     )
 
     def test_every_stylesheet_link_carries_the_version_token(self):
@@ -515,9 +516,9 @@ class TestPreviewOwnsTheDescriptorState:
     def _view(self, component_name: str):
         from django.test import RequestFactory
 
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        view = StorybookDetailView()
+        view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name=component_name)
         return view
 
@@ -558,7 +559,7 @@ class TestPreviewOwnsTheDescriptorState:
         import djust.theming as theming
 
         source = (
-            Path(theming.__file__).parent / "templates/djust_theming/gallery/storybook_detail.html"
+            Path(theming.__file__).parent / "templates/djust_theming/catalogue/detail.html"
         ).read_text()
         assert "{{ preview }}" in source
         assert "preview." not in source and "preview|" not in source
@@ -582,9 +583,9 @@ class TestEveryDemoEventResolvesOnThePreview:
     def test_dispatches_through_the_preview(self, event: str):
         from django.test import RequestFactory
 
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        view = StorybookDetailView()
+        view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="rating")
         getattr(view.preview, event)(value="4")
         assert isinstance(view.preview.state.values, dict)
@@ -592,9 +593,9 @@ class TestEveryDemoEventResolvesOnThePreview:
     def test_a_demo_value_seeds_from_the_first_example_and_moves(self):
         from django.test import RequestFactory
 
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
-        view = StorybookDetailView()
+        view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="rating")
         before = view._render_examples()[0]["html"]
         view.preview.set_rating(value=2)  # the example starts at 4; typed wire (ADR-033)
@@ -607,7 +608,7 @@ class TestEveryDemoEventResolvesOnThePreview:
         from django.test import RequestFactory
 
         from djust.theming.gallery import live_views
-        from djust.theming.gallery.live_views import StorybookDetailView
+        from djust.theming.gallery.live_views import ComponentsDetailView
 
         live_views._PREVIEW_RENDER_CACHE.clear()
         calls: list = []
@@ -621,7 +622,7 @@ class TestEveryDemoEventResolvesOnThePreview:
 
         live_views._render_preview_examples = counting
         try:
-            view = StorybookDetailView()
+            view = ComponentsDetailView()
             view.mount(RequestFactory().get("/"), component_name="switch")
             assert not view._base_ctx.get("python_examples_html")
             from django.test import override_settings
@@ -641,13 +642,13 @@ class TestPreviewTagNeedsNoDjangoTemplatesBackend:
     (a module-level `django.template.Template(...)` broke the import of every
     theme tag there — found by serving the gallery from such a project)."""
 
-    def test_storybook_preview_renders_with_only_the_djust_backend(self):
+    def test_component_preview_renders_with_only_the_djust_backend(self):
         from django.test import override_settings
 
-        from djust.theming.templatetags.theme_tags import storybook_preview
+        from djust.theming.templatetags.theme_tags import component_preview
 
         with override_settings(
             TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]
         ):
-            html = storybook_preview("badge", "python", [{"text": "New"}], {})
-        assert "sb-preview" in html and "New" in html
+            html = component_preview("badge", "python", [{"text": "New"}], {})
+        assert "dc-preview" in html and "New" in html

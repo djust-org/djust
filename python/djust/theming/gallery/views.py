@@ -1,5 +1,5 @@
 """
-Theme gallery views -- gallery, live editor, diff comparison, and component storybook.
+Theme gallery views -- gallery, live editor, diff comparison, and component catalogue.
 
 Gated by ``DEBUG=True`` or ``is_staff`` for production safety.
 """
@@ -260,12 +260,12 @@ def diff_view(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------------
-# Storybook views
+# Catalogue views
 # ---------------------------------------------------------------------------
 
 
 def _serve_liveview(view_cls: Any, request: HttpRequest, **kwargs: Any) -> HttpResponse:
-    """Serve a storybook LiveView for a plain HTTP request.
+    """Serve a catalogue LiveView for a plain HTTP request.
 
     A caller that built the request by hand (the tests do, with
     ``request.session = {}``) has no real session; the LiveView needs one
@@ -292,8 +292,8 @@ def _serve_liveview(view_cls: Any, request: HttpRequest, **kwargs: Any) -> HttpR
         return HttpResponseNotFound(escape(str(exc)))
 
 
-def storybook_index_view(request: HttpRequest) -> HttpResponse:
-    """The storybook index — the LiveView, served for an HTTP GET.
+def components_index_view(request: HttpRequest) -> HttpResponse:
+    """The catalogue index — the LiveView, served for an HTTP GET.
 
     Unrouted (`urls.py` points at the LiveViews); kept as the callable the
     tests and any importer address. It used to render the template with a
@@ -304,13 +304,13 @@ def storybook_index_view(request: HttpRequest) -> HttpResponse:
     denied = _check_access(request)
     if denied:
         return denied
-    from .live_views import StorybookIndexView
+    from .live_views import ComponentsIndexView
 
-    return _serve_liveview(StorybookIndexView, request)
+    return _serve_liveview(ComponentsIndexView, request)
 
 
-def storybook_detail_view(request: HttpRequest, component_name: str) -> HttpResponse:
-    """One component's storybook page — the LiveView, served for an HTTP GET.
+def components_detail_view(request: HttpRequest, component_name: str) -> HttpResponse:
+    """One component's catalogue page — the LiveView, served for an HTTP GET.
 
     Keeps the gallery's access gate on this path (the routed LiveView is
     deliberately ungated, a separate defect tracked on its own).
@@ -318,19 +318,19 @@ def storybook_detail_view(request: HttpRequest, component_name: str) -> HttpResp
     denied = _check_access(request)
     if denied:
         return denied
-    from .live_views import StorybookDetailView
+    from .live_views import ComponentsDetailView
 
-    return _serve_liveview(StorybookDetailView, request, component_name=component_name)
+    return _serve_liveview(ComponentsDetailView, request, component_name=component_name)
 
 
-def storybook_category_view(request: HttpRequest, category: str) -> HttpResponse:
-    """A category's storybook page — the LiveView, served for an HTTP GET."""
+def components_category_view(request: HttpRequest, category: str) -> HttpResponse:
+    """A category's catalogue page — the LiveView, served for an HTTP GET."""
     denied = _check_access(request)
     if denied:
         return denied
-    from .live_views import StorybookCategoryView
+    from .live_views import ComponentsCategoryView
 
-    return _serve_liveview(StorybookCategoryView, request, category=category)
+    return _serve_liveview(ComponentsCategoryView, request, category=category)
 
 
 # ---------------------------------------------------------------------------

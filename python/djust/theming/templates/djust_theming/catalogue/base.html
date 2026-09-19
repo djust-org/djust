@@ -1,0 +1,60 @@
+{% extends "djust_theming/catalogue/_document.html" %}
+{% load theme_tags theme_components djust_components static %}
+
+{% comment %}
+The catalogue's page shape, independent of the document around it: the mount
+root, the sidebar, and the column the three page templates fill.
+
+The document is ``_document.html``, and a host site replaces the catalogue's
+chrome by shadowing that path — see the contract in its own comment. Nothing
+in this file is chrome, so a host keeps all of it.
+
+The SIDEBAR lives here rather than in the document because it has to sit
+inside the mount root: its search box and category headers are ``dj-input`` /
+``dj-click`` server events, and djust only binds and dispatches events for
+elements inside the dj-root region.
+{% endcomment %}
+
+{% block body %}
+  {% comment %}
+  NOTE: none of these comments spell the mount tag out with angle brackets.
+  `_search_dj_root_open` scans the RAW template source, so a comment quoting
+  the tag is matched as if it were markup.
+  {% endcomment %}
+  <div dj-root>
+  <div class="dc-layout">
+    <nav class="dc-sidebar" id="dc-sidebar" aria-label="Components">
+      {% comment %}
+      `dj_input` with a debounce, not an `addEventListener` writing
+      `style.display`. The groups below are the *filtered* list the server
+      holds, so a search result is data rather than a hidden element, and a
+      category with no matches is simply not there.
+      {% endcomment %}
+      <div class="dc-sidebar-search">
+        {% theme_input "dc-search" type="search" placeholder="Search components…" value=search_query dj_input="search" dj_debounce="300" autocomplete="off" aria_label="Search components" %}
+        <span class="dc-kbd" aria-hidden="true">{% kbd "/" %}</span>
+      </div>
+      {% if recent_nav_items and not search_query %}
+      <div class="dc-sidebar-recent">
+        {% theme_nav_group "Recently viewed" items=recent_nav_items expanded=True %}
+      </div>
+      {% endif %}
+      <div class="dc-sidebar-label">Components ({{ sidebar_components|length }})</div>
+      {% for group in sidebar_groups %}
+        {% theme_nav_group group.category items=group.items expanded=group.expanded badge=group.count toggle_event="toggle_category" %}
+      {% empty %}
+        {% empty_state title="No components match" description=search_query %}
+      {% endfor %}
+    </nav>
+
+    {% comment %}
+    The view path is not named anywhere in this file. `mixins/request.py`
+    derives it from the class that rendered the page and stamps the dj-view
+    attribute onto the mount root above.
+    {% endcomment %}
+    <main class="dc-content {% block content_class %}{% endblock %}">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  </div>
+{% endblock %}

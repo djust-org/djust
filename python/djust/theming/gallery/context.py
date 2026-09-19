@@ -115,7 +115,7 @@ def _modal_examples() -> list[dict[str, Any]]:
 
     It was `sm`/`md`/`lg` side by side, which reads well as a size comparison on
     a page that can open them independently — the theming gallery gives each its
-    own trigger and its own `Modal` descriptor. A storybook page cannot: it
+    own trigger and its own `Modal` descriptor. A catalogue page cannot: it
     declares ONE descriptor per component and renders every example against that
     same state, so one trigger would open all three and they would stack on top
     of each other. `size` is documented in the PARAMETERS table; demonstrating

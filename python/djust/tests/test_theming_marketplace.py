@@ -11,7 +11,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
-from djust.theming.gallery.storybook import get_component_coverage
+from djust.theming.gallery.catalogue import get_component_coverage
 from djust.theming.manifest import ThemeManifest
 
 pytestmark = pytest.mark.theming

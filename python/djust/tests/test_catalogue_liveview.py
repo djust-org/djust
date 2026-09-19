@@ -1,4 +1,4 @@
-"""The storybook's component previews must be a real djust view.
+"""The catalogue's component previews must be a real djust view.
 
 They were a plain Django view, which renders a component's markup but cannot
 make it *work*: `dj-click` is a server event and a plain view ships no server to
@@ -18,7 +18,7 @@ event the markup declares, and assert the frame that comes back.
 these tests run under sets it to its own app plus nothing else, and setting it
 **replaces** the framework's ``"djust"`` fallback — so djust's own views cannot
 mount until the project allowlists them. That is the bug filed as #2889; this
-suite is about the storybook, and the override keeps the two independent.
+suite is about the catalogue, and the override keeps the two independent.
 """
 
 import re
@@ -26,7 +26,7 @@ import re
 import pytest
 from django.test import override_settings
 
-VIEW_PATH = "djust.theming.gallery.live_views.StorybookDetailView"
+VIEW_PATH = "djust.theming.gallery.live_views.ComponentsDetailView"
 
 # Two overrides, for two reasons documented above:
 #   LIVEVIEW_ALLOWED_MODULES  — #2889, so djust's own views may mount at all
@@ -40,7 +40,7 @@ _BASE = override_settings(
 
 
 async def _mount(component_name: str):
-    """Mount the storybook LiveView over a real WebSocket."""
+    """Mount the catalogue LiveView over a real WebSocket."""
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
 
@@ -80,7 +80,7 @@ def _html_of(payload: dict) -> str:
 @_BASE
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_storybook_view_mounts_over_the_socket():
+async def test_components_view_mounts_over_the_socket():
     """The view must resolve and mount — the allowlist is the only thing between it and the wire."""
     communicator, mounted = await _mount("accordion")
     try:
@@ -202,7 +202,7 @@ async def test_http_render_and_ws_mount_agree_structurally():
 
     # sync_to_async: the test client is synchronous and this test is not.
     def _fetch() -> str:
-        return Client().get("/theme/gallery/storybook/accordion/").content.decode()
+        return Client().get("/theme/components/accordion/").content.decode()
 
     http_html = await sync_to_async(_fetch)()
     _communicator, mounted = await _mount("accordion")
@@ -219,7 +219,7 @@ async def test_http_render_and_ws_mount_agree_structurally():
     )
 
 
-# (component, event, params) — the descriptors the storybook attaches, and the
+# (component, event, params) — the descriptors the catalogue attaches, and the
 # event each one's markup emits. `_INTERACTIVE` in live_views.py is the source
 # of truth for the set; this list is what proves each one answers.
 _INTERACTIVE_EVENTS = [
@@ -242,7 +242,7 @@ async def test_interactive_component_answers_its_event(component, event, params)
     """Rendering is not functionality: the event has to reach a handler.
 
     Each of these components emits a `dj-click` naming its own event. Before the
-    storybook became a LiveView, that click reached nothing at all — the markup
+    catalogue became a LiveView, that click reached nothing at all — the markup
     was correct and the component was inert. Mounting and asserting a non-error
     frame is what separates the two.
     """
