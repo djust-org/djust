@@ -29,7 +29,15 @@ rendered examples in `visible_components` would ship on every event.
 {% if visible_components %}
 <div class="dc-grid">
   {% for comp in visible_components %}
-  <a href="{{ comp.name }}/" class="dc-card-link">
+  {% comment %}
+  Both attributes carry the RESOLVED path. The href used to be relative
+  ("button/"), which is correct only while the document URL is still the
+  index: a dj-navigate changes the URL with pushState without reloading, so a
+  relative href on a card that outlives that swap resolves against the new
+  URL and points at /components/gauge/gauge/. `url` already accounts for the
+  mount point, so there is nothing to gain from the relative form.
+  {% endcomment %}
+  <a href="{% url 'djust_theming:components_detail' comp.name %}" class="dc-card-link" dj-navigate="{% url 'djust_theming:components_detail' comp.name %}">
     {% card title=comp.display_name class="dc-card" %}
       <div class="dc-card-head">
         {% theme_badge comp.component_type variant=comp.component_type %}

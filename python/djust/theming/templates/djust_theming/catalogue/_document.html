@@ -1,4 +1,4 @@
-{% load theme_tags theme_components static %}<!DOCTYPE html>
+{% load theme_tags theme_components live_tags static %}<!DOCTYPE html>
 <html lang="en">
 {% comment %}
 The document the component catalogue renders inside, and the ONE file a host
@@ -20,6 +20,13 @@ A replacement must:
   the sidebar and the content column, all of which must stay inside it;
 * load ``djust_theming/js/catalogue.js`` (presentation only: the ``/``
   shortcut, the narrow-screen sidebar, the table-of-contents scroll-spy);
+* render ``{% djust_client_config %}`` in its ``<head>``. That emits the
+  route map, which is what lets the catalogue's ``dj-navigate`` links
+  resolve a path to a LiveView and travel over the open socket instead of
+  reloading the document. Without it every card click is a full page load
+  that tears the socket down and re-mounts the view. Most host sites already
+  render it in their own base template, in which case there is nothing to
+  add here;
 * set ``--dc-topbar-h`` to the height of its own fixed header, if it has one.
   The catalogue offsets its fixed sidebar, its content column and its
   table-of-contents rail by that one variable, so a host never has to
@@ -34,6 +41,12 @@ which is what keeps a host page from rendering two navigations.
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Components{% endblock %}</title>
   {% include "djust_theming/catalogue/_assets.html" %}
+  {% comment %}
+  The route map and the client flags. The catalogue's own links carry
+  dj-navigate, and a dj-navigate is only honoured for a path the route map
+  resolves — so without this the pages full-load between themselves.
+  {% endcomment %}
+  {% djust_client_config %}
   {% block head_extra %}{% endblock %}
 </head>
 <body class="dc-body">

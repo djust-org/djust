@@ -586,10 +586,15 @@ class ComponentsSidebarMixin:
         collapsed = set(getattr(self, "collapsed_categories", []) or [])
 
         def nav_item(comp: Dict[str, Any]) -> Dict[str, Any]:
+            # `navigate` puts dj-navigate on the rendered link: every one of
+            # these is a catalogue LiveView route, so the click is a
+            # live_redirect over the socket that already exists rather than a
+            # document load that tears it down and re-mounts the view.
             return {
                 "label": comp["display_name"],
                 "url": reverse("djust_theming:components_detail", args=[comp["name"]]),
                 "active": comp["name"] == current,
+                "navigate": True,
             }
 
         groups: list = []
@@ -781,6 +786,11 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         from .catalogue import component_description
 
         ctx["description"] = component_description(component_name)
+        # The document title is chrome, so it lives outside the mount root and
+        # no VDOM patch can reach it. Setting it here sends a page_metadata
+        # command, which is what keeps the tab right after a dj-navigate the
+        # browser never reloaded.
+        self.page_title = str(ctx.get("display_name") or component_name) + " — Components"
         self.component_name = component_name
         self._base_ctx = ctx
         self._init_sidebar(component_name)
@@ -876,12 +886,19 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         previous/next links."""
         from django.urls import reverse
 
-        crumbs = [{"label": "Components", "url": reverse("djust_theming:components")}]
+        crumbs = [
+            {
+                "label": "Components",
+                "url": reverse("djust_theming:components"),
+                "navigate": True,
+            }
+        ]
         if ctx.get("category"):
             crumbs.append(
                 {
                     "label": ctx["category"],
                     "url": reverse("djust_theming:components_category", args=[ctx["category"]]),
+                    "navigate": True,
                 }
             )
         crumbs.append({"label": ctx.get("display_name", self.component_name), "url": ""})
@@ -961,6 +978,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
                 {
                     "label": "← " + prev_c["display_name"],
                     "url": reverse("djust_theming:components_detail", args=[prev_c["name"]]),
+                    "navigate": True,
                 }
             )
         if next_c:
@@ -968,6 +986,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
                 {
                     "label": next_c["display_name"] + " →",
                     "url": reverse("djust_theming:components_detail", args=[next_c["name"]]),
+                    "navigate": True,
                 }
             )
         return {
@@ -1024,6 +1043,8 @@ class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVie
         from .catalogue import build_catalogue_index_context
 
         ctx = build_catalogue_index_context()
+        # Keeps the tab in step with a dj-navigate; see the detail view.
+        self.page_title = "Components"
         self._init_sidebar()
         self.total_count = ctx["total_count"]
         # State holds NAMES and counts; the enriched dicts (descriptions,
@@ -1090,6 +1111,8 @@ class ComponentsCategoryView(ComponentsAccessMixin, ComponentsSidebarMixin, Live
             raise Http404(f"Unknown category: {category}")
 
         self.category = category
+        # Keeps the tab in step with a dj-navigate; see the detail view.
+        self.page_title = str(category) + " — Components"
         self._init_sidebar()
 
         # Template components carry contract counts; python components have no
@@ -1118,7 +1141,11 @@ class ComponentsCategoryView(ComponentsAccessMixin, ComponentsSidebarMixin, Live
         self._components_gallery_url = ctx.get("components_gallery_url")
         ctx.update(self._chrome_context())
         ctx["crumbs"] = [
-            {"label": "Components", "url": reverse("djust_theming:components")},
+            {
+                "label": "Components",
+                "url": reverse("djust_theming:components"),
+                "navigate": True,
+            },
             {"label": self.category, "url": ""},
         ]
         return ctx

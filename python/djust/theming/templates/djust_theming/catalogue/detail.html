@@ -109,7 +109,7 @@ A native `details` — the framework has no block-form collapsible yet.
 </details>
 
 <nav class="dc-pager" aria-label="Previous and next component">
-  {% for item in pager_items %}{% theme_nav_item item.label item.url class="dc-pager-link" %}{% endfor %}
+  {% for item in pager_items %}{% theme_nav_item item.label item.url class="dc-pager-link" navigate=True %}{% endfor %}
 </nav>
 </article>
 

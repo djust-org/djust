@@ -13,7 +13,7 @@
 
 <div class="dc-grid">
   {% for comp in category_components %}
-  <a href="{% url 'djust_theming:components_detail' comp.name %}" class="dc-card-link">
+  <a href="{% url 'djust_theming:components_detail' comp.name %}" class="dc-card-link" dj-navigate="{% url 'djust_theming:components_detail' comp.name %}">
     {% card title=comp.display_name class="dc-card" %}
       <div class="dc-card-head">
         {% theme_badge comp.component_type variant=comp.component_type %}

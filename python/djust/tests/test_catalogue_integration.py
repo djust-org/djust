@@ -437,3 +437,110 @@ class TestIconStyleStaysOffComponentArtwork:
                 (graphics if "__svg" in classes else icons).append((name, classes))
         assert graphics, "no chart rendered an svg to check"
         assert icons == [], f"a chart drew an svg the icon style would repaint: {icons}"
+
+
+# ---------------------------------------------------------------------------
+# Navigating between catalogue pages without dropping the socket
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestTheCatalogueNavigatesOverTheSocket:
+    """The catalogue is a set of LiveViews, so moving between them should be a
+    redirect over the open connection rather than a document load that closes
+    the socket and re-mounts the view.
+
+    Two halves have to be present for that. Every internal link carries
+    ``dj-navigate``, and the page carries the route map that tells the client
+    the target path is a LiveView — a ``dj-navigate`` whose path does not
+    resolve falls through to a full load.
+    """
+
+    def test_the_document_carries_the_route_map(self, catalogue_urls):
+        html = Client().get("/theme/components/").content.decode()
+        assert "_routeMap" in html, (
+            "no route map on the page: dj-navigate cannot resolve a target "
+            "and every link falls back to a full page load"
+        )
+
+    def test_a_card_links_over_the_socket(self, catalogue_urls):
+        html = Client().get("/theme/components/").content.decode()
+        assert 'dj-navigate="/theme/components/button/"' in html
+
+    def test_the_sidebar_links_over_the_socket(self, catalogue_urls):
+        html = Client().get("/theme/components/").content.decode()
+        sidebar = re.findall(r'<a[^>]*class="[^"]*sidebar-item[^"]*"[^>]*>', html)
+        assert sidebar, "no sidebar links rendered"
+        assert all("dj-navigate=" in a for a in sidebar)
+
+    def test_a_breadcrumb_links_over_the_socket(self, catalogue_urls):
+        html = Client().get("/theme/components/button/").content.decode()
+        crumbs = re.findall(r'<a[^>]*class="[^"]*breadcrumb-link[^"]*"[^>]*>', html)
+        assert crumbs, "no breadcrumb links rendered"
+        assert all("dj-navigate=" in a for a in crumbs)
+
+    def test_the_target_path_resolves_in_the_route_map(self, catalogue_urls):
+        """A dj-navigate the route map cannot resolve is a full load in
+        disguise, so the two have to agree on the path shape."""
+        html = Client().get("/theme/components/").content.decode()
+        assert "/theme/components/:component_name/" in html
+
+    def test_an_ordinary_nav_item_is_left_alone(self, catalogue_urls):
+        """`navigate` is opt-in: the shared theming components must not start
+        emitting dj-navigate for every app that renders a nav group."""
+        from django.template import Context, Template
+
+        rendered = Template(
+            '{% load theme_components %}{% theme_nav_group "G" items=items %}'
+        ).render(Context({"items": [{"label": "A", "url": "/a/"}]}))
+        assert "dj-navigate" not in rendered
+
+
+@pytest.mark.django_db
+class TestTheTabFollowsTheNavigation:
+    """A dj-navigate swaps the mount root, and the document title sits outside
+    it — no patch can reach it. The views send it as page metadata instead, so
+    a reader who never reloaded still sees the right tab."""
+
+    @pytest.mark.parametrize(
+        "path, expected",
+        [
+            ("/theme/components/", "Components"),
+            ("/theme/components/button/", "Button — Components"),
+            ("/theme/components/category/Forms/", "Forms — Components"),
+        ],
+    )
+    def test_each_page_announces_its_title(self, catalogue_urls, path, expected):
+        from django.test import RequestFactory
+        from djust.theming.gallery import live_views as lv
+
+        view_cls = {
+            "/theme/components/": lv.ComponentsIndexView,
+            "/theme/components/button/": lv.ComponentsDetailView,
+            "/theme/components/category/Forms/": lv.ComponentsCategoryView,
+        }[path]
+        kwargs = {}
+        if view_cls is lv.ComponentsDetailView:
+            kwargs["component_name"] = "button"
+        elif view_cls is lv.ComponentsCategoryView:
+            kwargs["category"] = "Forms"
+
+        view = view_cls()
+        view.mount(RequestFactory().get(path), **kwargs)
+        assert view.page_title == expected
+
+
+@pytest.mark.django_db
+class TestCardLinksSurviveTheUrlSwap:
+    """A dj-navigate changes the URL with pushState and does not reload, so a
+    relative href on the index resolves against the NEW url for as long as the
+    old DOM is on screen — "button/" under /components/gauge/ points at
+    /components/gauge/button/, which is a 404."""
+
+    def test_a_card_href_is_an_absolute_path(self, catalogue_urls):
+        html = Client().get("/theme/components/").content.decode()
+        hrefs = re.findall(r'<a[^>]*class="[^"]*dc-card-link[^"]*"[^>]*href="([^"]+)"', html)
+        hrefs += re.findall(r'<a[^>]*href="([^"]+)"[^>]*class="[^"]*dc-card-link', html)
+        assert hrefs, "no card links rendered"
+        relative = [h for h in hrefs if not h.startswith("/")]
+        assert relative == [], f"card links must not be relative: {relative[:3]}"

@@ -235,9 +235,11 @@ def _client_config_html(request: Any = None) -> Any:
     # auto_navigate (#1734, ADR-021 Stage 2): emit an opt-in flag the client
     # reads to install its delegated link-interception listener. Reads
     # LIVEVIEW_CONFIG['auto_navigate'] via the config singleton (the canonical
-    # accessor; already imported above). Default OFF → no meta, no client
-    # behavior change. Static content ("1"), so no escaping surface; CSP-clean
-    # (a <meta>, not an inline <script>).
+    # accessor; already imported above). Default ON since v1.1 (ADR-021
+    # Stage 3); a site opts out with LIVEVIEW_CONFIG["auto_navigate"] = False,
+    # which drops the meta and with it the client's link interception. Static
+    # content ("1"), so no escaping surface; CSP-clean (a <meta>, not an
+    # inline <script>).
     if config.get("auto_navigate"):
         html = html + '\n<meta name="djust-auto-navigate" content="1">'
     # Auto-emit the route map (#1733). get_route_map_script returns "" when
