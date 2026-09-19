@@ -7,7 +7,6 @@ it whole.
 
 from __future__ import annotations
 
-import importlib
 import re
 from pathlib import Path
 
@@ -22,7 +21,7 @@ if not settings.configured:
 import djust.components.components as _pkg  # noqa: E402
 from djust.theming.gallery.component_registry import (  # noqa: E402
     PYTHON_COMPONENT_EXAMPLES,
-    _to_class_name,
+    _load_component_class,
 )
 
 _COMPONENTS_DIR = Path(_pkg.__file__).parent
@@ -50,8 +49,9 @@ def _examples() -> list:
 
 
 def _instance(module_name: str, kwargs: dict, **extra):
-    module = importlib.import_module(f"djust.components.components.{module_name}")
-    cls = getattr(module, _to_class_name(module_name), None)
+    # The registry's own resolver: ``qr_code`` defines ``QRCode``, not the
+    # snake→CamelCase guess, and skipping it left a component unpinned.
+    cls, _class_name = _load_component_class(module_name)
     if cls is None:
         pytest.skip(f"registry example names a class {module_name} does not define")
     try:

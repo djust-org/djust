@@ -31,6 +31,10 @@ class MasonryGrid(Component):
         custom_class: Additional CSS classes
     """
 
+    #: ADR-033 D3: the walked state keys; ``items`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-item walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         items: Optional[list] = None,
