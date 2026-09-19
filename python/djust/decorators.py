@@ -12,6 +12,8 @@ import threading
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional, overload
 
 from ._deprecation import warn_deprecated
+from ._state import StateProperty as StateProperty
+from ._state import state as state
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from ._template_guards import alters_data  # noqa: F401 — re-export
 
@@ -609,59 +611,6 @@ def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
     prop = _ReactiveProperty(_getter, _setter)
     prop.__doc__ = func.__doc__
     return prop
-
-
-def state(default: Any = None) -> Any:
-    """
-    Decorator to mark a property as reactive state.
-
-    This provides a cleaner syntax than manually setting attributes in mount().
-    The state is automatically included in the view's context and triggers
-    re-renders when changed.
-
-    Usage:
-        class MyView(LiveView):
-            count = state(default=0)
-            message = state(default="Hello")
-
-            @event_handler
-            def increment(self):
-                self.count += 1
-
-    Args:
-        default: Default value for the state property
-
-    Returns:
-        Property descriptor for the state attribute
-    """
-
-    class StateProperty:
-        def __init__(self) -> None:
-            self.default = default
-            self.attr_name: Optional[str] = None
-            self.public_name: Optional[str] = None
-
-        def __set_name__(self, owner: type, name: str) -> None:
-            self.attr_name = f"_state_{name}"
-            self.public_name = name
-
-        def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
-            if obj is None:
-                return self
-            # __set_name__ guarantees attr_name is set before any access.
-            assert self.attr_name is not None
-            return getattr(obj, self.attr_name, self.default)
-
-        def __set__(self, obj: Any, value: Any) -> None:
-            # __set_name__ guarantees attr_name is set before any access.
-            assert self.attr_name is not None
-            setattr(obj, self.attr_name, value)
-            # Mark this as reactive state
-            if not hasattr(obj, "_reactive_state"):
-                obj._reactive_state = set()
-            obj._reactive_state.add(self.public_name)
-
-    return StateProperty()
 
 
 def computed(*deps: Any) -> Any:

@@ -3134,7 +3134,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             from urllib.parse import parse_qs
 
             qs = parse_qs(self.scope.get("query_string", b"").decode("utf-8", errors="ignore"))
-            platform = (qs.get("platform") or [None])[0]
+            platform_values = qs.get("platform")
+            platform = platform_values[0] if platform_values else None
             renderer_factory = get_renderer_factory(platform)
 
             self._runtime = ViewRuntime(

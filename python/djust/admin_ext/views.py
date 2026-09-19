@@ -17,7 +17,7 @@ from django.db.models import ForeignKey, OneToOneField, Q
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 from djust import LiveView
-from djust.decorators import debounce, event_handler, state
+from djust.decorators import StateProperty, debounce, event_handler, state
 
 from .forms import AdminFormMixin
 
@@ -235,10 +235,10 @@ class ModelListView(AdminBaseMixin, LiveView):
     # Reactive state
     search_query = state(default="")
     current_page = state(default=1)
-    ordering = state(default=None)
-    selected_ids = state(default=[])
+    ordering: StateProperty[Optional[str]] = state(default=None)
+    selected_ids: StateProperty[List[Any]] = state(default_factory=list)
     select_all = state(default=False)
-    active_filters = state(default={})
+    active_filters: StateProperty[Dict[str, Any]] = state(default_factory=dict)
 
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
@@ -537,7 +537,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
     is_saving = state(default=False)
     save_success = state(default=False)
-    redirect_url = state(default=None)
+    redirect_url: StateProperty[Optional[str]] = state(default=None)
 
     def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         super().mount(request, object_id=object_id, **kwargs)
@@ -674,7 +674,7 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
 
     confirmed = state(default=False)
     is_deleting = state(default=False)
-    redirect_url = state(default=None)
+    redirect_url: StateProperty[Optional[str]] = state(default=None)
 
     def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         self.request = request
