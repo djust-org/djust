@@ -242,7 +242,11 @@ def _make_demo_handler(event: str, effects: Any):
         for key, transform in pairs:
             if key not in values:
                 values[key] = _example_value(self.state.examples, key)
-            values[key] = transform(values[key], value)
+            # The wire carries strings; the example says what the kwarg is.
+            # `set_rating` with "4" rebuilt Rating(value="4") and the component
+            # compared an int to a str.
+            reference = _example_value(self.state.examples, key)
+            values[key] = coerce_like(reference, transform(values[key], value))
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
         self.state.values = values
@@ -263,6 +267,29 @@ def _example_value(examples: Any, key: str) -> Any:
     review 🔴1).
     """
     return examples[0].get(key) if examples else None
+
+
+def coerce_like(reference: Any, value: Any) -> Any:
+    """``value`` in the type of ``reference`` when it is a bool / int / float
+    and ``value`` is a string that parses as one; otherwise ``value`` as is."""
+    if not isinstance(value, str):
+        return value
+    if isinstance(reference, bool):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(reference, int):
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return int(float(value))
+            except ValueError:
+                return value
+    if isinstance(reference, float):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
 
 
 def _make_descriptor_handler(descriptor_cls: Any):

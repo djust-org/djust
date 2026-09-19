@@ -598,7 +598,7 @@ class TestEveryDemoEventResolvesOnThePreview:
         view.mount(RequestFactory().get("/"), component_name="rating")
         before = view._render_examples()[0]["html"]
         view.preview.set_rating(value="4")
-        assert view.preview.state.values["value"] == "4"
+        assert view.preview.state.values["value"] == 4  # coerced to the example's int
         assert view._render_examples()[0]["html"] != before
 
     def test_the_get_renders_the_examples_once(self):

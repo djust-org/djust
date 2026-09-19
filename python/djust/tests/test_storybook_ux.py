@@ -282,6 +282,27 @@ def test_the_pages_render_over_http(client):
 # ---------------------------------------------------------------------------
 
 
+class TestDemoEventsCoerceTheWireValue:
+    def test_set_rating_with_a_string_renders(self):
+        """The click arrives as "4"; the example says `value` is an int, so
+        the component is rebuilt with 4 — it compared an int to "4" before."""
+        view = _detail("rating")
+        view.preview.set_rating(value="4")
+        assert view.preview.state.values["value"] == 4
+        html = str(view.preview)
+        assert "failed to render" not in html and "rating-star" in html
+
+    def test_coerce_like(self):
+        from djust.theming.gallery.live_views import coerce_like
+
+        assert coerce_like(5, "4") == 4
+        assert coerce_like(0.5, "0.75") == 0.75
+        assert coerce_like(True, "false") is False
+        assert coerce_like("md", "lg") == "lg"
+        assert coerce_like(5, "x") == "x"
+        assert coerce_like(5, 7) == 7
+
+
 class TestUsageWithEvents:
     def test_a_descriptor_component_shows_the_class_level_form(self):
         snippet = _detail("accordion")._base_ctx["usage_snippet"]
@@ -297,7 +318,7 @@ class TestUsageWithEvents:
         assert "from djust.decorators import event_handler" in snippet
         assert "@event_handler()" in snippet
         assert 'def set_rating(self, value="", **kwargs):' in snippet
-        assert "self.component = Rating(value=value, max_stars=5)" in snippet
+        assert "self.component = Rating(value=int(value), max_stars=5)" in snippet
 
     def test_a_component_without_events_is_unchanged(self):
         view = _detail("button")

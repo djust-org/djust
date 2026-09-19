@@ -457,8 +457,18 @@ def usage_with_events(
             if key and class_name:
                 # The mount-time call again, with the kwarg this event drives
                 # bound to the incoming value — what the reader would write.
+                # The wire carries a string; convert to the kwarg's own type.
+                reference = (example or {}).get(key)
+                if isinstance(reference, bool):
+                    incoming = 'value == "true"'
+                elif isinstance(reference, int):
+                    incoming = "int(value)"
+                elif isinstance(reference, float):
+                    incoming = "float(value)"
+                else:
+                    incoming = "value"
                 kwargs_src = ", ".join(
-                    f"{k}={'value' if k == key else repr(v)}"
+                    f"{k}={incoming if k == key else repr(v)}"
                     for k, v in (example or {}).items()
                     if not k.startswith("slot_")
                 )
