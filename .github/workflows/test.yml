@@ -321,7 +321,7 @@ jobs:
         env:
           DJUST_COLLECTED_FLOOR: "1"
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto -m "not nightly" --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
       # Ancillary to the gate, so it may never fail the job: the merge gate is
       # the pytest step above, and a flaky artifact upload must not block a

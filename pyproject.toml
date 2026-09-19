@@ -170,6 +170,7 @@ markers = [
     "admin: marks tests for djust.admin_ext module",
     "theming: marks tests for djust.theming module",
     "components: marks tests for djust.components module",
+    "nightly: marks exhaustive differential sweeps for scheduled nightly CI (deselect with '-m \"not nightly\"')",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

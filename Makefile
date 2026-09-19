@@ -315,6 +315,11 @@ test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
+.PHONY: test-nightly
+test-nightly: ## Run nightly/exhaustive differential tests (-m nightly)
+	@echo "$(GREEN)Running nightly differential tests...$(NC)"
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
+
 .PHONY: test-harness
 test-harness: ## Validate and time doctor scenarios and CI shard collection
 	@PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
