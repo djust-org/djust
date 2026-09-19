@@ -365,6 +365,14 @@
         // Keep the active-nav highlight in sync on back/forward (the URL is
         // already current here), regardless of WS state. (#1756)
         updateAriaCurrent();
+        // These two returns leave `_renderedPathname` on the previous value,
+        // which is deliberate and safe: nothing was re-rendered, so the
+        // tracker still names what is on screen. It is also self-correcting —
+        // a stale tracker can only make a later popstate look like a path
+        // change, and the worst that costs is a remount that was not needed.
+        // The reverse (a missed remount, the old view left under a new URL)
+        // cannot happen, because every cross-path entry djust pushes also
+        // carries `redirect: true` and that flag is OR'd in below.
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -763,7 +771,6 @@
     }
 
     function _installNavigation() {
-        _setRenderedPathname(window.location.pathname);
         installAutoNavigate();
     }
 

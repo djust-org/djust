@@ -611,6 +611,14 @@ class ComponentsSidebarMixin:
         for group in groups:
             group["count"] = str(len(group["items"]))
 
+        # No `navigate` on these. dj-navigate swaps [dj-root] and leaves the
+        # document around it, so it only works between pages that SHARE that
+        # document. The catalogue's pages do; the theme gallery, editor and
+        # diff are each a standalone `<!DOCTYPE html>` with their own chrome
+        # and assets, so a socket navigation to one would drop its body into
+        # the catalogue's shell. These stay full loads on purpose — the case
+        # `guides/navigation.md` calls out under "When NOT to use
+        # dj-navigate".
         section_items = [
             {"label": "Components", "url": reverse("djust_theming:components"), "active": True},
             {"label": "Themes", "url": reverse("djust_theming:gallery")},
