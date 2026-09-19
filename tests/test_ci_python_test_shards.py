@@ -112,6 +112,12 @@ def test_every_gated_step_names_a_matrix_value_that_exists() -> None:
         if not cond:
             continue
         name = step.get("name") or step.get("uses")
+        # `always() && <gate>` still gates on the matrix value; it only adds
+        # "run even when an earlier step failed". Strip the prefix and check
+        # the gate exactly as before — a step that uploads what a FAILING run
+        # measured needs it, and would otherwise read as an unrecognised
+        # shape here.
+        cond = re.sub(r"^\s*always\(\)\s*&&\s*", "", str(cond))
         if m := re.fullmatch(r"\s*matrix\.group\s*==\s*(\d+)\s*", str(cond)):
             gated_groups.append((name, int(m.group(1))))
         elif m := re.fullmatch(r"\s*matrix\.python-version\s*==\s*'([^']+)'\s*", str(cond)):
