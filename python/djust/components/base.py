@@ -5,6 +5,8 @@ Provides Component (stateless) and LiveComponent (stateful) base classes for cre
 reusable, reactive components with automatic performance optimization.
 """
 
+import html as _html
+import json as _json
 import logging
 import re
 import types
@@ -297,7 +299,11 @@ class Component(TemplateMutatorGuard, ABC):
             self._rust_instance = None
 
     def __init__(
-        self, _component_key: Optional[str] = None, id: Optional[str] = None, **kwargs: Any
+        self,
+        _component_key: Optional[str] = None,
+        id: Optional[str] = None,
+        name: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize component.
@@ -308,6 +314,12 @@ class Component(TemplateMutatorGuard, ABC):
         Args:
             _component_key: Optional unique key for VDOM matching (like React key)
             id: Optional explicit ID for the component (used in HTML id attribute)
+            name: Optional instance identity (ADR-033 D5). Every event the
+                component emits through :meth:`event_attrs` carries it as
+                ``dj-value-name``, so one handler can serve several instances:
+                ``def set_rating(self, value, name=None, **kwargs)``. The
+                word HTML forms use for the same thing; ``event=`` stays a
+                rename of the verb.
             **kwargs: Component properties
         """
         self._rust_instance = None
@@ -318,6 +330,8 @@ class Component(TemplateMutatorGuard, ABC):
         # which reads attributes, and change detection, which walks state,
         # never disagree. Set before anything public so the write-through
         # below sees it.
+        if name is not None:
+            kwargs["name"] = name
         self.state: Dict[str, Any] = dict(kwargs)
 
         # Store explicit ID if provided (used by id property)
@@ -338,6 +352,45 @@ class Component(TemplateMutatorGuard, ABC):
         if self._rust_instance is None:
             for key, value in kwargs.items():
                 setattr(self, key, value)
+
+    def event_attrs(self, event: Optional[str], trigger: str = "click", **params: Any) -> str:
+        """The attributes an element emits an event with (ADR-033 D4/D5).
+
+        ``dj-<trigger>="<event>"`` followed by one typed ``dj-value-*`` per
+        keyword: an ``int`` renders ``dj-value-value:int="4"``, a ``bool``
+        ``:bool``, a ``float`` ``:float``, a ``str`` untyped, anything else
+        ``:json``; ``None`` is omitted. The client's typed-param parser
+        (``08-event-parsing.js``) hands the handler a real ``int``/``bool``,
+        so the ``int(value)`` line disappears from handlers. Underscores in a
+        key become hyphens (``item_id`` → ``dj-value-item-id``; the client
+        maps them back). When the instance has a ``name`` it is appended as
+        ``dj-value-name`` unless the caller passed one. A falsy *event*
+        renders nothing, so ``f"<button {self.event_attrs(self.event)}>"``
+        is the whole conditional. Every value is HTML-escaped here; pass raw
+        Python values, not pre-escaped strings.
+        """
+        if not event:
+            return ""
+        parts = [f'dj-{trigger}="{_html.escape(str(event), quote=True)}"']
+        instance_name = getattr(self, "name", None)
+        if instance_name and "name" not in params:
+            params["name"] = instance_name
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                suffix, text = ":bool", "true" if value else "false"
+            elif isinstance(value, int):
+                suffix, text = ":int", str(value)
+            elif isinstance(value, float):
+                suffix, text = ":float", repr(value)
+            elif isinstance(value, str):
+                suffix, text = "", value
+            else:
+                suffix, text = ":json", _json.dumps(value, separators=(",", ":"))
+            attr = "dj-value-" + str(key).replace("_", "-")
+            parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
+        return " ".join(parts)
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Write a public attribute through to ``state`` (ADR-033 D2).
