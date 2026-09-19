@@ -155,6 +155,9 @@ def _dropdown_examples() -> list[dict[str, Any]]:
             "id": "gallery-dropdown",
             "label": "Actions",
             "align": "left",
+            # Keep the menu open in the catalogue so its items are visible
+            # without requiring a server event before the example can be read.
+            "is_open": True,
             "slot_menu": items,
         }
     ]

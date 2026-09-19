@@ -444,6 +444,15 @@ class TestCodeHighlighting:
         assert '<span class="hl-nn"> djust</span>' in out, out
         assert re.sub(r"<[^>]+>", "", out) == "from djust import LiveView"  # what dj-copy copies
 
+    def test_whitespace_before_plain_shell_tokens_survives_the_pipeline(self):
+        import re
+
+        from djust.components.components.code_snippet import highlight_code
+
+        out = highlight_code("pip install djust", "bash")
+        assert re.sub(r"<[^>]+>", "", out) == "pip install djust"
+        assert "pipinstall" not in out and "installdjust" not in out
+
     def test_parameter_types_are_names_not_reprs(self):
         rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]
         value_row = next(row for row in rows if row[0] == "value")

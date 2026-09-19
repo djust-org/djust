@@ -819,6 +819,11 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # them from `examples[0]` would make the whole page show it repeated.
         descriptor_cls = _INTERACTIVE.get(component_name)
         values = dict(descriptor_cls.State()) if descriptor_cls is not None else {}
+        if component_name == "dropdown":
+            # The catalogue has one populated dropdown example. Start it open
+            # so the menu items are visible before the reader interacts with it;
+            # the hosted `toggle_dropdown` event still closes it normally.
+            values["is_open"] = True
         preview = self.preview
         preview.state.component_name = component_name
         preview.state.component_type = component_type

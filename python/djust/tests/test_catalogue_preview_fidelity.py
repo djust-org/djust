@@ -244,6 +244,30 @@ class TestSlotsReachTheTemplate:
         html = _preview("dropdown")
         assert "dropdown-item" in html
         assert len(re.findall(r'class="dropdown-item"', html)) >= 3
+        assert 'style="display:none;"' not in html
+        assert 'aria-expanded="true"' in html
+        assert re.search(
+            r'class="dropdown-menu dropdown-left"[\s\S]*role="menu"[\s\S]*data-open="true"',
+            html,
+        )
+
+    def test_checkbox_preview_has_readable_layout_hooks(self):
+        html = _preview("checkbox")
+        assert 'class="checkbox-group' in html
+        assert 'class="checkbox-label"' in html
+        assert 'class="checkbox-description"' in html
+
+    def test_live_dropdown_preview_starts_open(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        view = ComponentsDetailView()
+        view.mount(RequestFactory().get("/"), component_name="dropdown")
+        assert view.preview.state.values["is_open"] is True
+        html = "".join(example["html"] for example in view._render_examples())
+        assert 'style="display:none;"' not in html
+        assert "Edit" in html and "Archive" in html
 
 
 # ---------------------------------------------------------------------------

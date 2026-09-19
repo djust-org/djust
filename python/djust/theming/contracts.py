@@ -208,6 +208,7 @@ DROPDOWN_CONTRACT = ComponentContract(
     ),
     optional_context=(
         ContextVar(name="align", type="str", default="left"),
+        ContextVar(name="is_open", type="bool", default=False),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_trigger", type="str", default=None),

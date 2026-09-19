@@ -40,6 +40,7 @@ def highlight_code(code: str, language: str = "") -> str:
 _WS_BEFORE_TOKEN_RE = re.compile(
     r'(?:<span class="hl-w">([ \t]+)</span>|>([ \t]+))<span class="([^"]+)">'
 )
+_WS_SPAN_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>([^<]+)')
 
 
 def _fold_whitespace(highlighted: str) -> str:
@@ -60,7 +61,14 @@ def _fold_whitespace(highlighted: str) -> str:
         lead = ">" if match.group(2) is not None else ""
         return f'{lead}<span class="{match.group(3)}">{ws}'
 
-    return _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
+    folded = _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
+    # Pygments leaves some shell tokens as plain text, so the whitespace span
+    # is followed by text rather than another token span:
+    # ``pip<span class="hl-w"> </span>install``.  That whitespace-only span is
+    # discarded by the VDOM renderer for the same reason as a bare text node.
+    # Keep the following plain token in the span so the space is attached to
+    # visible content and survives the render pipeline.
+    return _WS_SPAN_BEFORE_TEXT_RE.sub(r'<span class="hl-w">\1\2</span>', folded)
 
 
 #: Names the catalogue and docs use that Pygments spells differently.
