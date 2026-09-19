@@ -1,0 +1,205 @@
+/* Components — layout only.
+ *
+ * The chrome is built from the theme's own components (`theme_nav`,
+ * `theme_nav_group`, `theme_input`, `card`, `toggle_group`, `theme_table`,
+ * `code_snippet`, `table_of_contents`, `theme_breadcrumb`, `theme_badge`);
+ * their looks come from the theme. This file places them: the fixed topbar,
+ * the fixed sidebar, the content column and the "On this page" rail, plus
+ * the few catalogue-specific bits (hero, card grid, preview surface).
+ */
+
+:root {
+  --dc-topbar-h: 3.25rem;
+  --dc-sidebar-w: 260px;
+  --dc-rail-w: 168px;
+}
+
+body.dc-body {
+  margin: 0;
+  background: hsl(var(--background, 0 0% 100%));
+  color: hsl(var(--foreground, 222 47% 11%));
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: var(--font-size-base, 16px);
+  line-height: var(--line-height, 1.5);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== Topbar ===== */
+.dc-topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  height: var(--dc-topbar-h);
+  display: flex; align-items: center; gap: 1rem; padding: 0 1rem;
+  background: hsl(var(--surface-1, var(--background, 0 0% 100%)) / 0.92);
+  border-bottom: 1px solid hsl(var(--border, 220 13% 91%));
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  font-size: 0.875rem;
+}
+.dc-topbar .dc-nav { flex: 1; min-width: 0; }
+.dc-topbar .navbar { background: transparent; border: 0; box-shadow: none; padding: 0; }
+.dc-topbar .navbar-inner { display: flex; align-items: center; gap: 1rem; padding: 0; }
+.dc-topbar .navbar-brand { font-weight: 700; white-space: nowrap; }
+.dc-topbar .navbar-nav { display: flex; gap: 0.25rem; }
+.dc-topbar .nav-link { padding: 0.35rem 0.625rem; border-radius: var(--radius-md, 0.375rem); text-decoration: none; color: hsl(var(--muted-foreground)); }
+.dc-topbar .nav-link:hover { color: hsl(var(--foreground)); }
+.dc-topbar .nav-link.active { color: hsl(var(--foreground)); background: hsl(var(--primary, 222 47% 51%) / 0.1); font-weight: 500; }
+.dc-topbar-tools { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+.dc-menu-btn {
+  display: none; border: 1px solid hsl(var(--border)); background: hsl(var(--card));
+  color: hsl(var(--foreground)); border-radius: var(--radius-md, 0.375rem);
+  padding: 0.25rem 0.5rem; font: inherit; cursor: pointer;
+}
+
+/* ===== Frame ===== */
+.dc-layout { display: flex; min-height: 100vh; padding-top: var(--dc-topbar-h); }
+
+/* ===== Sidebar (theme_input + theme_nav_group) ===== */
+.dc-sidebar {
+  position: fixed; top: var(--dc-topbar-h); left: 0; bottom: 0; z-index: 40;
+  width: var(--dc-sidebar-w);
+  background: hsl(var(--surface-2, var(--card, 0 0% 100%)));
+  border-right: 1px solid hsl(var(--border, 220 13% 91%));
+  overflow-y: auto; padding: 0.75rem 0 2rem;
+}
+.dc-sidebar-search { padding: 0 0.75rem 0.5rem; position: relative; }
+.dc-sidebar-search .input-group { margin: 0; }
+.dc-sidebar-search .input { width: 100%; box-sizing: border-box; padding-right: 2.25rem; font-size: 0.8125rem; }
+.dc-kbd { position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%); pointer-events: none; opacity: 0.7; }
+.dc-sidebar-search .input:focus ~ .dc-kbd, .dc-sidebar-search:focus-within .dc-kbd { display: none; }
+.dc-sidebar-label {
+  padding: 0.5rem 0.75rem 0.25rem; font-size: 0.6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground));
+}
+.dc-sidebar-recent { margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid hsl(var(--border) / 0.6); }
+.dc-sidebar .nav-group { border: 0; margin: 0; }
+.dc-sidebar .nav-group > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.4rem; user-select: none;
+  padding: 0.4rem 0.75rem; margin: 0; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: hsl(var(--muted-foreground));
+}
+.dc-sidebar .nav-group > summary::-webkit-details-marker { display: none; }
+.dc-sidebar .nav-group > summary::before { content: "▾"; opacity: 0.5; transition: transform 0.15s; }
+.dc-sidebar .nav-group:not([open]) > summary::before { transform: rotate(-90deg); }
+.dc-sidebar .nav-group-badge { margin-left: auto; font-weight: 500; opacity: 0.6; }
+.dc-sidebar .sidebar-menu { display: block; padding: 0; margin: 0; }
+.dc-sidebar .sidebar-item {
+  display: block; padding: 0.3rem 0.75rem 0.3rem 1.25rem; font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground)); text-decoration: none; border-left: 2px solid transparent;
+}
+.dc-sidebar .sidebar-item:hover { color: hsl(var(--foreground)); background: hsl(var(--muted, 220 13% 91%) / 0.3); }
+.dc-sidebar .sidebar-item.active {
+  color: hsl(var(--primary, 222 47% 51%)); background: hsl(var(--primary, 222 47% 51%) / 0.08);
+  border-left-color: hsl(var(--primary, 222 47% 51%)); font-weight: 500;
+}
+.dc-sidebar .empty-state { padding: 1rem; }
+
+/* ===== Content + rail ===== */
+.dc-content { margin-left: var(--dc-sidebar-w); flex: 1; min-width: 0; padding: 2rem 2.5rem 4rem; }
+.dc-content--with-rail { display: grid; grid-template-columns: minmax(0, 1fr) var(--dc-rail-w); gap: 2.5rem; align-items: start; }
+.dc-rail { position: sticky; top: calc(var(--dc-topbar-h) + 2rem); font-size: 0.8125rem; }
+.dc-rail .toc-title { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem; }
+.dc-rail .toc-item { display: block; padding: 0.25rem 0 0.25rem 0.75rem !important; color: hsl(var(--muted-foreground)); text-decoration: none; border-left: 2px solid hsl(var(--border)); }
+.dc-rail .toc-item:hover { color: hsl(var(--foreground)); }
+.dc-rail .toc-item-active { color: hsl(var(--primary)); border-left-color: hsl(var(--primary)); }
+
+/* The theme breadcrumb renders its own separator element, and
+   djust_components' stylesheet — loaded on the same page — also draws one
+   with `.breadcrumb-item::before` for ITS breadcrumb, which shares the class
+   names. Two libraries, one class: filed as a component gap; until it is
+   resolved the pseudo-element is switched off here. */
+.dc-content .breadcrumb-item::before { content: none; }
+
+/* ===== Page header ===== */
+.dc-hero { margin-bottom: 1.5rem; }
+.dc-hero p { color: hsl(var(--muted-foreground)); margin: 0; max-width: 64ch; }
+.dc-comp-title { font-family: var(--font-heading, system-ui); font-size: 1.875rem; font-weight: 700; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
+.dc-comp-desc { margin: 0 0 0.75rem; color: hsl(var(--muted-foreground)); max-width: 60ch; }
+.dc-comp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); margin-bottom: 1.5rem; }
+.badge-template { background: hsl(var(--primary, 222 47% 51%) / 0.12); color: hsl(var(--primary, 222 47% 51%)); }
+.badge-python { background: hsl(var(--muted, 220 13% 91%) / 0.5); color: hsl(var(--muted-foreground)); }
+
+/* ===== Sections (card) ===== */
+.dc-section { margin-bottom: 1.25rem; scroll-margin-top: calc(var(--dc-topbar-h) + 1rem); }
+.dc-section .card, .dc-section .dj-card { margin: 0; }
+.dc-subtitle { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); margin: 1rem 0 0.5rem; }
+.dc-badges { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.dc-note { font-size: 0.8125rem; color: hsl(var(--muted-foreground)); margin: 0.75rem 0 0; }
+.dc-note code { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+.dc-subtitle:first-child { margin-top: 0; }
+.dc-details > summary {
+  cursor: pointer; list-style: none; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); padding: 0.75rem 1.25rem;
+  border: 1px solid hsl(var(--border)); border-radius: var(--radius-lg, 0.5rem); background: hsl(var(--card));
+}
+.dc-details > summary::-webkit-details-marker { display: none; }
+.dc-details > summary::after { content: "▾"; float: right; opacity: 0.5; }
+.dc-details:not([open]) > summary::after { transform: rotate(-90deg); }
+.dc-details[open] > summary { margin-bottom: 0.75rem; }
+.dc-details pre, .dc-example-args pre { white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; }
+
+/* ===== Preview surface, playground, examples ===== */
+.dc-preview {
+  background: hsl(var(--muted, 220 13% 91%) / 0.15); border: 1px solid hsl(var(--border, 220 13% 91%));
+  border-radius: var(--radius-md, 0.375rem); padding: 1.5rem; margin-bottom: 0.75rem;
+  display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+}
+.dc-preview--empty { color: hsl(var(--muted-foreground)); font-size: 0.875rem; }
+.dc-example + .dc-example { margin-top: 1rem; }
+.dc-example-args { margin-top: 0.375rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.dc-example-args summary { cursor: pointer; }
+.dc-options { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
+.dc-option-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.dc-option-key { font-family: ui-monospace, monospace; font-size: 0.75rem; color: hsl(var(--muted-foreground)); min-width: 6rem; }
+.dc-section .dj-code-snippet, .dc-section .dj-code-snippet__pre { max-width: 100%; }
+.dc-section .dj-code-snippet__code { white-space: pre-wrap; word-break: break-word; }
+.dc-props td:first-child { font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+
+/* ===== Cards (index + category) ===== */
+.dc-filters { margin-bottom: 1.5rem; }
+.dc-filters .toggle-group { flex-wrap: wrap; }
+.dc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.dc-card-link { text-decoration: none; color: inherit; display: block; }
+.dc-card-link .card, .dc-card-link .dj-card { height: 100%; box-sizing: border-box; margin: 0; transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s; }
+.dc-card-link:hover .card, .dc-card-link:hover .dj-card { border-color: hsl(var(--primary) / 0.5); box-shadow: 0 4px 16px hsl(var(--foreground) / 0.06); transform: translateY(-1px); }
+.dc-card-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.dc-card-cat { font-size: 0.6875rem; color: hsl(var(--muted-foreground)); }
+.dc-card-desc { margin: 0 0 0.5rem; font-size: 0.8125rem; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dc-card-thumb {
+  position: relative; height: 72px; overflow: hidden; border-radius: var(--radius-md, 0.375rem); margin-bottom: 0.5rem;
+  background: hsl(var(--muted, 220 13% 91%) / 0.15); border: 1px solid hsl(var(--border) / 0.6); pointer-events: none;
+}
+.dc-card-thumb > div { transform: scale(0.72); transform-origin: top left; width: 138%; padding: 0.6rem; }
+.dc-card-meta { font-size: 0.6875rem; color: hsl(var(--muted-foreground)); }
+
+/* ===== Prev / next (theme_nav_item) ===== */
+.dc-pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem; }
+.dc-pager .nav-link { border: 1px solid hsl(var(--border)); border-radius: var(--radius-lg, 0.5rem); padding: 0.75rem 1rem; background: hsl(var(--card)); text-decoration: none; color: inherit; }
+.dc-pager .nav-link:hover { border-color: hsl(var(--primary) / 0.5); }
+.dc-pager .nav-link:last-child { margin-left: auto; }
+
+/* ===== Responsive ===== */
+@media (max-width: 980px) {
+  .dc-content--with-rail { grid-template-columns: minmax(0, 1fr); }
+  .dc-rail { display: none; }
+}
+@media (max-width: 900px) {
+  .dc-menu-btn { display: inline-block; }
+  .dc-sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+  body.dc-sidebar-open .dc-sidebar { transform: none; box-shadow: 0 0 0 100vmax hsl(var(--foreground) / 0.25); }
+  .dc-content { margin-left: 0; padding: 1.25rem 1rem 3rem; }
+}
+
+/* The version badge in the topbar and the two documentation links under a
+   component's title. Both are plain text links over theme tokens — the
+   catalogue's own CSS lays out, it does not restyle components. */
+.dc-version {
+  font-size: 0.75rem;
+  color: var(--muted-foreground, var(--color-text-secondary));
+  font-variant-numeric: tabular-nums;
+  padding-inline-end: 0.5rem;
+}
+.dc-doc-links {
+  display: flex;
+  gap: 1rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+}

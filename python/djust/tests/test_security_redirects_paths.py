@@ -51,9 +51,9 @@ def test_signup_view_rejects_protocol_relative_redirect(db, settings):
     assert view.get_success_url() == "/home/"
 
 
-def test_storybook_path_traversal_rejected():
+def test_components_path_traversal_rejected():
     """get_component_template_source rejects path-traversal payloads."""
-    from djust.theming.gallery.storybook import get_component_template_source
+    from djust.theming.gallery.catalogue import get_component_template_source
 
     # Directory traversal attempts
     assert get_component_template_source("../../../etc/passwd") == ""
@@ -65,9 +65,9 @@ def test_storybook_path_traversal_rejected():
     assert get_component_template_source("does-not-exist-anywhere") == ""
 
 
-def test_storybook_valid_component_name_still_works():
+def test_components_valid_component_name_still_works():
     """Sanity check: a known-valid component name still loads."""
-    from djust.theming.gallery.storybook import (
+    from djust.theming.gallery.catalogue import (
         COMPONENT_CONTRACTS,
         get_component_template_source,
     )
@@ -118,18 +118,18 @@ def test_signup_view_rejects_https_to_http_downgrade(db, settings):
     assert view.get_success_url() == "/home/"
 
 
-def test_storybook_rejects_null_byte():
+def test_components_rejects_null_byte():
     """get_component_template_source must reject null-byte payloads."""
-    from djust.theming.gallery.storybook import get_component_template_source
+    from djust.theming.gallery.catalogue import get_component_template_source
 
     # Null bytes are not in the allowlist -> "" fallback.
     assert get_component_template_source("foo\x00.html") == ""
     assert get_component_template_source("button\x00../../etc/passwd") == ""
 
 
-def test_storybook_rejects_uppercase():
+def test_components_rejects_uppercase():
     """get_component_template_source allowlist is lowercase-only (case-sensitive)."""
-    from djust.theming.gallery.storybook import get_component_template_source
+    from djust.theming.gallery.catalogue import get_component_template_source
 
     # Component names on disk are all lowercase; uppercase fails the allowlist.
     assert get_component_template_source("FOO") == ""

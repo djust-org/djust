@@ -1,6 +1,6 @@
-"""LiveView-backed storybook pages.
+"""LiveView-backed catalogue pages.
 
-The storybook's detail page was a plain Django view. That renders a component's
+The catalogue's detail page was a plain Django view. That renders a component's
 markup but cannot make it *work*: `dj-click` is a server event, and a plain view
 ships no server to reach, so an accordion showed a chevron and did nothing when
 clicked. The page that exists to demonstrate djust was demonstrating a dead
@@ -43,7 +43,7 @@ from djust.components.descriptors import (
 
 #: Component name -> the descriptor instance that gives it live state.
 #:
-#: Keys are the storybook's component names; values are the descriptors the
+#: Keys are the catalogue's component names; values are the descriptors the
 #: component gallery uses for the same widgets. A name absent here is a
 #: component whose examples are static markup — correct for a card or a badge,
 #: and the page documents it the same way.
@@ -77,12 +77,12 @@ _DESCRIPTOR_STUBS: Dict[str, list] = {
 
 
 # ---------------------------------------------------------------------------
-# Demo events — the storybook hosting its own previews
+# Demo events — the catalogue hosting its own previews
 # ---------------------------------------------------------------------------
 #
 # A component renders `dj-click="something"` because a host is expected to
 # answer it; that is the contract, and the documentation for each tells a
-# developer to write the handler. On a storybook page this view IS the host, so
+# developer to write the handler. On a catalogue page this view IS the host, so
 # every event its own previews emit has to resolve. An unanswered `dj-click` is
 # a server error, not a no-op — clicking it produced an error frame and a
 # console traceback on a page whose whole job is to look dependable.
@@ -289,7 +289,7 @@ def _make_descriptor_handler(descriptor_cls: Any):
 
     The descriptor's own `_handle_event` decides what the click means — an
     accordion toggles, tabs select, a modal flips — against a State rebuilt
-    from the preview's values, so the storybook does not restate any of it.
+    from the preview's values, so the catalogue does not restate any of it.
     """
     state_cls = descriptor_cls.State
     fields = [n for n in state_cls.__annotations__ if not n.startswith("_")]
@@ -322,7 +322,7 @@ def render_preview_examples(
     mechanism rather than two.
 
     Template components go through their **tag**, not their template — those
-    are different programs (`storybook._render_template_examples`).
+    are different programs (`catalogue._render_template_examples`).
     """
     key = (
         component_name,
@@ -361,7 +361,7 @@ def _render_preview_examples(
             )
         return rendered
 
-    from .storybook import _render_template_examples
+    from .catalogue import _render_template_examples
 
     if not examples:
         return []
@@ -371,15 +371,15 @@ def _render_preview_examples(
 
 
 class Preview(LiveComponent):
-    """The storybook page's live preview: one bound component owning the
-    example state, rendered by `{% storybook_preview %}`.
+    """The catalogue page's live preview: one bound component owning the
+    example state, rendered by `{% component_preview %}`.
 
     Why a component and not view attributes (ADR-032): an event that changes
     only this component's State is answered by re-rendering the preview and
     patching its subtree — the page, with its sidebar of `{% url %}` rows, is
     not rendered at all. That needs the state the previews depend on to live
     in ONE slot, so the descriptor state (accordion, tabs, modal, …) and the
-    demo values the storybook hosts by hand are both `values` here, merged
+    demo values the catalogue hosts by hand are both `values` here, merged
     into every example the way `_render_examples` always did.
 
     The page template reads it as the bare `{{ preview }}` and nothing else,
@@ -404,7 +404,7 @@ class Preview(LiveComponent):
 
     template = (
         "{% load theme_tags %}"
-        "{% storybook_preview component_name component_type examples values playground %}"
+        "{% component_preview component_name component_type examples values playground %}"
     )
 
     @event_handler()
@@ -414,7 +414,7 @@ class Preview(LiveComponent):
         ``:`` rather than ``=``: the client reads ``a=b`` in a ``dj-value`` as
         named params, so the handler would see an empty ``value``.
         """
-        from .storybook import playground_options
+        from .catalogue import playground_options
 
         key, sep, raw = str(value).partition(":")
         if not sep or not key:
@@ -482,7 +482,7 @@ def _make_forwarder(event: str):
 
     A click inside the rendered preview carries `component_id="preview"` and is
     routed to the component directly; an event sent without it — the shape the
-    storybook tests use, and what the descriptors' `Meta.event` alias used to
+    catalogue tests use, and what the descriptors' `Meta.event` alias used to
     answer on the view — reaches this forwarder instead. Either way the only
     state that changes is the preview's, so both routes patch the preview alone.
     """
@@ -496,22 +496,22 @@ def _make_forwarder(event: str):
 
 
 @functools.lru_cache(maxsize=1)
-def _all_storybook_components() -> list:
-    """The storybook index's component list, built once per process.
+def _all_catalogue_components() -> list:
+    """The catalogue index's component list, built once per process.
 
     The registry is static, so under `runserver` autoreload the list (and the
     sidebar count) refresh with the process, not with a template edit.
     """
-    from .storybook import build_storybook_index_context
+    from .catalogue import build_catalogue_index_context
 
-    return list(build_storybook_index_context().get("components", []))
+    return list(build_catalogue_index_context().get("components", []))
 
 
-class StorybookSidebarMixin:
-    """The sidebar's state and handlers, shared by every storybook page.
+class ComponentsSidebarMixin:
+    """The sidebar's state and handlers, shared by every catalogue page.
 
     The sidebar search box and the collapsible category headers were driven by a
-    `<script>` in `storybook_base.html` that filtered `.sb-sidebar-link` elements
+    `<script>` in `catalogue_base.html` that filtered `.dc-sidebar-link` elements
     by writing `style.display`. Three things were wrong with that on a page whose
     entire purpose is demonstrating djust:
 
@@ -542,10 +542,10 @@ class StorybookSidebarMixin:
         event (ADR-032 M4), so a 175-dict list that never changes was being
         fingerprinted twice per click.
         """
-        return _all_storybook_components()
+        return _all_catalogue_components()
 
     #: Session key for the sidebar's "Recently viewed" group.
-    _RECENT_KEY = "djust_storybook_recent"
+    _RECENT_KEY = "djust_components_recent"
 
     def _remember_visit(self, request: Any, component_name: str) -> None:
         """Push this component onto the visitor's recent list.
@@ -586,10 +586,15 @@ class StorybookSidebarMixin:
         collapsed = set(getattr(self, "collapsed_categories", []) or [])
 
         def nav_item(comp: Dict[str, Any]) -> Dict[str, Any]:
+            # `navigate` puts dj-navigate on the rendered link: every one of
+            # these is a catalogue LiveView route, so the click is a
+            # live_redirect over the socket that already exists rather than a
+            # document load that tears it down and re-mounts the view.
             return {
                 "label": comp["display_name"],
-                "url": reverse("djust_theming:storybook_detail", args=[comp["name"]]),
+                "url": reverse("djust_theming:components_detail", args=[comp["name"]]),
                 "active": comp["name"] == current,
+                "navigate": True,
             }
 
         groups: list = []
@@ -607,18 +612,19 @@ class StorybookSidebarMixin:
             group["count"] = str(len(group["items"]))
 
         section_items = [
-            {"label": "Gallery", "url": reverse("djust_theming:gallery")},
-            {"label": "Storybook", "url": reverse("djust_theming:storybook"), "active": True},
+            {"label": "Components", "url": reverse("djust_theming:components"), "active": True},
+            {"label": "Themes", "url": reverse("djust_theming:gallery")},
             {"label": "Editor", "url": reverse("djust_theming:editor")},
             {"label": "Diff", "url": reverse("djust_theming:diff")},
         ]
         live_url = getattr(self, "_components_gallery_url", None)
         if live_url:
-            section_items.append({"label": "Live components", "url": live_url})
+            section_items.append({"label": "Gallery (legacy)", "url": live_url})
         return {
             "sidebar_groups": groups,
             "recent_nav_items": [nav_item(c) for c in getattr(self, "recent_components", [])],
             "section_items": section_items,
+            **catalogue_chrome(),
         }
 
     def _init_sidebar(self, current_component: Optional[str] = None) -> None:
@@ -668,7 +674,53 @@ class StorybookSidebarMixin:
         """Hook for subclasses that also filter page content by the query."""
 
 
-class StorybookAccessMixin:
+#: The document the catalogue renders inside. A host site replaces its own
+#: chrome by SHADOWING this template path from an app listed before
+#: ``djust.theming`` in ``INSTALLED_APPS`` — the contract it has to meet is in
+#: the file's own comment. Not a setting: djust's Rust engine resolves
+#: ``{% extends %}`` targets literally and cannot take one from a variable, so
+#: the template loader is the override mechanism that works on both engines.
+CATALOGUE_DOCUMENT_TEMPLATE = "djust_theming/catalogue/_document.html"
+
+#: Where the prose documentation lives. The catalogue links every component to
+#: its reference entry and to the components guide, so a reader who wants the
+#: written version is one click away rather than searching for it.
+DEFAULT_DOCS_URL = "https://docs.djust.org"
+
+
+def docs_anchor(component_name: str) -> str:
+    """The reference page's anchor for *component_name*.
+
+    ``data_table`` -> ``data-table``. The docs generator derives the same slug
+    from the same name; the two are pinned against each other so a renamed
+    component cannot quietly break the link (ADR-033 follow-up).
+    """
+    return component_name.replace("_", "-")
+
+
+def catalogue_chrome() -> Dict[str, Any]:
+    """Context every catalogue page needs about the page AROUND it.
+
+    ``djust_version`` is shown in the topbar, because the catalogue runs a
+    release and the prose documentation pins a checkout, and those can differ;
+    the ``docs_*`` URLs are the prose half of every page. The document around
+    the page is chosen by the template loader rather than from here — see
+    :data:`CATALOGUE_DOCUMENT_TEMPLATE`.
+    """
+    from django.conf import settings
+
+    docs_url = str(getattr(settings, "DJUST_THEMING_DOCS_URL", DEFAULT_DOCS_URL)).rstrip("/")
+    from djust import __version__ as djust_version
+
+    return {
+        "djust_version": djust_version,
+        "docs_url": docs_url,
+        "docs_guide_url": f"{docs_url}/guides/components/",
+        "docs_reference_url": f"{docs_url}/reference/components/",
+    }
+
+
+class ComponentsAccessMixin:
     """The gallery's own access gate, honoured on every transport.
 
     The index and category pages used to call `views._check_access()` from a
@@ -679,7 +731,7 @@ class StorybookAccessMixin:
     the same predicate onto the LiveView closes that without changing *who* can
     see the page — the rule is deliberately identical to `_check_access`.
 
-    On all three storybook views. The routed function views on `main` called
+    On all three catalogue views. The routed function views on `main` called
     `_check_access` for every page; when the detail page became a routed
     LiveView it briefly lost the gate (#2926 review 🔴2), so the mixin is on
     it too — one predicate, every page, every transport.
@@ -702,10 +754,10 @@ class StorybookAccessMixin:
             raise PermissionDenied("Gallery is only available in DEBUG mode or for staff users.")
 
 
-class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
-    """One component's storybook page, with its examples actually working."""
+class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):
+    """One component's catalogue page, with its examples actually working."""
 
-    template_name = "djust_theming/gallery/storybook_detail.html"
+    template_name = "djust_theming/catalogue/detail.html"
     login_required = False
 
     #: The live preview (ADR-032): one bound component owning every example's
@@ -715,7 +767,7 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
 
     def mount(self, request: Any, component_name: Optional[str] = None, **kwargs: Any) -> None:
         from .component_registry import _COMPONENT_TO_CATEGORY
-        from .storybook import build_storybook_detail_context
+        from .catalogue import build_catalogue_detail_context
         from djust.theming.contracts import COMPONENT_CONTRACTS
 
         if not component_name or (
@@ -727,13 +779,18 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
         try:
             # The examples are the preview's; the static context must not
             # render them a second time (#2921 review 🟡3).
-            ctx = build_storybook_detail_context(component_name, render_examples=False)
+            ctx = build_catalogue_detail_context(component_name, render_examples=False)
         except KeyError as exc:
             raise Http404(f"Unknown component: {component_name}") from exc
 
-        from .storybook import component_description
+        from .catalogue import component_description
 
         ctx["description"] = component_description(component_name)
+        # The document title is chrome, so it lives outside the mount root and
+        # no VDOM patch can reach it. Setting it here sends a page_metadata
+        # command, which is what keeps the tab right after a dj-navigate the
+        # browser never reloaded.
+        self.page_title = str(ctx.get("display_name") or component_name) + " — Components"
         self.component_name = component_name
         self._base_ctx = ctx
         self._init_sidebar(component_name)
@@ -765,7 +822,7 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
         # the page's `{{ preview }}` one render. Not per event: an open item
         # would change the table and, with it, force a page render for what
         # is otherwise a preview-only click (ADR-032 D1).
-        from .storybook import component_events, split_usage, styles_for, usage_with_events
+        from .catalogue import component_events, split_usage, styles_for, usage_with_events
 
         ctx.pop("styles", None)
         rendered = self._render_examples()
@@ -829,12 +886,19 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
         previous/next links."""
         from django.urls import reverse
 
-        crumbs = [{"label": "Storybook", "url": reverse("djust_theming:storybook")}]
+        crumbs = [
+            {
+                "label": "Components",
+                "url": reverse("djust_theming:components"),
+                "navigate": True,
+            }
+        ]
         if ctx.get("category"):
             crumbs.append(
                 {
                     "label": ctx["category"],
-                    "url": reverse("djust_theming:storybook_category", args=[ctx["category"]]),
+                    "url": reverse("djust_theming:components_category", args=[ctx["category"]]),
+                    "navigate": True,
                 }
             )
         crumbs.append({"label": ctx.get("display_name", self.component_name), "url": ""})
@@ -896,16 +960,16 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
                 ]
             )
 
-        toc = [{"id": "sb-preview", "label": "Preview"}, {"id": "sb-usage", "label": "Usage"}]
+        toc = [{"id": "dc-preview", "label": "Preview"}, {"id": "dc-usage", "label": "Usage"}]
         if props_rows:
-            toc.append({"id": "sb-props", "label": "Props"})
+            toc.append({"id": "dc-props", "label": "Props"})
         elif params_rows:
-            toc.append({"id": "sb-props", "label": "Parameters"})
+            toc.append({"id": "dc-props", "label": "Parameters"})
         if a11y_rows:
-            toc.append({"id": "sb-a11y", "label": "Accessibility"})
+            toc.append({"id": "dc-a11y", "label": "Accessibility"})
         if ctx.get("available_slots"):
-            toc.append({"id": "sb-slots", "label": "Slots"})
-        toc.append({"id": "sb-source", "label": "Source & styles"})
+            toc.append({"id": "dc-slots", "label": "Slots"})
+        toc.append({"id": "dc-source", "label": "Source & styles"})
 
         prev_c, next_c = ctx.get("prev_component"), ctx.get("next_component")
         pager = []
@@ -913,14 +977,16 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
             pager.append(
                 {
                     "label": "← " + prev_c["display_name"],
-                    "url": reverse("djust_theming:storybook_detail", args=[prev_c["name"]]),
+                    "url": reverse("djust_theming:components_detail", args=[prev_c["name"]]),
+                    "navigate": True,
                 }
             )
         if next_c:
             pager.append(
                 {
                     "label": next_c["display_name"] + " →",
-                    "url": reverse("djust_theming:storybook_detail", args=[next_c["name"]]),
+                    "url": reverse("djust_theming:components_detail", args=[next_c["name"]]),
+                    "navigate": True,
                 }
             )
         return {
@@ -935,6 +1001,11 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
             "styles_rows": styles_rows,
             "toc_items": toc,
             "pager_items": pager,
+            # The prose half of this page: the generated reference entry for
+            # this component, and the guide that explains the model behind it.
+            "docs_component_url": (
+                f"{catalogue_chrome()['docs_reference_url']}#{docs_anchor(self.component_name)}"
+            ),
         }
 
     def _neighbours(self) -> tuple:
@@ -951,13 +1022,13 @@ class StorybookDetailView(StorybookAccessMixin, StorybookSidebarMixin, LiveView)
 for _event in (
     list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()] + ["set_option"]
 ):
-    if not hasattr(StorybookDetailView, _event):
-        setattr(StorybookDetailView, _event, _make_forwarder(_event))
+    if not hasattr(ComponentsDetailView, _event):
+        setattr(ComponentsDetailView, _event, _make_forwarder(_event))
 del _event
 
 
-class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
-    """The storybook landing page: every component, filterable.
+class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):
+    """The catalogue landing page: every component, filterable.
 
     Was a plain Django function view whose entire filtering behaviour was a
     `<script>` toggling `style.display` on the cards. The chips and the search
@@ -965,13 +1036,15 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
     what is being shown.
     """
 
-    template_name = "djust_theming/gallery/storybook_index.html"
+    template_name = "djust_theming/catalogue/index.html"
     login_required = False
 
     def mount(self, request: Any, **kwargs: Any) -> None:
-        from .storybook import build_storybook_index_context
+        from .catalogue import build_catalogue_index_context
 
-        ctx = build_storybook_index_context()
+        ctx = build_catalogue_index_context()
+        # Keeps the tab in step with a dj-navigate; see the detail view.
+        self.page_title = "Components"
         self._init_sidebar()
         self.total_count = ctx["total_count"]
         # State holds NAMES and counts; the enriched dicts (descriptions,
@@ -1005,7 +1078,7 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
 
     def _on_search(self) -> None:
         # The grid honours the sidebar's query too. That was a second,
-        # separately-written `style.display` loop in storybook_index.html
+        # separately-written `style.display` loop in catalogue_index.html
         # duplicating the sidebar's own — one query, two code paths.
         self._filter_components()
 
@@ -1025,10 +1098,10 @@ class StorybookIndexView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
 # ---------------------------------------------------------------------------
 
 
-class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveView):
+class ComponentsCategoryView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):
     """One category's components. Same sidebar, so the same handlers."""
 
-    template_name = "djust_theming/gallery/storybook_category.html"
+    template_name = "djust_theming/catalogue/category.html"
     login_required = False
 
     def mount(self, request: Any, category: Optional[str] = None, **kwargs: Any) -> None:
@@ -1038,6 +1111,8 @@ class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveVie
             raise Http404(f"Unknown category: {category}")
 
         self.category = category
+        # Keeps the tab in step with a dj-navigate; see the detail view.
+        self.page_title = str(category) + " — Components"
         self._init_sidebar()
 
         # Template components carry contract counts; python components have no
@@ -1066,7 +1141,11 @@ class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveVie
         self._components_gallery_url = ctx.get("components_gallery_url")
         ctx.update(self._chrome_context())
         ctx["crumbs"] = [
-            {"label": "Storybook", "url": reverse("djust_theming:storybook")},
+            {
+                "label": "Components",
+                "url": reverse("djust_theming:components"),
+                "navigate": True,
+            },
             {"label": self.category, "url": ""},
         ]
         return ctx
@@ -1075,7 +1154,7 @@ class StorybookCategoryView(StorybookAccessMixin, StorybookSidebarMixin, LiveVie
 # There is deliberately no `ThemeGalleryView` here.
 #
 # The theme gallery looks like a candidate for the same treatment as the
-# storybook — it renders the same `theme_tabs` / `theme_modal` /
+# catalogue — it renders the same `theme_tabs` / `theme_modal` /
 # `theme_dropdown` components, and they are descriptor-friendly. It cannot be
 # one: `gallery.html` uses all 25 `{% theme_* %}` tags, and those are registered
 # with **Django's** template engine only. Nothing registers them with djust's

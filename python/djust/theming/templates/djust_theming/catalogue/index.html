@@ -1,0 +1,56 @@
+{% extends "djust_theming/catalogue/base.html" %}
+{% load theme_tags theme_components djust_components %}
+
+{% block title %}Components{% endblock %}
+
+{% block catalogue_content %}
+<div class="dc-hero">
+  <h1 class="dc-comp-title">Components</h1>
+  <p>
+    {{ total_count }} components across {{ components_by_category|length }} categories.
+    Pick one to see it live, copy the usage, and read its props.
+  </p>
+</div>
+
+{% comment %}
+The category filter is a `toggle_group` bound to `set_category`; the pressed
+chip is the server's `active_category`, rendered rather than toggled in JS.
+{% endcomment %}
+<div class="dc-filters">
+  {% toggle_group name="category" options=category_options value=active_category event="set_category" size="sm" %}
+</div>
+
+{% comment %}
+One `card` per component — `visible_components` is the server's filtered
+list, so an empty result is an `empty_state`, not every card `display:none`.
+The thumbnail is a template tag over a process-wide cache, not state: 24
+rendered examples in `visible_components` would ship on every event.
+{% endcomment %}
+{% if visible_components %}
+<div class="dc-grid">
+  {% for comp in visible_components %}
+  {% comment %}
+  Both attributes carry the RESOLVED path. The href used to be relative
+  ("button/"), which is correct only while the document URL is still the
+  index: a dj-navigate changes the URL with pushState without reloading, so a
+  relative href on a card that outlives that swap resolves against the new
+  URL and points at /components/gauge/gauge/. `url` already accounts for the
+  mount point, so there is nothing to gain from the relative form.
+  {% endcomment %}
+  <a href="{% url 'djust_theming:components_detail' comp.name %}" class="dc-card-link" dj-navigate="{% url 'djust_theming:components_detail' comp.name %}">
+    {% card title=comp.display_name class="dc-card" %}
+      <div class="dc-card-head">
+        {% theme_badge comp.component_type variant=comp.component_type %}
+        <span class="dc-card-cat">{{ comp.category }}</span>
+      </div>
+      {% if comp.description %}<p class="dc-card-desc">{{ comp.description }}</p>{% endif %}
+      {% component_thumbnail comp.name as thumb %}{% if thumb %}<div class="dc-card-thumb" aria-hidden="true"><div>{{ thumb }}</div></div>{% endif %}
+      {% if comp.example_count %}<div class="dc-card-meta">{{ comp.example_count }} example{{ comp.example_count|pluralize }}</div>{% endif %}
+    {% endcard %}
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+  {% empty_state title="No components match" description=search_query %}
+{% endif %}
+{% endblock %}

@@ -1,7 +1,7 @@
-"""Every storybook page must document an import that actually imports.
+"""Every catalogue page must document an import that actually imports.
 
 The USAGE snippet's import line used to be spelled out in
-`storybook_detail.html` as `from djust_components.components.<name> import
+`catalogue_detail.html` as `from djust_components.components.<name> import
 <Name>`, and both halves of that were wrong:
 
 * `djust_components` is the **static** namespace (`static/djust_components/`),
@@ -20,14 +20,14 @@ from djust.theming.gallery.component_registry import (
     _COMPONENT_TO_CATEGORY,
     get_python_component_import,
 )
-from djust.theming.gallery.storybook import build_storybook_detail_context
+from djust.theming.gallery.catalogue import build_catalogue_detail_context
 
 
 def _python_components() -> list[str]:
     return [
         name
         for name in sorted(_COMPONENT_TO_CATEGORY)
-        if build_storybook_detail_context(name).get("component_type") == "python"
+        if build_catalogue_detail_context(name).get("component_type") == "python"
     ]
 
 
@@ -40,7 +40,7 @@ def test_every_generated_import_line_executes():
     """The point of the fix. This fails on the old `djust_components.…` line."""
     broken = {}
     for name in _python_components():
-        line = build_storybook_detail_context(name)["import_line"]
+        line = build_catalogue_detail_context(name)["import_line"]
         if not line:
             continue  # documented as having no class — asserted separately
         try:
@@ -48,7 +48,7 @@ def test_every_generated_import_line_executes():
         except Exception as exc:  # noqa: BLE001 — any failure is the finding
             broken[name] = f"{line!r} -> {type(exc).__name__}: {exc}"
 
-    assert not broken, f"storybook documents unimportable lines: {broken}"
+    assert not broken, f"catalogue documents unimportable lines: {broken}"
 
 
 def test_a_module_with_no_component_class_documents_no_import():
@@ -57,7 +57,7 @@ def test_a_module_with_no_component_class_documents_no_import():
     The old template emitted `import ServerEventToast` for it — a name that
     exists nowhere.
     """
-    ctx = build_storybook_detail_context("server_event_toast")
+    ctx = build_catalogue_detail_context("server_event_toast")
 
     assert ctx["component_type"] == "python"
     assert ctx["import_line"] == ""
@@ -77,14 +77,14 @@ def test_a_module_with_several_components_documents_all_of_them():
 
     assert names == ["FieldError", "FormErrors"]
 
-    line = build_storybook_detail_context("form_validation")["import_line"]
+    line = build_catalogue_detail_context("form_validation")["import_line"]
     assert "FieldError" in line and "FormErrors" in line
 
 
 def test_pages_do_not_name_the_static_namespace_as_a_package():
     """The static namespace must never appear in a Python import line."""
     for name in _python_components():
-        line = build_storybook_detail_context(name)["import_line"]
+        line = build_catalogue_detail_context(name)["import_line"]
         assert "djust_components." not in line, f"{name}: {line!r}"
 
 
@@ -97,7 +97,7 @@ def _template_component_names() -> list[str]:
     return [
         name
         for name in sorted(_COMPONENT_TO_CATEGORY)
-        if build_storybook_detail_context(name).get("component_type") == "template"
+        if build_catalogue_detail_context(name).get("component_type") == "template"
     ]
 
 
@@ -117,7 +117,7 @@ def test_every_template_component_gets_a_rendered_preview():
     """
     unrendered = {}
     for name in _template_component_names():
-        ctx = build_storybook_detail_context(name)
+        ctx = build_catalogue_detail_context(name)
         previews = ctx.get("template_examples_html") or []
         if not previews:
             unrendered[name] = "no previews produced"
@@ -136,7 +136,7 @@ def test_the_preview_is_not_the_invocation():
     import re
 
     for name in _template_component_names():
-        ctx = build_storybook_detail_context(name)
+        ctx = build_catalogue_detail_context(name)
         for preview in ctx.get("template_examples_html") or []:
             assert not re.match(rf"^\s*{re.escape(name)}\(", preview["html"]), (
                 f"{name}: the preview is the invocation, not the component"

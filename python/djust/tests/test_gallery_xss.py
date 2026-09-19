@@ -31,14 +31,14 @@ def rf():
 
 
 @override_settings(DEBUG=True)
-def test_theming_storybook_unknown_component_escaped_in_404(rf):
+def test_theming_catalogue_unknown_component_escaped_in_404(rf):
     """Unknown component name with HTML payload must be escaped in the 404 body."""
-    from djust.theming.gallery.views import storybook_detail_view
+    from djust.theming.gallery.views import components_detail_view
 
     payload = "foo<script>alert(1)</script>"
-    request = rf.get(f"/storybook/{payload}/")
+    request = rf.get(f"/catalogue/{payload}/")
     request.session = {}
-    response = storybook_detail_view(request, component_name=payload)
+    response = components_detail_view(request, component_name=payload)
 
     assert response.status_code == 404
     body = response.content.decode()
@@ -47,14 +47,14 @@ def test_theming_storybook_unknown_component_escaped_in_404(rf):
 
 
 @override_settings(DEBUG=True)
-def test_theming_storybook_unknown_category_escaped_in_404(rf):
+def test_theming_catalogue_unknown_category_escaped_in_404(rf):
     """Unknown category with HTML payload must be escaped in the 404 body."""
-    from djust.theming.gallery.views import storybook_category_view
+    from djust.theming.gallery.views import components_category_view
 
     payload = "foo<img src=x onerror=alert(1)>"
-    request = rf.get(f"/storybook/cat/{payload}/")
+    request = rf.get(f"/catalogue/cat/{payload}/")
     request.session = {}
-    response = storybook_category_view(request, category=payload)
+    response = components_category_view(request, category=payload)
 
     assert response.status_code == 404
     body = response.content.decode()

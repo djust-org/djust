@@ -13,6 +13,7 @@ Provides:
 import importlib
 import inspect
 import logging
+import re
 from typing import Any
 
 from django.utils.html import escape
@@ -250,6 +251,16 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
             "active": "1",
         },
     ],
+    "table_of_contents": [
+        {
+            "items": [
+                {"id": "intro", "label": "Introduction"},
+                {"id": "usage", "label": "Usage"},
+                {"id": "props", "label": "Parameters"},
+            ],
+            "active": "usage",
+        },
+    ],
     "dropdown_menu": [
         {
             "label": "Actions",
@@ -324,7 +335,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     # examples passed the wrong keys, so the star count and the value fell back
     # to defaults while the preview still looked plausible.
     #
-    # One example rather than two: every example on a storybook page is
+    # One example rather than two: every example on a catalogue page is
     # rendered against the *same* live state, so a second, deliberately
     # different rating (`readonly`, value 2) would silently mirror whatever the
     # first one was clicked to. `readonly` is documented in the PARAMETERS
@@ -571,7 +582,7 @@ def _load_component_class(component_name: str) -> tuple[Any, str]:
     The class is NOT always the snake→CamelCase of the module name: ``qr_code``
     defines ``QRCode``, and guessing ``QrCode`` silently produced an empty
     preview, an empty signature table and a broken import line. Reading the
-    module is what keeps the storybook's USAGE import, its PARAMETERS table and
+    module is what keeps the catalogue's USAGE import, its PARAMETERS table and
     its rendered example agreeing with each other.
 
     Never raises — callers decide what a missing class means.
@@ -636,6 +647,27 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         )
 
 
+#: What ``get_python_component_signature`` writes for a parameter with no
+#: default. Read rather than re-derived, so a legitimate ``None`` default is
+#: never mistaken for a required parameter.
+_NO_DEFAULT = "—"
+
+#: What a component writes for "the caller did not pass this", when its
+#: default is a private sentinel rather than a value. The repr of such an
+#: object carries its memory address, which is different on every run — a
+#: documentation page generated from it is not reproducible, and a props
+#: table showing ``<object object at 0x102743770>`` tells a reader nothing.
+NOT_SUPPLIED = "NOT_SUPPLIED"
+
+
+def _default_source(default: Any) -> str:
+    """A parameter's default, as source a reader could type."""
+    if default is inspect.Parameter.empty:
+        return _NO_DEFAULT
+    text = repr(default)
+    return NOT_SUPPLIED if " object at 0x" in text else text
+
+
 def get_python_component_signature(component_name: str) -> list[dict] | None:
     """Return parameter info for a Python component's __init__ method.
 
@@ -655,9 +687,7 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
                 {
                     "name": param_name,
                     "kind": str(param.kind.name),
-                    "default": (
-                        repr(param.default) if param.default is not inspect.Parameter.empty else "—"
-                    ),
+                    "default": _default_source(param.default),
                     "annotation": (
                         str(param.annotation)
                         if param.annotation is not inspect.Parameter.empty
@@ -757,7 +787,41 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "button": [{"label": "Example"}],
-        "calendar_heatmap": [{}],
+        # Without data every cell sits at the empty level, so the preview was
+        # an empty grid. One month of commit-shaped activity gives the scale
+        # something to colour.
+        "calendar_heatmap": [
+            {
+                "data": {
+                    "2026-01-02": 1,
+                    "2026-01-03": 3,
+                    "2026-01-05": 5,
+                    "2026-01-06": 8,
+                    "2026-01-07": 2,
+                    "2026-01-09": 4,
+                    "2026-01-10": 11,
+                    "2026-01-11": 6,
+                    "2026-01-12": 1,
+                    "2026-01-14": 2,
+                    "2026-01-15": 7,
+                    "2026-01-16": 9,
+                    "2026-01-17": 3,
+                    "2026-01-19": 1,
+                    "2026-01-20": 5,
+                    "2026-01-21": 12,
+                    "2026-01-22": 8,
+                    "2026-01-23": 4,
+                    "2026-01-25": 2,
+                    "2026-01-26": 6,
+                    "2026-01-27": 10,
+                    "2026-01-28": 3,
+                    "2026-01-29": 1,
+                    "2026-01-31": 7,
+                },
+                "year": 2026,
+                "title": "Contributions",
+            }
+        ],
         "calendar_view": [{}],
         "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
         "carousel": [
@@ -959,7 +1023,8 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "gauge": [{}],
+        # A gauge at 0 with no label shows nothing about what a gauge is.
+        "gauge": [{"value": 72, "max_value": 100, "label": "Disk used"}],
         "heatmap": [
             {
                 "data": [[1, 4, 2], [3, 0, 5], [2, 6, 1]],
@@ -1282,3 +1347,211 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "voice_input": [{"lang": "en-US"}],
     }
 )
+
+
+#: The keys :func:`describe_component` always returns. Pinned as a constant so
+#: a consumer in another repository (the documentation generator) can assert
+#: the shape it depends on rather than discovering a missing key at build time.
+COMPONENT_DESCRIPTION_KEYS = (
+    "name",
+    "display_name",
+    "category",
+    "component_type",
+    "description",
+    "import_line",
+    "class_name",
+    "params",
+    "examples",
+    "events",
+    "accessibility",
+    "slots",
+    "style_paths",
+    "python_class",
+)
+
+
+def describe_component(component_name: str) -> dict:
+    """Everything known about one component, as data.
+
+    This is the contract the component catalogue and the prose documentation
+    share. The catalogue renders it; ``docs.djust.org`` generates its reference
+    page from the same call, so the two cannot describe a component
+    differently — before this, the generator read constructor signatures only
+    and had no access to the descriptions, examples, events, accessibility
+    rules or slots the registry carries.
+
+    Returns a dict with exactly :data:`COMPONENT_DESCRIPTION_KEYS`:
+
+    ``params``
+        ``[{"name", "type", "default", "doc"}]`` — the constructor's own
+        parameters for a python component, the template contract's context
+        variables for a contracted one.
+    ``examples``
+        The kwarg dicts the catalogue previews, usable verbatim in a snippet.
+    ``events``
+        Server event names the component's markup emits, in the order they
+        appear. Derived by rendering the first example, which is the only way
+        to see what a component actually emits.
+    ``style_paths``
+        ``[(label, path)]`` — where to override it: the module or template,
+        and the stylesheet that defines its classes.
+    ``python_class``
+        ``{"class_name", "import_line", "params"}`` when a Python class of the
+        same name ALSO exists, which is the case for most contracted
+        components: ``{% theme_alert %}`` and ``Alert`` are two ways to render
+        one component, and a reader on either side needs to know the other is
+        there. ``None`` when there is no such class, and for a component that
+        IS a class (its own keys carry it).
+
+    Raises ``KeyError`` for an unknown component, as
+    ``build_catalogue_detail_context`` does.
+    """
+    from .catalogue import (
+        build_catalogue_detail_context,
+        component_description,
+        component_events,
+    )
+
+    ctx = build_catalogue_detail_context(component_name, render_examples=False)
+    is_template = ctx.get("component_type") == "template"
+
+    if is_template:
+        # A template contract records a variable's name, type and whether it
+        # is required, but never what it MEANS. Most contracted components
+        # are also a Python class whose docstring documents exactly these
+        # names, so that is where the descriptions come from — otherwise both
+        # this page and the catalogue's props table show an em dash in every
+        # row.
+        contract_cls, _contract_class_name = _load_component_class(component_name)
+        contract_docs = _docstring_args(contract_cls)
+        params = [
+            {
+                "name": p.get("name", ""),
+                "type": str(p.get("type", "") or ""),
+                "default": p.get("default"),
+                "doc": p.get("description") or contract_docs.get(p.get("name", ""), ""),
+                "required": required,
+                "kind": "",
+            }
+            for required, group in (
+                (True, ctx.get("required_context") or []),
+                (False, ctx.get("optional_context") or []),
+            )
+            for p in group
+        ]
+    else:
+        cls, _class_name = _load_component_class(component_name)
+        arg_docs = _docstring_args(cls)
+        params = [
+            {
+                "name": p.get("name", ""),
+                # ``<class 'float'>`` is the repr of a type, not a type name.
+                "type": _annotation_name(p.get("annotation")),
+                "default": p.get("default"),
+                "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
+                "required": p.get("default") == _NO_DEFAULT,
+                "kind": p.get("kind", ""),
+            }
+            for p in ctx.get("python_params") or []
+        ]
+
+    examples = list(ctx.get("examples") or []) or list(
+        PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
+    )
+
+    events: list[str] = []
+    if examples:
+        try:
+            if is_template:
+                from .catalogue import _render_template_examples
+
+                rendered = _render_template_examples(component_name, examples[:1])
+                html = "".join(e.get("html", "") for e in rendered)
+            else:
+                html = render_python_component_example(component_name, dict(examples[0]))
+            events = component_events(html)
+        except Exception:  # noqa: BLE001 — a component that cannot render has no events to report
+            logger.debug("could not scan events for %s", sanitize_for_log(component_name))
+
+    style_paths = []
+    if ctx.get("template_path"):
+        style_paths.append(("template", str(ctx["template_path"])))
+    if ctx.get("module_path"):
+        style_paths.append(("module", str(ctx["module_path"])))
+    if ctx.get("css_path"):
+        style_paths.append(("css", str(ctx["css_path"])))
+
+    python_class = None
+    if is_template:
+        cls, class_name = _load_component_class(component_name)
+        if cls is not None:
+            arg_docs = _docstring_args(cls)
+            signature = get_python_component_signature(component_name) or []
+            python_class = {
+                "class_name": class_name,
+                "import_line": f"from djust.components import {class_name}",
+                "params": [
+                    {
+                        "name": p.get("name", ""),
+                        "type": _annotation_name(p.get("annotation")),
+                        "default": p.get("default"),
+                        "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
+                        "required": p.get("default") == _NO_DEFAULT,
+                        "kind": p.get("kind", ""),
+                    }
+                    for p in signature
+                ],
+            }
+
+    return {
+        "name": component_name,
+        "display_name": ctx.get("display_name", component_name.replace("_", " ").title()),
+        "category": ctx.get("category", ""),
+        "component_type": ctx.get("component_type", "python"),
+        # The detail context does not carry the one-line description (the
+        # index page computes it); the reference entry leads with it, so it is
+        # part of this contract rather than something a consumer re-derives.
+        "description": ctx.get("description") or component_description(component_name) or "",
+        "import_line": ctx.get("import_line", "") or "",
+        "class_name": ctx.get("class_name", "") or "",
+        "params": params,
+        "examples": examples,
+        "events": events,
+        "accessibility": list(ctx.get("accessibility") or []),
+        "slots": list(ctx.get("available_slots") or []),
+        "style_paths": style_paths,
+        "python_class": python_class,
+    }
+
+
+def _docstring_args(cls: Any) -> dict:
+    """``{parameter: description}`` from a class's ``Args:`` block.
+
+    The parameter descriptions a component's author wrote. Neither the
+    signature nor the registry carries them, so both the catalogue's
+    parameters table and the generated reference showed an em dash for every
+    row until this read them off the docstring.
+    """
+    if cls is None:
+        return {}
+    doc = inspect.getdoc(cls) or ""
+    match = re.search(r"(?:^|\n)Args:\n(.*?)(?=\n\S|\Z)", doc, re.S)
+    if not match:
+        return {}
+    described: dict = {}
+    current = None
+    for line in match.group(1).splitlines():
+        entry = re.match(r"^\s+(\w+)(?:\s*\([^)]*\))?:\s*(.*)", line)
+        if entry:
+            current = entry[1]
+            described[current] = entry[2].strip()
+        elif current and line.strip():
+            described[current] += " " + line.strip()
+    return described
+
+
+def _annotation_name(annotation: Any) -> str:
+    text = str(annotation or "")
+    if text.startswith("<class '") and text.endswith("'>"):
+        return text[8:-2]
+    return text

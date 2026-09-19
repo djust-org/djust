@@ -11,7 +11,15 @@
             {{ slot_items|safe }}
         {% else %}
             {% for item in items %}
-            <a href="{{ item.url }}" class="{{ css_prefix }}sidebar-item{% if item.active %} active{% endif %}"{% if item.active %} aria-current="page"{% endif %}>
+            {% comment %}
+            `navigate` is opt-in per item: a link the app knows points at a
+            LiveView route carries dj-navigate so a plain left click goes over
+            the open socket instead of reloading the document. The href is
+            what makes the rest still work — copy-link, crawlers, and the
+            modified clicks (Cmd, Ctrl, Shift, Alt, middle button) that
+            dj-navigate deliberately does not intercept.
+            {% endcomment %}
+            <a href="{{ item.url }}" class="{{ css_prefix }}sidebar-item{% if item.active %} active{% endif %}"{% if item.active %} aria-current="page"{% endif %}{% if item.navigate and item.url %} dj-navigate="{{ item.url }}"{% endif %}>
                 {% if item.icon %}<span class="{{ css_prefix }}nav-item-icon">{{ item.icon }}</span>{% endif %}
                 {{ item.label }}
                 {% if item.badge %}<span class="{{ css_prefix }}sidebar-item-count">{{ item.badge }}</span>{% endif %}

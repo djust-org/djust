@@ -171,6 +171,54 @@ marked current, and an `aria-current` you set yourself to a different value
 section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
 your own rule on top.
 
+#### What the back button does
+
+Going back has two meanings and djust has to tell them apart. Back to a
+**different path** is a different view, so it re-mounts. Back to the **same
+path with different query parameters** is the same view seeing new parameters,
+so it sends `handle_params` and keeps your scroll position, your inputs and
+your view state.
+
+The pathname is what decides it. djust records the path the mounted view is
+showing and compares on `popstate`, because `popstate` fires after the address
+bar has already changed and cannot otherwise see where it came from.
+
+djust does not write to the history entry your page was loaded on. An earlier
+version did, and it broke `dj-patch`: a patch pushes an entry that is not a
+redirect, so backing out of a patched URL onto a stamped entry re-mounted the
+view and threw away exactly the state the patch path exists to preserve.
+
+A `live_redirect` still marks its own entries, so an explicit redirect to the
+same path re-mounts as you asked.
+
+#### When NOT to use `dj-navigate`
+
+`dj-navigate` swaps the contents of `[dj-root]`. Everything outside it — the
+`<head>` above all — belongs to the document the reader already has. So a
+target page that needs its own stylesheet or script in `<head>` arrives as
+*unstyled markup*: the HTML is right, the CSS that makes it a page was never
+loaded, and nothing errors.
+
+Link to such a page with a plain `href`, so the browser fetches the whole
+document:
+
+```html
+{# Same application, same base template: SPA navigation is right. #}
+<a dj-navigate="/dashboard/">Dashboard</a>
+
+{# A page that brings its own head assets — another app's LiveViews, a
+   section with its own stylesheet. A real navigation, deliberately. #}
+<a href="/components/">Components</a>
+```
+
+Two symptoms name this mistake when you hit it: the destination renders with
+no styling, and `document.title` still shows the page you came from. The
+title is the same cause — `<title>` lives in `<head>`, so a `dj-root`-only
+swap cannot touch it. A LiveView that wants the tab title to follow SPA
+navigation sets it from Python with
+[`self.page_title`](document-metadata.md); a page whose title is a
+`{% block title %}` in its template only gets it on a full load.
+
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard
 > reload but stays blank after navigation. Initialize third-party libraries from

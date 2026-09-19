@@ -269,7 +269,7 @@
         // `dj-view` is the signal: the server stamps it onto the mount root of
         // every LiveView render (`mixins/request.py`), and a plain Django page
         // never has one. The theming gallery and the theme editor are plain
-        // pages, so they keep this fallback; the storybook's pages are
+        // pages, so they keep this fallback; the catalogue's pages are
         // LiveViews, so they do not.
         if (document.querySelector('[dj-view]')) return;
 

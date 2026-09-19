@@ -3395,6 +3395,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 sticky_preserved=sticky_preserved,
                 state_snapshot=state_snapshot,
             )
+            # Anything the new view's ``mount()`` queued for the client has to
+            # go out here. On an HTTP load the document carries the title and
+            # meta tags, so nothing queued at mount ever needed sending; a
+            # redirect mount has no document render, so without this flush a
+            # view that sets ``self.page_title`` in ``mount()`` leaves the tab
+            # showing the page the reader navigated away from.
+            await self._flush_all_pending()
         except Exception:
             # Drain any staged stickys so their async tasks / groups
             # clean up. Without this, a render/auth failure on the NEW

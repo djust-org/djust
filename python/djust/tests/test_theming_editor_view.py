@@ -70,28 +70,28 @@ _URL_SETTINGS = {"ROOT_URLCONF": "tests.gallery_test_urls"}
 class TestEditorURLResolution:
     @override_settings(**_URL_SETTINGS)
     def test_editor_url_resolves_to_view(self):
-        match = resolve("/theming/gallery/editor/")
+        match = resolve("/theming/themes/editor/")
         assert match.func is editor_view
 
     @override_settings(**_URL_SETTINGS)
     def test_editor_export_url_resolves_to_view(self):
-        match = resolve("/theming/gallery/editor/export/")
+        match = resolve("/theming/themes/editor/export/")
         assert match.func is editor_export_view
 
     @override_settings(**_URL_SETTINGS)
     def test_diff_url_resolves_to_view(self):
-        match = resolve("/theming/gallery/diff/")
+        match = resolve("/theming/themes/diff/")
         assert match.func is diff_view
 
     @override_settings(**_URL_SETTINGS)
     def test_editor_url_reverse(self):
         url = reverse("djust_theming:editor")
-        assert url == "/theming/gallery/editor/"
+        assert url == "/theming/themes/editor/"
 
     @override_settings(**_URL_SETTINGS)
     def test_diff_url_reverse(self):
         url = reverse("djust_theming:diff")
-        assert url == "/theming/gallery/diff/"
+        assert url == "/theming/themes/diff/"
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ class TestEditorURLResolution:
 class TestEditorAccessControl:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_accessible_in_debug(self, rf):
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         assert response.status_code == 200
@@ -113,7 +113,7 @@ class TestEditorAccessControl:
             is_staff = False
             is_authenticated = False
 
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.user = _AnonUser()
         request.session = {}
         response = editor_view(request)
@@ -125,7 +125,7 @@ class TestEditorAccessControl:
             is_staff = True
             is_authenticated = True
 
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.user = _StaffUser()
         request.session = {}
         response = editor_view(request)
@@ -140,7 +140,7 @@ class TestEditorAccessControl:
 class TestDiffAccessControl:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_diff_accessible_in_debug(self, rf):
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.session = {}
         response = diff_view(request)
         assert response.status_code == 200
@@ -151,7 +151,7 @@ class TestDiffAccessControl:
             is_staff = False
             is_authenticated = False
 
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.user = _AnonUser()
         request.session = {}
         response = diff_view(request)
@@ -163,7 +163,7 @@ class TestDiffAccessControl:
             is_staff = True
             is_authenticated = True
 
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.user = _StaffUser()
         request.session = {}
         response = diff_view(request)
@@ -179,7 +179,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_color_inputs(self, rf):
         """Editor page contains color input controls."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -188,7 +188,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_radius_slider(self, rf):
         """Editor page contains a range input for border radius."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -198,7 +198,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_preset_selector(self, rf):
         """Editor page contains a preset selector."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -208,7 +208,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_export_button(self, rf):
         """Editor page contains an export button."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -217,7 +217,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_preset_json_data(self, rf):
         """Editor page contains serialized preset JSON for JS initialization."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -227,7 +227,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_preset_param(self, rf):
         """?preset=nord loads nord as the initial preset."""
-        request = rf.get("/theming/gallery/editor/", {"preset": "nord"})
+        request = rf.get("/theming/themes/editor/", {"preset": "nord"})
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -236,7 +236,7 @@ class TestEditorContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_editor_contains_preview_components(self, rf):
         """Editor page contains component preview sections (buttons, cards, etc)."""
-        request = rf.get("/theming/gallery/editor/")
+        request = rf.get("/theming/themes/editor/")
         request.session = {}
         response = editor_view(request)
         content = response.content.decode()
@@ -254,7 +254,7 @@ class TestEditorExport:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_export_get_returns_405(self, rf):
         """GET to export endpoint returns 405 Method Not Allowed."""
-        request = rf.get("/theming/gallery/editor/export/")
+        request = rf.get("/theming/themes/editor/export/")
         request.session = {}
         response = editor_export_view(request)
         assert response.status_code == 405
@@ -281,7 +281,7 @@ class TestEditorExport:
             },
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -304,7 +304,7 @@ class TestEditorExport:
             },
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -326,7 +326,7 @@ class TestEditorExport:
             },
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -345,7 +345,7 @@ class TestEditorExport:
             is_authenticated = False
 
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps({"name": "test", "radius": 0.5, "tokens": {"light": {}, "dark": {}}}),
             content_type="application/json",
         )
@@ -358,7 +358,7 @@ class TestEditorExport:
     def test_export_invalid_json(self, rf):
         """Malformed JSON body returns 400."""
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data="not-json{{{",
             content_type="application/json",
         )
@@ -378,7 +378,7 @@ class TestEditorExport:
             },
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -398,7 +398,7 @@ class TestEditorExport:
             },
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -415,7 +415,7 @@ class TestEditorExport:
             "tokens": {"light": {}, "dark": {}},
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -432,7 +432,7 @@ class TestEditorExport:
             "tokens": {"light": {}, "dark": {}},
         }
         request = rf.post(
-            "/theming/gallery/editor/export/",
+            "/theming/themes/editor/export/",
             data=json.dumps(payload),
             content_type="application/json",
         )
@@ -450,7 +450,7 @@ class TestDiffContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_diff_contains_iframes(self, rf):
         """Diff page contains two iframes for side-by-side comparison."""
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.session = {}
         response = diff_view(request)
         content = response.content.decode()
@@ -459,7 +459,7 @@ class TestDiffContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_diff_contains_preset_selectors(self, rf):
         """Diff page contains left and right preset selectors."""
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.session = {}
         response = diff_view(request)
         content = response.content.decode()
@@ -470,7 +470,7 @@ class TestDiffContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_diff_default_presets(self, rf):
         """Default left=default and right=nord are reflected in the page."""
-        request = rf.get("/theming/gallery/diff/")
+        request = rf.get("/theming/themes/diff/")
         request.session = {}
         response = diff_view(request)
         content = response.content.decode()
@@ -481,7 +481,7 @@ class TestDiffContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_diff_custom_presets(self, rf):
         """?left=blue&right=purple loads those presets."""
-        request = rf.get("/theming/gallery/diff/", {"left": "blue", "right": "purple"})
+        request = rf.get("/theming/themes/diff/", {"left": "blue", "right": "purple"})
         request.session = {}
         response = diff_view(request)
         content = response.content.decode()
