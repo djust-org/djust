@@ -89,6 +89,14 @@ class Idempotent(LiveComponent):
     def accept(self, **kwargs: Any) -> None:
         self.state.accepted = True
 
+    @event_handler()
+    def toast(self, **kwargs: Any) -> None:
+        self._view.push_event("toast", {"msg": "hi"})
+
+    @event_handler()
+    def force(self, **kwargs: Any) -> None:
+        self._view._force_full_html = True
+
 
 class IdempotentPage(LiveView):
     template = "<div dj-root>{{ banner }}</div>"
@@ -458,6 +466,35 @@ class TestNoChangeOnTheComponentRoute:
         assert second["type"] == "noop", second
         assert second["ref"] == 2 and second["event_name"] == "accept"
         assert view.banner.accepted is True
+
+    @pytest.mark.asyncio
+    async def test_a_push_only_handler_answers_noop_and_the_push_is_delivered(self):
+        """#2923 review 🟡1: the view route noops a push-only handler (#700);
+        so does the component route — the push drains before the noop."""
+        import asyncio
+
+        view, runtime, transport = _mounted(IdempotentPage)
+        await runtime.dispatch_event(
+            {"type": "event", "event": "toast", "params": {"component_id": "banner"}, "ref": 1}
+        )
+        await asyncio.sleep(0)
+        types = [f.get("type") for f in transport.sent]
+        assert "noop" in types and "html_update" not in types, types
+        assert "push_event" in types, types
+
+    @pytest.mark.asyncio
+    async def test_forced_full_html_is_consumed_on_the_component_route(self):
+        """#2923 review 🟡2: the flag was never reset here, so every later
+        component event bypassed the noop and scoped branches."""
+        view, runtime, transport = _mounted(IdempotentPage)
+        event = {"type": "event", "params": {"component_id": "banner"}}
+        await runtime.dispatch_event({**event, "event": "force", "ref": 1})
+        assert _last_frame(transport)["type"] == "html_update"
+        assert view._force_full_html is False
+        await runtime.dispatch_event({**event, "event": "accept", "ref": 2})
+        assert _last_frame(transport)["type"] == "patch"
+        await runtime.dispatch_event({**event, "event": "accept", "ref": 3})
+        assert _last_frame(transport)["type"] == "noop"
 
 
 @pytest.mark.django_db
