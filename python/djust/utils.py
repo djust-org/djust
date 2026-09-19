@@ -327,9 +327,28 @@ def clear_template_dirs_cache() -> None:
     the changes to be reflected in template rendering.
 
     Note: This is rarely needed in production since template directories
-    typically don't change at runtime.
+    typically don't change at runtime. Under Django's ``override_settings``
+    (tests) the cache clears itself: ``_clear_template_dirs_on_setting_change``
+    is connected to ``setting_changed``, so a test that pointed ``TEMPLATES``
+    at a temporary directory no longer leaves every later ``template_name``
+    view searching that directory ("Template not found" for an unrelated
+    test file, order-dependent).
     """
     _get_template_dirs_cached.cache_clear()
+
+
+def _clear_template_dirs_on_setting_change(*, setting: str, **kwargs: Any) -> None:
+    """``setting_changed`` receiver: the dirs derive from these two settings."""
+    if setting in ("TEMPLATES", "INSTALLED_APPS"):
+        clear_template_dirs_cache()
+
+
+try:
+    from django.core.signals import setting_changed as _setting_changed
+
+    _setting_changed.connect(_clear_template_dirs_on_setting_change, weak=False)
+except Exception:  # pragma: no cover — Django absent or signals unavailable
+    pass
 
 
 # ---------------------------------------------------------------------------
