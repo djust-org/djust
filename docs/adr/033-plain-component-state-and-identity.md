@@ -1,6 +1,6 @@
 # ADR-033: A plain component is state a handler writes to — content-compared, written through, typed on the wire, named per instance
 
-**Status**: Proposed
+**Status**: Accepted (2026-09-19; S1–S3 #2925, S4 #2926)
 **Date**: 2026-09-19
 **Citations**: `file:line` pinned to `main` at `0c1180d6` and the storybook branch `feat/storybook-ux-wt` at `4efa576d`.
 **Deciders**: Project maintainers
