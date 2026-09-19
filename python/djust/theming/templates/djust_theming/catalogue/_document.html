@@ -19,7 +19,11 @@ A replacement must:
 * render ``{% block body %}`` — ``base.html`` fills it with the mount root,
   the sidebar and the content column, all of which must stay inside it;
 * load ``djust_theming/js/catalogue.js`` (presentation only: the ``/``
-  shortcut, the narrow-screen sidebar, the table-of-contents scroll-spy).
+  shortcut, the narrow-screen sidebar, the table-of-contents scroll-spy);
+* set ``--dc-topbar-h`` to the height of its own fixed header, if it has one.
+  The catalogue offsets its fixed sidebar, its content column and its
+  table-of-contents rail by that one variable, so a host never has to
+  re-style any of them.
 
 Anything else — the topbar below, the theme switcher, the version badge — is
 this file's own chrome, and a host that replaces the file replaces that too,

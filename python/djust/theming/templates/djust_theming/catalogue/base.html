@@ -9,6 +9,13 @@ The document is ``_document.html``, and a host site replaces the catalogue's
 chrome by shadowing that path — see the contract in its own comment. Nothing
 in this file is chrome, so a host keeps all of it.
 
+The blocks this file exposes are NAMESPACED — `catalogue_content`,
+`catalogue_content_class` — because a host document is an ancestor in the same
+inheritance chain. A plain `content` block collided with the one
+`marketing/base.html` on djust.org already defined, and Django resolved the
+page's override against the HOST's block: the page rendered, the sidebar and
+the mount root did not.
+
 The SIDEBAR lives here rather than in the document because it has to sit
 inside the mount root: its search box and category headers are ``dj-input`` /
 ``dj-click`` server events, and djust only binds and dispatches events for
@@ -52,8 +59,8 @@ elements inside the dj-root region.
     derives it from the class that rendered the page and stamps the dj-view
     attribute onto the mount root above.
     {% endcomment %}
-    <main class="dc-content {% block content_class %}{% endblock %}">
-      {% block content %}{% endblock %}
+    <main class="dc-content {% block catalogue_content_class %}{% endblock %}">
+      {% block catalogue_content %}{% endblock %}
     </main>
   </div>
   </div>
