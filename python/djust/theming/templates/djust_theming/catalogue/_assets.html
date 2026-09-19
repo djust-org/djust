@@ -1,8 +1,10 @@
 {% load theme_tags static %}{% comment %}
-The catalogue's stylesheets. A host site that supplies its own document
-(``DJUST_THEMING_COMPONENTS_BASE_TEMPLATE``) includes this in its ``<head>``
-so the pages keep their layout and the components their tokens; the
-framework's own ``_document.html`` includes it too, so there is one list.
+The catalogue's stylesheets. A host site that supplies its own document —
+by shadowing ``djust_theming/catalogue/_document.html`` through the template
+loader, which is the override mechanism; there is no setting — includes this
+in its ``<head>`` so the pages keep their layout and the components their
+tokens. The framework's own ``_document.html`` includes it too, so there is
+one list.
 
 ``theme_head`` already links ``djust_components/components.css``, versioned.
 Repeating it unversioned loaded the same file twice and let the cacheable

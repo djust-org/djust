@@ -11642,6 +11642,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
@@ -11771,6 +11772,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         // Move the active-nav highlight immediately (the URL is now current),
         // rather than waiting for the WS mount round-trip. (#1756)
@@ -11933,8 +11935,14 @@ window.djust.getActiveStreams = getActiveStreams;
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
 
-        // Check if this is a redirect (different path) vs patch (same path, different params)
-        const isRedirect = event.state && event.state.redirect;
+        // Redirect (different path → remount) vs patch (same path, different
+        // params → url_change). The pathname is the thing that decides it. The
+        // `redirect` flag is still honoured so an explicit same-path
+        // live_redirect still remounts, but it is no longer the only signal:
+        // the entry the browser created on load has no state at all.
+        const cameFrom = _renderedPathname;
+        _setRenderedPathname(url.pathname);
+        const isRedirect = (event.state && event.state.redirect) || url.pathname !== cameFrom;
 
         if (isRedirect) {
             // Different view — need to remount. STRICT resolution (#1934): the
@@ -12052,6 +12060,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // WebSocket patch — pushState + url_change for selects, inputs, links, buttons
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         window.history.pushState({ djust: true }, '', newUrl.toString());
+        _setRenderedPathname(newUrl.pathname);
 
         const allParams = Object.fromEntries(newUrl.searchParams);
         liveViewWS.sendMessage({
@@ -12096,6 +12105,15 @@ window.djust.getActiveStreams = getActiveStreams;
     const _patchBound = new WeakSet();
     const _navigateBound = new WeakSet();
 
+    /**
+     * A click the browser should handle itself: any mouse button but the
+     * primary one, or a modifier that means open-in-new-tab / new-window /
+     * download. Intercepting these is how an SPA router breaks Cmd+click.
+     */
+    function _isModifiedClick(e) {
+        return e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
+    }
+
     function bindNavigationDirectives() {
         // dj-patch: Update URL params without remount
         // Select/input elements are handled by the delegated document listener above.
@@ -12106,6 +12124,7 @@ window.djust.getActiveStreams = getActiveStreams;
             // Only bind click for non-select elements (links/buttons)
             if (el.tagName !== 'SELECT' && el.tagName !== 'INPUT') {
                 el.addEventListener('click', function (e) {
+                    if (_isModifiedClick(e)) return;
                     e.preventDefault();
                     // When dj-patch is used as a boolean attribute on <a> tags
                     // (e.g. <a href="?tab=docs" dj-patch>), the attribute value
@@ -12126,6 +12145,13 @@ window.djust.getActiveStreams = getActiveStreams;
             _navigateBound.add(el);
 
             el.addEventListener('click', function (e) {
+                // A modified or middle click means "open this somewhere else",
+                // and the browser can only honour that if we leave the default
+                // alone. This used to call preventDefault() first and swallow
+                // it, so Cmd/Ctrl+click opened nothing. The delegated
+                // auto-navigate listener has always got this right; the
+                // directive now uses the same rule.
+                if (_isModifiedClick(e) || !el.getAttribute('dj-navigate')) return;
                 e.preventDefault();
                 if (!liveViewWS || !liveViewWS.ws) return;
 
@@ -12174,7 +12200,7 @@ window.djust.getActiveStreams = getActiveStreams;
      * auto_navigate (#1734, ADR-021 Stage 2): opt-in Turbo-Drive-style link
      * interception. When enabled (server emits
      * ``<meta name="djust-auto-navigate" content="1">`` from
-     * ``LIVEVIEW_CONFIG['auto_navigate']``, default OFF), a SINGLE delegated
+     * ``LIVEVIEW_CONFIG['auto_navigate']``, default ON since v1.1), a SINGLE delegated
      * click listener on ``document`` SPA-navigates plain ``<a href>`` links —
      * but ONLY when the path resolves in the (auth-filtered, #1758) route map.
      * Everything else falls through to normal browser navigation, so non-djust
@@ -12248,6 +12274,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 return;
             }
             window.history.pushState({ djust: true }, '', url.pathname + url.search);
+            _setRenderedPathname(url.pathname);
             liveViewWS.sendMessage({
                 type: 'url_change',
                 params: Object.fromEntries(url.searchParams),
@@ -12260,31 +12287,28 @@ window.djust.getActiveStreams = getActiveStreams;
     }
 
     /**
-     * Give the entry the document was loaded on a djust history state.
+     * The pathname the mounted view is currently showing.
      *
-     * A live_redirect pushes an entry stamped ``{djust, redirect}``, and the
-     * popstate handler uses that stamp to decide between re-mounting a view
-     * and patching the current one. The entry the browser created for the
-     * original page load carries ``null``, so going back from the first
-     * dj-navigate looked like a same-page parameter change: the URL moved
-     * and the content did not, which is a back button that does nothing.
+     * `popstate` fires AFTER the address bar has changed, so the handler
+     * cannot read where it came from — and that is the one thing it needs, to
+     * tell "back to a different view, remount" from "back to different query
+     * parameters on this view, patch". It used to read a `redirect` flag off
+     * the history entry instead, which fails for the entry the BROWSER
+     * created on load: that one carries `null`, so the first back after a
+     * navigation took the patch branch and left the old view on screen.
      *
-     * Only an unstamped entry is touched, so an application that keeps its
-     * own history state keeps it.
+     * Stamping that entry would have fixed the symptom and broken `dj-patch`:
+     * a patch pushes `{djust: true}` with no `redirect`, so a back from a
+     * patched URL to a stamped load entry would take the REMOUNT branch and
+     * throw away scroll, inputs and view state where a cheap `url_change`
+     * was right. So track the pathname and compare, which is what the
+     * handler's own comment always said it was doing.
      */
-    function stampInitialHistoryEntry() {
-        if (typeof window === 'undefined' || !window.history) return;
-        if (window.history.state) return;
-        try {
-            window.history.replaceState(
-                { djust: true, redirect: true },
-                '',
-                window.location.href,
-            );
-        } catch (_e) {
-            // replaceState throws on an opaque origin (a sandboxed iframe).
-            // Nothing to stamp there, and nothing depends on it.
-        }
+    let _renderedPathname =
+        typeof window !== 'undefined' && window.location ? window.location.pathname : '';
+
+    function _setRenderedPathname(pathname) {
+        _renderedPathname = pathname;
     }
 
     let _autoNavigateInstalled = false;
@@ -12303,7 +12327,7 @@ window.djust.getActiveStreams = getActiveStreams;
     }
 
     function _installNavigation() {
-        stampInitialHistoryEntry();
+        _setRenderedPathname(window.location.pathname);
         installAutoNavigate();
     }
 
@@ -12322,7 +12346,6 @@ window.djust.getActiveStreams = getActiveStreams;
         resolveViewPath: resolveViewPath,
         updateAriaCurrent: updateAriaCurrent,
         installAutoNavigate: installAutoNavigate,
-        stampInitialHistoryEntry: stampInitialHistoryEntry,
         // Exposed for tests + advanced callers; the delegated listener is the
         // supported entry point.
         _handleAutoNavigateClick: _handleAutoNavigateClick,

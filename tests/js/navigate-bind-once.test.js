@@ -107,3 +107,50 @@ describe('dj-navigate binds once', () => {
         expect(clicksBound()).toBe(0);
     });
 });
+
+describe('dj-navigate leaves modified clicks to the browser', () => {
+    // Cmd/Ctrl+click means "open in a new tab" and middle-click means the
+    // same. The binder used to call preventDefault() before looking, so on a
+    // nav of 175 dj-navigate links none of them could be opened in a tab.
+    async function linkDom() {
+        const dom = await createDom('<a href="/t/" dj-navigate="/t/" id="link">T</a>');
+        dom.window.djust.navigation.bindDirectives();
+        return dom;
+    }
+
+    const modifiers = [
+        ['meta (Cmd)', { metaKey: true }],
+        ['ctrl', { ctrlKey: true }],
+        ['shift', { shiftKey: true }],
+        ['alt', { altKey: true }],
+        ['middle button', { button: 1 }],
+    ];
+
+    for (const [label, init] of modifiers) {
+        it(`does not swallow a ${label} click`, async () => {
+            const dom = await linkDom();
+            const event = new dom.window.MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                ...init,
+            });
+
+            dom.window.document.getElementById('link').dispatchEvent(event);
+
+            expect(event.defaultPrevented).toBe(false);
+        });
+    }
+
+    it('still handles a plain left click', async () => {
+        const dom = await linkDom();
+        const event = new dom.window.MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+        });
+
+        dom.window.document.getElementById('link').dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(true);
+    });
+});

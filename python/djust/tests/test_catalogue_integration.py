@@ -160,16 +160,28 @@ class TestAHostSuppliesItsOwnChrome:
         content = Client().get("/theme/components/button/").content.decode()
         assert "djust_theming/css/catalogue.css" in content
 
-    def test_the_default_document_is_the_frameworks_own(self):
-        assert CATALOGUE_DOCUMENT_TEMPLATE == "djust_theming/catalogue/_document.html"
-        assert (
+    def test_the_page_shape_extends_the_shadowable_document(self):
+        """The override is the template loader, so the path the pages extend
+        IS the contract. Asserting the constant equals its own literal proved
+        nothing; this fails if the pages start extending something a host
+        cannot shadow."""
+        catalogue = (
             Path(__file__).resolve().parent.parent
             / "theming"
             / "templates"
             / "djust_theming"
             / "catalogue"
-            / "_document.html"
-        ).exists()
+        )
+        assert (catalogue / "_document.html").exists()
+        assert (
+            '{% extends "' + CATALOGUE_DOCUMENT_TEMPLATE + '" %}'
+            in (catalogue / "base.html").read_text()
+        )
+        for page in ("index.html", "category.html", "detail.html"):
+            assert (
+                '{% extends "djust_theming/catalogue/base.html" %}'
+                in (catalogue / page).read_text()
+            )
 
 
 # ---------------------------------------------------------------------------

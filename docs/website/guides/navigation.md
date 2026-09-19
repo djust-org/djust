@@ -171,18 +171,25 @@ marked current, and an `aria-current` you set yourself to a different value
 section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
 your own rule on top.
 
-#### The back button, and the history entry you started on
+#### What the back button does
 
-djust stamps its own state onto each entry it pushes, and the popstate handler
-reads that stamp to tell "go back to a different view" from "go back to
-different query parameters on this one". The entry the browser created for the
-original page load has no state at all, so djust stamps that one too, once, on
-load. Without it the first press of back after a `dj-navigate` moved the
-address bar and left the page showing the view the reader had navigated to.
+Going back has two meanings and djust has to tell them apart. Back to a
+**different path** is a different view, so it re-mounts. Back to the **same
+path with different query parameters** is the same view seeing new parameters,
+so it sends `handle_params` and keeps your scroll position, your inputs and
+your view state.
 
-If your application keeps its own `history.state`, djust leaves it alone — only
-an entry whose state is `null` is stamped. Expect `history.state` to be
-non-null on a djust page from load onward.
+The pathname is what decides it. djust records the path the mounted view is
+showing and compares on `popstate`, because `popstate` fires after the address
+bar has already changed and cannot otherwise see where it came from.
+
+djust does not write to the history entry your page was loaded on. An earlier
+version did, and it broke `dj-patch`: a patch pushes an entry that is not a
+redirect, so backing out of a patched URL onto a stamped entry re-mounted the
+view and threw away exactly the state the patch path exists to preserve.
+
+A `live_redirect` still marks its own entries, so an explicit redirect to the
+same path re-mounts as you asked.
 
 #### When NOT to use `dj-navigate`
 
