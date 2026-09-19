@@ -35,7 +35,8 @@ class ThemeToggle(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_current = html.escape(self.current)
-        click_attr = f' dj-click="{html.escape(self.event)}"' if self.event else ""
+        ea = self.event_attrs(self.event)
+        click_attr = f" {ea}" if ea else ""
         themes = [
             ("light", "Light", "&#9728;"),
             ("dark", "Dark", "&#9790;"),

@@ -42,7 +42,7 @@ class TreeView(Component):
         """Render a single tree node recursively."""
         if not isinstance(node, dict):
             return ""
-        nid = html.escape(str(node.get("id", "")))
+        node_id = node.get("id", "")
         label = html.escape(str(node.get("label", "")))
         children = node.get("children", [])
         expanded = node.get("expanded", False)
@@ -50,10 +50,8 @@ class TreeView(Component):
         sel_cls = " tree-node-selected" if str(node.get("id", "")) == self.selected else ""
         exp_cls = " tree-node-expanded" if expanded else ""
         indent = depth * 1.25
-        e_expand = html.escape(self.expand_event)
-        e_select = html.escape(self.select_event)
         toggle_html = (
-            f'<button class="tree-toggle" dj-click="{e_expand}" data-value="{nid}">'
+            f'<button class="tree-toggle" {self.event_attrs(self.expand_event, value=node_id)}>'
             f"{'&#9662;' if expanded else '&#9656;'}</button>"
             if has_children
             else '<span class="tree-toggle-placeholder"></span>'
@@ -68,7 +66,7 @@ class TreeView(Component):
         return (
             f'<div class="tree-node{sel_cls}{exp_cls}" style="padding-left:{indent}rem">'
             f'<div class="tree-node-row">{toggle_html}'
-            f'<button class="tree-node-label" dj-click="{e_select}" data-value="{nid}">'
+            f'<button class="tree-node-label" {self.event_attrs(self.select_event, value=node_id)}>'
             f"{label}</button></div>"
             f"{children_html}</div>"
         )

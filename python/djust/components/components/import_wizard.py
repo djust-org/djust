@@ -67,7 +67,6 @@ class ImportWizard(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_event = html.escape(self.event)
         e_formats = html.escape(self.accepted_formats)
 
         # Step indicator
@@ -93,14 +92,13 @@ class ImportWizard(Component):
 
         # Step content
         if self.step == "upload":
-            e_upload = html.escape(self.upload_event)
             body = (
                 f'<div class="dj-import-wizard__upload">'
                 f'<div class="dj-import-wizard__dropzone">'
                 f"<p>Drag & drop or click to upload</p>"
                 f'<input type="file" accept="{e_formats}" '
                 f'class="dj-import-wizard__file-input" '
-                f'dj-change="{e_upload}">'
+                f"{self.event_attrs(self.upload_event, trigger='change')}>"
                 f'<p class="dj-import-wizard__formats">Accepted: {e_formats}</p>'
                 f"</div></div>"
             )
@@ -122,7 +120,7 @@ class ImportWizard(Component):
                 f'<div class="dj-import-wizard__preview">'
                 f"<p>Preview your data before importing.</p>"
                 f'<button class="dj-import-wizard__import-btn" '
-                f'dj-click="{e_event}">Import</button></div>'
+                f"{self.event_attrs(self.event)}>Import</button></div>"
             )
 
         return f'<div class="{class_str}">{nav}{body}</div>'

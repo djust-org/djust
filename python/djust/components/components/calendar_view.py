@@ -117,8 +117,6 @@ class CalendarView(Component):
         except (ValueError, OverflowError):
             weeks = []
 
-        e_event = html.escape(self.event) if self.event else ""
-
         weeks_html = []
         for week in weeks:
             cells = []
@@ -142,8 +140,8 @@ class CalendarView(Component):
                     ev_html += f'<div class="dj-calendar__more">+{len(day_events) - 3} more</div>'
 
                 click_attr = ""
-                if e_event:
-                    click_attr = f' dj-click="{e_event}" data-value="{date_str}"'
+                if self.event:
+                    click_attr = f" {self.event_attrs(self.event, value=date_str)}"
 
                 cells.append(
                     f'<div class="dj-calendar__day" data-date="{date_str}"{click_attr}>'

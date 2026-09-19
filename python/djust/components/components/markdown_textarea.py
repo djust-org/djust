@@ -91,7 +91,6 @@ class MarkdownTextarea(Component):
 
         e_name = html.escape(self.name)
         e_value = html.escape(self.value)
-        e_event = html.escape(self.toggle_event)
         e_placeholder = html.escape(self.placeholder)
         disabled_attr = " disabled" if self.disabled else ""
         rows = int(self.rows)
@@ -103,9 +102,9 @@ class MarkdownTextarea(Component):
         toolbar = (
             f'<div class="dj-md-textarea__toolbar">'
             f'<button type="button" class="dj-md-textarea__tab{write_active}" '
-            f'dj-click="{e_event}" data-mode="write">Write</button>'
+            f"{self.event_attrs(self.toggle_event, mode='write')}>Write</button>"
             f'<button type="button" class="dj-md-textarea__tab{preview_active}" '
-            f'dj-click="{e_event}" data-mode="preview">Preview</button>'
+            f"{self.event_attrs(self.toggle_event, mode='preview')}>Preview</button>"
             f"</div>"
         )
 

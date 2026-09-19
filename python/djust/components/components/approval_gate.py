@@ -94,8 +94,6 @@ class ApprovalGate(Component):
             cls += f" {html.escape(self.custom_class)}"
 
         e_msg = html.escape(self.message)
-        e_approve_evt = html.escape(self.approve_event)
-        e_reject_evt = html.escape(self.reject_event)
         e_approve_lbl = html.escape(self.approve_label)
         e_reject_lbl = html.escape(self.reject_label)
 
@@ -138,9 +136,9 @@ class ApprovalGate(Component):
             f'<div class="dj-approval__message">{e_msg}</div>'
             f'<div class="dj-approval__actions">'
             f'<button class="dj-approval__btn dj-approval__btn--reject" '
-            f'dj-click="{e_reject_evt}">{e_reject_lbl}</button>'
+            f"{self.event_attrs(self.reject_event)}>{e_reject_lbl}</button>"
             f'<button class="dj-approval__btn dj-approval__btn--approve" '
-            f'dj-click="{e_approve_evt}">{e_approve_lbl}</button>'
+            f"{self.event_attrs(self.approve_event)}>{e_approve_lbl}</button>"
             f"</div>"
             f"</div>"
         )

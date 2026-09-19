@@ -63,9 +63,9 @@ class ErrorBoundary(Component):
             e_fallback = html.escape(self.fallback)
             retry_html = ""
             if self.retry_event:
-                e_retry = html.escape(self.retry_event)
                 retry_html = (
-                    f'<button class="dj-error-boundary__retry" dj-click="{e_retry}">Retry</button>'
+                    f'<button class="dj-error-boundary__retry" '
+                    f"{self.event_attrs(self.retry_event)}>Retry</button>"
                 )
             return (
                 f'<div class="{class_str}" role="alert">'

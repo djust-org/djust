@@ -120,7 +120,9 @@ class Switch(Component):
             input_attrs.append("disabled")
 
         if self.action and not self.disabled:
-            input_attrs.append(f'dj-change="{html.escape(self.action)}"')
+            ea = self.event_attrs(self.action, trigger="change")
+            if ea:
+                input_attrs.append(ea)
 
         input_str = " ".join(input_attrs)
 

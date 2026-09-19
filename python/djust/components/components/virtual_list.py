@@ -52,7 +52,6 @@ class VirtualList(Component):
         cls = "virtual-list"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_load = html.escape(self.load_more_event)
         rows = ""
         for item in items:
             if isinstance(item, dict):
@@ -64,7 +63,7 @@ class VirtualList(Component):
         has_more = (self.page * self.page_size) < self.total
         load_more_html = (
             f'<div class="vl-load-more">'
-            f'<button class="btn btn-ghost btn-sm" dj-click="{e_load}">Load more</button>'
+            f'<button class="btn btn-ghost btn-sm" {self.event_attrs(self.load_more_event)}>Load more</button>'
             f"</div>"
             if has_more
             else ""

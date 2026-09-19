@@ -103,8 +103,9 @@ class Tag(Component):
 
         if self.dismissible:
             dismiss_attrs = ['class="dj-tag-dismiss"', 'aria-label="Remove"']
-            if self.action:
-                dismiss_attrs.append(f'dj-click="{html.escape(self.action)}"')
+            ea = self.event_attrs(self.action)
+            if ea:
+                dismiss_attrs.append(ea)
             dismiss_str = " ".join(dismiss_attrs)
             parts.append(f"<button {dismiss_str}>&times;</button>")
 

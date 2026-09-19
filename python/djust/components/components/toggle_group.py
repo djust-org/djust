@@ -49,18 +49,16 @@ class ToggleGroup(Component):
         cls = f"toggle-group{size_cls}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_event = html.escape(self.event)
         buttons = []
         for opt in options:
             if not isinstance(opt, dict):
                 continue
-            ov = html.escape(str(opt.get("value", "")))
             ol = html.escape(str(opt.get("label", "")))
             is_active = str(opt.get("value", "")) == str(self.value)
             active_cls = " toggle-group-btn--active" if is_active else ""
             buttons.append(
                 f'<button class="toggle-group-btn{active_cls}" '
-                f'dj-click="{e_event}" data-value="{ov}">'
+                f"{self.event_attrs(self.event, value=opt.get('value', ''))}>"
                 f'<span class="toggle-group-label">{ol}</span></button>'
             )
         return f'<div class="{cls}" role="group">{"".join(buttons)}</div>'

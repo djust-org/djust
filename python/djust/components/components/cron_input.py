@@ -66,7 +66,6 @@ class CronInput(Component):
             cls += f" {html.escape(self.custom_class)}"
 
         e_name = html.escape(self.name)
-        e_event = html.escape(self.event)
         e_value = html.escape(self.value)
 
         parts = self.value.split()
@@ -87,9 +86,8 @@ class CronInput(Component):
                 f"</div>"
             )
 
-        event_attr = ""
-        if e_event:
-            event_attr = f' dj-change="{e_event}"'
+        ea = self.event_attrs(self.event, trigger="change")
+        event_attr = f" {ea}" if ea else ""
 
         return (
             f'<div class="{cls}"{event_attr}>'

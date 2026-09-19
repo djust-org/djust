@@ -77,8 +77,6 @@ class DataCardGrid(Component):
         except (ValueError, TypeError):
             cols = 3
 
-        e_event = html.escape(self.event)
-
         # Collect unique categories for filter bar
         categories = []
         seen = set()
@@ -118,8 +116,8 @@ class DataCardGrid(Component):
                 img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
 
             click_attr = ""
-            if e_event:
-                click_attr = f' dj-click="{e_event}" dj-value-title="{title}"'
+            if self.event:
+                click_attr = f" {self.event_attrs(self.event, title=it.get('title', ''))}"
 
             cards.append(
                 f'<div class="dj-data-card-grid__card" data-category="{cat}" '

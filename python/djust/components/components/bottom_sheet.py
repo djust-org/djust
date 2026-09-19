@@ -62,7 +62,7 @@ class BottomSheet(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_close = html.escape(self.close_event)
+        close_attrs = self.event_attrs(self.close_event)
         e_title = html.escape(self.title)
         e_content = html.escape(self.content) if self.content else ""
 
@@ -71,12 +71,12 @@ class BottomSheet(Component):
             title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>'
 
         return (
-            f'<div class="dj-bottom-sheet__backdrop" dj-click="{e_close}">'
+            f'<div class="dj-bottom-sheet__backdrop" {close_attrs}>'
             f'<div class="{class_str}" onclick="event.stopPropagation()">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"
-            f'<button class="dj-bottom-sheet__close" dj-click="{e_close}">&times;</button>'
+            f'<button class="dj-bottom-sheet__close" {close_attrs}>&times;</button>'
             f"</div>"
             f'<div class="dj-bottom-sheet__body">{e_content}</div>'
             f"</div></div>"

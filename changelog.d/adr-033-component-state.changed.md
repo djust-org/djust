@@ -23,3 +23,14 @@
   constructor, leaving the tag as a dict when it cannot. A reconnect after the
   write renders five stars
   (`python/djust/tests/test_component_state_persistence_adr033.py`).
+- **Values are typed on the wire and an instance carries a `name` (ADR-033 S3).**
+  `Component.event_attrs(event, trigger="click", **params)` renders the
+  attributes an element emits an event with: `dj-<trigger>` plus one typed
+  `dj-value-*` per keyword (`int` → `:int`, `bool` → `:bool`, `float` →
+  `:float`, `str` untyped), so a handler receives `4`, not `"4"`, and the
+  `int(value)` line disappears. `Component(name="row-7")` is state and rides
+  along as `dj-value-name` on every trigger, so one handler serves several
+  instances: `def set_rating(self, value, name=None, **kwargs)`. Every shipped
+  component that emits an event now goes through the helper (the untyped
+  `data-value` form is no longer emitted; the client still reads it), pinned
+  by `python/djust/tests/test_component_typed_events_sweep_adr033.py`.

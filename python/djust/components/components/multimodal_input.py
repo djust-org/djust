@@ -85,7 +85,6 @@ class MultimodalInput(Component):
             cls += f" {html.escape(self.custom_class)}"
 
         e_name = html.escape(self.name)
-        e_event = html.escape(self.event)
         e_placeholder = html.escape(self.placeholder)
         e_accept = html.escape(self.file_accept)
         disabled_attr = " disabled" if self.disabled else ""
@@ -122,7 +121,7 @@ class MultimodalInput(Component):
 
         send_btn = (
             f'<button type="button" class="dj-mminput__btn dj-mminput__send-btn" '
-            f'dj-click="{e_event}" title="Send"{disabled_attr}>'
+            f'{self.event_attrs(self.event)} title="Send"{disabled_attr}>'
             f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             f'stroke-width="2" width="18" height="18">'
             f'<line x1="22" y1="2" x2="11" y2="13"/>'

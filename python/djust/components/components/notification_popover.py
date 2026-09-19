@@ -77,8 +77,6 @@ class NotificationPopover(Component):
 
     def _render_custom(self) -> str:
         """Render the notification popover HTML."""
-        e_toggle = html.escape(str(self.toggle_event))
-        e_mark = html.escape(str(self.mark_read_event))
         e_title = html.escape(str(self.title))
 
         # Badge
@@ -94,7 +92,7 @@ class NotificationPopover(Component):
         cls = " ".join(c for c in classes if c)
 
         bell_html = (
-            f'<button class="dj-notif-popover__bell" dj-click="{e_toggle}" '
+            f'<button class="dj-notif-popover__bell" {self.event_attrs(self.toggle_event)} '
             f'aria-label="Notifications">'
             f'<svg class="dj-notif-popover__icon" viewBox="0 0 24 24" fill="none" '
             f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
@@ -120,14 +118,14 @@ class NotificationPopover(Component):
                 n_body = getattr(notif, "body", getattr(notif, "message", ""))
                 n_time = getattr(notif, "time", "")
                 n_read = getattr(notif, "read", False)
-            e_n_id = html.escape(str(n_id))
             e_n_title = html.escape(str(n_title))
             e_n_body = html.escape(str(n_body))
             e_n_time = html.escape(str(n_time))
             read_cls = "dj-notif-popover__item--read" if n_read else ""
             mark_attr = ""
             if not n_read:
-                mark_attr = f' dj-click="{e_mark}" data-id="{e_n_id}"'
+                ea = self.event_attrs(self.mark_read_event, id=n_id)
+                mark_attr = f" {ea}" if ea else ""
             items_html.append(
                 f'<div class="dj-notif-popover__item {read_cls}"{mark_attr}>'
                 f'<div class="dj-notif-popover__item-title">{e_n_title}</div>'

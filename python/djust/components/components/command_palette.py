@@ -43,20 +43,19 @@ class CommandPalette(Component):
 
     def _render_custom(self) -> str:
         """Render the commandpalette HTML."""
-        e_search = html.escape(self.search_event)
-        e_close = html.escape(self.close_event)
+        close_attrs = self.event_attrs(self.close_event)
         e_placeholder = html.escape(self.placeholder)
         open_attr = ' data-open="true"' if self.is_open else ""
         cls = "palette"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         return (
-            f'<div class="palette-overlay" dj-click="{e_close}"{open_attr}></div>'
+            f'<div class="palette-overlay" {close_attrs}{open_attr}></div>'
             f'<div class="{cls}"{open_attr}>'
             f'<div class="palette-search">'
             f'<input class="palette-input" type="text" placeholder="{e_placeholder}" '
-            f'dj-input="{e_search}">'
-            f'<button class="palette-close" dj-click="{e_close}">Esc</button>'
+            f"{self.event_attrs(self.search_event, trigger='input')}>"
+            f'<button class="palette-close" {close_attrs}>Esc</button>'
             f"</div>"
             f'<div class="palette-results">{self.content}</div>'
             f"</div>"

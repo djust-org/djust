@@ -45,7 +45,6 @@ class OtpInput(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
-        dj_event = html.escape(self.event or self.name)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         boxes = "".join(
             f'<input type="text" class="otp-digit" maxlength="1" data-index="{i}">'
@@ -54,6 +53,7 @@ class OtpInput(Component):
         return (
             f'<div class="{cls}">{label_html}'
             f'<div class="otp-boxes">{boxes}</div>'
-            f'<input type="hidden" name="{e_name}" class="otp-hidden" dj-change="{dj_event}">'
+            f'<input type="hidden" name="{e_name}" class="otp-hidden" '
+            f"{self.event_attrs(self.event or self.name, trigger='change')}>"
             f"</div>"
         )

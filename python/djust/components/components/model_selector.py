@@ -101,7 +101,6 @@ class ModelSelector(Component):
 
     def _render_custom(self) -> str:
         e_name = html.escape(self.name)
-        e_event = html.escape(self.event or self.name)
         e_placeholder = html.escape(self.placeholder)
         disabled_attr = " disabled" if self.disabled else ""
         disabled_cls = " dj-model-sel--disabled" if self.disabled else ""
@@ -132,8 +131,7 @@ class ModelSelector(Component):
             inner = self._option_inner(opt)
             opt_parts.append(
                 f'<div class="dj-model-sel__opt{active_cls}" '
-                f'data-value="{html.escape(ov)}" '
-                f'dj-click="{e_event}" '
+                f"{self.event_attrs(self.event or self.name, value=ov)} "
                 f'role="option" aria-selected="{"true" if ov == self.value else "false"}">'
                 f"{inner}</div>"
             )

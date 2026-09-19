@@ -42,14 +42,12 @@ class Pagination(Component):
         cls = "dj-pagination"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_prev = html.escape(self.prev_event)
-        e_next = html.escape(self.next_event)
         prev_disabled = " disabled" if self.page <= 1 else ""
         next_disabled = " disabled" if self.page >= self.total_pages else ""
         return (
             f'<nav class="{cls}">'
-            f'<button class="dj-pagination__prev" dj-click="{e_prev}"{prev_disabled}>&laquo; Prev</button>'
+            f'<button class="dj-pagination__prev" {self.event_attrs(self.prev_event)}{prev_disabled}>&laquo; Prev</button>'
             f'<span class="dj-pagination__info">Page {self.page} of {self.total_pages}</span>'
-            f'<button class="dj-pagination__next" dj-click="{e_next}"{next_disabled}>Next &raquo;</button>'
+            f'<button class="dj-pagination__next" {self.event_attrs(self.next_event)}{next_disabled}>Next &raquo;</button>'
             f"</nav>"
         )

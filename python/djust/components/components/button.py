@@ -155,8 +155,10 @@ class Button(Component):
             attrs.append("disabled")
 
         # Add dj-click action
-        if self.action and not self.disabled and not self.loading:
-            attrs.append(f'dj-click="{html.escape(self.action)}"')
+        if not self.disabled and not self.loading:
+            ea = self.event_attrs(self.action)
+            if ea:
+                attrs.append(ea)
 
         # Add data attributes
         for k, v in self.data.items():

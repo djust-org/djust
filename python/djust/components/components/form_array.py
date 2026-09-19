@@ -76,8 +76,6 @@ class FormArray(Component):
         class_str = " ".join(classes)
 
         e_name = html.escape(self.name)
-        e_add_event = html.escape(self.add_event)
-        e_remove_event = html.escape(self.remove_event)
         e_add_label = html.escape(self.add_label)
 
         row_count = len(self.rows)
@@ -91,7 +89,7 @@ class FormArray(Component):
             if can_remove:
                 remove_html = (
                     f'<button class="dj-form-array__remove" type="button" '
-                    f'dj-click="{e_remove_event}" data-value="{i}" '
+                    f"{self.event_attrs(self.remove_event, value=i)} "
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
             rows_html.append(
@@ -104,7 +102,7 @@ class FormArray(Component):
         add_disabled = "" if can_add else " disabled"
         add_html = (
             f'<button class="dj-form-array__add" type="button" '
-            f'dj-click="{e_add_event}"{add_disabled}>'
+            f"{self.event_attrs(self.add_event)}{add_disabled}>"
             f"{e_add_label}</button>"
         )
 

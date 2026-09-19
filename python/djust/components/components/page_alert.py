@@ -75,10 +75,9 @@ class PageAlert(Component):
 
         dismiss_html = ""
         if self.dismissible:
-            e_event = html.escape(self.dismiss_event)
             dismiss_html = (
                 f'<button class="dj-page-alert__dismiss" '
-                f'dj-click="{e_event}" aria-label="Dismiss">&times;</button>'
+                f'{self.event_attrs(self.dismiss_event)} aria-label="Dismiss">&times;</button>'
             )
 
         return (

@@ -45,8 +45,7 @@ class AnnouncementBar(Component):
             cls += f" {html.escape(self.custom_class)}"
         close_html = ""
         if self.dismissible:
-            e_dismiss = html.escape(self.dismiss_event)
-            close_html = f'<button class="dj-announcement-bar__close" dj-click="{e_dismiss}">&times;</button>'
+            close_html = f'<button class="dj-announcement-bar__close" {self.event_attrs(self.dismiss_event)}>&times;</button>'
         return (
             f'<div class="{cls}" role="banner">'
             f'<div class="dj-announcement-bar__content">{self.content}</div>'

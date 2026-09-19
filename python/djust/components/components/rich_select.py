@@ -163,7 +163,6 @@ class RichSelect(Component):
         """Render the rich select HTML."""
         e_name = html.escape(self.name)
         e_placeholder = html.escape(self.placeholder)
-        dj_event = html.escape(self.event or self.name)
         disabled_attr = " disabled" if self.disabled else ""
         disabled_cls = " rich-select--disabled" if self.disabled else ""
 
@@ -201,8 +200,7 @@ class RichSelect(Component):
             variant_cls = f" rich-select-option--variant-{variant}" if variant != "default" else ""
             opt_parts.append(
                 f'<div class="rich-select-option{active_cls}{variant_cls}" '
-                f'data-value="{html.escape(ov)}" '
-                f'dj-click="{dj_event}" '
+                f"{self.event_attrs(self.event or self.name, value=ov)} "
                 f'role="option" aria-selected="{"true" if ov == self.value else "false"}" '
                 f"onclick=\"this.closest('.rich-select').classList.remove('rich-select--open')\">"
                 f"{self._option_html(opt)}"
