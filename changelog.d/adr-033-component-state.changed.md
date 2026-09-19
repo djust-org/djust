@@ -29,8 +29,16 @@
   `dj-value-*` per keyword (`int` → `:int`, `bool` → `:bool`, `float` →
   `:float`, `str` untyped), so a handler receives `4`, not `"4"`, and the
   `int(value)` line disappears. `Component(name="row-7")` is state and rides
-  along as `dj-value-name` on every trigger, so one handler serves several
+  along as `dj-value-name` on every trigger (for a class without a `name`
+  parameter of its own — a form-field component keeps `name` as the field
+  name and is not named on the wire), so one handler serves several
   instances: `def set_rating(self, value, name=None, **kwargs)`. Every shipped
   component that emits an event now goes through the helper (the untyped
   `data-value` form is no longer emitted; the client still reads it), pinned
   by `python/djust/tests/test_component_typed_events_sweep_adr033.py`.
+- **Compatibility notes (ADR-033).** A handler annotated `value: str` still
+  receives text for a typed wire value (`"4"`, `"true"`). `event_attrs` renders
+  a UUID/date/Decimal as its `str()`, untyped. `state` is a reserved
+  `Component` constructor kwarg (`TypeError`). `get_template_dirs()` clears its
+  cache on `setting_changed`, so `override_settings(TEMPLATES=...)` no longer
+  leaks a temporary directory into later `template_name` views in a test run.
