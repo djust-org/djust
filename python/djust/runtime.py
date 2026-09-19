@@ -44,8 +44,10 @@ import json
 import logging
 import re
 import time
+from functools import wraps
 from typing import (
     Any,
+    Awaitable,
     AsyncIterator,
     Callable,
     ContextManager,
@@ -85,6 +87,17 @@ EVENT_STATE_SAVE_TIMEOUT_S = 0.150
 
 
 logger = logging.getLogger(__name__)
+
+
+def _mount_tenant_scope(method: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
+    """Restore the caller's tenant even when mount/auth fails or returns early."""
+
+    @wraps(method)
+    async def scoped(*args: Any, **kwargs: Any) -> None:
+        with _tenant_context(None):
+            await method(*args, **kwargs)
+
+    return scoped
 
 
 def _tenant_context(tenant: Any) -> ContextManager[Any]:
@@ -2096,6 +2109,7 @@ class ViewRuntime:
     # Mount dispatch (used by SSE in this PR; WS still uses handle_mount)
     # ------------------------------------------------------------------ #
 
+    @_mount_tenant_scope
     async def dispatch_mount(self, data: Dict[str, Any]) -> None:
         """Mount a LiveView from a mount frame.
 
@@ -2536,13 +2550,20 @@ class ViewRuntime:
                 await sync_to_async(view_instance.mount)(request, **mount_kwargs)
                 if not legacy_exposure:
                     from ._exposure_sessions import load_server_state
+                    from .security import safe_setattr
 
                     if callable(getattr(view_instance, "resolve_tenant", None)):
                         request.tenant = getattr(view_instance, "_tenant", None)
                     restored = await sync_to_async(load_server_state)(view_instance, request)
                     if restored is not None:
                         for key, value in restored.items():
-                            setattr(view_instance, key, value)
+                            safe_setattr(
+                                view_instance,
+                                key,
+                                value,
+                                allow_private=False,
+                                raise_on_blocked=True,
+                            )
                         mounted_from_restore = True
                         view_instance._force_full_html = True
             except Exception as exc:

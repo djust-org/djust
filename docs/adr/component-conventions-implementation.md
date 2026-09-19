@@ -180,11 +180,27 @@ their separate integration remains unfinished.
 
 Tests cover denied/throwing auth hooks, changed user/tenant, missing request,
 logout, inactive users, changed passwords, the SSE route/session boundary and
-concurrent SSE request isolation. A Channels WebSocket connection test proves
-save/reconnect restoration and rejection after session deletion with tenancy
-disabled. These do not prove configured tenant middleware parity, live browser
-behavior, complete SSE endpoints, actor/sticky-child/component persistence,
-explicit client snapshots or all provider contracts; those remain activation gates.
+concurrent SSE request isolation. Channels WebSocket connection tests prove
+save/reconnect restoration and rejection after session deletion, both without
+tenancy and with a configured session tenant resolver and TenantMixin.
+
+### Tenant-bound request and query context
+
+In explicit mode, TenantMixin stamps its resolved tenant onto the request and
+scopes HTTP dispatch/GET/POST query context around that tenant. Runtime mount
+resolves the explicit view's tenant before permission hooks, matching HTTP's
+ordering. Runtime mount restores its caller's tenant context on all exits
+(including legacy mounts); this prevents a resolved tenant from escaping the
+mount operation. Legacy auth sequencing and HTTP TenantMixin behavior remain
+unchanged.
+
+Tests assert matching tenant identities in permission hooks, persistence and
+rendering, context restoration after success and missing-required-tenant errors,
+rejection of an old runtime after a session tenant switch, and HTTP remount
+instead of cross-tenant state hydration. Session-resolver coverage does not prove
+all tenant middleware/custom/header/path resolver combinations. Live browser,
+complete SSE endpoint, actor/sticky-child/component persistence, explicit client
+snapshot and remaining provider tests are still activation gates.
 
 ## Readiness audit
 

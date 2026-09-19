@@ -16,6 +16,7 @@ from djust import LiveView, event_handler
 from djust._exposure_sessions import server_state_adapter
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tenants.mixin import TenantMixin
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -42,6 +43,17 @@ class RuntimeView(LiveView):
         self.count += 1
 
 
+class TenantRuntimeView(TenantMixin, RuntimeView):
+    count = state(0, persist="server")
+    hidden = state("SERVER_SENTINEL", persist="server")
+
+    def check_permissions(self, request):
+        from djust.tenants.middleware import get_current_tenant
+
+        current = get_current_tenant()
+        return current is not None and current.id == request.tenant.id == self.tenant.id
+
+
 def make_request(session_key=None):
     request = RequestFactory().get("/runtime-explicit/")
     request.user = AnonymousUser()
@@ -52,7 +64,7 @@ def make_request(session_key=None):
     return request
 
 
-async def mount(request, **extra):
+async def mount(request, view_class=RuntimeView, **extra):
     transport = MockTransport()
     transport.build_request = lambda: request
 
@@ -63,7 +75,12 @@ async def mount(request, **extra):
     runtime = ViewRuntime(transport)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust"]):
         await runtime.dispatch_mount(
-            {"type": "mount", "view": __name__ + ".RuntimeView", "url": request.path, **extra}
+            {
+                "type": "mount",
+                "view": __name__ + "." + view_class.__name__,
+                "url": request.path,
+                **extra,
+            }
         )
     assert not transport.errors, transport.errors
     assert runtime.view_instance is not None
@@ -271,11 +288,18 @@ async def test_sse_adapter_uses_current_post_request_and_view_route_for_save(sta
     assert second.view_instance.count == 6
 
 
-async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(staged):
+@pytest.mark.parametrize("tenant_enabled", [False, True])
+async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
+    staged, tenant_enabled
+):
     from channels.testing import WebsocketCommunicator
     from djust.websocket import LiveViewConsumer
 
     request = await sync_to_async(make_request)()
+    if tenant_enabled:
+        await request.session.aset("tenant_id", "alpha")
+        await request.session.asave()
+    view_name = "TenantRuntimeView" if tenant_enabled else "RuntimeView"
 
     async def connect():
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -285,7 +309,7 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(st
         assert connected
         await comm.receive_json_from(timeout=5)
         await comm.send_json_to(
-            {"type": "mount", "view": __name__ + ".RuntimeView", "url": request.path}
+            {"type": "mount", "view": __name__ + "." + view_name, "url": request.path}
         )
         frame = await comm.receive_json_from(timeout=5)
         assert frame["type"] == "mount", frame
@@ -293,7 +317,12 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(st
         return comm, frame
 
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False, DJUST_CONFIG={}, DJUST_TENANTS={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__],
+        DEBUG=False,
+        DJUST_CONFIG={"TENANT_RESOLVER": "session", "TENANT_REQUIRED": True}
+        if tenant_enabled
+        else {},
+        DJUST_TENANTS={},
     ):
         comm, frame = await connect()
         try:
@@ -363,3 +392,89 @@ async def test_concurrent_sse_turns_keep_their_own_auth_request(staged, monkeypa
     assert runtime.view_instance.count == 7
     assert session._event_request is None
     assert "_djust_event_request" not in runtime.view_instance.__dict__
+
+
+async def test_tenant_mixin_http_and_runtime_use_same_authorized_tenant(staged):
+    from djust.tenants.middleware import get_current_tenant
+
+    request = await sync_to_async(make_request)()
+    await request.session.aset("tenant_id", "alpha")
+    await request.session.asave()
+    with override_settings(DJUST_CONFIG={"TENANT_RESOLVER": "session", "TENANT_REQUIRED": True}):
+        response = await sync_to_async(TenantRuntimeView.as_view())(request)
+        assert response.status_code == 200
+        assert request.tenant.id == "alpha"
+        assert get_current_tenant() is None
+        fresh = await sync_to_async(make_request)(request.session.session_key)
+        runtime, transport = await mount(fresh, view_class=TenantRuntimeView)
+        await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+        assert runtime.view_instance is not None, transport.sent
+        assert runtime.view_instance.count == 6
+        assert runtime.view_instance.request.tenant.id == "alpha"
+        assert get_current_tenant() is None
+
+
+async def test_tenant_change_refuses_old_runtime_and_http_remounts(staged):
+    from djust.tenants.middleware import get_current_tenant
+
+    request = await sync_to_async(make_request)()
+    await request.session.aset("tenant_id", "alpha")
+    await request.session.asave()
+    with override_settings(DJUST_CONFIG={"TENANT_RESOLVER": "session", "TENANT_REQUIRED": True}):
+        runtime, transport = await mount(request, view_class=TenantRuntimeView)
+        await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+        view = runtime.view_instance
+        assert view.count == 6
+        session = SessionStore(request.session.session_key)
+        await session.aset("tenant_id", "beta")
+        await session.asave()
+        await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+        assert runtime.view_instance is None
+        assert view.count == 6
+        assert transport.closed_with == 4403
+        assert get_current_tenant() is None
+
+        def post():
+            current = RequestFactory().post(
+                request.path, {"event": "increment", "params": {}}, content_type="application/json"
+            )
+            current.user = AnonymousUser()
+            current.session = SessionStore(request.session.session_key)
+            response = TenantRuntimeView.as_view()(current)
+            assert response.status_code == 200, response.content
+            assert current.tenant.id == "beta"
+            return server_state_adapter(TenantRuntimeView(), current).load()
+
+        # Alpha's 6 is not hydrated: fresh beta mount starts at 5, then increments.
+        assert (await sync_to_async(post)())["count"] == 6
+        assert (await sync_to_async(post)())["count"] == 7
+        assert get_current_tenant() is None
+
+
+async def test_required_tenant_failure_restores_callers_context(staged):
+    from django.http import Http404
+    from djust.tenants.middleware import get_current_tenant, tenant_context
+    from djust.tenants.resolvers import TenantInfo
+
+    request = await sync_to_async(make_request)()
+    outer = TenantInfo("outer")
+    with (
+        override_settings(
+            DJUST_CONFIG={"TENANT_RESOLVER": "session", "TENANT_REQUIRED": True},
+            LIVEVIEW_ALLOWED_MODULES=[__name__],
+            DEBUG=False,
+        ),
+        tenant_context(outer),
+    ):
+        with pytest.raises(Http404):
+            await sync_to_async(TenantRuntimeView.as_view())(request)
+        assert get_current_tenant() is outer
+        transport = MockTransport()
+        transport.build_request = lambda: request
+        runtime = ViewRuntime(transport)
+        await runtime.dispatch_mount(
+            {"type": "mount", "view": __name__ + ".TenantRuntimeView", "url": request.path}
+        )
+        assert any(frame.get("type") == "error" for frame in transport.sent)
+        assert not any(frame.get("type") == "mount" for frame in transport.sent)
+        assert get_current_tenant() is outer

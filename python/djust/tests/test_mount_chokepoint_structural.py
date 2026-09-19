@@ -262,8 +262,10 @@ _SETATTR_WHITELIST = {
     # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
     # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
     # import in live_view.py.
-    ("live_view.py", 1417),
-    ("live_view.py", 1419),
+    # ADR-038 construction guard moved these to 1456/1458. Re-inspected:
+    # still the developer-returned dictionary, not restored/client state.
+    ("live_view.py", 1456),
+    ("live_view.py", 1458),
 }
 
 

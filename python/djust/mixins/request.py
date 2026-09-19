@@ -711,7 +711,7 @@ class RequestMixin:
                 restored = load_server_state(self, request)
                 if restored is not None:
                     for key, value in restored.items():
-                        setattr(self, key, value)
+                        safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
             elif not saved_state:
                 self.mount(request, **kwargs)
                 self._snapshot_user_private_attrs()
