@@ -282,25 +282,16 @@ def test_the_pages_render_over_http(client):
 # ---------------------------------------------------------------------------
 
 
-class TestDemoEventsCoerceTheWireValue:
-    def test_set_rating_with_a_string_renders(self):
-        """The click arrives as "4"; the example says `value` is an int, so
-        the component is rebuilt with 4 — it compared an int to "4" before."""
+class TestDemoEventsTakeTypedValues:
+    def test_set_rating_with_the_typed_wire_value_renders(self):
+        """The star emits `dj-value-value:int="4"` (ADR-033 D4), so the click
+        arrives as 4 and the preview re-renders with it — no coercion."""
         view = _detail("rating")
-        view.preview.set_rating(value="4")
+        view.preview.set_rating(value=4)
         assert view.preview.state.values["value"] == 4
         html = str(view.preview)
         assert "failed to render" not in html and "rating-star" in html
-
-    def test_coerce_like(self):
-        from djust.theming.gallery.live_views import coerce_like
-
-        assert coerce_like(5, "4") == 4
-        assert coerce_like(0.5, "0.75") == 0.75
-        assert coerce_like(True, "false") is False
-        assert coerce_like("md", "lg") == "lg"
-        assert coerce_like(5, "x") == "x"
-        assert coerce_like(5, 7) == 7
+        assert 'dj-value-value:int="4"' in html
 
 
 class TestUsageWithEvents:
@@ -317,12 +308,12 @@ class TestUsageWithEvents:
         assert view._base_ctx["events"] == ["set_rating"]
         assert "from djust.decorators import event_handler" in snippet
         assert "@event_handler()" in snippet
-        assert 'def set_rating(self, value="", **kwargs):' in snippet
-        # State on the view, the component derived from it on every render.
-        assert "        self.value = 4" in snippet
-        assert "        self.value = int(value)" in snippet
-        assert 'ctx["component"] = Rating(value=self.value, max_stars=5)' in snippet
-        assert "self.component = " not in snippet
+        assert "def set_rating(self, value, **kwargs):" in snippet
+        # ADR-033: the component is held in mount() and the handler writes
+        # to it; the value arrives typed, so no int(), no rebuild.
+        assert "        self.component = Rating(value=4, max_stars=5)" in snippet
+        assert "        self.component.value = value" in snippet
+        assert "int(value)" not in snippet and "get_context_data" not in snippet
 
     def test_a_component_without_events_is_unchanged(self):
         view = _detail("button")

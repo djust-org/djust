@@ -426,9 +426,10 @@ def usage_with_events(
     * a descriptor (``Accordion``, ``Tabs``, ``Modal`` …): the class-level
       form owns per-view state and wires its ``Meta.event`` itself, so the
       snippet shows that instead of a handler;
-    * any other event: an ``@event_handler`` stub on the view that rebuilds
-      the component with the new value, the kwarg it drives named when the
-      storybook knows it (``demo_keys``).
+    * any other event: an ``@event_handler`` stub on the view that writes the
+      new value to the component held in ``mount()`` (ADR-033 — the write
+      goes through to its state), the kwarg it drives named when the
+      storybook knows it (``demo_stubs``).
     """
     if not events and not descriptor_class:
         return snippet
@@ -461,42 +462,25 @@ def usage_with_events(
         keys = list(initial)
 
         if keys and class_name:
-            # State on the view, the component derived from it: a handler
-            # changes an attribute, get_context_data builds the component on
-            # every render, and the kwargs are written once. (A plain
-            # Component must not be a class attribute — one shared object
-            # across every user of the view.)
-            mount_at = next(i for i, ln in enumerate(lines) if "self.component = " in ln)
-            lines[mount_at : mount_at + 1] = [f"        self.{k} = {initial[k]!r}" for k in keys]
+            # ADR-033: the component lives on the view and a handler writes
+            # to it — the write goes through to the component's state and the
+            # re-render carries it. No rebuild, no get_context_data.
             for event in others:
-                lines += ["", "    @event_handler()", f'    def {event}(self, value="", **kwargs):']
+                uses_value = any("value" in expr for _k, expr, _s in stubs[event])
+                params = "self, value, **kwargs" if uses_value else "self, **kwargs"
+                lines += ["", "    @event_handler()", f"    def {event}({params}):"]
                 if stubs[event]:
                     for key, expr, _start in stubs[event]:
-                        lines.append(f"        self.{key} = {expr}")
+                        lines.append(f"        self.component.{key} = {expr}")
                 else:
-                    lines.append("        ...  # update state; the re-render carries it")
-            kwargs_src = ", ".join(
-                f"{k}={f'self.{k}' if k in keys else repr(v)}"
-                for k, v in example.items()
-                if not k.startswith("slot_")
-            )
-            for k in keys:
-                if k not in example:
-                    kwargs_src = f"{kwargs_src}, {k}=self.{k}" if kwargs_src else f"{k}=self.{k}"
-            lines += [
-                "",
-                "    def get_context_data(self, **kwargs):",
-                "        ctx = super().get_context_data(**kwargs)",
-                f'        ctx["component"] = {class_name}({kwargs_src})',
-                "        return ctx",
-            ]
+                    lines.append("        ...  # write to self.component; the re-render carries it")
         else:
             for event in others:
                 lines += [
                     "",
                     "    @event_handler()",
-                    f'    def {event}(self, value="", **kwargs):',
-                    "        ...  # update state; the re-render carries it",
+                    f"    def {event}(self, value=None, **kwargs):",
+                    "        ...  # write to self.component; the re-render carries it",
                 ]
     return "\n".join(lines) + sep + template_part
 

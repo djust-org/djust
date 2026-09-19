@@ -153,7 +153,7 @@ class ModelSelector(Component):
         # it the option list carried `display: none` and no rule anywhere turned
         # it back on, so the dropdown could be populated and still never open —
         # the trigger had nothing to dispatch either.
-        e_toggle = html.escape(self.toggle_event)
+        toggle_attrs = self.event_attrs(self.toggle_event, value=self.name)
         open_attr = ' data-open="true"' if self.is_open else ""
         expanded = "true" if self.is_open else "false"
 
@@ -162,7 +162,7 @@ class ModelSelector(Component):
             f"{label_html}"
             f'<input type="hidden" name="{e_name}" value="{html.escape(self.value)}">'
             f'<button type="button" class="dj-model-sel__trigger" role="combobox" '
-            f'dj-click="{e_toggle}" data-value="{e_name}" '
+            f"{toggle_attrs} "
             f'aria-expanded="{expanded}" aria-haspopup="listbox"{disabled_attr}>'
             f"{selected_html}"
             f'<span class="dj-model-sel__chevron">&#9662;</span>'

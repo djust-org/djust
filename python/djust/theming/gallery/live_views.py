@@ -242,11 +242,9 @@ def _make_demo_handler(event: str, effects: Any):
         for key, transform in pairs:
             if key not in values:
                 values[key] = _example_value(self.state.examples, key)
-            # The wire carries strings; the example says what the kwarg is.
-            # `set_rating` with "4" rebuilt Rating(value="4") and the component
-            # compared an int to a str.
-            reference = _example_value(self.state.examples, key)
-            values[key] = coerce_like(reference, transform(values[key], value))
+            # The value arrives typed (ADR-033 D4: every shipped component
+            # emits `dj-value-value:int="4"`), so no coercion here.
+            values[key] = transform(values[key], value)
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
         self.state.values = values
@@ -267,29 +265,6 @@ def _example_value(examples: Any, key: str) -> Any:
     review 🔴1).
     """
     return examples[0].get(key) if examples else None
-
-
-def coerce_like(reference: Any, value: Any) -> Any:
-    """``value`` in the type of ``reference`` when it is a bool / int / float
-    and ``value`` is a string that parses as one; otherwise ``value`` as is."""
-    if not isinstance(value, str):
-        return value
-    if isinstance(reference, bool):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    if isinstance(reference, int):
-        try:
-            return int(value)
-        except ValueError:
-            try:
-                return int(float(value))
-            except ValueError:
-                return value
-    if isinstance(reference, float):
-        try:
-            return float(value)
-        except ValueError:
-            return value
-    return value
 
 
 def _make_descriptor_handler(descriptor_cls: Any):
@@ -445,19 +420,9 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
     ``{event: [(kwarg, python_expression, initial_value), …]}`` — derived
     from `_DEMO_EVENTS`' transforms so the usage snippet shows the real
     semantics (`toggle_x` flips, `carousel_next` steps, `close_x` sets
-    False, `set_x` takes the wire value converted to the kwarg's type)
-    rather than a generic assignment.
+    False, `set_x` takes the wire value, which arrives typed) rather than a
+    generic assignment.
     """
-
-    def convert(key: str) -> str:
-        reference = example.get(key)
-        if isinstance(reference, bool):
-            return 'value == "true"'
-        if isinstance(reference, int):
-            return "int(value)"
-        if isinstance(reference, float):
-            return "float(value)"
-        return "value"
 
     out: Dict[str, list] = {}
     for event, effects in _DEMO_EVENTS.items():
@@ -467,14 +432,13 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
             initial = example.get(key)
             name = getattr(transform, "__name__", "")
             if transform is _flip:
-                expr, initial = f"not self.{key}", bool(initial)
-            elif transform is _as_int:
-                expr = "int(value)"
-            elif transform is _text:
-                expr = convert(key)
+                expr, initial = f"not self.component.{key}", bool(initial)
+            elif transform is _as_int or transform is _text:
+                # The wire carries the value typed (ADR-033 D4): no int().
+                expr = "value"
             elif name == "_shift":
                 delta = transform(0, None)
-                expr = f"self.{key} {'+' if delta >= 0 else '-'} {abs(delta)}"
+                expr = f"self.component.{key} {'+' if delta >= 0 else '-'} {abs(delta)}"
             elif name == "<lambda>":
                 # A constant setter: the same value whatever comes in.
                 probe = transform(initial, "x")
@@ -858,8 +822,16 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
             text = str(annotation or "—")
             return text[8:-2] if text.startswith("<class '") and text.endswith("'>") else text
 
+        def param_type(p: Any) -> str:
+            text = type_name(p.get("annotation"))
+            # ADR-033 D5: `event=` renames the verb; which instance spoke is
+            # `name`, carried on every trigger as `dj-value-name`.
+            if p["name"] == "event" or p["name"].endswith("_event"):
+                return f"{text} — renames the event; identity is `name`"
+            return text
+
         params_rows = [
-            [p["name"], type_name(p.get("annotation")), str(p.get("default", ""))]
+            [p["name"], param_type(p), str(p.get("default", ""))]
             for p in ctx.get("python_params") or []
         ]
         a11y_rows = [

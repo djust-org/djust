@@ -489,7 +489,7 @@ class TestSegmentedProgressIsClickable:
         html = _preview("segmented_progress")
         assert "<button" in html
         assert 'dj-click="set_segment"' in html
-        assert 'data-value="3"' in html
+        assert 'dj-value-value:int="3"' in html
 
     def test_steps_are_plain_divs_without_an_event(self):
         """A progress indicator wired to nothing should not look clickable."""
@@ -597,8 +597,8 @@ class TestEveryDemoEventResolvesOnThePreview:
         view = StorybookDetailView()
         view.mount(RequestFactory().get("/"), component_name="rating")
         before = view._render_examples()[0]["html"]
-        view.preview.set_rating(value="2")  # the example starts at 4
-        assert view.preview.state.values["value"] == 2  # coerced to the example's int
+        view.preview.set_rating(value=2)  # the example starts at 4; typed wire (ADR-033)
+        assert view.preview.state.values["value"] == 2
         assert view._render_examples()[0]["html"] != before
 
     def test_the_get_renders_the_examples_once(self):

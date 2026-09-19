@@ -94,11 +94,8 @@ class SegmentedProgress(Component):
             # that is not wired to anything should not be focusable or announce
             # itself as clickable. `stepper` — the clickable sibling of this
             # component — dispatches the same way.
-            click = (
-                f' dj-click="{html.escape(self.event)}" data-value="{step_num}"'
-                if self.event
-                else ""
-            )
+            click_attrs = self.event_attrs(self.event, value=step_num)
+            click = f" {click_attrs}" if click_attrs else ""
             tag = "button" if self.event else "div"
             type_attr = ' type="button"' if self.event else ""
             segments.append(

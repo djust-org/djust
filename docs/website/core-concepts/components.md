@@ -37,25 +37,60 @@ version of this note said otherwise while
 [#2501](https://github.com/djust-org/djust/issues/2501) was open; it is
 closed).
 
-A stateless component does not have to live in `mount()`. For a component
-whose events change what it shows, keep the *state* on the view and derive
-the component on each render, so a handler changes one attribute and the
-kwargs are written once:
+A component's constructor kwargs are its **state**, and writing an attribute
+writes that state
+([ADR-033](https://github.com/djust-org/djust/blob/main/docs/adr/033-plain-component-state-and-identity.md)).
+So a handler changes the component the way it changes any attribute, and the
+re-render carries it:
 
 ```python
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        self.value = 4
+        self.rating = Rating(value=4, max_stars=5)
 
     @event_handler()
-    def set_rating(self, value="", **kwargs):
-        self.value = int(value)  # the wire carries a string
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx["rating"] = Rating(value=self.value, max_stars=5)
-        return ctx
+    def set_rating(self, value, **kwargs):
+        self.rating.value = value
 ```
+
+`value` arrives as an `int`: every shipped component emits its values typed
+(`dj-value-value:int="4"`), so a handler never starts with `int(value)`.
+
+Change detection compares a plain component by that state (the #2900 rule
+that already covered class-level components), budgeted like any container.
+A component holding data can narrow the walk with
+`fingerprint_fields = ("columns",)`: listed keys are walked, every other key
+is a one-node leaf — a scalar compares by value, a container by identity, so
+`self.table.rows = fetch()` is seen and `self.table.rows.append(x)` is not.
+The data components that ship with djust declare theirs.
+
+**One handler, several instances.** Give each instance a `name`; every event
+it emits carries it as `dj-value-name`, so the handler knows which one spoke —
+the same word an HTML form uses:
+
+```python
+class ReviewView(LiveView):
+    def mount(self, request, **kwargs):
+        self.ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
+
+    @event_handler()
+    def set_rating(self, value, name=None, **kwargs):
+        for rating in self.ratings:
+            if rating.name == name:
+                rating.value = value
+```
+
+`event=` still renames the event (`Rating(event="rate_delivery")`); it is
+the verb, `name` is the noun.
+
+**Which shape when.** A fixed widget with behaviour of its own — tabs, an
+accordion, a modal — is a
+[class-level `LiveComponent`](../guides/components.md#class-level-components):
+per-view state, its own handlers, routed by attribute name, like fields on a
+`Form`. Anything data-driven or repeated — a rating per row, a chart, a
+table — is a plain component held by the view: state in its kwargs, written
+to by the view's handlers, identified by `name`, like a formset. Rebuilding a
+component in a handler still works; it is no longer the taught shape.
 
 Do not make a plain `Component` a class attribute: that is one shared object
 across every user of the view. Class-level declaration is for
