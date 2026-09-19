@@ -269,6 +269,48 @@ class TestSlotsReachTheTemplate:
         assert 'style="display:none;"' not in html
         assert "Edit" in html and "Archive" in html
 
+    def test_live_sheet_preview_preserves_open_example_state(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        view = ComponentsDetailView()
+        view.mount(RequestFactory().get("/"), component_name="sheet")
+        assert view.preview.state.values["is_open"] is True
+        html = "".join(example["html"] for example in view._render_examples())
+        assert 'data-open="true"' in html
+        assert "Choose which project activity to display." in html
+
+
+class TestPythonExamplesHaveUsefulContent:
+    """Python previews must demonstrate the component, not only its wrapper."""
+
+    @staticmethod
+    def _render(name: str) -> str:
+        from djust.theming.gallery.component_registry import (
+            PYTHON_COMPONENT_EXAMPLES,
+            render_python_component_example,
+        )
+
+        return "".join(
+            render_python_component_example(name, example)
+            for example in PYTHON_COMPONENT_EXAMPLES[name]
+        )
+
+    def test_message_and_collaboration_previews_show_content(self):
+        assert "The deployment is ready for review." in self._render("chat_bubble")
+        assert "Ada Lovelace" in self._render("collab_selection")
+        assert "Grace Hopper" in self._render("cursors_overlay")
+
+    def test_stateful_and_overlay_previews_show_their_states(self):
+        assert "Unable to load the project details." in self._render("error_boundary")
+        assert "ctx-item" in self._render("context_menu")
+        assert "dj-notification-badge--dot" in self._render("notification_badge")
+        assert "Project status" in self._render("popover")
+        assert self._render("presence_avatars").count("dj-presence__item") >= 3
+        assert 'data-open="true"' in self._render("sheet")
+        assert "Project dashboard" in self._render("sticky_header")
+
 
 # ---------------------------------------------------------------------------
 # D. The documented snippet is real code

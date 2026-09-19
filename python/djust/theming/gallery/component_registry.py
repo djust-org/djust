@@ -274,7 +274,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "infinite_scroll": [
-        {"load_event": "load_more"},
+        {"load_event": "load_more", "finished": True},
         {"load_event": "load_more", "loading": True},
     ],
     "terminal": [
@@ -482,7 +482,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "notification_badge": [
         {"count": 5},
         {"count": 99},
-        {"count": 0},
+        {"dot": True, "pulse": True},
     ],
     "avatar_group": [
         {
@@ -754,7 +754,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "alert": [{"message": "Example"}],
         "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
         "approval_gate": [{}],
-        "aspect_ratio": [{}],
+        "aspect_ratio": [{"content": "<span>16:9 content</span>"}],
         "audit_log": [{}],
         "avatar": [{"initials": "JD", "alt": "Jane Doe", "size": "md"}],
         "badge": [{"label": "Example"}],
@@ -841,8 +841,37 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "active": 0,
             }
         ],
-        "chat_bubble": [{}],
-        "collab_selection": [{}],
+        "chat_bubble": [
+            {
+                "message": {
+                    "sender": "user",
+                    "name": "Ada Lovelace",
+                    "text": "The deployment is ready for review.",
+                    "time": "10:04 AM",
+                    "status": "delivered",
+                }
+            }
+        ],
+        "collab_selection": [
+            {
+                "users": [
+                    {
+                        "name": "Ada Lovelace",
+                        "color": "#3b82f6",
+                        "start": 10,
+                        "end": 25,
+                        "text": "selected text",
+                    },
+                    {
+                        "name": "Grace Hopper",
+                        "color": "#ef4444",
+                        "start": 40,
+                        "end": 55,
+                        "text": "another selection",
+                    },
+                ]
+            }
+        ],
         "color_picker": [
             {
                 "name": "accent",
@@ -865,7 +894,19 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "command_palette": [{}],
+        "command_palette": [
+            {
+                "content": (
+                    '<div class="palette-item" role="option">'
+                    '<span class="palette-item-label">Open project dashboard</span>'
+                    "</div>"
+                    '<div class="palette-item" role="option">'
+                    '<span class="palette-item-label">Create new project</span>'
+                    "</div>"
+                ),
+                "is_open": True,
+            }
+        ],
         "comparison_table": [
             {
                 "plans": [
@@ -880,7 +921,16 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "content_loader": [{"loaded": False, "placeholder": "<p>Loading…</p>"}],
-        "context_menu": [{}],
+        "context_menu": [
+            {
+                "label": "Project actions",
+                "content": (
+                    '<button class="ctx-item" role="menuitem">Rename</button>'
+                    '<button class="ctx-item" role="menuitem">Duplicate</button>'
+                    '<button class="ctx-item ctx-item-danger" role="menuitem">Delete</button>'
+                ),
+            }
+        ],
         "conversation_thread": [
             {
                 "messages": [
@@ -901,7 +951,14 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "cron_input": [{}],
         "currency_input": [{}],
-        "cursors_overlay": [{}],
+        "cursors_overlay": [
+            {
+                "users": [
+                    {"name": "Ada Lovelace", "color": "#3b82f6", "x": 120, "y": 40},
+                    {"name": "Grace Hopper", "color": "#ef4444", "x": 260, "y": 120},
+                ]
+            }
+        ],
         "dashboard_grid": [
             {
                 "panels": [
@@ -982,7 +1039,12 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ),
             }
         ],
-        "error_boundary": [{}],
+        "error_boundary": [
+            {
+                "fallback": "Unable to load the project details.",
+                "error": "Request timed out",
+            }
+        ],
         "expandable_text": [{}],
         "fieldset": [
             {"legend": "Shipping address", "content": '<label>Street <input type="text"></label>'}
@@ -1235,8 +1297,23 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "popover": [{}],
-        "presence_avatars": [{}],
+        "popover": [
+            {
+                "trigger": "View details",
+                "title": "Project status",
+                "content": "<p>Deployment completed successfully.</p>",
+            }
+        ],
+        "presence_avatars": [
+            {
+                "users": [
+                    {"name": "Ada Lovelace", "status": "online"},
+                    {"name": "Grace Hopper", "status": "away"},
+                    {"name": "Alan Turing", "status": "busy"},
+                ],
+                "max_display": 2,
+            }
+        ],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
         "reactions": [
             {
@@ -1257,7 +1334,13 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "scroll_area": [{"content": "<p>Scrollable body text.</p>" * 12}],
         "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
         "scroll_to_top": [{}],
-        "sheet": [{}],
+        "sheet": [
+            {
+                "title": "Filters",
+                "content": "<p>Choose which project activity to display.</p>",
+                "is_open": True,
+            }
+        ],
         "sidebar": [
             {
                 "title": "Workspace",
@@ -1291,8 +1374,8 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "source_citation": [{}],
         "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
-        "split_pane": [{}],
-        "sticky_header": [{}],
+        "split_pane": [{"left": "<p>Navigation</p>", "right": "<p>Details</p>"}],
+        "sticky_header": [{"content": "<strong>Project dashboard</strong>"}],
         "tabs": [
             {
                 "tabs": [{"id": "one", "label": "Overview"}, {"id": "two", "label": "Activity"}],

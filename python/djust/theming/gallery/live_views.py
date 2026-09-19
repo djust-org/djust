@@ -189,6 +189,10 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_sheet": ("is_open", _flip),
     "close_sheet": ("is_open", lambda _c, _v: False),
     "close_palette": ("is_open", lambda _c, _v: False),
+    # The command palette's search is intentionally a no-op in the catalogue:
+    # the example has static results, but typing still needs a hosted handler
+    # so the preview does not report an event error.
+    "palette_search": ("search", _text),
     "accept_cookies": ("accepted", lambda _c, _v: True),
     "dismiss_alert": ("dismissed", lambda _c, _v: True),
     "add_row": ("rows", _append_row),
@@ -823,6 +827,11 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             # The catalogue has one populated dropdown example. Start it open
             # so the menu items are visible before the reader interacts with it;
             # the hosted `toggle_dropdown` event still closes it normally.
+            values["is_open"] = True
+        elif component_name == "sheet":
+            # The sheet example documents an open drawer. Preserve that first
+            # paint so the preview demonstrates the content before the reader
+            # closes it with the hosted `close_sheet` event.
             values["is_open"] = True
         preview = self.preview
         preview.state.component_name = component_name
