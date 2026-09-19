@@ -413,7 +413,7 @@ def usage_with_events(
     *,
     descriptor_class: str = "",
     descriptor_event: str = "",
-    demo_keys: dict | None = None,
+    demo_stubs: dict | None = None,
     class_name: str = "",
     example: dict | None = None,
 ) -> str:
@@ -451,32 +451,53 @@ def usage_with_events(
     if others:
         if "from djust.decorators import event_handler" not in lines:
             lines.insert(2, "from djust.decorators import event_handler")
+        example = example or {}
+        stubs = {e: (demo_stubs or {}).get(e) or [] for e in others}
+        # Every kwarg some event drives, with the value it starts from.
+        initial: dict = {}
         for event in others:
-            key = (demo_keys or {}).get(event)
-            lines += ["", "    @event_handler()", f'    def {event}(self, value="", **kwargs):']
-            if key and class_name:
-                # The mount-time call again, with the kwarg this event drives
-                # bound to the incoming value — what the reader would write.
-                # The wire carries a string; convert to the kwarg's own type.
-                reference = (example or {}).get(key)
-                if isinstance(reference, bool):
-                    incoming = 'value == "true"'
-                elif isinstance(reference, int):
-                    incoming = "int(value)"
-                elif isinstance(reference, float):
-                    incoming = "float(value)"
+            for key, _expr, start_value in stubs[event]:
+                initial.setdefault(key, start_value)
+        keys = list(initial)
+
+        if keys and class_name:
+            # State on the view, the component derived from it: a handler
+            # changes an attribute, get_context_data builds the component on
+            # every render, and the kwargs are written once. (A plain
+            # Component must not be a class attribute — one shared object
+            # across every user of the view.)
+            mount_at = next(i for i, ln in enumerate(lines) if "self.component = " in ln)
+            lines[mount_at : mount_at + 1] = [f"        self.{k} = {initial[k]!r}" for k in keys]
+            for event in others:
+                lines += ["", "    @event_handler()", f'    def {event}(self, value="", **kwargs):']
+                if stubs[event]:
+                    for key, expr, _start in stubs[event]:
+                        lines.append(f"        self.{key} = {expr}")
                 else:
-                    incoming = "value"
-                kwargs_src = ", ".join(
-                    f"{k}={incoming if k == key else repr(v)}"
-                    for k, v in (example or {}).items()
-                    if not k.startswith("slot_")
-                )
-                if key not in (example or {}):
-                    kwargs_src = f"{kwargs_src}, {key}=value" if kwargs_src else f"{key}=value"
-                lines.append(f"        self.component = {class_name}({kwargs_src})")
-            else:
-                lines.append("        ...  # update state; the re-render carries it")
+                    lines.append("        ...  # update state; the re-render carries it")
+            kwargs_src = ", ".join(
+                f"{k}={f'self.{k}' if k in keys else repr(v)}"
+                for k, v in example.items()
+                if not k.startswith("slot_")
+            )
+            for k in keys:
+                if k not in example:
+                    kwargs_src = f"{kwargs_src}, {k}=self.{k}" if kwargs_src else f"{k}=self.{k}"
+            lines += [
+                "",
+                "    def get_context_data(self, **kwargs):",
+                "        ctx = super().get_context_data(**kwargs)",
+                f'        ctx["component"] = {class_name}({kwargs_src})',
+                "        return ctx",
+            ]
+        else:
+            for event in others:
+                lines += [
+                    "",
+                    "    @event_handler()",
+                    f'    def {event}(self, value="", **kwargs):',
+                    "        ...  # update state; the re-render carries it",
+                ]
     return "\n".join(lines) + sep + template_part
 
 

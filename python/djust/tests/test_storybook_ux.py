@@ -318,7 +318,11 @@ class TestUsageWithEvents:
         assert "from djust.decorators import event_handler" in snippet
         assert "@event_handler()" in snippet
         assert 'def set_rating(self, value="", **kwargs):' in snippet
-        assert "self.component = Rating(value=int(value), max_stars=5)" in snippet
+        # State on the view, the component derived from it on every render.
+        assert "        self.value = 4" in snippet
+        assert "        self.value = int(value)" in snippet
+        assert 'ctx["component"] = Rating(value=self.value, max_stars=5)' in snippet
+        assert "self.component = " not in snippet
 
     def test_a_component_without_events_is_unchanged(self):
         view = _detail("button")

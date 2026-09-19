@@ -439,6 +439,53 @@ for _event, _effects in _DEMO_EVENTS.items():
 del _descriptor_cls, _event, _effects
 
 
+def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
+    """What each hand-hosted demo event does, as the line a handler writes.
+
+    ``{event: [(kwarg, python_expression, initial_value), …]}`` — derived
+    from `_DEMO_EVENTS`' transforms so the usage snippet shows the real
+    semantics (`toggle_x` flips, `carousel_next` steps, `close_x` sets
+    False, `set_x` takes the wire value converted to the kwarg's type)
+    rather than a generic assignment.
+    """
+
+    def convert(key: str) -> str:
+        reference = example.get(key)
+        if isinstance(reference, bool):
+            return 'value == "true"'
+        if isinstance(reference, int):
+            return "int(value)"
+        if isinstance(reference, float):
+            return "float(value)"
+        return "value"
+
+    out: Dict[str, list] = {}
+    for event, effects in _DEMO_EVENTS.items():
+        pairs = effects if isinstance(effects, list) else [effects]
+        stubs = []
+        for key, transform in pairs:
+            initial = example.get(key)
+            name = getattr(transform, "__name__", "")
+            if transform is _flip:
+                expr, initial = f"not self.{key}", bool(initial)
+            elif transform is _as_int:
+                expr = "int(value)"
+            elif transform is _text:
+                expr = convert(key)
+            elif name == "_shift":
+                delta = transform(0, None)
+                expr = f"self.{key} {'+' if delta >= 0 else '-'} {abs(delta)}"
+            elif name == "<lambda>":
+                # A constant setter: the same value whatever comes in.
+                probe = transform(initial, "x")
+                expr = repr(probe) if probe == transform(initial, "y") else "value"
+            else:
+                expr = f"...  # `{name.strip('_')}` — see this component's docs"
+            stubs.append((key, expr, initial))
+        out[event] = stubs
+    return out
+
+
 def _make_forwarder(event: str):
     """A view-level `@event_handler` that forwards to the preview component.
 
@@ -733,16 +780,12 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         # descriptor's class-level form when there is one, and for the
         # hand-hosted demo events the kwarg each one drives.
         events = component_events("".join(e["html"] for e in rendered[:1]))
-        demo_keys = {
-            ev: (effects[0][0] if isinstance(effects, list) else effects[0])
-            for ev, effects in _DEMO_EVENTS.items()
-        }
         ctx["usage_snippet"] = usage_with_events(
             ctx.get("usage_snippet", ""),
             events,
             descriptor_class=descriptor_cls.__name__ if descriptor_cls is not None else "",
             descriptor_event=descriptor_cls.Meta.event if descriptor_cls is not None else "",
-            demo_keys=demo_keys,
+            demo_stubs=demo_stub_sources(examples[0] if examples else {}),
             class_name=ctx.get("class_name") or "",
             example=examples[0] if examples else None,
         )

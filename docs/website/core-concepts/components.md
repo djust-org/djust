@@ -31,7 +31,36 @@ class MyView(LiveView):
         return {"status_dot": self.status_dot}
 ```
 
-In the template: `{{ status_dot }}` — calls `__str__()` → `render()`. Add `|safe` (`{{ status_dot|safe }}`) until [#2501](https://github.com/djust-org/djust/issues/2501)'s escaping fix lands — without it the markup renders as literal text.
+In the template: `{{ status_dot }}` — calls `__str__()` → `render()`, which
+marks the markup safe, so no `|safe` is needed on any render path (an earlier
+version of this note said otherwise while
+[#2501](https://github.com/djust-org/djust/issues/2501) was open; it is
+closed).
+
+A stateless component does not have to live in `mount()`. For a component
+whose events change what it shows, keep the *state* on the view and derive
+the component on each render, so a handler changes one attribute and the
+kwargs are written once:
+
+```python
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.value = 4
+
+    @event_handler()
+    def set_rating(self, value="", **kwargs):
+        self.value = int(value)  # the wire carries a string
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rating"] = Rating(value=self.value, max_stars=5)
+        return ctx
+```
+
+Do not make a plain `Component` a class attribute: that is one shared object
+across every user of the view. Class-level declaration is for
+[`LiveComponent` descriptors](../guides/components.md#class-level-components),
+which give each view its own state.
 
 ### Rendering Priority
 
