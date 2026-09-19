@@ -435,9 +435,12 @@ class TestTitleExhaustive:
         # Render the same four probes for EVERY Unicode scalar, in bounded
         # batches. Both engines still execute their template title filter and
         # autoescape for each probe; only per-render setup is shared.
-        for start in range(0, 0x110000, 1024):
+        # Fast path: when a batch's output strings match identically, all probes
+        # in the batch agreed without needing to split and unpack thousands of cells.
+        batch_size = 4096
+        for start in range(0, 0x110000, batch_size):
             cases = []
-            for cp in range(start, min(start + 1024, 0x110000)):
+            for cp in range(start, min(start + batch_size, 0x110000)):
                 if 0xD800 <= cp <= 0xDFFF:
                     continue
                 char = chr(cp)
@@ -445,17 +448,30 @@ class TestTitleExhaustive:
                     cases.append((cp, probe))
             if not cases:
                 continue
-            results = self._render_batch([probe for _, probe in cases], compiled)
-            for (cp, probe), (django_out, djust_out) in zip(cases, results, strict=True):
+
+            probes = [probe for _, probe in cases]
+            context = {"probes": probes}
+            django_out = compiled.render(DjangoContext(context))
+            djust_out = _rust.render_template(self._batch_template, normalize_django_value(context))
+
+            if django_out == djust_out:
+                checked += len(cases)
+                continue
+
+            # When a batch has any divergence (e.g. Unicode-version skew),
+            # split and isolate the diverging codepoint cells.
+            cells_django = django_out.split(self._separator)[:-1]
+            cells_djust = djust_out.split(self._separator)[:-1]
+            for (cp, probe), (dj_o, dj_u) in zip(
+                cases, zip(cells_django, cells_djust), strict=True
+            ):
                 checked += 1
-                if django_out == djust_out:
+                if dj_o == dj_u:
                     continue
                 if self._cpython_knows_no_case(chr(cp)):
                     skew += 1
                     continue
-                unexpected.append(
-                    f"  U+{cp:04X} {probe!r}: django={django_out!r} djust={djust_out!r}"
-                )
+                unexpected.append(f"  U+{cp:04X} {probe!r}: django={dj_o!r} djust={dj_u!r}")
         assert checked == 4 * (0x110000 - 0x800), checked
         assert not unexpected, (
             f"{len(unexpected)} codepoints diverge for a reason other than "

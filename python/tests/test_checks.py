@@ -4062,7 +4062,7 @@ class TestT011UnsupportedTemplateTags:
 class TestV004LifecycleMethods:
     """V004 must not fire on known djust lifecycle methods."""
 
-    def _make_view_with_method(self, method_name):
+    def _make_view_with_methods(self, method_names):
         import pytest
 
         if not _liveview_available():
@@ -4077,27 +4077,33 @@ class TestV004LifecycleMethods:
         def lifecycle_method(self, **kwargs):
             pass
 
+        attrs = {
+            "__module__": "myapp.views",
+            "template_name": "t.html",
+            "mount": mount,
+        }
+        for name in method_names:
+            attrs[name] = lifecycle_method
+
         cls = type(
-            f"V004Lifecycle_{method_name}",
+            "V004Lifecycle_Batch",
             (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                method_name: lifecycle_method,
-            },
+            attrs,
         )
 
         try:
             errors = check_liveviews(None)
             v004 = [e for e in errors if e.id == "djust.V004"]
-            cls_name = f"V004Lifecycle_{method_name}"
-            assert not any(cls_name in e.msg and method_name in e.msg for e in v004), (
-                f"V004 should not fire on lifecycle method {method_name!r}"
-            )
+            for method_name in method_names:
+                assert not any(
+                    "V004Lifecycle_Batch" in e.msg and method_name in e.msg for e in v004
+                ), f"V004 should not fire on lifecycle method {method_name!r}"
         finally:
             del cls
             _force_gc()
+
+    def _make_view_with_method(self, method_name):
+        self._make_view_with_methods([method_name])
 
     def test_v004_ignores_handle_params(self):
         """handle_params() is a lifecycle method — V004 must not fire."""
@@ -4125,17 +4131,18 @@ class TestV004LifecycleMethods:
         split checks/components.py. Regression for the canonical symptom
         (handle_presence_leave, which bit djust-org/djust-start#5).
         """
-        for method_name in (
-            "handle_presence_join",
-            "handle_presence_leave",
-            "handle_cursor_move",
-            "handle_tick",
-            "handle_async_result",
-            "handle_component_event",
-            "handle_info",
-            "on_wizard_complete",
-        ):
-            self._make_view_with_method(method_name)
+        self._make_view_with_methods(
+            [
+                "handle_presence_join",
+                "handle_presence_leave",
+                "handle_cursor_move",
+                "handle_tick",
+                "handle_async_result",
+                "handle_component_event",
+                "handle_info",
+                "on_wizard_complete",
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
