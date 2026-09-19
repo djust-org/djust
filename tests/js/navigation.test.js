@@ -292,32 +292,59 @@ describe('navigation', () => {
     });
 
     describe('bindDirectives', () => {
+        // These used to assert a `data-djust-*-bound` attribute. The attribute
+        // was the bug: server HTML never carries it, so a morph that reused the
+        // node stripped it while the listener stayed, and the next pass bound
+        // the element a second time. The listener count is what matters, so
+        // that is what these assert.
+        function clickListenersAdded(el) {
+            const spy = vi.spyOn(el, 'addEventListener');
+            return () => spy.mock.calls.filter((c) => c[0] === 'click').length;
+        }
+
         it('binds dj-patch elements', () => {
             const { window, document } = createEnv('<a dj-patch="?page=2">Page 2</a>');
+            const link = document.querySelector('[dj-patch]');
+            const added = clickListenersAdded(link);
 
             window.djust.navigation.bindDirectives();
 
-            const link = document.querySelector('[dj-patch]');
-            expect(link.dataset.djustPatchBound).toBe('true');
+            expect(added()).toBe(1);
         });
 
         it('binds dj-navigate elements', () => {
             const { window, document } = createEnv('<a dj-navigate="/about/">About</a>');
+            const link = document.querySelector('[dj-navigate]');
+            const added = clickListenersAdded(link);
 
             window.djust.navigation.bindDirectives();
 
-            const link = document.querySelector('[dj-navigate]');
-            expect(link.dataset.djustNavigateBound).toBe('true');
+            expect(added()).toBe(1);
         });
 
         it('does not double-bind dj-patch', () => {
             const { window, document } = createEnv('<a dj-patch="?page=2">Page 2</a>');
-
-            window.djust.navigation.bindDirectives();
-            window.djust.navigation.bindDirectives();
-
             const link = document.querySelector('[dj-patch]');
-            expect(link.dataset.djustPatchBound).toBe('true');
+            const added = clickListenersAdded(link);
+
+            window.djust.navigation.bindDirectives();
+            window.djust.navigation.bindDirectives();
+
+            expect(added()).toBe(1);
+        });
+
+        it('does not double-bind after a morph strips the element attributes', () => {
+            const { window, document } = createEnv('<a dj-navigate="/about/">About</a>');
+            const link = document.querySelector('[dj-navigate]');
+
+            window.djust.navigation.bindDirectives();
+            const added = clickListenersAdded(link);
+            [...link.attributes]
+                .filter((a) => a.name.startsWith('data-'))
+                .forEach((a) => link.removeAttribute(a.name));
+            window.djust.navigation.bindDirectives();
+
+            expect(added()).toBe(0);
         });
     });
 

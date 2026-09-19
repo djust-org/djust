@@ -12079,12 +12079,29 @@ window.djust.getActiveStreams = getActiveStreams;
         installDjPatchChangeHandler();
     })();
 
+    /**
+     * Which elements already carry a click listener from this module.
+     *
+     * This used to be a data attribute on the element, and that is wrong for
+     * anything inside the mount root. The server's HTML never contains the
+     * attribute, so a morph or a patch that reuses the DOM node strips the
+     * flag while the listener it recorded stays attached. The next bind pass
+     * then saw an unflagged element and added a SECOND listener, so one click
+     * pushed two identical history entries and the back button looked dead —
+     * it was stepping between duplicates of the same page. Every further
+     * patch added another. Element identity is the thing being tracked, so
+     * track it by identity: a WeakSet survives attribute stripping, and a
+     * node the morph genuinely replaces is a different key and binds once.
+     */
+    const _patchBound = new WeakSet();
+    const _navigateBound = new WeakSet();
+
     function bindNavigationDirectives() {
         // dj-patch: Update URL params without remount
         // Select/input elements are handled by the delegated document listener above.
         document.querySelectorAll('[dj-patch]').forEach(function (el) {
-            if (el.dataset.djustPatchBound) return;
-            el.dataset.djustPatchBound = 'true';
+            if (_patchBound.has(el)) return;
+            _patchBound.add(el);
 
             // Only bind click for non-select elements (links/buttons)
             if (el.tagName !== 'SELECT' && el.tagName !== 'INPUT') {
@@ -12105,8 +12122,8 @@ window.djust.getActiveStreams = getActiveStreams;
 
         // dj-navigate: Navigate to a different view
         document.querySelectorAll('[dj-navigate]').forEach(function (el) {
-            if (el.dataset.djustNavigateBound) return;
-            el.dataset.djustNavigateBound = 'true';
+            if (_navigateBound.has(el)) return;
+            _navigateBound.add(el);
 
             el.addEventListener('click', function (e) {
                 e.preventDefault();
@@ -12242,6 +12259,34 @@ window.djust.getActiveStreams = getActiveStreams;
         }
     }
 
+    /**
+     * Give the entry the document was loaded on a djust history state.
+     *
+     * A live_redirect pushes an entry stamped ``{djust, redirect}``, and the
+     * popstate handler uses that stamp to decide between re-mounting a view
+     * and patching the current one. The entry the browser created for the
+     * original page load carries ``null``, so going back from the first
+     * dj-navigate looked like a same-page parameter change: the URL moved
+     * and the content did not, which is a back button that does nothing.
+     *
+     * Only an unstamped entry is touched, so an application that keeps its
+     * own history state keeps it.
+     */
+    function stampInitialHistoryEntry() {
+        if (typeof window === 'undefined' || !window.history) return;
+        if (window.history.state) return;
+        try {
+            window.history.replaceState(
+                { djust: true, redirect: true },
+                '',
+                window.location.href,
+            );
+        } catch (_e) {
+            // replaceState throws on an opaque origin (a sandboxed iframe).
+            // Nothing to stamp there, and nothing depends on it.
+        }
+    }
+
     let _autoNavigateInstalled = false;
 
     function installAutoNavigate() {
@@ -12257,11 +12302,16 @@ window.djust.getActiveStreams = getActiveStreams;
         _autoNavigateInstalled = true;
     }
 
+    function _installNavigation() {
+        stampInitialHistoryEntry();
+        installAutoNavigate();
+    }
+
     if (typeof document !== 'undefined') {
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', installAutoNavigate);
+            document.addEventListener('DOMContentLoaded', _installNavigation);
         } else {
-            installAutoNavigate();
+            _installNavigation();
         }
     }
 
@@ -12272,6 +12322,7 @@ window.djust.getActiveStreams = getActiveStreams;
         resolveViewPath: resolveViewPath,
         updateAriaCurrent: updateAriaCurrent,
         installAutoNavigate: installAutoNavigate,
+        stampInitialHistoryEntry: stampInitialHistoryEntry,
         // Exposed for tests + advanced callers; the delegated listener is the
         // supported entry point.
         _handleAutoNavigateClick: _handleAutoNavigateClick,

@@ -171,6 +171,19 @@ marked current, and an `aria-current` you set yourself to a different value
 section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
 your own rule on top.
 
+#### The back button, and the history entry you started on
+
+djust stamps its own state onto each entry it pushes, and the popstate handler
+reads that stamp to tell "go back to a different view" from "go back to
+different query parameters on this one". The entry the browser created for the
+original page load has no state at all, so djust stamps that one too, once, on
+load. Without it the first press of back after a `dj-navigate` moved the
+address bar and left the page showing the view the reader had navigated to.
+
+If your application keeps its own `history.state`, djust leaves it alone — only
+an entry whose state is `null` is stamped. Expect `history.state` to be
+non-null on a djust page from load onward.
+
 #### When NOT to use `dj-navigate`
 
 `dj-navigate` swaps the contents of `[dj-root]`. Everything outside it — the
