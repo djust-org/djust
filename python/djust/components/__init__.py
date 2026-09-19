@@ -38,6 +38,7 @@ __version__ = "1.2.0rc8"
 # ---------------------------------------------------------------------------
 # Core component classes (original djust.components)
 # ---------------------------------------------------------------------------
+import importlib
 from typing import Any
 
 from .base import Component, LiveComponent
@@ -196,10 +197,30 @@ def __getattr__(name: str) -> Any:
     Names already defined here win — ``__getattr__`` is only consulted for a
     missing attribute — so the nine that exist in both namespaces are
     unaffected.
+
+    Underscored names are refused before the import runs, and that guard is
+    load-bearing rather than tidy. Importing the subpackage makes the import
+    machinery look up attributes on THIS module, and every one it does not
+    find lands back here — which re-entered the import and recursed until the
+    interpreter gave up. Any `hasattr(djust.components, x)` for an absent `x`
+    hit it, so a consumer probing for an optional name crashed instead of
+    getting `False`. Dunders are never component classes, so refusing them
+    costs nothing and breaks the cycle.
     """
-    from . import components as _components
+    if name.startswith("_"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    # `from . import components` is what must NOT appear here. That form asks
+    # the import machinery for the attribute `components` on this module, and
+    # until the submodule is bound that lookup comes straight back into this
+    # function, which asks again — the recursion that made any
+    # `hasattr(djust.components, missing)` blow the stack. `import_module`
+    # resolves through `sys.modules` instead and never consults us.
+    subpackage = importlib.import_module(f"{__name__}.components")
+    if name == "components":
+        return subpackage
 
     try:
-        return getattr(_components, name)
+        return getattr(subpackage, name)
     except AttributeError:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
