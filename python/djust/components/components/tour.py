@@ -117,21 +117,21 @@ class Tour(Component):
         if idx > 0:
             prev_btn = (
                 f'<button class="dj-tour__prev" type="button" '
-                f'dj-click="{e_event}" data-value="prev">Back</button>'
+                f"{self.event_attrs(self.event, value='prev')}>Back</button>"
             )
 
         next_label = "Finish" if idx == total - 1 else "Next"
         next_action = "finish" if idx == total - 1 else "next"
         next_btn = (
             f'<button class="dj-tour__next" type="button" '
-            f'dj-click="{e_event}" data-value="{next_action}">{next_label}</button>'
+            f"{self.event_attrs(self.event, value=next_action)}>{next_label}</button>"
         )
 
         skip_btn = ""
         if self.show_skip and idx < total - 1:
             skip_btn = (
                 f'<button class="dj-tour__skip" type="button" '
-                f'dj-click="{e_event}" data-value="skip">Skip tour</button>'
+                f"{self.event_attrs(self.event, value='skip')}>Skip tour</button>"
             )
 
         step_label = f'<span class="dj-tour__step-label">Step {idx + 1} of {total}</span>'

@@ -98,8 +98,8 @@ class ImageLightbox(Component):
         # Navigation
         prev_btn = (
             (
-                f'<button class="dj-lightbox__prev" dj-click="{e_nav}" '
-                f'data-value="{idx - 1}" aria-label="Previous">'
+                f'<button class="dj-lightbox__prev" '
+                f'{self.event_attrs(self.navigate_event, value=idx - 1)} aria-label="Previous">'
                 f"&#8249;</button>"
             )
             if total > 1
@@ -108,8 +108,8 @@ class ImageLightbox(Component):
 
         next_btn = (
             (
-                f'<button class="dj-lightbox__next" dj-click="{e_nav}" '
-                f'data-value="{idx + 1}" aria-label="Next">'
+                f'<button class="dj-lightbox__next" '
+                f'{self.event_attrs(self.navigate_event, value=idx + 1)} aria-label="Next">'
                 f"&#8250;</button>"
             )
             if total > 1
@@ -124,8 +124,8 @@ class ImageLightbox(Component):
             f'<div class="{class_str}" dj-hook="ImageLightbox" '
             f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
             f'role="dialog" aria-modal="true">'
-            f'<div class="dj-lightbox__backdrop" dj-click="{e_close}"></div>'
-            f'<button class="dj-lightbox__close" dj-click="{e_close}" '
+            f'<div class="dj-lightbox__backdrop" {self.event_attrs(self.close_event)}></div>'
+            f'<button class="dj-lightbox__close" {self.event_attrs(self.close_event)} '
             f'aria-label="Close">&times;</button>'
             f"{prev_btn}"
             f'<div class="dj-lightbox__stage">{img_html}{caption_html}</div>'

@@ -64,8 +64,6 @@ class Wizard(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_event = html.escape(self.event)
-
         # Find active index
         active_idx = 0
         for i, step in enumerate(self.steps):
@@ -76,7 +74,6 @@ class Wizard(Component):
         # Step indicators
         indicators = []
         for i, step in enumerate(self.steps):
-            step_id = html.escape(str(step.get("id", "")))
             step_label = html.escape(str(step.get("label", "")))
             step_cls = "dj-wizard__step"
             if i < active_idx:
@@ -90,7 +87,7 @@ class Wizard(Component):
 
             indicators.append(
                 f'<button class="{step_cls}" '
-                f'dj-click="{e_event}" data-value="{step_id}">'
+                f"{self.event_attrs(self.event, value=step.get('id', ''))}>"
                 f"{number_html}"
                 f'<span class="dj-wizard__label">{step_label}</span>'
                 f"</button>"

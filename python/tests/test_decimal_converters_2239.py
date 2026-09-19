@@ -564,6 +564,10 @@ EXPECTED_ROUNDTRIP_SITES = {
     ("mixins/sticky.py", "save_sticky_child_state_sync"),
     # The inner `_save` closure of `_persist_state_after_event`.
     ("runtime.py", "_save"),
+    # ADR-033 D6: the tagged form of a plain component's state, reached only
+    # from the writers above (and `StateRoundtripJSONEncoder`), so a Decimal
+    # or a nested component INSIDE the state takes its tagged form too.
+    ("serialization.py", "component_for_state_roundtrip"),
 }
 
 #: Modules holding at least one call that deliberately does NOT pass the flag —

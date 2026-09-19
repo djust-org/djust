@@ -47,11 +47,10 @@ class Dropdown(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_label = html.escape(self.label)
-        e_toggle = html.escape(self.toggle_event)
         menu_html = f'<div class="dj-dropdown__menu">{self.content}</div>' if self.is_open else ""
         open_attr = " data-open" if self.is_open else ""
         return (
             f'<div class="{cls}"{open_attr}>'
-            f'<button class="dj-dropdown__trigger" dj-click="{e_toggle}">{e_label}</button>'
+            f'<button class="dj-dropdown__trigger" {self.event_attrs(self.toggle_event)}>{e_label}</button>'
             f"{menu_html}</div>"
         )

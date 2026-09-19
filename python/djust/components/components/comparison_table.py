@@ -75,7 +75,6 @@ class ComparisonTable(Component):
         if not self.plans:
             return f'<div class="{class_str}"><table class="dj-compare__table"></table></div>'
 
-        e_event = html.escape(self.event) if self.event else ""
         num_plans = len(self.plans)
 
         # Header row
@@ -89,8 +88,8 @@ class ComparisonTable(Component):
             hl_class = " dj-compare__plan--highlighted" if highlighted else ""
 
             click_attr = ""
-            if e_event:
-                click_attr = f' dj-click="{e_event}" data-value="{name}"'
+            if self.event:
+                click_attr = f" {self.event_attrs(self.event, value=plan.get('name', ''))}"
 
             price_html = f'<div class="dj-compare__price">{price}</div>' if price else ""
             header_cells.append(

@@ -62,9 +62,6 @@ class DatePicker(Component):
         cls = "date-picker"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_prev = html.escape(self.prev_event)
-        e_next = html.escape(self.next_event)
-        e_select = html.escape(self.select_event)
         e_label = html.escape(self.label)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         month_name = calendar.month_name[month]
@@ -85,14 +82,17 @@ class DatePicker(Component):
                         day_cls += " dp-day-today"
                     if date_str == self.selected:
                         day_cls += " dp-day-selected"
-                    day_cells += f'<button class="{day_cls}" dj-click="{e_select}" data-value="{date_str}">{day}</button>'
+                    day_cells += (
+                        f'<button class="{day_cls}" '
+                        f"{self.event_attrs(self.select_event, value=date_str)}>{day}</button>"
+                    )
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
             f'<div class="dp-header">'
-            f'<button class="dp-nav-btn" dj-click="{e_prev}">&#8249;</button>'
+            f'<button class="dp-nav-btn" {self.event_attrs(self.prev_event)}>&#8249;</button>'
             f'<span class="dp-month-label">{month_name} {year}</span>'
-            f'<button class="dp-nav-btn" dj-click="{e_next}">&#8250;</button>'
+            f'<button class="dp-nav-btn" {self.event_attrs(self.next_event)}>&#8250;</button>'
             f"</div>"
             f'<div class="dp-grid">{weekdays}{day_cells}</div>'
             f"</div></div>"

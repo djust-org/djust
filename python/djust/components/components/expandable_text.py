@@ -86,7 +86,6 @@ class ExpandableText(Component):
             cls += f" {html.escape(self.custom_class)}"
 
         e_text = html.escape(self.text)
-        e_event = html.escape(self.toggle_event)
         e_more = html.escape(self.more_label)
         e_less = html.escape(self.less_label)
         max_lines = int(self.max_lines)
@@ -104,7 +103,7 @@ class ExpandableText(Component):
         return (
             f'<div class="{cls}">'
             f'<div class="dj-expandable-text__content"{style}>{e_text}</div>'
-            f'<button class="dj-expandable-text__toggle" dj-click="{e_event}">'
+            f'<button class="dj-expandable-text__toggle" {self.event_attrs(self.toggle_event)}>'
             f"{label}</button>"
             f"</div>"
         )

@@ -28,6 +28,10 @@ class Sparkline(Component):
         custom_class: Additional CSS classes
     """
 
+    #: ADR-033 D3: the walked state keys; ``data`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         data: Optional[list] = None,

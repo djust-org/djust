@@ -42,7 +42,6 @@ class Stepper(Component):
         cls = "stepper"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_event = html.escape(self.event)
         parts = []
         for i, step in enumerate(steps):
             if isinstance(step, dict):
@@ -57,7 +56,7 @@ class Stepper(Component):
             if complete:
                 step_cls += " stepper-step-complete"
             parts.append(
-                f'<button class="{step_cls}" dj-click="{e_event}" data-value="{i}">'
+                f'<button class="{step_cls}" {self.event_attrs(self.event, value=i)}>'
                 f'<span class="stepper-number">{i + 1}</span>'
                 f'<span class="stepper-label">{lbl}</span>'
                 f"</button>"

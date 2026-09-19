@@ -48,6 +48,10 @@ class DataGrid(Component):
         custom_class: additional CSS classes
     """
 
+    #: ADR-033 D3: the walked state keys; ``rows`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-row walk per click.
+    fingerprint_fields = ("columns",)
+
     def __init__(
         self,
         columns: Optional[list] = None,
@@ -134,7 +138,8 @@ class DataGrid(Component):
         for row in self.rows:
             if not isinstance(row, dict):
                 continue
-            rk = html.escape(str(row.get(self.row_key, "")))
+            rk_raw = row.get(self.row_key, "")
+            rk = html.escape(str(rk_raw))
             cells = []
             for idx, col in enumerate(self.columns):
                 if not isinstance(col, dict):
@@ -159,8 +164,7 @@ class DataGrid(Component):
                 cells.append(
                     f'<td class="data-grid-cell data-grid-actions-col">'
                     f'<button class="data-grid-delete-btn" '
-                    f'dj-click="{html.escape(self.delete_row_event)}" '
-                    f'data-value="{rk}">&times;</button>'
+                    f"{self.event_attrs(self.delete_row_event, value=rk_raw)}>&times;</button>"
                     f"</td>"
                 )
 

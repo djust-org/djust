@@ -49,13 +49,13 @@ class Modal(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_title = html.escape(self.title)
-        e_close = html.escape(self.close_event)
+        close_attrs = self.event_attrs(self.close_event)
         return (
-            f'<div class="dj-modal-backdrop" dj-click="{e_close}">'
+            f'<div class="dj-modal-backdrop" {close_attrs}>'
             f'<div class="{cls}">'
             f'<div class="dj-modal__header">'
             f'<h3 class="dj-modal__title">{e_title}</h3>'
-            f'<button class="dj-modal__close" dj-click="{e_close}">&times;</button>'
+            f'<button class="dj-modal__close" {close_attrs}>&times;</button>'
             f"</div>"
             f'<div class="dj-modal__body">{self.content}</div>'
             f"</div>"
