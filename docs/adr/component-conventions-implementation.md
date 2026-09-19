@@ -39,6 +39,14 @@ The ADRs remain Proposed until their transport and security gates pass.
   context diagnostics, and time-travel recording. Time-travel parameters and
   errors are redacted; observational records cannot restore, scrub components,
   or replay handlers. Legacy debug behavior is preserved.
+- The staged explicit base-context path now uses deliberate kwargs and the
+  component descriptor registry, action state and stream rendering providers;
+  it does not discover public/private attributes, configuration, properties or
+  state declarations. Native deliberately supplied ORM objects remain renderer
+  inputs. Context processors use a copied rendering dictionary, preserve view
+  precedence, and reject reserved provider collisions instead of overwriting.
+  This branch remains behind the construction guard; persistence integration
+  must stop saving render context before it can be enabled.
 
 These changes **do not enable explicit exposure at runtime**. LiveView rejects
 `exposure_policy="explicit"` and nondefault state exposure grants until automatic
@@ -88,6 +96,25 @@ Observability reset/eval operations, error tooling and historical bug captures
 still need a complete audit before enabling the policy. Display redaction alone
 must not be mistaken for acceptance of all debugging surfaces.
 
+### Explicit rendering context boundary
+
+The base context does not automatically expose `state()` fields. Applications
+must deliberately add their rendering inputs through `get_context_data()`.
+Component rendering uses the existing descriptor registry and rejects stale
+entries replaced by properties. Instance-assigned components are not discovered;
+their future migration/provider contract still needs completion. Actions and
+streams contribute rendering namespaces only. A raw `view` context key is
+rejected; no compatibility facade is provided yet. Form/upload providers and
+nested provider inheritance remain acceptance work.
+
+`test_exposure_context.py` covers no-reflection sentinels, kwargs/cache isolation,
+reserved-name collisions, context-processor precedence, per-view component
+binding, stale registries and deliberate native-model rendering in Django and
+Rust template backends. These are direct context/renderer tests with deliberately
+uninitialized gated views, not full HTTP/WS explicit-policy coverage. In
+particular, existing HTTP/WS persistence still consumes render context and must
+be replaced before removing the explicit construction guard.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.
@@ -108,7 +135,8 @@ reflection fallback. These are implementation gates, not completed guarantees.
 Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
 `test_exposure_contract.py`, `test_exposure_policy_guard.py`, and
-`test_exposure_sessions.py`, plus `test_exposure_debug.py`. Run these with
+`test_exposure_sessions.py`, `test_exposure_debug.py`, and
+`test_exposure_context.py`. Run these with
 the existing form, decorator, state and WebSocket regression suites. This slice
 does not change browser JavaScript and does not establish browser, cross-worker,
 or complete explicit-exposure parity.
