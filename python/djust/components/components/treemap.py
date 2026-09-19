@@ -48,6 +48,10 @@ class Treemap(Component):
         "#a855f7",
     ]
 
+    #: ADR-033 D3: the walked state keys; ``data`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-item walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         data: Optional[list] = None,

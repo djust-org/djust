@@ -1,5 +1,5 @@
 """
-Component registry for all 169 djust-components, organized by category.
+Component registry for every djust component (python and theme), organized by category.
 
 Provides:
 - COMPONENT_CATEGORIES: dict mapping category names to lists of component names
@@ -40,6 +40,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "code_snippet",
         "collapsible",
         "dropdown",
+        "dropdown_menu",
         "input",
         "kbd",
         "meter",
@@ -73,6 +74,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "sidebar",
         "sidebar_nav",
         "stepper",
+        "wizard",
         "sticky_header",
         "table_of_contents",
         "toolbar",
@@ -103,6 +105,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "activity_feed",
         "audit_log",
         "code_block",
+        "terminal",
         "comparison_table",
         "data_card_grid",
         "data_grid",
@@ -198,6 +201,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "feedback_widget",
         "filter_bar",
         "icon",
+        "infinite_scroll",
         "import_wizard",
         "kanban_board",
         "live_counter",
@@ -244,6 +248,39 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
                 },
             ],
             "active": "1",
+        },
+    ],
+    "dropdown_menu": [
+        {
+            "label": "Actions",
+            "items": [
+                {"label": "Edit", "event": "edit_item"},
+                {"label": "Duplicate", "event": "duplicate_item"},
+                {"divider": True},
+                {"label": "Delete", "event": "delete_item", "danger": True},
+            ],
+            "open": True,
+        },
+    ],
+    "infinite_scroll": [
+        {"load_event": "load_more"},
+        {"load_event": "load_more", "loading": True},
+    ],
+    "terminal": [
+        {
+            "output": ["$ djust new myapp", "Creating project…", "Done in 1.2s"],
+            "title": "shell",
+            "show_line_numbers": True,
+        },
+    ],
+    "wizard": [
+        {
+            "steps": [
+                {"id": "account", "label": "Account"},
+                {"id": "profile", "label": "Profile"},
+                {"id": "review", "label": "Review"},
+            ],
+            "active": "profile",
         },
     ],
     "spinner": [
@@ -485,7 +522,7 @@ def get_component_category(component_name: str) -> str:
 
 
 def get_all_components_by_category() -> dict[str, list[str]]:
-    """Return all 169 components organized by category."""
+    """Return every registered component organized by category."""
     return dict(COMPONENT_CATEGORIES)
 
 
