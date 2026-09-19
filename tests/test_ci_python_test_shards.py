@@ -345,7 +345,9 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
         # fails, and the pre-push suite blocks every worktree push.
         env={
             **os.environ,
-            "PYTHONPATH": os.pathsep.join(filter(None, [os.environ.get("PYTHONPATH", ""), "."])),
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, ["python", ".", os.environ.get("PYTHONPATH", "")])
+            ),
         },
         timeout=180,
     )
