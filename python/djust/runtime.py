@@ -3984,6 +3984,24 @@ class ViewRuntime:
         # path; the frame is the ``patch`` frame that path emits.
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
             changed = _compute_changed_keys(pre_assigns, _snapshot_assigns(view))
+            # A click whose handler changed nothing (close on a closed sheet,
+            # a second "accept", a push-only handler) is a ``noop``, as the
+            # view route answers — not a page render shipped as a 30 KB
+            # ``html_update`` (#2922). ``_flush_all_pending`` below drains any
+            # push events before the noop goes out, as on the view route.
+            if not changed:
+                await self._flush_all_pending()
+                noop_msg: Dict[str, Any] = {
+                    "type": "noop",
+                    "source": "event",
+                    "event_name": event_name,
+                }
+                if event_ref is not None:
+                    noop_msg["ref"] = event_ref
+                await self.transport.send(noop_msg)
+                self._dispatch_async_work(event_name)
+                await self._flush_deferred_activity_events()
+                return True
             if _scoped_component_for(view, changed) is component:
                 _scoped_start = time.perf_counter()
                 scoped = await self._render_scoped_component(view, component)
@@ -4004,6 +4022,12 @@ class ViewRuntime:
         from .websocket import _emit_full_html_update
 
         html, _patches, version = await sync_to_async(view.render_with_diff)()
+        # The forced full HTML this render honoured is consumed here, as
+        # ``_render_and_send`` consumes it on the view route; left set, every
+        # later component_id event would bypass the noop and scoped branches
+        # until a view-route turn reset it (#2923 review).
+        if getattr(view, "_force_full_html", False):
+            view._force_full_html = False
         if html and hasattr(view, "_strip_comments_and_whitespace"):
             html = view._strip_comments_and_whitespace(html)
         if html and hasattr(view, "_extract_liveview_content"):

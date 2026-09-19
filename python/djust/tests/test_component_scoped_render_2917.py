@@ -77,6 +77,35 @@ class Tabs(LiveComponent):
         self.state.active = value
 
 
+class Idempotent(LiveComponent):
+    """A handler that may change nothing (#2922)."""
+
+    class State(TypedState):
+        accepted: bool = False
+
+    template = "<p>{{ accepted }}</p>"
+
+    @event_handler()
+    def accept(self, **kwargs: Any) -> None:
+        self.state.accepted = True
+
+    @event_handler()
+    def toast(self, **kwargs: Any) -> None:
+        self._view.push_event("toast", {"msg": "hi"})
+
+    @event_handler()
+    def force(self, **kwargs: Any) -> None:
+        self._view._force_full_html = True
+
+
+class IdempotentPage(LiveView):
+    template = "<div dj-root>{{ banner }}</div>"
+    banner = Idempotent()
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        pass
+
+
 class Probe(LiveComponent):
     """``Meta.event`` alias: the event has no ``component_id`` and runs as a
     VIEW event through the skip gate (#2900)."""
@@ -418,6 +447,54 @@ class TestScopedPath:
         )
         assert view.nav.active == "b" and other.nav.active == "overview"
         assert "overview<b" in other.render_with_diff()[0]
+
+
+@pytest.mark.django_db
+class TestNoChangeOnTheComponentRoute:
+    @pytest.mark.asyncio
+    async def test_a_handler_that_changed_nothing_answers_noop(self):
+        """#2922: the component route rendered the whole page as an
+        ``html_update`` for a click whose handler left the state equal; the
+        view route answered ``noop``. Now both do."""
+        view, runtime, transport = _mounted(IdempotentPage)
+        event = {"type": "event", "event": "accept", "params": {"component_id": "banner"}}
+        await runtime.dispatch_event({**event, "ref": 1})
+        first = _last_frame(transport)
+        assert first["type"] == "patch" and first["ref"] == 1, first
+        await runtime.dispatch_event({**event, "ref": 2})
+        second = _last_frame(transport)
+        assert second["type"] == "noop", second
+        assert second["ref"] == 2 and second["event_name"] == "accept"
+        assert view.banner.accepted is True
+
+    @pytest.mark.asyncio
+    async def test_a_push_only_handler_answers_noop_and_the_push_is_delivered(self):
+        """#2923 review 🟡1: the view route noops a push-only handler (#700);
+        so does the component route — the push drains before the noop."""
+        import asyncio
+
+        view, runtime, transport = _mounted(IdempotentPage)
+        await runtime.dispatch_event(
+            {"type": "event", "event": "toast", "params": {"component_id": "banner"}, "ref": 1}
+        )
+        await asyncio.sleep(0)
+        types = [f.get("type") for f in transport.sent]
+        assert "noop" in types and "html_update" not in types, types
+        assert "push_event" in types, types
+
+    @pytest.mark.asyncio
+    async def test_forced_full_html_is_consumed_on_the_component_route(self):
+        """#2923 review 🟡2: the flag was never reset here, so every later
+        component event bypassed the noop and scoped branches."""
+        view, runtime, transport = _mounted(IdempotentPage)
+        event = {"type": "event", "params": {"component_id": "banner"}}
+        await runtime.dispatch_event({**event, "event": "force", "ref": 1})
+        assert _last_frame(transport)["type"] == "html_update"
+        assert view._force_full_html is False
+        await runtime.dispatch_event({**event, "event": "accept", "ref": 2})
+        assert _last_frame(transport)["type"] == "patch"
+        await runtime.dispatch_event({**event, "event": "accept", "ref": 3})
+        assert _last_frame(transport)["type"] == "noop"
 
 
 @pytest.mark.django_db
