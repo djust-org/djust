@@ -337,9 +337,11 @@ def clear_template_dirs_cache() -> None:
     _get_template_dirs_cached.cache_clear()
 
 
-def _clear_template_dirs_on_setting_change(*, setting: str, **kwargs: Any) -> None:
-    """``setting_changed`` receiver: the dirs derive from these two settings."""
-    if setting in ("TEMPLATES", "INSTALLED_APPS"):
+def _clear_template_dirs_on_setting_change(**kwargs: Any) -> None:
+    """``setting_changed`` receiver: the dirs derive from these two settings.
+    Keyword-agnostic like ``mixins/context.py``'s receiver — a test that
+    fires the signal bare (no ``setting``) must not raise."""
+    if kwargs.get("setting") in ("TEMPLATES", "INSTALLED_APPS", None):
         clear_template_dirs_cache()
 
 
