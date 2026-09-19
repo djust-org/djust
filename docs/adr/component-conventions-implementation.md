@@ -112,8 +112,8 @@ reserved-name collisions, context-processor precedence, per-view component
 binding, stale registries and deliberate native-model rendering in Django and
 Rust template backends. These are direct context/renderer tests with deliberately
 uninitialized gated views, not full HTTP/WS explicit-policy coverage. The separate
-HTTP integration tests below use real initialized views; WebSocket persistence
-still consumes render context and must be replaced before removing the guard.
+HTTP and shared-runtime integration tests below use real initialized views;
+full transport coverage is still required before removing the guard.
 
 ### HTTP persistence integration
 
@@ -140,6 +140,27 @@ cross-user/tenant and schema rejection, legacy-state isolation, denied requests,
 and cookie-backend rejection. This does not prove complete WS/actor/sticky-child
 parity or enable the policy. Server state currently uses the adapter's one-hour
 lifetime; configurable schema-version/codec and provider persistence work remains.
+
+### Shared-runtime persistence integration
+
+The staged explicit runtime path reconstructs transient dependencies with mount,
+then overlays validated server fields before existing object authorization and
+rendering. Event saves use the server projection independently of the legacy
+client-snapshot opt-in. Explicit views neither consume nor emit legacy signed
+snapshots; the separate explicit client codec remains unimplemented.
+
+`test_exposure_runtime.py` exercises real runtime dispatch with a recording
+transport and database sessions: three fresh runtimes restore successive values,
+invalid schemas/extra keys/legacy dictionaries remount, denied reconnects do not
+restore or write, and internal sentinels stay out of emitted frames. This is not
+an actual WebSocket connection or complete SSE endpoint test.
+
+The existing event-save timeout and best-effort error handling are retained.
+Fresh event authorization is still optional in the transports, and SSE saves
+currently bind against the mount request rather than the current event request.
+These are unresolved activation gates, alongside actor/sticky-child/component
+persistence, explicit client snapshots, and provider contracts. The constructor
+guard remains in place; this integration does not enable explicit-mode apps.
 
 ## Readiness audit
 

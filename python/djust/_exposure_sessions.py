@@ -121,6 +121,16 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
         return None
 
 
+async def asave_server_state(view: Any, request: Any) -> None:
+    """Async transport save with identity/default evaluation in the Django thread."""
+    from asgiref.sync import sync_to_async
+
+    adapter = await sync_to_async(server_state_adapter)(view, request, create=True)
+    if adapter is not None:
+        values = await sync_to_async(adapter.contract.project_view)(view, "server")
+        await adapter.asave(values)
+
+
 @dataclass(frozen=True)
 class StateBinding:
     """Explicit trusted identifiers; anonymous/no-tenant need explicit sentinels.

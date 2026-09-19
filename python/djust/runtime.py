@@ -2332,6 +2332,13 @@ class ViewRuntime:
         # component state saved by the per-event session-save (#1466) onto a
         # plain reconnect. Gated on ``enable_state_snapshot`` (#1552).
         opt_in = getattr(view_instance, "enable_state_snapshot", False)
+        from ._exposure import uses_legacy_exposure
+
+        legacy_exposure = uses_legacy_exposure(view_instance)
+        # Explicit server persistence is independent of client snapshot opt-in.
+        # Until the explicit signed-client adapter lands, never use either
+        # legacy snapshot restore mechanism for an explicit view.
+        opt_in = opt_in and legacy_exposure
         session = getattr(request, "session", None)
         if opt_in and session is not None:
             view_key = f"liveview_{page_url}"
@@ -2507,6 +2514,15 @@ class ViewRuntime:
         if not mounted_from_restore:
             try:
                 await sync_to_async(view_instance.mount)(request, **mount_kwargs)
+                if not legacy_exposure:
+                    from ._exposure_sessions import load_server_state
+
+                    restored = await sync_to_async(load_server_state)(view_instance, request)
+                    if restored is not None:
+                        for key, value in restored.items():
+                            setattr(view_instance, key, value)
+                        mounted_from_restore = True
+                        view_instance._force_full_html = True
             except Exception as exc:
                 response = handle_exception(
                     exc,
@@ -2757,7 +2773,11 @@ class ViewRuntime:
             from django.conf import settings
 
             state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if state_master_on and getattr(view_instance, "enable_state_snapshot", False):
+            if (
+                state_master_on
+                and legacy_exposure
+                and getattr(view_instance, "enable_state_snapshot", False)
+            ):
                 snapshot_fn = getattr(view_instance, "_capture_snapshot_state", None)
                 if callable(snapshot_fn):
                     # strict=True: this is the real client-signed persistence
@@ -3229,6 +3249,11 @@ class ViewRuntime:
             self.view_instance, "enable_state_snapshot", False
         ):
             await self._persist_state_after_event(target_view, event_name)
+        else:
+            from ._exposure import uses_legacy_exposure
+
+            if target_view is self.view_instance and not uses_legacy_exposure(target_view):
+                await self._persist_state_after_event(target_view, event_name)
 
         # Auto-detect unchanged state. _resolve_skip_render owns the skip
         # decision (#2834) — it consumes an explicit ``_skip_render`` so a
@@ -3551,9 +3576,9 @@ class ViewRuntime:
     async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> None:
         """Persist the top-level view's post-event state to the Django session.
 
-        Caller MUST have already verified the gate
-        (``target_view is self.view_instance and enable_state_snapshot``); this
-        method assumes it runs only for an opted-in top-level view. Bounded by a
+        Caller MUST have already verified top-level view identity and either
+        legacy snapshot opt-in or the staged explicit policy. Explicit saves
+        select only declared server fields, never render context. Bounded by a
         150ms timeout, mirroring the WS save block (websocket.py:3704-3804)."""
 
         async def _save() -> None:
@@ -3562,6 +3587,15 @@ class ViewRuntime:
             # session (carries the save-key namespace + path); fall back to the
             # ASGI scope's session when no mount request was stashed.
             mount_request = getattr(target_view, "_djust_mount_request", None)
+            from ._exposure import ExposureError, uses_legacy_exposure
+
+            if not uses_legacy_exposure(target_view):
+                from ._exposure_sessions import asave_server_state
+
+                if mount_request is None:
+                    raise ExposureError("Explicit persistence requires the trusted mount request")
+                await asave_server_state(target_view, mount_request)
+                return
             scope_session = (
                 (self.scope.get("session") if self.scope else None)
                 if mount_request is None
