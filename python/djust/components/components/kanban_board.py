@@ -14,6 +14,10 @@ class KanbanBoard(Component):
         move_event: dj-click event for drag-drop
         add_card_event: dj-click event for adding cards"""
 
+    #: ADR-033 D3: the walked state keys; ``columns`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         columns: Optional[list] = None,

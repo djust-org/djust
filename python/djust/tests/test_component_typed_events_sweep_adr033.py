@@ -92,7 +92,12 @@ class TestEveryEmitterUsesEventAttrs:
     def test_a_named_instance_names_every_trigger(self, name, kwargs):
         """D5: one handler serves several instances because every trigger the
         instance renders says which instance it is."""
-        html = _render(_instance(name, kwargs, name="probe"))
+        from djust.components.base import _declares_name
+
+        instance = _instance(name, kwargs, name="probe")
+        if _declares_name(type(instance)):
+            pytest.skip("`name` is this component's own form-field parameter, not an identity")
+        html = _render(instance)
         # A trigger the EXAMPLE itself hands in (a slot's raw HTML content) is
         # the caller's markup, not an emitter of this component.
         given = sum(len(_TRIGGER_ATTR.findall(v)) for v in kwargs.values() if isinstance(v, str))

@@ -65,6 +65,10 @@ class FileTree(Component):
     FOLDER_OPEN_ICON = "&#x1F4C2;"
     DEFAULT_FILE_ICON = "&#x1F4C4;"
 
+    #: ADR-033 D3: the walked state keys; ``nodes`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         nodes: Optional[list] = None,

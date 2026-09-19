@@ -53,7 +53,7 @@ class TableOfContents(Component):
             iid = html.escape(str(item.get("id", "")))
             lbl = html.escape(str(item.get("label", "")))
             level = int(item.get("level", 1))
-            active_cls = " toc-item-active" if str(item.get("id", "")) == self.active else ""
+            active_cls = " toc-item-active" if str(item.get("id", "")) == str(self.active) else ""
             ea = self.event_attrs(self.event, value=item.get("id", ""))
             event_attr = f" {ea}" if ea else ""
             items_html += f'<a href="#{iid}" class="toc-item toc-level-{level}{active_cls}"{event_attr}>{lbl}</a>'

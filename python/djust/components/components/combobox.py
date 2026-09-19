@@ -18,6 +18,10 @@ class Combobox(Component):
         search_event: dj-input event for search
         placeholder: search input placeholder"""
 
+    #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         name: str = "",

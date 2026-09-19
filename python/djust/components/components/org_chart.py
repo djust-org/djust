@@ -32,6 +32,10 @@ class OrgChart(Component):
         custom_class: Additional CSS classes
     """
 
+    #: ADR-033 D3: the walked state keys; ``nodes`` (the data) compares by
+    #: identity, so reassign it to re-render — never a per-node walk per click.
+    fingerprint_fields = ()
+
     def __init__(
         self,
         nodes: Optional[list] = None,

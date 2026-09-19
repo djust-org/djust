@@ -975,6 +975,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 capture (``time_travel.py``) intentionally leaves this False
                 to preserve its existing lossy-snapshot-by-design behavior.
         """
+        from .components.base import Component
+
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
@@ -985,6 +987,22 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 continue
             if strict and self._reject_orm_value_in_state_persistence(key, value):
                 continue
+            if strict and isinstance(value, Component):
+                # ADR-033 D6: the same rule inside a component's state — a
+                # model in ``table.rows`` must not be dict-ified and restored
+                # as a dict (review 🟡6).
+                if any(
+                    self._reject_orm_value_in_state_persistence(f"{key}.{k}", v)
+                    or (
+                        isinstance(v, (list, tuple))
+                        and any(
+                            self._reject_orm_value_in_state_persistence(f"{key}.{k}[]", item)
+                            for item in v
+                        )
+                    )
+                    for k, v in value.state.items()
+                ):
+                    continue
             try:
                 # json.dumps serves as the serializability check; the
                 # accompanying json.loads round-trips to a *disconnected*

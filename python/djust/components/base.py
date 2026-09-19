@@ -177,6 +177,34 @@ def _render_template_name_with_markers(
     return cast(str, rust_view.render())
 
 
+_DECLARES_NAME: Dict[type, bool] = {}
+
+
+def _declares_name(cls: type) -> bool:
+    """Does *cls* (or a base below ``Component``) take ``name`` as its own
+    constructor parameter? Then ``name`` is that class's concept — the HTML
+    field name for the form components — not the ADR-033 instance identity."""
+    cached = _DECLARES_NAME.get(cls)
+    if cached is None:
+        import inspect
+
+        cached = False
+        for klass in cls.__mro__:
+            if klass is Component:
+                break
+            init = klass.__dict__.get("__init__")
+            if init is None:
+                continue
+            try:
+                if "name" in inspect.signature(init).parameters:
+                    cached = True
+                    break
+            except (TypeError, ValueError):  # pragma: no cover — C-level init
+                continue
+        _DECLARES_NAME[cls] = cached
+    return cached
+
+
 class Component(TemplateMutatorGuard, ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
@@ -330,6 +358,20 @@ class Component(TemplateMutatorGuard, ABC):
         # which reads attributes, and change detection, which walks state,
         # never disagree. Set before anything public so the write-through
         # below sees it.
+        if "state" in kwargs:
+            raise TypeError(
+                f"{type(self).__name__}: 'state' is reserved — it is the component's "
+                "own state dict (ADR-033); name the kwarg something else"
+            )
+        # ``name`` is the instance's identity ONLY for a class that does not
+        # declare a ``name`` parameter of its own: a form-field component
+        # (``DatePicker(name="date")``, 26 of the shipped ones) means the HTML
+        # field name by it and defaults it non-empty, and stamping THAT on
+        # every trigger as ``dj-value-name`` would hand an unexpected param to
+        # every pre-existing handler without ``**kwargs`` (review 🔴1).
+        object.__setattr__(
+            self, "_identity", name if name is not None and not _declares_name(type(self)) else None
+        )
         if name is not None:
             kwargs["name"] = name
         self.state: Dict[str, Any] = dict(kwargs)
@@ -359,12 +401,14 @@ class Component(TemplateMutatorGuard, ABC):
         ``dj-<trigger>="<event>"`` followed by one typed ``dj-value-*`` per
         keyword: an ``int`` renders ``dj-value-value:int="4"``, a ``bool``
         ``:bool``, a ``float`` ``:float``, a ``str`` untyped, anything else
-        ``:json``; ``None`` is omitted. The client's typed-param parser
+        ``:json``, and any other object (a UUID, a date, a Decimal) its
+        ``str()`` untyped; ``None`` is omitted. The client's typed-param parser
         (``08-event-parsing.js``) hands the handler a real ``int``/``bool``,
         so the ``int(value)`` line disappears from handlers. Underscores in a
         key become hyphens (``item_id`` → ``dj-value-item-id``; the client
-        maps them back). When the instance has a ``name`` it is appended as
-        ``dj-value-name`` unless the caller passed one. A falsy *event*
+        maps them back). When the instance was given an identity ``name``
+        (a class without a ``name`` parameter of its own — see ``__init__``)
+        it is appended as ``dj-value-name`` unless the caller passed one. A falsy *event*
         renders nothing, so ``f"<button {self.event_attrs(self.event)}>"``
         is the whole conditional. Every value is HTML-escaped here; pass raw
         Python values, not pre-escaped strings.
@@ -372,7 +416,7 @@ class Component(TemplateMutatorGuard, ABC):
         if not event:
             return ""
         parts = [f'dj-{trigger}="{_html.escape(str(event), quote=True)}"']
-        instance_name = getattr(self, "name", None)
+        instance_name = self.__dict__.get("_identity")
         if instance_name and "name" not in params:
             params["name"] = instance_name
         for key, value in params.items():
@@ -386,8 +430,13 @@ class Component(TemplateMutatorGuard, ABC):
                 suffix, text = ":float", repr(value)
             elif isinstance(value, str):
                 suffix, text = "", value
+            elif isinstance(value, (list, tuple, dict)):
+                suffix, text = ":json", _json.dumps(value, separators=(",", ":"), default=str)
             else:
-                suffix, text = ":json", _json.dumps(value, separators=(",", ":"))
+                # A UUID, a date, a Decimal, a model: what ``html.escape(str(x))``
+                # rendered before — untyped, so the handler receives the string
+                # it always did (review 🔴3).
+                suffix, text = "", str(value)
             attr = "dj-value-" + str(key).replace("_", "-")
             parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
         return " ".join(parts)

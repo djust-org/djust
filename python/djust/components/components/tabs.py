@@ -49,7 +49,7 @@ class Tabs(Component):
             if not isinstance(tab, dict):
                 continue
             label = html.escape(str(tab.get("label", "")))
-            active_cls = " dj-tab--active" if str(tab.get("id", "")) == self.active else ""
+            active_cls = " dj-tab--active" if str(tab.get("id", "")) == str(self.active) else ""
             nav_items.append(
                 f'<button class="dj-tab{active_cls}" '
                 f"{self.event_attrs(self.event, value=tab.get('id', ''))}>{label}</button>"

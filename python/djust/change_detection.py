@@ -97,13 +97,6 @@ CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
 STATE_MARKER = "_djust_fingerprint_state"
 
 
-def _unwrap(value: Any) -> Any:
-    """The object a snapshot should fingerprint for *value*."""
-    if getattr(type(value), STATE_MARKER, False):
-        return getattr(value, "state", value)
-    return value
-
-
 #: Name of the optional class attribute that narrows the walk of a
 #: state-marked object (ADR-033 D3). A tuple of state keys: those are walked
 #: structurally; every OTHER key is a leaf — compared by value when it is a
@@ -146,6 +139,8 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
         fields = getattr(type(value), FINGERPRINT_FIELDS, None)
+        if isinstance(fields, str):  # ``fingerprint_fields = "columns"`` — one key, not chars
+            fields = (fields,)
         value = getattr(value, "state", value)
     counter[0] -= 1
     if counter[0] < 0:
