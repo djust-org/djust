@@ -24,6 +24,8 @@ Two shapes keep a hook safe and both are worth copying:
 """
 
 import importlib
+import os
+import pathlib
 import pkgutil
 import subprocess
 import sys
@@ -53,17 +55,40 @@ def _modules_with_a_getattr_hook():
     return sorted(set(found))
 
 
+def _tree_under_test() -> str:
+    """The directory the child must have on its path to import the djust this
+    session imported. A subprocess does not inherit pytest's `sys.path`, so
+    without this it resolves whatever djust the ambient environment installs
+    — in a worktree, the main checkout — and would report a pass for a tree
+    nobody is reviewing."""
+    return str(pathlib.Path(djust.__file__).resolve().parent.parent)
+
+
 def _probe_in_a_fresh_interpreter(module_name: str, attribute: str) -> str:
-    """Import *module_name* cold and probe *attribute*. Returns a verdict."""
+    """Import *module_name* cold and probe *attribute*. Returns a verdict.
+
+    Every non-verdict outcome is surfaced rather than swallowed. A dead
+    subprocess used to read as a pass, and so did `SKIP:RecursionError` —
+    which is this exact bug class raised one frame earlier.
+    """
+    tree = _tree_under_test()
     script = textwrap.dedent(
         f"""
-        import sys
+        import pathlib, sys
         sys.setrecursionlimit(300)
         import importlib
+        import djust
+        actual = pathlib.Path(djust.__file__).resolve().parent.parent
+        if str(actual) != {tree!r}:
+            print("WRONG_TREE:" + str(actual))
+            raise SystemExit(0)
         try:
             module = importlib.import_module({module_name!r})
+        except RecursionError:
+            print("RECURSION")
+            raise SystemExit(0)
         except Exception as exc:
-            print("SKIP:" + type(exc).__name__)
+            print("IMPORT_FAILED:" + type(exc).__name__)
             raise SystemExit(0)
         try:
             present = hasattr(module, {attribute!r})
@@ -78,8 +103,18 @@ def _probe_in_a_fresh_interpreter(module_name: str, attribute: str) -> str:
         capture_output=True,
         text=True,
         timeout=120,
+        env={**os.environ, "PYTHONPATH": tree + os.pathsep + os.environ.get("PYTHONPATH", "")},
     )
-    return (result.stdout.strip().splitlines() or ["NO_OUTPUT"])[-1]
+    assert result.returncode == 0, (
+        f"probe for {module_name}.{attribute} crashed "
+        f"(exit {result.returncode}):\n{result.stderr[-2000:]}"
+    )
+    verdict = (result.stdout.strip().splitlines() or ["NO_OUTPUT"])[-1]
+    assert verdict in {"PRESENT", "ABSENT", "RECURSION"}, (
+        f"probe for {module_name}.{attribute} produced no usable verdict: "
+        f"{verdict!r}. It tested nothing."
+    )
+    return verdict
 
 
 @pytest.fixture(scope="module")

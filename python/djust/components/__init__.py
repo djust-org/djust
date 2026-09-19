@@ -198,14 +198,15 @@ def __getattr__(name: str) -> Any:
     missing attribute — so the nine that exist in both namespaces are
     unaffected.
 
-    Underscored names are refused before the import runs, and that guard is
-    load-bearing rather than tidy. Importing the subpackage makes the import
-    machinery look up attributes on THIS module, and every one it does not
-    find lands back here — which re-entered the import and recursed until the
-    interpreter gave up. Any `hasattr(djust.components, x)` for an absent `x`
-    hit it, so a consumer probing for an optional name crashed instead of
-    getting `False`. Dunders are never component classes, so refusing them
-    costs nothing and breaks the cycle.
+    Two things below are deliberate. ``importlib.import_module`` is the one
+    that matters: ``from . import components`` asks the import machinery for
+    an attribute on THIS module, so until the submodule is bound the lookup
+    re-enters here and recurses until the interpreter gives up — every
+    ``hasattr(djust.components, x)`` for an absent ``x`` crashed instead of
+    answering ``False``. Resolving through ``sys.modules`` cannot form that
+    cycle. Refusing underscored names up front is a cheap extra: it is no
+    longer load-bearing, and on its own it does NOT fix the recursion, since
+    the cycle runs through ``components``, which has no underscore.
     """
     if name.startswith("_"):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

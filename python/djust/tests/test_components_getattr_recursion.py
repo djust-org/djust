@@ -19,6 +19,8 @@ which broke three unrelated gallery tests on the shard that ran this file.
 A subprocess gets the cold-import state for free and mutates nothing.
 """
 
+import os
+import pathlib
 import subprocess
 import sys
 import textwrap
@@ -26,16 +28,60 @@ import textwrap
 import pytest
 
 
+def _tree_under_test() -> str:
+    """The directory that must be on the child's path for it to import the
+    djust this test session imported.
+
+    Without this the child resolves whatever `djust` the ambient environment
+    installs — in a worktree that is the main checkout, so the probe would
+    happily test a different tree than the one under review and report it as
+    a pass. `pyproject.toml` sets pytest's own `sys.path`, which a subprocess
+    does not inherit.
+    """
+    import djust
+
+    return str(pathlib.Path(djust.__file__).resolve().parent.parent)
+
+
+def _child_env() -> dict:
+    tree = _tree_under_test()
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = tree + (os.pathsep + existing if existing else "")
+    return env
+
+
+#: Prepended to every probe so the child proves WHICH tree it loaded. A probe
+#: that silently imported a different djust would otherwise pass while
+#: testing nothing.
+_ASSERT_SAME_TREE = """
+import pathlib, sys
+import djust
+_expected = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
+_actual = pathlib.Path(djust.__file__).resolve().parent.parent
+if _expected is not None and _actual != _expected:
+    print("WRONG_TREE:" + str(_actual))
+    raise SystemExit(0)
+"""
+
+
 def _probe(source: str) -> str:
     """Run *source* in a fresh interpreter and return its last output line."""
+    tree = _tree_under_test()
     result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(source)],
+        [sys.executable, "-c", _ASSERT_SAME_TREE + textwrap.dedent(source), tree],
         capture_output=True,
         text=True,
         timeout=120,
+        env=_child_env(),
     )
     assert result.returncode == 0, f"probe crashed:\n{result.stderr[-2000:]}"
-    return (result.stdout.strip().splitlines() or ["NO_OUTPUT"])[-1]
+    verdict = (result.stdout.strip().splitlines() or ["NO_OUTPUT"])[-1]
+    assert verdict != "NO_OUTPUT", "probe produced no output — it tested nothing"
+    assert not verdict.startswith("WRONG_TREE:"), (
+        f"probe imported the wrong djust: {verdict.split(':', 1)[1]} instead of {tree}"
+    )
+    return verdict
 
 
 def test_a_missing_name_answers_false_instead_of_recursing():
