@@ -9,6 +9,10 @@
 - [ADR-031](031-class-level-component-rendering.md): per-view component bindings.
 - [ADR-032](032-component-scoped-rendering.md): conditional subtree rendering.
 - [ADR-033](033-plain-component-state-and-identity.md): plain-component state and identity.
+- [ADR-035](035-django-native-form-and-object-lifecycle.md): proposed Django-native form/object lifecycle.
+- [ADR-036](036-typed-event-parameter-contracts.md): proposed strict parameter contracts and canonical markup.
+- [ADR-037](037-event-contract-checks-and-executable-documentation.md): proposed shared checks and fixture-backed docs.
+- [ADR-038](038-explicit-context-and-state-exposure.md): proposed explicit context, persistence, and browser exposure.
 
 ## Summary
 
