@@ -171,6 +171,34 @@ marked current, and an `aria-current` you set yourself to a different value
 section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
 your own rule on top.
 
+#### When NOT to use `dj-navigate`
+
+`dj-navigate` swaps the contents of `[dj-root]`. Everything outside it — the
+`<head>` above all — belongs to the document the reader already has. So a
+target page that needs its own stylesheet or script in `<head>` arrives as
+*unstyled markup*: the HTML is right, the CSS that makes it a page was never
+loaded, and nothing errors.
+
+Link to such a page with a plain `href`, so the browser fetches the whole
+document:
+
+```html
+{# Same application, same base template: SPA navigation is right. #}
+<a dj-navigate="/dashboard/">Dashboard</a>
+
+{# A page that brings its own head assets — another app's LiveViews, a
+   section with its own stylesheet. A real navigation, deliberately. #}
+<a href="/components/">Components</a>
+```
+
+Two symptoms name this mistake when you hit it: the destination renders with
+no styling, and `document.title` still shows the page you came from. The
+title is the same cause — `<title>` lives in `<head>`, so a `dj-root`-only
+swap cannot touch it. A LiveView that wants the tab title to follow SPA
+navigation sets it from Python with
+[`self.page_title`](document-metadata.md); a page whose title is a
+`{% block title %}` in its template only gets it on a full load.
+
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard
 > reload but stays blank after navigation. Initialize third-party libraries from

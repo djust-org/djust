@@ -44,3 +44,10 @@
   signature, so a `None` default is not a missing one and `**kwargs` is not a
   parameter named "kwargs". `docs.djust.org` generates its component
   reference from this call.
+- **Documented when not to use `dj-navigate`.** It swaps the contents of
+  `[dj-root]` and nothing else, so a target page that needs its own
+  stylesheet or script in `<head>` — the component catalogue, or any page
+  from another application — arrives as unstyled markup, with the previous
+  page's `<title>` still in the tab. Nothing errors. `guides/navigation.md`
+  now names the symptom and says to link such pages with a plain `href`, and
+  `guides/components.md` says it for the catalogue specifically.
