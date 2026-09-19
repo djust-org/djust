@@ -367,3 +367,73 @@ class TestDescribeComponent:
                 if set(described) != set(COMPONENT_DESCRIPTION_KEYS):
                     failures.append(f"{name}: wrong keys")
         assert failures == [], failures
+
+
+class TestIconStyleStaysOffComponentArtwork:
+    """A theme pack's icon style must not repaint a component's own drawing.
+
+    The rules carry ``!important`` — they have to beat the ``fill`` and
+    ``stroke`` attributes an inline icon writes — so an unscoped ``svg``
+    selector reached every chart djust ships. Bars lost their fill and became
+    outlines, and ``stroke: currentColor`` on the root ``<svg>`` inherited
+    into ``<text>``, so labels were stroked as well as filled and read as far
+    too bold. Both symptoms, one selector.
+    """
+
+    def _icon_css(self, style: str) -> str:
+        from dataclasses import replace
+
+        from djust.theming.pack_css_generator import ThemePackCSSGenerator
+
+        generator = ThemePackCSSGenerator("djust")
+        generator.pack = replace(
+            generator.pack, icon_style=replace(generator.pack.icon_style, style=style)
+        )
+        return generator._generate_icon_css()
+
+    @pytest.mark.parametrize("style", ["outlined", "filled"])
+    def test_the_rules_exclude_a_components_drawing_surface(self, style):
+        css = self._icon_css(style)
+        assert ':not([class*="__svg"])' in css
+        # No bare `svg` selector survives, in any of the three blocks.
+        for line in css.splitlines():
+            if line.strip().startswith("svg") and "{" in line:
+                assert "__svg" in line, f"unscoped selector: {line.strip()}"
+
+    def test_an_icon_still_gets_the_style(self):
+        """The setting keeps working for what it is for."""
+        css = self._icon_css("outlined")
+        assert "fill: none !important" in css
+        assert "stroke: currentColor !important" in css
+
+    def test_djusts_graphics_and_icons_are_told_apart_by_that_class(self):
+        """The exclusion is a convention, so the convention is pinned: a
+        component's drawing surface is `dj-<name>__svg`, its icons are not."""
+        import re as _re
+
+        from djust.theming.gallery.component_registry import (
+            PYTHON_COMPONENT_EXAMPLES,
+            render_python_component_example,
+        )
+
+        graphics, icons = [], []
+        for name in (
+            "bar_chart",
+            "line_chart",
+            "pie_chart",
+            "sparkline",
+            "gauge",
+            "progress_circle",
+            "treemap",
+            "gantt_chart",
+            "calendar_heatmap",
+            "heatmap",
+        ):
+            examples = PYTHON_COMPONENT_EXAMPLES.get(name)
+            if not examples:
+                continue
+            html = render_python_component_example(name, dict(examples[0])) or ""
+            for classes in _re.findall(r'<svg[^>]*class="([^"]*)"', html):
+                (graphics if "__svg" in classes else icons).append((name, classes))
+        assert graphics, "no chart rendered an svg to check"
+        assert icons == [], f"a chart drew an svg the icon style would repaint: {icons}"

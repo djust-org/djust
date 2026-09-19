@@ -67,3 +67,12 @@
   thumbnail now renders `a` and `button` as `span`, keeping their classes so
   the preview still looks like the component. The same change removes
   keyboard-focusable controls from a region marked `aria-hidden`.
+- **A theme pack's icon style no longer repaints charts.** The generated
+  rules target every `svg` on the page with `!important` — they have to beat
+  the `fill` and `stroke` attributes an inline icon writes — so every chart
+  djust ships lost its fills and became an outline, and `stroke: currentColor`
+  on the root `svg` inherited into `<text>`, rendering labels stroked as well
+  as filled and far too bold. The rules now exclude a component's own drawing
+  surface, which djust names `dj-<component>__svg`; `gauge` and
+  `progress_circle` were missing that class and now carry it. A host's inline
+  icons still get the treatment, which is what the setting is for.

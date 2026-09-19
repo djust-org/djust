@@ -283,9 +283,24 @@ class ThemePackCSSGenerator:
         lines.append("}")
         return "\n".join(lines)
 
+    #: An icon style must not reach a component's own artwork. These rules
+    #: carry ``!important`` (they have to beat the ``fill`` / ``stroke``
+    #: attributes an inline icon writes), so an unscoped ``svg`` selector
+    #: repainted every chart djust ships: bars lost their fill and became
+    #: outlines, and ``stroke: currentColor`` on the root ``<svg>`` inherited
+    #: into ``<text>``, which is why the labels rendered stroked as well as
+    #: filled and read as too bold.
+    #:
+    #: djust's graphic components name their drawing surface
+    #: ``dj-<component>__svg`` and its icons ``dj-<component>__icon`` or
+    #: ``dj-icon``, so one exclusion separates the two. A host's own inline
+    #: icons keep the treatment, which is the point of the setting.
+    GRAPHIC_SVG = ':not([class*="__svg"])'
+
     def _generate_icon_css(self) -> str:
         """Generate CSS for icon styling."""
         icon = self.pack.icon_style
+        svg = f"svg{self.GRAPHIC_SVG}"
 
         # Base icon CSS that applies to all SVGs
         base_css = f"""
@@ -295,8 +310,8 @@ class ThemePackCSSGenerator:
   --icon-size-scale: {icon.size_scale};
 }}
 
-/* Apply icon styles to all SVG icons */
-svg {{
+/* Apply icon styles to SVG icons — never to a component's own artwork */
+{svg} {{
   stroke-width: {icon.stroke_width};
 }}
 """
@@ -304,28 +319,28 @@ svg {{
         # Style-specific CSS modifications with !important to override inline SVG attributes
         style_css = ""
         if icon.style == "filled":
-            style_css = """
+            style_css = f"""
 /* Filled icon style */
-svg {
+{svg} {{
   fill: currentColor !important;
   stroke: none !important;
-}
-svg path, svg circle, svg rect, svg polygon, svg line {
+}}
+{svg} path, {svg} circle, {svg} rect, {svg} polygon, {svg} line {{
   fill: currentColor !important;
   stroke: none !important;
-}
+}}
 """
         elif icon.style == "outlined":
             style_css = f"""
 /* Outlined icon style */
-svg {{
+{svg} {{
   fill: none !important;
   stroke: currentColor !important;
   stroke-width: {icon.stroke_width} !important;
   stroke-linecap: round !important;
   stroke-linejoin: round !important;
 }}
-svg path, svg circle, svg rect, svg polygon, svg line {{
+{svg} path, {svg} circle, {svg} rect, {svg} polygon, {svg} line {{
   fill: none !important;
   stroke: currentColor !important;
 }}
