@@ -10,7 +10,11 @@ from __future__ import annotations
 import pytest
 from django.test import override_settings
 
-from djust.theming.gallery.catalogue import component_description, playground_options
+from djust.theming.gallery.catalogue import (
+    component_description,
+    component_preview_note,
+    playground_options,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -71,10 +75,13 @@ class TestDescriptions:
     def test_python_component_docstring_first_line(self):
         assert component_description("accordion").startswith("Accordion")
 
-    def test_a_component_without_a_python_class_has_no_prose_yet(self):
-        """A template-only component has no docstring to read — "" is the
-        honest answer, not a generated sentence."""
+    def test_unknown_component_has_no_prose_but_template_only_entries_do(self):
+        """Known template-only entries have explicit prose; unknown names do
+        not get a made-up description."""
         assert component_description("no_such_component") == ""
+        assert component_description("checkbox")
+        assert component_description("nav_item")
+        assert component_description("server_event_toast")
         assert isinstance(component_description("button"), str)
 
     def test_index_cards_carry_it(self):
@@ -83,6 +90,13 @@ class TestDescriptions:
         by_name = {c["name"]: c for c in build_catalogue_index_context()["components"]}
         assert by_name["accordion"]["description"]
         assert "description" in by_name["button"]
+        assert all(c["description"] for c in by_name.values())
+
+    def test_components_without_standalone_previews_explain_the_gap(self):
+        assert component_preview_note("server_event_toast").startswith(
+            "This is a server-event helper"
+        )
+        assert component_preview_note("button") == ""
 
 
 class TestThumbnails:
@@ -432,7 +446,13 @@ class TestCodeHighlighting:
 
     def test_parameter_types_are_names_not_reprs(self):
         rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]
-        assert ["value", "float", "0"] in rows
+        value_row = next(row for row in rows if row[0] == "value")
+        assert value_row[:3] == ["value", "float", "0"]
+        assert "current rating value" in value_row[3]
+
+    def test_empty_accessibility_is_explicit_for_template_components(self):
+        ctx = _detail("button").get_context_data()
+        assert "Accessibility" in {item["label"] for item in ctx["toc_items"]}
 
     def test_unknown_language_and_no_language_stay_plain(self):
         from djust.components.components.code_snippet import highlight_code

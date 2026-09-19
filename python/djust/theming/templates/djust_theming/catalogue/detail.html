@@ -41,6 +41,7 @@ the preview's subtree instead of re-rendering the page. Keep it the bare
 variable.
 {% endcomment %}
 {{ preview }}
+{% if preview_note %}<p class="dc-note dc-preview-note">{{ preview_note }}</p>{% endif %}
 
 <section id="dc-usage" class="dc-section">
   {% card title="Usage" %}
@@ -76,6 +77,12 @@ variable.
 <section id="dc-a11y" class="dc-section">
   {% card title="Accessibility" %}
     {% theme_table headers=a11y_headers rows=a11y_rows %}
+  {% endcard %}
+</section>
+{% elif component_type == "template" %}
+<section id="dc-a11y" class="dc-section">
+  {% card title="Accessibility" %}
+    <p class="dc-note">No additional accessibility rules are declared for this component. Keep its required semantic elements and labels when supplying the context.</p>
   {% endcard %}
 </section>
 {% endif %}

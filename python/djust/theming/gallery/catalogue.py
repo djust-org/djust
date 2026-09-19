@@ -144,19 +144,77 @@ def _get_component_css_variables(component_name: str) -> list[str]:
     return sorted(all_vars)
 
 
+_COMPONENT_DESCRIPTIONS = {
+    # These entries are template-only components, so there is no Python class
+    # docstring to use as their one-line catalogue description. Keep the
+    # prose next to the catalogue contract rather than silently showing a
+    # component card with no explanation.
+    "checkbox": "Checkbox input with a label, description, and validation state.",
+    "input": "Text input with a label, help text, and validation state.",
+    "radio": "Radio-group input for choosing one value from a set.",
+    "select": "Select input with options, labels, and validation support.",
+    "textarea": "Multiline text input with a label and validation state.",
+    "nav": "Navigation container for links and the current active state.",
+    "nav_group": "Grouped navigation section with a heading and nested items.",
+    "nav_item": "Single navigation link with active and disabled states.",
+    "sidebar_nav": "Sidebar navigation list with grouped items and active state.",
+    "table": "Semantic table wrapper for headers, rows, and responsive data.",
+    "server_event_toast": "Server-event helper for delivering toast notifications.",
+}
+
+# Components whose contract is useful but cannot render a standalone example.
+# The detail page shows this explanation beside the generic empty preview so a
+# missing thumbnail is not mistaken for a broken component.
+_COMPONENT_PREVIEW_NOTES = {
+    "form_validation": (
+        "This module provides validation helpers used by form fields rather than "
+        "a standalone renderable surface."
+    ),
+    "image_lightbox": (
+        "The lightbox is opened by an image trigger supplied by the host page, "
+        "so it has no standalone preview."
+    ),
+    "server_event_toast": (
+        "This is a server-event helper, not a renderable component. Use it with "
+        "a toast surface in the view that owns the event."
+    ),
+    "bottom_sheet": (
+        "The sheet requires a host trigger and viewport-level overlay context, "
+        "so it has no standalone preview."
+    ),
+    "export_dialog": (
+        "The dialog requires a host action and export payload, so it has no standalone preview."
+    ),
+    "prompt_editor": (
+        "This composed editor receives its state from the host view, so it has "
+        "no standalone preview."
+    ),
+    "tour": (
+        "The tour requires host-page anchors and a current step, so it has no standalone preview."
+    ),
+}
+
+
 def component_description(component_name: str) -> str:
-    """One line a card can show: the first line of a python component's
-    class docstring, or ``""`` when nothing documents it. Template components
-    carry no prose in their contract, so they get ``""`` too — an honest gap
-    the docs pass can fill, not a generated sentence."""
+    """Return the concise description shown on cards and detail pages.
+
+    Python components use the first line of their class docstring. Components
+    without a Python class use the explicit catalogue prose above; unknown
+    names still return ``""`` rather than inventing documentation.
+    """
     from .component_registry import _load_component_class
 
     cls, _ = _load_component_class(component_name)
     doc = (getattr(cls, "__doc__", None) or "").strip() if cls is not None else ""
     if not doc:
-        return ""
+        return _COMPONENT_DESCRIPTIONS.get(component_name, "")
     first = doc.splitlines()[0].strip()
     return first if len(first) <= 140 else first[:137].rstrip() + "…"
+
+
+def component_preview_note(component_name: str) -> str:
+    """Explain why a known component does not have a standalone example."""
+    return _COMPONENT_PREVIEW_NOTES.get(component_name, "")
 
 
 _TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,15}$")

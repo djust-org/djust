@@ -791,9 +791,10 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         except KeyError as exc:
             raise Http404(f"Unknown component: {component_name}") from exc
 
-        from .catalogue import component_description
+        from .catalogue import component_description, component_preview_note
 
         ctx["description"] = component_description(component_name)
+        ctx["preview_note"] = component_preview_note(component_name)
         # The document title is chrome, so it lives outside the mount root and
         # no VDOM patch can reach it. Setting it here sends a page_metadata
         # command, which is what keeps the tab right after a dj-navigate the
@@ -893,6 +894,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         breadcrumb items, table rows, table-of-contents entries, the
         previous/next links."""
         from django.urls import reverse
+        from .component_registry import describe_component
 
         crumbs = [
             {
@@ -915,10 +917,16 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             value = p.get("default")
             return "—" if value in (None, "") else str(value)
 
+        described = describe_component(self.component_name)
+        docs_by_name = {p["name"]: p.get("doc") or "—" for p in described["params"]}
+
         props_rows = [
-            [p["name"], p["type"], "required", default_of(p)]
+            [p["name"], p["type"], "required", default_of(p), docs_by_name.get(p["name"], "—")]
             for p in ctx.get("required_context") or []
-        ] + [[p["name"], p["type"], "", default_of(p)] for p in ctx.get("optional_context") or []]
+        ] + [
+            [p["name"], p["type"], "", default_of(p), docs_by_name.get(p["name"], "—")]
+            for p in ctx.get("optional_context") or []
+        ]
 
         def type_name(annotation: Any) -> str:
             # `<class 'float'>` is the repr of a type, not a type name.
@@ -934,7 +942,12 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             return text
 
         params_rows = [
-            [p["name"], param_type(p), str(p.get("default", ""))]
+            [
+                p["name"],
+                param_type(p),
+                str(p.get("default", "")),
+                docs_by_name.get(p["name"], "—"),
+            ]
             for p in ctx.get("python_params") or []
         ]
         a11y_rows = [
@@ -973,7 +986,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             toc.append({"id": "dc-props", "label": "Props"})
         elif params_rows:
             toc.append({"id": "dc-props", "label": "Parameters"})
-        if a11y_rows:
+        if a11y_rows or ctx.get("component_type") == "template":
             toc.append({"id": "dc-a11y", "label": "Accessibility"})
         if ctx.get("available_slots"):
             toc.append({"id": "dc-slots", "label": "Slots"})
@@ -999,8 +1012,8 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             )
         return {
             "crumbs": crumbs,
-            "props_headers": ["Name", "Type", "Required", "Default"],
-            "params_headers": ["Name", "Type", "Default"],
+            "props_headers": ["Name", "Type", "Required", "Default", "Description"],
+            "params_headers": ["Name", "Type", "Default", "Description"],
             "a11y_headers": ["Requirement", "Element", "Attribute", "Value"],
             "styles_headers": ["File", "Path", "Notes"],
             "props_rows": props_rows,
