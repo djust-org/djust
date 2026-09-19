@@ -378,10 +378,30 @@ class Preview(LiveComponent):
         examples: list = []
         #: Descriptor state + demo values, merged into every example.
         values: dict = {}
+        #: The playground's overrides (`variant`, `size`, …) over the first
+        #: example — the reader's choices, separate from `values` so the
+        #: examples stay what they document.
+        playground: dict = {}
 
     template = (
-        "{% load theme_tags %}{% storybook_preview component_name component_type examples values %}"
+        "{% load theme_tags %}"
+        "{% storybook_preview component_name component_type examples values playground %}"
     )
+
+    @event_handler()
+    def set_option(self, value: Any = "", **kwargs: Any) -> None:
+        """A playground chip: ``dj-value="variant:ghost"`` / ``"disabled:true"``.
+
+        ``:`` rather than ``=``: the client reads ``a=b`` in a ``dj-value`` as
+        named params, so the handler would see an empty ``value``.
+        """
+        key, sep, raw = str(value).partition(":")
+        if not sep or not key:
+            return
+        parsed: Any = raw
+        if raw in ("true", "false"):
+            parsed = raw == "true"
+        self.state.playground = {**self.state.playground, key: parsed}
 
 
 for _descriptor_cls in _INTERACTIVE.values():
@@ -459,6 +479,30 @@ class StorybookSidebarMixin:
         """
         return _all_storybook_components()
 
+    #: Session key for the sidebar's "Recently viewed" group.
+    _RECENT_KEY = "djust_storybook_recent"
+
+    def _remember_visit(self, request: Any, component_name: str) -> None:
+        """Push this component onto the visitor's recent list.
+
+        Written on the HTTP GET only — that is the request whose session the
+        middleware saves; the WebSocket mount's request is synthetic.
+        """
+        session = getattr(request, "session", None)
+        if session is None or getattr(request, "method", "") != "GET":
+            return
+        try:
+            recent = [n for n in list(session.get(self._RECENT_KEY, [])) if n != component_name]
+            recent.insert(0, component_name)
+            session[self._RECENT_KEY] = recent[:5]
+        except Exception:  # noqa: BLE001 — a recents list is never worth a 500
+            return
+        self.recent_components = self._recent_entries(recent[:5])
+
+    def _recent_entries(self, names: list) -> list:
+        by_name = {c["name"]: c for c in self._all_components}
+        return [by_name[n] for n in names if n in by_name and n != self.current_component]
+
     def _init_sidebar(self, current_component: Optional[str] = None) -> None:
         #: What the sidebar actually renders. Kept as real state rather than a
         #: template-side filter so the server and the DOM cannot disagree.
@@ -466,6 +510,13 @@ class StorybookSidebarMixin:
         self.search_query = ""
         self.collapsed_categories: list = []
         self.current_component = current_component
+        request = getattr(self, "request", None)
+        session = getattr(request, "session", None)
+        try:
+            names = list(session.get(self._RECENT_KEY, [])) if session is not None else []
+        except Exception:  # noqa: BLE001
+            names = []
+        self.recent_components = self._recent_entries(names)
 
     @event_handler
     def search(self, value: str = "", **kwargs: Any) -> None:
@@ -562,6 +613,9 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         except KeyError as exc:
             raise Http404(f"Unknown component: {component_name}") from exc
 
+        from .storybook import component_description
+
+        ctx["description"] = component_description(component_name)
         self.component_name = component_name
         self._base_ctx = ctx
         self._init_sidebar(component_name)
@@ -586,6 +640,8 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         preview.state.component_type = component_type
         preview.state.examples = examples
         preview.state.values = values
+        preview.state.playground = {}
+        self._remember_visit(request, component_name)
         # `styles` ("what do I override?") is derived ONCE, at mount, from the
         # examples as the preview first renders them — the memo makes this and
         # the page's `{{ preview }}` one render. Not per event: an open item
@@ -607,10 +663,26 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
         ctx["current_component"] = self.current_component
+        ctx["prev_component"], ctx["next_component"] = self._neighbours()
+        ctx["props_count"] = len(ctx.get("required_context") or []) + len(
+            ctx.get("optional_context") or []
+        )
         return ctx
 
+    def _neighbours(self) -> tuple:
+        """The components before and after this one, in sidebar order."""
+        names = self._all_components
+        for i, comp in enumerate(names):
+            if comp["name"] == self.component_name:
+                prev_c = names[i - 1] if i > 0 else None
+                next_c = names[i + 1] if i + 1 < len(names) else None
+                return prev_c, next_c
+        return None, None
 
-for _event in list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()]:
+
+for _event in (
+    list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()] + ["set_option"]
+):
     if not hasattr(StorybookDetailView, _event):
         setattr(StorybookDetailView, _event, _make_forwarder(_event))
 del _event

@@ -144,6 +144,54 @@ def _get_component_css_variables(component_name: str) -> list[str]:
     return sorted(all_vars)
 
 
+def component_description(component_name: str) -> str:
+    """One line a card can show: the first line of a python component's
+    class docstring, or ``""`` when nothing documents it. Template components
+    carry no prose in their contract, so they get ``""`` too — an honest gap
+    the docs pass can fill, not a generated sentence."""
+    from .component_registry import _load_component_class
+
+    cls, _ = _load_component_class(component_name)
+    doc = (getattr(cls, "__doc__", None) or "").strip() if cls is not None else ""
+    if not doc:
+        return ""
+    first = doc.splitlines()[0].strip()
+    return first if len(first) <= 140 else first[:137].rstrip() + "…"
+
+
+_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,15}$")
+
+
+def playground_options(examples: list[dict]) -> list[dict]:
+    """The example kwargs a reader can flip in the playground.
+
+    Derived from the examples themselves rather than a per-component table:
+    a string kwarg that takes at least two distinct short values across the
+    examples (``variant``: primary / secondary / …, ``size``: sm / md / lg)
+    or a bool one becomes a row of chips. Long strings (labels, content) and
+    structured values (lists of items) are not options — changing them is
+    editing the example, not exploring the component.
+    """
+    seen: dict[str, list] = {}
+    for example in examples:
+        for key, value in example.items():
+            if key.startswith("slot_"):
+                continue
+            # A token (`primary`, `sm`, `top-left`), not prose: a label such
+            # as `text="Primary"` also varies across examples but is content.
+            if isinstance(value, bool) or (isinstance(value, str) and _TOKEN_RE.match(value)):
+                seen.setdefault(key, [])
+                if value not in seen[key]:
+                    seen[key].append(value)
+    options = []
+    for key, values in seen.items():
+        if all(isinstance(v, bool) for v in values):
+            options.append({"key": key, "values": [False, True]})
+        elif len(values) >= 2 and all(isinstance(v, str) for v in values) and len(values) <= 8:
+            options.append({"key": key, "values": values})
+    return options
+
+
 def build_storybook_index_context() -> dict:
     """Build context data for the storybook index page.
 
@@ -160,13 +208,14 @@ def build_storybook_index_context() -> dict:
     enriched = []
     for comp in all_components:
         name = comp["name"]
+        comp = dict(comp)
         if name in COMPONENT_CONTRACTS:
             contract = COMPONENT_CONTRACTS[name]
-            comp = dict(comp)
             comp["required_count"] = len(contract.required_context)
             comp["optional_count"] = len(contract.optional_context)
             comp["slot_count"] = len(contract.available_slots)
             comp["a11y_count"] = len(contract.accessibility)
+        comp["description"] = component_description(name)
         enriched.append(comp)
 
     # Group by category

@@ -607,47 +607,42 @@ def theme_asset_version() -> str:
 # needs a configured ``DjangoTemplates`` backend, and a ``djust new`` project
 # configures only ``DjustTemplateBackend`` — a module-level ``Template(...)``
 # here broke the import of every theme tag in such a project.
-_STORYBOOK_PREVIEW_SOURCE = """{% if component_type == "template" %}{% if examples_html %}
-<div class="sb-section">
-  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
-  <div class="sb-preview">
-    {% for ex in examples_html %}
-      <div>{{ ex.html|safe }}</div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}{% else %}{% if examples_html %}
-  <div class="sb-section">
-    <div class="sb-section-title">EXAMPLES <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
-    {% for ex in examples_html %}
-    <div style="margin-bottom: 1rem;">
-      {% if ex.html %}
-      <div class="sb-preview" style="margin-bottom: 0.5rem;">
-        {{ ex.html|safe }}
-      </div>
-      {% endif %}
-      <div class="sb-code" style="margin-top: 0.5rem;">
-        <div class="sb-code-header">
-          <div class="sb-code-dots">
-            <span class="sb-code-dot" style="background:#ff5f57;"></span>
-            <span class="sb-code-dot" style="background:#febc2e;"></span>
-            <span class="sb-code-dot" style="background:#28c840;"></span>
-          </div>
-          <span>python</span>
-        </div>
-        <pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre>
-      </div>
+_STORYBOOK_PREVIEW_SOURCE = """{% if options %}
+<section class="sb-section" id="sb-playground">
+  <div class="sb-section-title">Playground</div>
+  <div class="sb-options">
+    {% for opt in options %}
+    <div class="sb-option-row">
+      <span class="sb-option-key">{{ opt.key }}</span>
+      {% for v in opt.values %}
+      <button type="button" class="sb-chip{% if v == opt.current %} sb-chip--on{% endif %}"
+              dj-click="set_option" data-value="{{ opt.key }}:{{ v|lower }}">{{ v }}</button>
+      {% endfor %}
     </div>
     {% endfor %}
   </div>
-  {% else %}
-  <div class="sb-section">
-    <div class="sb-section-title">PREVIEW</div>
-    <div class="sb-preview" style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">
-      Preview not available — component requires runtime dependencies or no examples defined.
-    </div>
+  <div class="sb-preview sb-preview--playground">{{ playground_html|safe }}</div>
+  <div class="sb-code sb-code--inline"><pre class="sb-code-body">{{ playground_call }}</pre></div>
+</section>
+{% endif %}
+{% if examples_html %}
+<section class="sb-section" id="sb-examples">
+  <div class="sb-section-title">{% if component_type == "template" %}Live preview{% else %}Examples{% endif %} <span class="sb-badge sb-badge-count">{{ examples_html|length }}</span></div>
+  {% for ex in examples_html %}
+  <div class="sb-example">
+    {% if ex.html %}<div class="sb-preview">{{ ex.html|safe }}</div>{% endif %}
+    {% if ex.kwargs_display %}
+    <details class="sb-example-args"><summary>Arguments</summary><pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre></details>
+    {% endif %}
   </div>
-  {% endif %}{% endif %}"""
+  {% endfor %}
+</section>
+{% else %}
+<section class="sb-section" id="sb-examples">
+  <div class="sb-section-title">Preview</div>
+  <div class="sb-preview sb-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+</section>
+{% endif %}"""
 
 
 @functools.lru_cache(maxsize=1)
@@ -659,21 +654,45 @@ def _storybook_preview_template() -> Any:
 
 @register.simple_tag
 def storybook_preview(
-    component_name: str, component_type: str, examples: Any, values: Any
+    component_name: str,
+    component_type: str,
+    examples: Any,
+    values: Any,
+    playground: Any = None,
 ) -> SafeString:
     """The storybook page's live preview, rendered from the preview
     component's State (`live_views.Preview`, ADR-032).
 
-    Renders the component's examples merged with the current `values` — the
-    markup that used to be computed in the view's `get_context_data` and
-    looped over in `storybook_detail.html`. Living in the component's own
-    template is what lets a click re-render the preview alone.
+    Renders the playground (the first example with the reader's chip choices
+    applied, when the examples expose any enumerable kwargs) and the
+    component's examples merged with the current `values`. Living in the
+    component's own template is what lets a click re-render the preview alone.
     """
     from ..gallery.live_views import render_preview_examples
+    from ..gallery.storybook import playground_options
 
-    examples_html = render_preview_examples(
-        component_name, component_type, list(examples or []), dict(values or {})
-    )
+    examples = list(examples or [])
+    values = dict(values or {})
+    playground = dict(playground or {})
+    examples_html = render_preview_examples(component_name, component_type, examples, values)
+
+    options: list = []
+    playground_html = ""
+    playground_call = ""
+    if examples:
+        base = {**examples[0], **values}
+        options = playground_options(examples)
+        for opt in options:
+            opt["current"] = playground.get(opt["key"], base.get(opt["key"]))
+        if options:
+            chosen = {**base, **playground}
+            rendered = render_preview_examples(component_name, component_type, [chosen], {})
+            playground_html = rendered[0]["html"] if rendered else ""
+            playground_call = (
+                f"{component_name}("
+                + ", ".join(f"{k}={v!r}" for k, v in chosen.items() if not k.startswith("slot_"))
+                + ")"
+            )
     return mark_safe(
         _storybook_preview_template().render(
             Context(
@@ -681,7 +700,39 @@ def storybook_preview(
                     "name": component_name,
                     "component_type": component_type,
                     "examples_html": examples_html,
+                    "options": options,
+                    "playground_html": playground_html,
+                    "playground_call": playground_call,
                 }
             )
         )
     )
+
+
+@functools.lru_cache(maxsize=256)
+def _storybook_thumbnail_html(component_name: str) -> str:
+    """A template component's first example, rendered once per process, for
+    the index cards. Python components get "" — their examples need runtime
+    context the card cannot supply, and a blank beats a broken box."""
+    from djust.theming.contracts import COMPONENT_CONTRACTS
+
+    from ..gallery.storybook import _render_template_examples, build_storybook_detail_context
+
+    if component_name not in COMPONENT_CONTRACTS:
+        return ""
+    try:
+        examples = build_storybook_detail_context(component_name, render_examples=False).get(
+            "examples"
+        )
+        if not examples:
+            return ""
+        rendered = _render_template_examples(component_name, [examples[0]])
+    except Exception:  # noqa: BLE001 — a card thumbnail is never worth a 500
+        return ""
+    return rendered[0]["html"] if rendered else ""
+
+
+@register.simple_tag
+def storybook_thumbnail(component_name: str) -> SafeString:
+    """`{% storybook_thumbnail comp.name as thumb %}` — the card's preview."""
+    return mark_safe(_storybook_thumbnail_html(str(component_name)))

@@ -614,7 +614,9 @@ class TestEveryDemoEventResolvesOnThePreview:
         real = live_views._render_preview_examples
 
         def counting(*args, **kwargs):
-            calls.append(args[0])
+            # (name, how many examples) — the playground renders ONE example
+            # under its own key; the examples list must render once.
+            calls.append((args[0], len(args[2])))
             return real(*args, **kwargs)
 
         live_views._render_preview_examples = counting
@@ -627,7 +629,7 @@ class TestEveryDemoEventResolvesOnThePreview:
             str(view.preview)
         finally:
             live_views._render_preview_examples = real
-        assert calls == ["switch"], calls
+        assert calls.count(("switch", 2)) == 1, calls
 
 
 class TestPreviewTagNeedsNoDjangoTemplatesBackend:
