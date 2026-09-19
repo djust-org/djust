@@ -1,6 +1,7 @@
 """Code Snippet component — code block with copy button and language badge."""
 
 import html
+import re
 import uuid
 
 from djust import Component
@@ -31,8 +32,35 @@ def highlight_code(code: str, language: str = "") -> str:
         except Exception:  # noqa: BLE001 — unknown language: plain text
             return html.escape(code)
         formatter = HtmlFormatter(nowrap=True, classprefix=_HIGHLIGHT_PREFIX)
-        return str(highlight(code, lexer, formatter)).rstrip("\n")
+        out = str(highlight(code, lexer, formatter)).rstrip("\n")
+        return _fold_whitespace(out)
     return html.escape(code)
+
+
+_WS_BEFORE_TOKEN_RE = re.compile(
+    r'(?:<span class="hl-w">([ \t]+)</span>|>([ \t]+))<span class="([^"]+)">'
+)
+
+
+def _fold_whitespace(highlighted: str) -> str:
+    """Fold the space between two tokens into the next token's span.
+
+    A whitespace-only text node — bare, or Pygments' own
+    ``<span class="hl-w"> </span>`` — is dropped on the way to the page (the
+    VDOM pipeline treats a lone space between elements as insignificant, even
+    inside ``<pre>``), so ``from djust`` arrived as ``fromdjust``. Prepended to
+    the following token's text (``<span class="hl-nn"> djust</span>``) the
+    space is no longer alone and survives; ``textContent`` — what ``dj-copy``
+    copies — is unchanged. Whitespace at a line end is left where it is;
+    newlines are never lone.
+    """
+
+    def fold(match: "re.Match[str]") -> str:
+        ws = match.group(1) or match.group(2) or ""
+        lead = ">" if match.group(2) is not None else ""
+        return f'{lead}<span class="{match.group(3)}">{ws}'
+
+    return _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
 
 
 #: Names the storybook and docs use that Pygments spells differently.

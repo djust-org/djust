@@ -782,8 +782,14 @@ class StorybookDetailView(StorybookSidebarMixin, LiveView):
             [p["name"], p["type"], "required", default_of(p)]
             for p in ctx.get("required_context") or []
         ] + [[p["name"], p["type"], "", default_of(p)] for p in ctx.get("optional_context") or []]
+
+        def type_name(annotation: Any) -> str:
+            # `<class 'float'>` is the repr of a type, not a type name.
+            text = str(annotation or "—")
+            return text[8:-2] if text.startswith("<class '") and text.endswith("'>") else text
+
         params_rows = [
-            [p["name"], p.get("annotation") or "—", str(p.get("default", ""))]
+            [p["name"], type_name(p.get("annotation")), str(p.get("default", ""))]
             for p in ctx.get("python_params") or []
         ]
         a11y_rows = [

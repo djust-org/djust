@@ -338,6 +338,22 @@ class TestCodeHighlighting:
         html = CodeSnippet(code="x = 1", language="python").render()
         assert 'class="hl-' in html and "dj-copy=" in html
 
+    def test_whitespace_between_tokens_survives_the_pipeline(self):
+        """The VDOM pipeline drops a lone space between elements, which turned
+        `from djust` into `fromdjust`; the space is folded into the next token."""
+        import re
+
+        from djust.components.components.code_snippet import highlight_code
+
+        out = highlight_code("from djust import LiveView", "python")
+        assert not re.search(r">[ \t]+<", out), out  # no lone space, bare or spanned
+        assert '<span class="hl-nn"> djust</span>' in out, out
+        assert re.sub(r"<[^>]+>", "", out) == "from djust import LiveView"  # what dj-copy copies
+
+    def test_parameter_types_are_names_not_reprs(self):
+        rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]
+        assert ["value", "float", "0"] in rows
+
     def test_unknown_language_and_no_language_stay_plain(self):
         from djust.components.components.code_snippet import highlight_code
 
