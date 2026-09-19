@@ -45,6 +45,11 @@ INSTALLED_APPS = [
     "djust",
     "djust.theming",  # Optional extra — needed for theming tests
     "djust.admin_ext",  # Optional extra — needed for admin tests
+    # Optional extra — the component gallery's LiveView routes render templates
+    # from this app's templates/ directory, which Django only scans when the
+    # app is installed. Without it the gallery 500s with
+    # TemplateDoesNotExist: djust_components/gallery/index.html.
+    "djust.components",
     # New organized apps
     "djust_shared",  # Shared components and base classes
     "djust_homepage",  # Landing page and navigation

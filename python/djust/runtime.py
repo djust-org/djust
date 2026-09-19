@@ -3881,6 +3881,23 @@ class ViewRuntime:
 
         component = view._components.get(component_id) if hasattr(view, "_components") else None
         if not component:
+            # A descriptor's `BoundComponent` is registered in
+            # `view._components` by `LiveComponent.__get__` (ADR-031 D2), so
+            # the lookup above finds it and this branch is normally not
+            # reached — descriptor events now take the validated
+            # component-dispatch path below, as events on an instance-assigned
+            # component always have.
+            #
+            # It remains the right fall-through for a descriptor nothing has
+            # materialised yet: the name is in `_component_descriptors`, but
+            # `__get__` has not run, so `_components` has no entry. Such a
+            # descriptor still takes a `component_id` — `__set_name__` wires
+            # its `Meta.event` onto the view, and `_make_event_handler`'s
+            # view-level alias resolves the instance from that parameter
+            # itself. Erroring here would make it unreachable.
+            if component_id in getattr(type(view), "_component_descriptors", {}):
+                return False
+
             # Verbatim WS shape (websocket.py:3358-3362): the component_id is
             # server-assigned (not free-form client text), so echoing it in the
             # error is the existing behavior.
@@ -4379,11 +4396,24 @@ class ViewRuntime:
         """Resolve URL-pattern kwargs (e.g. ``pk``, ``slug``) from
         ``page_url``. Returns ``{}`` for unresolvable paths so callers can
         unconditionally ``mount_kwargs.update(...)``.
+
+        ``unquote`` first, and that is load-bearing. ``page_url`` is the
+        browser's ``location.pathname``, which is percent-encoded, but
+        ``django.urls.resolve`` expects a path that has ALREADY been decoded —
+        Django decodes ``request.path`` before it ever reaches the resolver, so
+        the two are not interchangeable. Resolving the raw form hands a view the
+        encoded value: a category named "Core UI" arrives as ``"Core%20UI"``,
+        misses its own lookup, and the page renders fine over HTTP while its
+        WebSocket mount dies with ``Http404`` — so the page is visible and
+        inert. Any kwarg with a space, a slash or a non-ASCII character is
+        affected; ``unquote`` is idempotent for the ones that are not.
         """
         try:
+            from urllib.parse import unquote
+
             from django.urls import resolve
 
-            match = resolve(page_url)
+            match = resolve(unquote(page_url))
             return dict(match.kwargs) if match.kwargs else {}
         except Exception:
             return {}

@@ -42,6 +42,10 @@ PRIVATE_METHOD_DEF_RE = re.compile(
     re.MULTILINE,
 )
 DUNDER_RE = re.compile(r"^__\w+__$")
+# `@property` / `@cached_property` / `@functools.cached_property`. A property is
+# READ (`self._x`), never called (`self._x()`), so it needs a different caller
+# pattern — see `has_callers`.
+PROPERTY_RE = re.compile(r"^@\s*(?:[\w.]+\.)?(?:cached_)?property\s*$")
 NOQA_RE = re.compile(r"#\s*noqa:\s*dead-method-allowed", re.IGNORECASE)
 
 
@@ -74,7 +78,7 @@ def changed_python_files() -> list[Path]:
     return files
 
 
-def newly_added_methods(file_path: Path) -> list[tuple[str, str]]:
+def newly_added_methods(file_path: Path) -> list[tuple[str, str, bool]]:
     """Return ``[(method_name, def_line_with_noqa_check)]`` for methods
     appearing in the branch's added/modified diff for the file.
 
@@ -102,19 +106,44 @@ def newly_added_methods(file_path: Path) -> list[tuple[str, str]]:
         def_line = added[line_start:line_end]
         if NOQA_RE.search(def_line):
             continue
-        methods.append((name, def_line.strip()))
+        methods.append((name, def_line.strip(), _is_property(added, match.start())))
     return methods
 
 
-def has_callers(method_name: str, def_file: Path) -> bool:
+def _is_property(added: str, def_start: int) -> bool:
+    r"""Is the ``def`` at ``def_start`` decorated with ``@property``?
+
+    A property is read as ``self._x``, so the ``\._x\(`` caller pattern can
+    never match it and every newly-added private property looked dead. Twelve
+    already exist in ``python/djust/`` (``runtime.py``, ``wizard.py``,
+    ``admin_ext/views.py``); they are only unflagged because this check scopes
+    itself to newly-added defs. Walking back over the decorator/comment run
+    immediately above the ``def`` is enough — a blank line or any other
+    statement ends it.
+    """
+    for line in reversed(added[:def_start].splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("@"):
+            return bool(PROPERTY_RE.match(stripped))
+        break
+    return False
+
+
+def has_callers(method_name: str, def_file: Path, is_property: bool = False) -> bool:
     """Return True if any non-definition reference to ``method_name`` exists
     in ``python/djust/`` or ``tests/``.
 
     Looks for: ``.METHOD(``, ``"METHOD"``, ``'METHOD'``. The string-literal
     forms catch ``getattr(self, '_method')`` reflection.
+
+    For a property the call form is ``.METHOD`` with NO parenthesis — that is
+    the whole difference, and testing only the call form is what made this
+    check fail on a property that has five readers.
     """
     patterns = [
-        rf"\.{re.escape(method_name)}\(",
+        rf"\.{re.escape(method_name)}\b" if is_property else rf"\.{re.escape(method_name)}\(",
         rf"['\"]({re.escape(method_name)})['\"]",
     ]
     for pattern in patterns:
@@ -158,8 +187,8 @@ def main() -> int:
 
     dead: list[tuple[Path, str, str]] = []
     for file_path in files:
-        for method, def_line in newly_added_methods(file_path):
-            if not has_callers(method, file_path):
+        for method, def_line, is_property in newly_added_methods(file_path):
+            if not has_callers(method, file_path, is_property):
                 dead.append((file_path, method, def_line))
 
     if not dead:

@@ -17,7 +17,9 @@ Usage:
     {% theme_preset_selector layout="dropdown" %}
 """
 
+import functools
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from django import template
@@ -59,7 +61,7 @@ def build_theme_head_context(
     Single source of truth for the ``theme_head`` render context. Both the
     ``{% theme_head %}`` simple tag and ``ThemeMixin._setup_theme_context()``
     call this so the two render paths cannot drift (#1531 — the #1452 drift,
-    repeated for the ThemeMixin path). ``theme_head.html`` consumes eight
+    repeated for the ThemeMixin path). ``theme_head.html`` consumes nine
     variables; a hand-built sub-dict silently drops the rest.
 
     Args:
@@ -81,8 +83,10 @@ def build_theme_head_context(
     Returns:
         A dict with keys: ``loading_class``, ``css_block``,
         ``deferred_css_block``, ``component_css_block``,
-        ``include_component_link``, ``include_js``, ``direction``,
-        ``cookie_prefix_js`` — exactly the variables ``theme_head.html``
+        ``include_component_link``, ``include_components_app_link``,
+        ``include_js``, ``direction``,
+        ``cookie_prefix_js``, ``resolved_mode_js`` — exactly the variables
+        ``theme_head.html``
         consumes.
     """
     # Get current theme state
@@ -183,7 +187,60 @@ def build_theme_head_context(
         "include_js": include_js,
         "direction": direction,
         "cookie_prefix_js": cookie_prefix_js,
+        # The mode the *server* resolved — config default, session, or cookie.
+        # The anti-FOUC script used to hardcode `'system'` as its fallback, so
+        # a project that configured `default_mode: "dark"` still rendered in
+        # whatever the OS preferred until the user clicked a toggle. Handing
+        # the resolved mode to the script is what makes the configured default
+        # actually the default. JSON-encoded like cookie_prefix_js, since it
+        # is interpolated into a <script> literal.
+        "resolved_mode_js": json.dumps(state.mode),
+        # Cache-buster for the asset tags below. Without one a browser keeps the
+        # `components.js` / `components.css` it already downloaded: Django's
+        # static server sends no `Cache-Control`, so browsers fall back to
+        # heuristic freshness — a fraction of the file's age — and revalidate
+        # only once that elapses. A fix to either file is then invisible on the
+        # page it was made for, which reads as "the fix didn't work". Production
+        # avoids this with hashed filenames (`ManifestStaticFilesStorage`); a
+        # dev server serving the source does not.
+        "asset_version": _theme_asset_version(),
     }
+
+
+def _theme_asset_version() -> str:
+    """A short token that changes whenever a theming static asset does.
+
+    Derived from the newest mtime under the theming static tree rather than
+    from the package version, because the case that bites is an edit — someone
+    changes `components.css`, reloads, and sees the old stylesheet. A
+    release-keyed token would not move until the next release, which is exactly
+    when it is not needed.
+
+    Both static trees are scanned, because `theme_head.html` links assets from
+    each: the theming package's own, and `djust_components/components.css` from
+    the optional components app. Scanning only the first would leave a fix to
+    the second uncached — which is exactly the file whose spinner rules were
+    written but never reaching the page.
+
+    Cheap enough to compute per render: the trees are a handful of files.
+    """
+    app_static = Path(__file__).resolve().parent.parent / "static"
+    bases = [app_static / "djust_theming"]
+    # djust/components/static/djust_components — a sibling app, not a parent.
+    components_base = app_static.parent.parent / "components" / "static" / "djust_components"
+    if components_base.is_dir():
+        bases.append(components_base)
+
+    newest = 0.0
+    for base in bases:
+        for path in base.rglob("*"):
+            if path.suffix not in (".js", ".css"):
+                continue
+            try:
+                newest = max(newest, path.stat().st_mtime)
+            except OSError:  # pragma: no cover — a file that vanished mid-scan
+                continue
+    return f"{int(newest):x}"
 
 
 @register.simple_tag(takes_context=True)
@@ -524,3 +581,206 @@ def theme_resolved_mode(context: Context) -> str:
     request = context.get("request")
     manager = get_theme_manager(request)
     return manager.get_state().resolved_mode
+
+
+@register.simple_tag
+def theme_asset_version() -> str:
+    """The cache-buster token, for templates that link assets outside `theme_head`.
+
+    `theme_head` stamps its own links itself. A page that adds a stylesheet of
+    its own has no way to reach that token, and so links it bare — which is how
+    the storybook came to load `djust_components/components.css` twice, once
+    versioned and once not, with the unversioned copy second and therefore
+    winning. A bare link is a link that goes stale on the next edit.
+
+    Usage:
+        <link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={% theme_asset_version %}">
+    """
+    return _theme_asset_version()
+
+
+# ---------------------------------------------------------------------------
+# Storybook preview (ADR-032)
+# ---------------------------------------------------------------------------
+
+# Compiled lazily through a private ``Engine``: ``django.template.Template``
+# needs a configured ``DjangoTemplates`` backend, and a ``djust new`` project
+# configures only ``DjustTemplateBackend`` — a module-level ``Template(...)``
+# here broke the import of every theme tag in such a project.
+_STORYBOOK_PREVIEW_SOURCE = """{% load djust_components %}<section class="sb-section" id="sb-preview">
+{% card title="Preview" %}
+  {% if options %}
+  <div class="sb-options">
+    {% for opt in options %}
+    <div class="sb-option-row">
+      <span class="sb-option-key">{{ opt.key }}</span>
+      {% toggle_group name=opt.key options=opt.choices value=opt.current event="set_option" size="sm" %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="sb-preview">{{ playground_html|safe }}</div>
+  {{ playground_code_html }}
+  {% else %}
+    {% for ex in examples_html %}
+    <div class="sb-example">
+      <div class="sb-preview">{{ ex.html|safe }}</div>
+      {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
+    </div>
+    {% empty %}
+    <div class="sb-preview sb-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+    {% endfor %}
+  {% endif %}
+  {% if more_examples %}
+  <div class="sb-subtitle">More examples</div>
+  {% for ex in more_examples %}
+  <div class="sb-example">
+    <div class="sb-preview">{{ ex.html|safe }}</div>
+    {% if ex.kwargs_display %}<details class="sb-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+{% endcard %}
+</section>"""
+
+
+@functools.lru_cache(maxsize=1)
+def _storybook_preview_template() -> Any:
+    from django.template import Engine
+
+    return Engine(
+        autoescape=True,
+        libraries={"djust_components": "djust.components.templatetags.djust_components"},
+    ).from_string(_STORYBOOK_PREVIEW_SOURCE)
+
+
+def _highlighted_python(code: str) -> str:
+    if not code:
+        return ""
+    from djust.components.components.code_snippet import CodeSnippet
+
+    return str(CodeSnippet(code=code, language="python").render())
+
+
+@register.simple_tag
+def storybook_preview(
+    component_name: str,
+    component_type: str,
+    examples: Any,
+    values: Any,
+    playground: Any = None,
+) -> SafeString:
+    """The storybook page's preview, rendered from the preview component's
+    State (`live_views.Preview`, ADR-032), out of the components it shows.
+
+    One Preview card. When the examples expose enumerable kwargs (a token
+    string with two or more values across the examples, or a bool) the card
+    is a playground: a `toggle_group` per kwarg, the first example rendered
+    with the reader's choices, and the call that produces it in a
+    `code_snippet`. Examples the chips can reproduce are not repeated; the
+    ones that show something else (a slot, an icon, different content) follow
+    as "More examples". Without options the examples are the preview.
+    """
+    from ..gallery.live_views import render_preview_examples
+    from ..gallery.storybook import playground_options
+
+    examples = list(examples or [])
+    values = dict(values or {})
+    playground = dict(playground or {})
+    rendered = render_preview_examples(component_name, component_type, examples, values)
+
+    options: list = []
+    playground_html = ""
+    playground_call = ""
+    more_examples: list = []
+    if examples:
+        base = {**examples[0], **values}
+        for opt in playground_options(examples):
+            current = playground.get(opt["key"], base.get(opt["key"]))
+            options.append(
+                {
+                    "key": opt["key"],
+                    "choices": [
+                        {"value": f"{opt['key']}:{str(v).lower()}", "label": str(v)}
+                        for v in opt["values"]
+                    ],
+                    "current": f"{opt['key']}:{str(current).lower()}",
+                }
+            )
+        if options:
+            chosen = {**base, **playground}
+            shown = render_preview_examples(component_name, component_type, [chosen], {})
+            playground_html = shown[0]["html"] if shown else ""
+            playground_call = (
+                f"{component_name}("
+                + ", ".join(f"{k}={v!r}" for k, v in chosen.items() if not k.startswith("slot_"))
+                + ")"
+            )
+            # An example is "more" only if it shows something the chips cannot:
+            # a slot, a structural kwarg (items, columns …), a bool the chips
+            # do not cover. A different label or message alongside a different
+            # variant is the same example with other words.
+            option_keys = {o["key"] for o in options}
+            first = examples[0]
+
+            def shows_more(key: str, value: Any) -> bool:
+                if key in option_keys:
+                    return False
+                if key.startswith("slot_"):
+                    return True
+                return not isinstance(value, str)
+
+            for example, html in zip(examples, rendered):
+                keys = set(example) | set(first)
+                if any(
+                    example.get(k) != first.get(k) and shows_more(k, example.get(k, first.get(k)))
+                    for k in keys
+                ):
+                    more_examples.append(html)
+    return mark_safe(
+        _storybook_preview_template().render(
+            Context(
+                {
+                    "name": component_name,
+                    "component_type": component_type,
+                    "examples_html": rendered,
+                    "options": options,
+                    "playground_html": playground_html,
+                    "playground_call": playground_call,
+                    # The Python component, not the ``{% code_snippet %}`` tag:
+                    # the Rust engine renders the tag natively without the
+                    # highlighting or the ``dj-copy`` the usage card has.
+                    "playground_code_html": _highlighted_python(playground_call),
+                    "more_examples": more_examples,
+                }
+            )
+        )
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _storybook_thumbnail_html(component_name: str) -> str:
+    """A template component's first example, rendered once per process, for
+    the index cards. Python components get "" — their examples need runtime
+    context the card cannot supply, and a blank beats a broken box."""
+    from djust.theming.contracts import COMPONENT_CONTRACTS
+
+    from ..gallery.storybook import _render_template_examples, build_storybook_detail_context
+
+    if component_name not in COMPONENT_CONTRACTS:
+        return ""
+    try:
+        examples = build_storybook_detail_context(component_name, render_examples=False).get(
+            "examples"
+        )
+        if not examples:
+            return ""
+        rendered = _render_template_examples(component_name, [examples[0]])
+    except Exception:  # noqa: BLE001 — a card thumbnail is never worth a 500
+        return ""
+    return rendered[0]["html"] if rendered else ""
+
+
+@register.simple_tag
+def storybook_thumbnail(component_name: str) -> SafeString:
+    """`{% storybook_thumbnail comp.name as thumb %}` — the card's preview."""
+    return mark_safe(_storybook_thumbnail_html(str(component_name)))

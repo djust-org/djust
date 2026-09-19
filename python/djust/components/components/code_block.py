@@ -1,6 +1,8 @@
 """CodeBlock component."""
 
 import html
+
+from .code_snippet import highlight_code
 from djust import Component
 from typing import Any
 
@@ -40,7 +42,7 @@ class CodeBlock(Component):
     def _render_custom(self) -> str:
         """Render the codeblock HTML."""
         e_language = html.escape(self.language or "text")
-        e_code = html.escape(self.code)
+        e_code = highlight_code(self.code, self.language)
         cls = "code-block"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"

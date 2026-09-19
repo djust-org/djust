@@ -7,12 +7,14 @@ Provides three views:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from django.http import HttpRequest, HttpResponse, Http404
-from django.template import Template, Context
+from django.template.backends.base import BaseEngine
 from django.templatetags.static import static
 from django.utils.html import escape
+
+from djust._log_utils import sanitize_for_log
 
 from .registry import get_gallery_data
 
@@ -23,11 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 def _get_theme_css(
-    preset: str = "default", design_system: str = "material", mode: str = "light"
+    preset: str = "default",
+    design_system: str = "material",
+    mode: Literal["light", "dark", "system"] = "light",
 ) -> str:
-    """Generate theme CSS from djust-theming, or return empty string if unavailable."""
+    """Generate theme CSS from the theming package, or return "" if unavailable.
+
+    The import path here was ``djust_theming``, which is not a Python package —
+    ``djust_theming`` is only the *static* namespace (``static/djust_theming/``).
+    The real package is ``djust.theming``. Every call therefore raised
+    ModuleNotFoundError, which the bare ``except`` below swallowed, so the
+    gallery rendered with **no theme CSS at all**: no design tokens, and
+    consequently every component in it unstyled.
+    """
     try:
-        from djust_theming.manager import ThemeState, generate_css_for_state
+        from djust.theming.manager import ThemeState, generate_css_for_state
 
         state = ThemeState(
             theme=design_system,
@@ -38,20 +50,54 @@ def _get_theme_css(
         css: str = generate_css_for_state(state)
         return css
     except Exception:
+        # Keep the gallery renderable, but do not do it silently — a silent
+        # fallback here is indistinguishable from "this theme has no CSS".
+        #
+        # sanitize_for_log on all three: they come from the gallery's own
+        # cookies, so they are request data (CodeQL py/log-injection).
+        logger.exception(
+            "component gallery could not generate theme CSS for %s/%s/%s",
+            sanitize_for_log(design_system),
+            sanitize_for_log(preset),
+            sanitize_for_log(mode),
+        )
         return ""
 
 
 def _get_theme_options() -> Tuple[List[str], List[str]]:
-    """Get available presets and design systems from djust-theming."""
+    """Get available presets and design systems from the theming package."""
     try:
-        from djust_theming.presets import THEME_PRESETS
-        from djust_theming.theme_packs import DESIGN_SYSTEMS
+        from djust.theming.presets import THEME_PRESETS
+        from djust.theming.theme_packs import DESIGN_SYSTEMS
 
         presets = sorted(THEME_PRESETS.keys())
         systems = sorted(DESIGN_SYSTEMS.keys())
         return presets, systems
     except Exception:
+        logger.exception("component gallery could not enumerate theme options")
         return ["default"], ["material"]
+
+
+def _project_theme_defaults(request: HttpRequest) -> Tuple[str, str, str]:
+    """The project's configured (preset, design system, mode).
+
+    The gallery used to hardcode these to ``default`` / ``material`` / ``light``,
+    so a project that configured a preset or ``default_mode: "dark"`` still got
+    a light, default-palette component gallery — the one place a developer goes
+    to see what their own theme actually looks like.
+
+    These are defaults only: an in-gallery selection (a cookie) still wins.
+    """
+    try:
+        from djust.theming.manager import get_theme_manager
+
+        state = get_theme_manager(request).get_state()
+        return state.preset, state.theme, state.resolved_mode
+    except Exception:
+        # Keep the gallery renderable, but not silently — the fallback is
+        # indistinguishable from "this project has no theme configured".
+        logger.exception("component gallery could not resolve the project theme")
+        return "default", "material", "light"
 
 
 def _resolve_theme(request: HttpRequest) -> Tuple[str, str, str, str]:
@@ -60,15 +106,27 @@ def _resolve_theme(request: HttpRequest) -> Tuple[str, str, str, str]:
     Returns (mode, theme_css, ds_options, preset_options).
     """
     presets, systems = _get_theme_options()
+    default_preset, default_ds, default_mode = _project_theme_defaults(request)
 
-    _ds_raw = request.COOKIES.get("gallery_ds", "material")
-    design_system = _ds_raw if _ds_raw in systems else "material"
+    # A cookie is an explicit choice made in the gallery's own toolbar; with no
+    # cookie, fall back to what the project configured rather than a hardcoded
+    # default.
+    _ds_raw = request.COOKIES.get("gallery_ds", default_ds)
+    design_system = _ds_raw if _ds_raw in systems else default_ds
+    if design_system not in systems:
+        design_system = "material"
 
-    _preset_raw = request.COOKIES.get("gallery_preset", "default")
-    preset = _preset_raw if _preset_raw in presets else "default"
+    _preset_raw = request.COOKIES.get("gallery_preset", default_preset)
+    preset = _preset_raw if _preset_raw in presets else default_preset
+    if preset not in presets:
+        preset = "default"
 
-    _mode_raw = request.COOKIES.get("gallery_mode", "light")
-    mode = _mode_raw if _mode_raw in ("light", "dark") else "light"
+    _mode_raw = request.COOKIES.get("gallery_mode", default_mode)
+    # Narrowed to the Literal ThemeState accepts: the cookie is untyped, and
+    # the membership test is what actually constrains it.
+    mode: Literal["light", "dark"] = (
+        cast(Literal["light", "dark"], _mode_raw) if _mode_raw in ("light", "dark") else "light"
+    )
 
     theme_css = _get_theme_css(preset=preset, design_system=design_system, mode=mode)
 
@@ -102,6 +160,17 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
         # djust_theming may not be installed / staticfiles may not resolve it; skip silently.
         logger.debug("Optional djust_theming base CSS link unavailable: %s", exc)
 
+    # Versioned, like every other asset link: Django's static server sends no
+    # `Cache-Control`, so a bare link is cached heuristically and an edit to the
+    # stylesheet stays invisible on the page it was made for.
+    try:
+        from djust.theming.templatetags.theme_tags import _theme_asset_version
+
+        asset_version = f"?v={_theme_asset_version()}"
+    except Exception as exc:
+        logger.debug("Theming asset version unavailable, linking styles unversioned: %s", exc)
+        asset_version = ""
+
     return f"""\
 <head>
     <meta charset="UTF-8">
@@ -109,9 +178,33 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
     <title>{title}</title>
     {theming_base_link}
     <style data-djust-theme>{theme_css}</style>
-    <link rel="stylesheet" href="{static("djust_components/components.css")}">
-    <link rel="stylesheet" href="{static("djust_components/components-classes.css")}">
+    <link rel="stylesheet" href="{static("djust_components/components.css")}{asset_version}">
+    <link rel="stylesheet" href="{static("djust_components/components-classes.css")}{asset_version}">
     <style>
+        /* ── Token aliases ──
+           The layout rules below reference `--color-bg`, `--color-text`,
+           `--color-border`, `--color-text-secondary`, `--color-bg-subtle` and
+           `--color-primary`. NONE of those names exist in the theming system,
+           which emits the semantic set (`--background`, `--foreground`,
+           `--border`, `--muted`, `--primary`) plus `--color-brand-*`.
+
+           So the gallery's own chrome has never actually been themed: every
+           `var(--color-*)` was undefined and the declarations were dropped,
+           which happens to look correct in light mode (browser default is
+           dark-on-light) and is unreadable in dark mode — the header and
+           section headings rendered white on white.
+
+           Aliased rather than renamed so the mapping is one place, and so a
+           theme pack can override any of them individually. */
+        :root {{
+            --color-bg: hsl(var(--background, 0 0% 100%));
+            --color-text: hsl(var(--foreground, 240 10% 4%));
+            --color-text-secondary: hsl(var(--muted-foreground, 240 4% 46%));
+            --color-border: hsl(var(--border, 240 6% 90%));
+            --color-bg-subtle: hsl(var(--muted, 240 5% 96%));
+            --color-primary: hsl(var(--primary, 240 6% 10%));
+        }}
+
         /* ── Reset — scoped to gallery layout only, not component internals ── */
         *, *::before, *::after {{ box-sizing: border-box; }}
         body {{ margin: 0; }}
@@ -561,6 +654,45 @@ def _render_scripts() -> str:
     </script>"""
 
 
+def _gallery_template_backend() -> BaseEngine:
+    """The template backend used to compile gallery snippets.
+
+    The gallery used ``django.template.base.Template``, which compiles through
+    ``Engine.get_default()`` and therefore REQUIRES a ``DjangoTemplates`` entry
+    in ``TEMPLATES``. A project scaffolded by ``djust new`` — and djust's own
+    demo — configures only ``djust.template_backend.DjustTemplateBackend``, so
+    every snippet raised ``ImproperlyConfigured: No DjangoTemplates backend is
+    configured`` and every component in the gallery rendered as the red
+    "Render error" placeholder rather than the component.
+
+    Both are Django template backends exposing the same
+    ``from_string()`` / ``render()`` pair, so resolution prefers a
+    ``DjangoTemplates`` backend when the project has one (it is the one that
+    guarantees the widest tag support for an arbitrary snippet) and otherwise
+    uses whatever the project configured first.
+
+    The alias is read from ``EngineHandler.templates`` rather than assumed:
+    Django derives it from the entry's ``NAME``, or from the backend path when
+    ``NAME`` is absent — a lone ``DjustTemplateBackend`` registers as
+    ``template_backend``, so indexing a hardcoded ``engines["django"]`` would
+    raise ``KeyError`` and land right back at the "Render error" placeholder.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    from django.template import engines
+
+    django_backend = "django.template.backends.django.DjangoTemplates"
+    configured = list(getattr(engines, "templates", {}).items())
+
+    for alias, params in configured:
+        if params.get("BACKEND") == django_backend:
+            return cast(BaseEngine, engines[alias])
+
+    if configured:
+        return cast(BaseEngine, engines[configured[0][0]])
+
+    raise ImproperlyConfigured("the component gallery needs at least one usable entry in TEMPLATES")
+
+
 def _render_component_cards(
     components: List[Dict[str, Any]], extra_context: Optional[Dict[str, Any]] = None
 ) -> str:
@@ -590,11 +722,15 @@ def _render_component_cards(
             if comp["type"] == "tag":
                 try:
                     tpl_str = variant["template"]
-                    t = Template("{% load djust_components %}" + tpl_str)
+                    # Compiled through the project's own backend — see
+                    # _gallery_template_backend for why not `Template(...)`.
+                    t = _gallery_template_backend().from_string(
+                        "{% load djust_components %}" + tpl_str
+                    )
                     ctx = dict(variant.get("context", {}))
                     if extra_context:
                         ctx.update(extra_context)
-                    rendered = t.render(Context(ctx))
+                    rendered = t.render(ctx)
                 except Exception:
                     logger.exception(
                         "gallery template render failed for variant %s",

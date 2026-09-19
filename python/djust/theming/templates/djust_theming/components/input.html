@@ -17,6 +17,7 @@
         {% if attrs.required %}required{% endif %}
         {% if attrs.disabled %}disabled{% endif %}
         {% if attrs.readonly %}readonly{% endif %}
+        {{ extra_attrs }}
     />
     {% endif %}
     {% if slot_help_text %}

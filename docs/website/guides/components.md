@@ -105,13 +105,38 @@ Most components only need a `template`. Add `_render_custom()` when you need fra
 
 ### Updating a Component
 
-Call `.update()` to change properties without recreating the instance:
+Write the attribute. A plain component's constructor kwargs are its state,
+an attribute write goes through to that state, and change detection compares
+the component by it
+([ADR-033](https://github.com/djust-org/djust/blob/main/docs/adr/033-plain-component-state-and-identity.md)),
+so the handler below re-renders the dot:
 
 ```python
-def toggle_status(self):
-    new_color = "red" if self.status.color == "green" else "green"
-    self.status.update(color=new_color)
+@event_handler()
+def toggle_status(self, **kwargs):
+    self.status.color = "red" if self.status.color == "green" else "green"
 ```
+
+`.update(color=...)` does the same for several properties at once. Only the
+constructor kwargs (and any declared `fingerprint_fields`) are state; an
+attribute a subclass computes for itself in `__init__` is not.
+
+The values a component emits arrive typed — a star renders
+`dj-value-value:int="4"` and the handler receives `4`, not `"4"`. When a
+component has to say which instance it is, give it a `name`:
+
+```python
+self.ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
+
+@event_handler()
+def set_rating(self, value, name=None, **kwargs):
+    ...
+```
+
+Every trigger the instance renders then carries `dj-value-name="row-7"`.
+Components that render their own triggers do this through
+`self.event_attrs(self.event, value=...)`, which is also what a custom
+component should call instead of hand-writing `dj-click="…"`.
 
 ### Component IDs
 
@@ -252,8 +277,8 @@ class Tabs(LiveComponent):
 
     template = """
         <nav>
-          <button dj-click="select" dj-value="overview">Overview</button>
-          <button dj-click="select" dj-value="billing">Billing</button>
+          <button dj-click="select" dj-value-value="overview">Overview</button>
+          <button dj-click="select" dj-value-value="billing">Billing</button>
         </nav>
         <p>{{ active }}</p>
     """

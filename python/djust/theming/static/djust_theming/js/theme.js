@@ -80,7 +80,21 @@
          * Get the current mode setting from storage
          */
         getMode() {
-            return localStorage.getItem(STORAGE_KEY_MODE) || 'system';
+            // Fallback order: the visitor's explicit choice, then the mode the
+            // SERVER resolved (config default, session, or cookie), then
+            // 'system'.
+            //
+            // `__djust_theme_default_mode` is published by the anti-FOUC script
+            // in theme_head.html, which resolves the same value. Reading it here
+            // rather than hardcoding 'system' is what stops the two
+            // implementations from disagreeing: this module loads `defer`, so it
+            // runs AFTER the inline anti-FOUC script and re-applies the mode — a
+            // hardcoded 'system' here silently overwrote the correct
+            // server-resolved value on every page load, and a project
+            // configuring `default_mode: "dark"` came up light.
+            return localStorage.getItem(STORAGE_KEY_MODE)
+                || window.__djust_theme_default_mode
+                || 'system';
         }
 
         /**

@@ -10,7 +10,7 @@
     </div>
     {% endif %}
     <div class="{{ css_prefix }}card-body">
-        {% if slot_body %}{{ slot_body|safe }}{% else %}{{ content }}{% endif %}
+        {% if slot_body %}{{ slot_body|safe }}{% endif %}
     </div>
     {% if slot_footer %}
     <div class="{{ css_prefix }}card-footer">

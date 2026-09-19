@@ -1,4 +1,4 @@
-{% load static %}
+{% load static theme_tags %}
 <!DOCTYPE html>
 <html lang="en" data-theme="{{ mode }}">
 <head>
@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}djust-components Gallery{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'djust_theming/css/base.css' %}">
-    <link rel="stylesheet" href="{% static 'djust_components/components.css' %}">
-    <link rel="stylesheet" href="{% static 'djust_components/components-classes.css' %}">
+    <link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={% theme_asset_version %}">
+    <link rel="stylesheet" href="{% static 'djust_components/components-classes.css' %}?v={% theme_asset_version %}">
     <style>
         /* ── Gallery Layout CSS ── */
         *, *::before, *::after { box-sizing: border-box; }
@@ -154,7 +154,23 @@
     </style>
 </head>
 <body>
-<div dj-view="djust_components.gallery.live_views.{% block view_class %}GalleryIndexView{% endblock %}">
+{% comment %}
+The dj-root attribute alone — no dj-view. `mixins/request.py` computes the view
+path from the class doing the render and stamps dj-view onto this div.
+
+This used to name the class here, with a dotted path rooted at the
+static/template namespace, and every one of the gallery's ten views was
+therefore refused on mount (#2893): that namespace is not a Python package, so
+`security/mount.py`'s `importlib.import_module` raised. The pages returned 200
+and looked correct while nothing was listening. A path the server derives
+cannot drift from the class that actually rendered the page.
+
+NOTE: this comment deliberately does not spell the tag out with angle brackets.
+`_search_dj_root_open` scans the RAW template source, so a comment quoting the
+tag is matched as if it were markup — which silently erased this gallery's page
+content once.
+{% endcomment %}
+<div dj-root>
     <style data-djust-theme>{{ theme_css|safe }}</style>
 
     <header class="gallery-header">
@@ -186,7 +202,7 @@
     <div class="gallery-body">
         <nav class="gallery-sidebar">
             {% for cat in category_cards %}
-            <h3><a href="/lv/{{ cat.slug }}/" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
+            <h3><a href="{{ cat.url }}" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
             {% endfor %}
         </nav>
         <main class="gallery-content preview-container {{ preview_mode }}">

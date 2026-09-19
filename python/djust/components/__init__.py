@@ -38,6 +38,8 @@ __version__ = "1.2.0rc8"
 # ---------------------------------------------------------------------------
 # Core component classes (original djust.components)
 # ---------------------------------------------------------------------------
+from typing import Any
+
 from .base import Component, LiveComponent
 from .registry import (
     register_component,
@@ -175,3 +177,29 @@ __all__ = [
     "register_preset",
     "get_preset",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily expose the component classes defined under ``components/``.
+
+    ``djust.components`` re-exported only four of the 151 component classes, so
+    the documented import — ``from djust.components import Accordion``, which
+    this module's own docstring shows — worked for those four and failed for
+    the rest. Callers had to reach into ``djust.components.components.<module>``,
+    an internal layout whose name reads like a mistake.
+
+    Resolved on demand rather than re-exported eagerly: the subpackage holds
+    ~150 classes and importing them all at package-import time would cost every
+    project that never touches them. A module-level ``__getattr__`` costs
+    nothing until a name is asked for.
+
+    Names already defined here win — ``__getattr__`` is only consulted for a
+    missing attribute — so the nine that exist in both namespaces are
+    unaffected.
+    """
+    from . import components as _components
+
+    try:
+        return getattr(_components, name)
+    except AttributeError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None

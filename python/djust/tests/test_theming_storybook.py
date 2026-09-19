@@ -15,7 +15,8 @@ from djust.theming.gallery.storybook import (
     extract_css_variables,
     get_component_template_source,
 )
-from djust.theming.gallery.views import storybook_detail_view, storybook_index_view
+from djust.theming.gallery.live_views import StorybookIndexView
+from djust.theming.gallery.views import storybook_detail_view
 
 pytestmark = pytest.mark.theming
 
@@ -42,8 +43,15 @@ class TestStorybookURLResolution:
 
     @override_settings(**_URL_SETTINGS)
     def test_storybook_index_url_resolves_to_view(self):
+        """The index is a LiveView, like its siblings.
+
+        It resolved to `views.storybook_index_view` — a plain Django function —
+        which is why the index page had to re-implement its own filtering in a
+        `<script>`: `dj-click` and `dj-input` are server events and a plain view
+        has no server for them to reach.
+        """
         match = resolve("/theming/gallery/storybook/")
-        assert match.func is storybook_index_view
+        assert match.func.view_class is StorybookIndexView
 
     @override_settings(**_URL_SETTINGS)
     def test_storybook_detail_url_resolves(self):
@@ -52,9 +60,18 @@ class TestStorybookURLResolution:
         assert url == "/theming/gallery/storybook/button/"
 
     @override_settings(**_URL_SETTINGS)
-    def test_storybook_detail_url_resolves_to_view(self):
+    def test_storybook_detail_url_resolves_to_the_liveview(self):
+        """It resolves to the LiveView, not the plain view it used to.
+
+        The detail page has to be a `LiveView`: `dj-click` is a server event, and
+        a plain view ships no server for it to reach, so the component previews
+        rendered but did nothing when clicked.
+        """
+        from djust.theming.gallery.live_views import StorybookDetailView
+
         match = resolve("/theming/gallery/storybook/button/")
-        assert match.func is storybook_detail_view
+        assert match.func.view_class is StorybookDetailView
+        assert match.kwargs["component_name"] == "button"
 
 
 # ---------------------------------------------------------------------------
@@ -64,26 +81,29 @@ class TestStorybookURLResolution:
 
 class TestStorybookAccessControl:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
-    def test_storybook_index_accessible_in_debug(self, rf):
+    @pytest.mark.django_db
+    def test_storybook_index_accessible_in_debug(self, client):
         """Returns 200 when DEBUG=True."""
-        request = rf.get("/theming/gallery/storybook/")
-        request.session = {}
-        response = storybook_index_view(request)
-        assert response.status_code == 200
+        assert client.get("/theming/gallery/storybook/").status_code == 200
 
-    @override_settings(DEBUG=False)
-    def test_storybook_index_forbidden_non_staff(self, rf):
-        """Returns 403 when DEBUG=False and user is not staff."""
+    @override_settings(DEBUG=False, **_URL_SETTINGS)
+    @pytest.mark.django_db
+    def test_storybook_index_denied_when_not_staff(self, client):
+        """Denied when DEBUG=False and the user is not staff.
 
-        class _AnonUser:
-            is_staff = False
-            is_authenticated = False
+        The rule is unchanged — `StorybookAccessMixin.check_permissions` is the
+        same predicate the plain view's `_check_access` used, `DEBUG` (or
+        `DJUST_THEMING_GALLERY_PUBLIC`) or `is_staff`. Only the shape of the
+        refusal moved: the plain view returned a bare 403, and a LiveView
+        expresses denial by raising `PermissionDenied`, which the framework
+        answers with a redirect to the login page. Denied either way.
 
-        request = rf.get("/theming/gallery/storybook/")
-        request.user = _AnonUser()
-        request.session = {}
-        response = storybook_index_view(request)
-        assert response.status_code == 403
+        The value of moving it: the plain view's gate covered only the initial
+        HTTP GET, so the same page was reachable over the WebSocket without it.
+        `check_permissions` is consulted on every transport.
+        """
+        response = client.get("/theming/gallery/storybook/")
+        assert response.status_code in (302, 403)
 
     @override_settings(DEBUG=True, **_URL_SETTINGS)
     def test_storybook_detail_accessible_in_debug(self, rf):
@@ -123,24 +143,20 @@ class TestStorybookAccessControl:
 
 class TestStorybookIndexContent:
     @override_settings(DEBUG=True, **_URL_SETTINGS)
-    def test_index_lists_all_components(self, rf):
+    @pytest.mark.django_db
+    def test_index_lists_all_components(self, client):
         """Index page contains all 24 component names."""
-        request = rf.get("/theming/gallery/storybook/")
-        request.session = {}
-        response = storybook_index_view(request)
-        content = response.content.decode()
+        content = client.get("/theming/gallery/storybook/").content.decode()
 
         for name in COMPONENT_CONTRACTS:
             display = name.replace("_", " ").title()
             assert display in content, f"Missing component: {display}"
 
     @override_settings(DEBUG=True, **_URL_SETTINGS)
-    def test_index_has_links_to_detail_pages(self, rf):
+    @pytest.mark.django_db
+    def test_index_has_links_to_detail_pages(self, client):
         """Index page contains links to detail pages."""
-        request = rf.get("/theming/gallery/storybook/")
-        request.session = {}
-        response = storybook_index_view(request)
-        content = response.content.decode()
+        content = client.get("/theming/gallery/storybook/").content.decode()
 
         # Should contain at least some hrefs to detail pages
         assert "storybook/button/" in content

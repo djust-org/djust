@@ -1869,7 +1869,11 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .dj-meter { display: flex; flex-direction: column; gap: 0.375rem; }
 .dj-meter__label { font-size: 0.875rem; font-weight: 500; color: hsl(var(--foreground, 222 47% 11%)); }
 .dj-meter__bar { display: flex; height: 0.5rem; border-radius: 9999px; overflow: hidden; background: hsl(var(--muted, 210 40% 96%)); }
-.dj-meter__segment { height: 100%; transition: width var(--duration-slow, 0.3s) var(--ease-in-out, ease); }
+/* A default fill, because the component only sets `background` inline when a
+   segment is given a `color` — and `Meter`'s own example passes none. Without
+   this the bar had width and no paint: the markup and the ARIA were correct and
+   the meter was invisible. A segment's own `color` still wins (inline style). */
+.dj-meter__segment { height: 100%; background: hsl(var(--primary, 222 47% 51%)); transition: width var(--duration-slow, 0.3s) var(--ease-in-out, ease); }
 .dj-meter__legend { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.8125rem; }
 .dj-meter__legend-item { display: flex; align-items: center; gap: 0.25rem; }
 .dj-meter__legend-swatch { width: 0.625rem; height: 0.625rem; border-radius: 2px; flex-shrink: 0; }
@@ -2406,7 +2410,225 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .dj-status-indicator:focus-visible { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 2px; border-radius: 9999px; }
 .dj-inline-edit__display:focus-visible { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 1px; }
 
+/* --- Remaining element and variant rules ---
+   Each of these is a class a component emits that matched no rule. The BLOCK
+   is styled in every case, so the component looks right and the specific
+   element or variant does nothing — quieter than the wholly-unstyled
+   components above, and the kind of gap that only shows up once the component
+   has content to render. */
+.dj-accordion-item--open > .dj-accordion__trigger { color: hsl(var(--foreground, 222 47% 11%)); font-weight: 600; }
+.dj-approval__risk { display: inline-flex; align-items: center; padding: 1px 0.5rem; border-radius: 9999px; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; background: hsl(var(--warning, 38 92% 50%) / 0.15); color: hsl(var(--warning, 38 92% 50%)); }
+.dj-breadcrumb__separator { color: hsl(var(--muted-foreground, 215 16% 47%)); opacity: 0.6; user-select: none; }
+.dj-calendar__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.dj-calendar__dayname { padding: 0.375rem 0; text-align: center; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-copyable-text__value { font-family: var(--font-mono, ui-monospace, monospace); }
+.dj-dashboard-grid { display: grid; gap: 1rem; }
+.dj-diff__pane--new { background: hsl(var(--success, 142 71% 45%) / 0.06); }
+.dj-feedback--thumbs .dj-feedback__btn { padding: 0.375rem; }
+.dj-file-tree__node--folder > .dj-file-tree__label { font-weight: 600; }
+.dj-file-tree__node--file > .dj-file-tree__label { color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-file-tree__node--expanded > .dj-file-tree__children { display: block; }
+.dj-filter-bar__badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.125rem; height: 1.125rem; padding: 0 0.3125rem; border-radius: 9999px; background: hsl(var(--primary, 222 47% 51%)); color: hsl(0 0% 100%); font-size: 0.6875rem; font-weight: 600; }
+.dj-gantt__svg { display: block; max-width: 100%; height: auto; }
+.dj-gantt__title { fill: hsl(var(--foreground, 222 47% 11%)); }
+.dj-gantt__label { fill: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-gantt__header { fill: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-gantt__bar { fill: hsl(var(--primary, 222 47% 51%)); }
+.dj-heatmap__value { fill: hsl(var(--foreground, 222 47% 11%)); font-size: 9px; }
+.dj-import-wizard__step-label { font-size: 0.75rem; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-import-wizard__upload { display: block; padding: 1.5rem; border: 2px dashed hsl(var(--border, 220 13% 91%)); border-radius: 0.5rem; text-align: center; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-inline-edit__value { border-bottom: 1px dashed hsl(var(--border, 220 13% 91%)); cursor: text; }
+.dj-json__node--object > .dj-json__key { color: hsl(var(--primary, 222 47% 51%)); }
+.dj-json__value { color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-page-alert--dismissible { padding-right: 2.5rem; }
+.dj-pie-chart__pct { fill: hsl(var(--foreground, 222 47% 11%)); font-size: 10px; }
+.dj-pivot__total-header { background: hsl(var(--muted, 210 40% 96%)); font-weight: 600; }
+.dj-progress-circle--primary .dj-progress-circle__fill { stroke: hsl(var(--primary, 222 47% 51%)); }
+.dj-segmented-progress--md .dj-segmented-progress__indicator { width: 2rem; height: 2rem; font-size: 0.8125rem; }
+.dj-signature-pad__value { font-family: var(--font-mono, ui-monospace, monospace); color: hsl(var(--muted-foreground, 215 16% 47%)); }
+/* The `--thinking` state is the only one there is; it animates the dots so the
+   indicator reads as live rather than as three static full stops. */
+.dj-thinking--thinking .dj-thinking__dot { animation: dj-thinking-pulse 1.2s ease-in-out infinite; }
+.dj-thinking--thinking .dj-thinking__dot:nth-child(2) { animation-delay: 0.2s; }
+.dj-thinking--thinking .dj-thinking__dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dj-thinking-pulse { 0%, 60%, 100% { opacity: 0.3; } 30% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dj-thinking--thinking .dj-thinking__dot { animation-duration: 2.4s; } }
+.dj-treemap__label { fill: hsl(0 0% 100%); font-size: 11px; font-weight: 500; }
+
+/* --- Data Table ---
+   The block had no rules, so a populated table rendered with browser-default
+   borders and spacing — inconsistent with every other table in the set and, at
+   zero rows, indistinguishable from a broken component. */
+.dj-data-table { width: 100%; overflow-x: auto; }
+.dj-data-table__table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.dj-data-table__th { padding: 0.5rem 0.75rem; text-align: left; font-weight: 600; color: hsl(var(--muted-foreground, 215 16% 47%)); border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); white-space: nowrap; }
+.dj-data-table__td { padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-data-table__tr:last-child .dj-data-table__td { border-bottom: 0; }
+.dj-data-table__tr:hover .dj-data-table__td { background: hsl(var(--muted, 210 40% 96%) / 0.5); }
+
+/* --- Progress Circle ---
+   No rules existed. The component emits an SVG with `__track` and `__value`
+   circles, so with nothing to size or stroke them the ring rendered as two
+   unstyled black circles at whatever default the browser picked. */
+.dj-progress-circle { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.dj-progress-circle--sm svg { width: 48px; height: 48px; }
+.dj-progress-circle--md svg { width: 80px; height: 80px; }
+.dj-progress-circle--lg svg { width: 120px; height: 120px; }
+/* No `transform: rotate()` here — the component already rotates the `__fill`
+   arc by -90° in its own `transform` attribute, and a rule that rotated the
+   whole SVG would turn it another quarter and start the arc at six o'clock. */
+.dj-progress-circle__track { stroke: hsl(var(--muted, 210 40% 96%)); }
+.dj-progress-circle__fill { stroke: hsl(var(--primary, 222 47% 51%)); transition: stroke-dashoffset 0.3s ease; }
+.dj-progress-circle--success .dj-progress-circle__fill { stroke: hsl(var(--success, 142 71% 45%)); }
+.dj-progress-circle--warning .dj-progress-circle__fill { stroke: hsl(var(--warning, 38 92% 50%)); }
+.dj-progress-circle--danger .dj-progress-circle__fill { stroke: hsl(var(--destructive, 0 84% 60%)); }
+.dj-progress-circle__value { fill: hsl(var(--foreground, 222 47% 11%)); font-weight: 600; }
+
+/* --- Segmented Progress ---
+   Also had no rules: the steps, their indicators and the connectors between
+   them all rendered as bare text at body size. */
+.dj-segmented-progress { display: flex; align-items: center; gap: 0.5rem; }
+/* A step is a `<button>` whenever the component is given an event to dispatch,
+   and a plain `<div>` when it is not — so the rule has to strip the button
+   chrome the browser would otherwise draw around it. */
+.dj-segmented-progress__step { display: flex; flex-direction: column; align-items: center; gap: 0.375rem; flex: 0 0 auto; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.dj-segmented-progress__step:focus-visible { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 2px; border-radius: 0.375rem; }
+.dj-segmented-progress__indicator { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: 9999px; border: 1px solid hsl(var(--border, 220 13% 91%)); background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--muted-foreground, 215 16% 47%)); font-size: 0.8125rem; font-weight: 600; }
+.dj-segmented-progress__step--completed .dj-segmented-progress__indicator { background: hsl(var(--primary, 222 47% 51%)); border-color: hsl(var(--primary, 222 47% 51%)); color: hsl(0 0% 100%); }
+.dj-segmented-progress__step--active .dj-segmented-progress__indicator { border-color: hsl(var(--primary, 222 47% 51%)); color: hsl(var(--primary, 222 47% 51%)); }
+.dj-segmented-progress__label { font-size: 0.75rem; color: hsl(var(--muted-foreground, 215 16% 47%)); white-space: nowrap; }
+.dj-segmented-progress__step--active .dj-segmented-progress__label { color: hsl(var(--foreground, 222 47% 11%)); font-weight: 500; }
+.dj-segmented-progress__connector { flex: 1 1 auto; height: 1px; background: hsl(var(--border, 220 13% 91%)); }
+.dj-segmented-progress__connector--completed { background: hsl(var(--primary, 222 47% 51%)); }
+.dj-segmented-progress--sm .dj-segmented-progress__indicator { width: 1.5rem; height: 1.5rem; font-size: 0.6875rem; }
+.dj-segmented-progress--lg .dj-segmented-progress__indicator { width: 2.5rem; height: 2.5rem; font-size: 0.9375rem; }
+
+/* --- Notification Badge --- */
+.dj-notification-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.25rem; height: 1.25rem; padding: 0 0.375rem; border-radius: 9999px; background: hsl(var(--destructive, 0 84% 60%)); color: hsl(0 0% 100%); font-size: 0.6875rem; font-weight: 600; line-height: 1; }
+.dj-notification-badge--sm { min-width: 1rem; height: 1rem; font-size: 0.625rem; }
+.dj-notification-badge--md { min-width: 1.25rem; height: 1.25rem; }
+.dj-notification-badge--lg { min-width: 1.5rem; height: 1.5rem; font-size: 0.75rem; }
+
+/* --- Status Indicator ---
+   `.dj-status-indicator` had only a `:focus-visible` rule, so the dot had no
+   size or colour and the pair rendered as a line of text. */
+.dj-status-indicator { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.8125rem; color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-status-indicator__dot { display: inline-block; flex-shrink: 0; width: 0.5rem; height: 0.5rem; border-radius: 9999px; background: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-status-indicator--sm .dj-status-indicator__dot { width: 0.375rem; height: 0.375rem; }
+.dj-status-indicator--md .dj-status-indicator__dot { width: 0.5rem; height: 0.5rem; }
+.dj-status-indicator--lg .dj-status-indicator__dot { width: 0.75rem; height: 0.75rem; }
+.dj-status-indicator--success .dj-status-indicator__dot { background: hsl(var(--success, 142 71% 45%)); }
+.dj-status-indicator--info .dj-status-indicator__dot { background: hsl(var(--primary, 222 47% 51%)); }
+.dj-status-indicator--warning .dj-status-indicator__dot { background: hsl(var(--warning, 38 92% 50%)); }
+.dj-status-indicator--danger .dj-status-indicator__dot { background: hsl(var(--destructive, 0 84% 60%)); }
+.dj-status-indicator--gray .dj-status-indicator__dot { background: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-status-indicator__label { color: hsl(var(--muted-foreground, 215 16% 47%)); }
+
+/* --- Toolbar alignment ---
+   `--sm`/`--lg` existed; the alignment modifiers the component emits did not. */
+.dj-toolbar--left { justify-content: flex-start; }
+.dj-toolbar--center { justify-content: center; }
+.dj-toolbar--right { justify-content: flex-end; }
+
+/* --- Skeleton shape aliases ---
+   The factory emits `dj-skeleton--text` while the plain component emits
+   `skeleton-text`; only the latter was styled, so a factory-built text
+   skeleton had no line styling. */
+.dj-skeleton--text > * { width: 100%; }
+
+/* --- Switch (the `dj-` component family) ---
+   The theming `.switch*` family was styled; this one had no rules at all, so
+   the component rendered as a raw browser checkbox sitting next to its label —
+   `.dj-switch-input` had no visually-hidden rule, `.dj-switch-slider` had no
+   track, and `.dj-switch-checked` did nothing. Mirrors the theming design. */
+.dj-switch { position: relative; display: inline-flex; align-items: center; gap: 0.75rem; cursor: pointer; }
+.dj-switch-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.dj-switch-slider { position: relative; display: block; flex-shrink: 0; width: 2.75rem; height: 1.5rem; background: hsl(var(--muted-foreground, 215 16% 47%) / 0.3); border: 1px solid hsl(var(--border, 220 13% 91%)); border-radius: 9999px; transition: background 0.2s ease, border-color 0.2s ease; }
+.dj-switch-slider::after { content: ""; position: absolute; top: 2px; left: 2px; width: calc(1.5rem - 6px); height: calc(1.5rem - 6px); background: hsl(0 0% 100%); border-radius: 9999px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); transition: transform 0.2s ease; }
+.dj-switch-checked .dj-switch-slider { background: hsl(var(--primary, 222 47% 51%)); border-color: hsl(var(--primary, 222 47% 51%)); }
+.dj-switch-checked .dj-switch-slider::after { transform: translateX(1.25rem); }
+.dj-switch-label { font-size: 0.875rem; color: hsl(var(--foreground, 222 47% 11%)); user-select: none; }
+.dj-switch-input:focus-visible + .dj-switch-slider { outline: 2px solid hsl(var(--ring, 222 47% 51%)); outline-offset: 2px; }
+
+/* --- Tag (the `dj-` component family) ---
+   Same story: `.tag*` existed, `.dj-tag*` did not, so a tag rendered as plain
+   inline text with no pill, border or variant colour. */
+.dj-tag { display: inline-flex; align-items: center; gap: 0.25rem; padding: 2px 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; border: 1px solid hsl(var(--border, 220 13% 91%)); background: hsl(var(--muted, 210 40% 96%) / 0.6); color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-tag-label { line-height: 1.4; }
+.dj-tag-info { background: hsl(var(--primary, 222 47% 51%) / 0.1); border-color: hsl(var(--primary, 222 47% 51%) / 0.25); color: hsl(var(--primary, 222 47% 51%)); }
+.dj-tag-success { background: hsl(var(--success, 142 71% 45%) / 0.1); border-color: hsl(var(--success, 142 71% 45%) / 0.25); color: hsl(var(--success, 142 71% 45%)); }
+.dj-tag-warning { background: hsl(var(--warning, 38 92% 50%) / 0.1); border-color: hsl(var(--warning, 38 92% 50%) / 0.25); color: hsl(var(--warning, 38 92% 50%)); }
+.dj-tag-destructive { background: hsl(var(--destructive, 0 84% 60%) / 0.1); border-color: hsl(var(--destructive, 0 84% 60%) / 0.25); color: hsl(var(--destructive, 0 84% 60%)); }
+
+/* --- Stat Card ---
+   Had no rules either, so the whole component was three lines of bare text. */
+.dj-stat-card { display: flex; flex-direction: column; gap: 0.25rem; padding: 1rem 1.25rem; background: hsl(var(--card, 0 0% 100%)); border: 1px solid hsl(var(--border, 220 13% 91%)); border-radius: 0.5rem; }
+.dj-stat-card-label { font-size: 0.8125rem; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-stat-card-value { font-size: 1.5rem; font-weight: 600; line-height: 1.2; color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-stat-card-trend { font-size: 0.8125rem; font-weight: 500; }
+.dj-stat-card-trend-up { color: hsl(var(--success, 142 71% 45%)); }
+.dj-stat-card-trend-down { color: hsl(var(--destructive, 0 84% 60%)); }
+.dj-stat-card-trend-flat { color: hsl(var(--muted-foreground, 215 16% 47%)); }
+
+/* --- Markdown / prose ---
+   The component emits `dj-prose`; `prose.css` styles the unprefixed `.prose`,
+   so rendered markdown came out as unstyled browser default — headings all one
+   size, lists without markers' spacing. These are the essentials of the prose
+   scale, kept here rather than duplicated from `theming/css/prose.css`. */
+.dj-prose { color: hsl(var(--foreground, 222 47% 11%)); line-height: 1.7; }
+.dj-prose > * + * { margin-top: 0.75em; }
+.dj-prose h1 { font-size: 1.75rem; font-weight: 700; line-height: 1.25; }
+.dj-prose h2 { font-size: 1.375rem; font-weight: 600; line-height: 1.3; }
+.dj-prose h3 { font-size: 1.125rem; font-weight: 600; }
+.dj-prose p { margin: 0; }
+.dj-prose strong { font-weight: 600; }
+.dj-prose em { font-style: italic; }
+.dj-prose a { color: hsl(var(--primary, 222 47% 51%)); text-decoration: underline; }
+.dj-prose ul, .dj-prose ol { padding-left: 1.25rem; }
+.dj-prose ul { list-style: disc; }
+.dj-prose ol { list-style: decimal; }
+.dj-prose code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.875em; background: hsl(var(--muted, 210 40% 96%)); padding: 0.1em 0.35em; border-radius: 3px; }
+.dj-prose pre { background: hsl(var(--muted, 210 40% 96%)); padding: 0.75rem 1rem; border-radius: 0.375rem; overflow-x: auto; }
+.dj-prose blockquote { border-left: 3px solid hsl(var(--border, 220 13% 91%)); padding-left: 1rem; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+
+/* --- Spinner ---
+   These rules did not exist. `Spinner._render_custom` emits `dj-spinner` with
+   `-sm/-md/-lg` and `-primary/-muted` modifiers and documents six
+   `--dj-spinner-*` custom properties, so the component was specified and the
+   stylesheet was never written: the preview rendered the words "Loading..." in
+   plain text and no spinner at all. `content_loader` and the form template tags
+   emit the base class too, so all three were affected. */
+.dj-spinner { display: inline-block; width: var(--dj-spinner-size-md, 1.5rem); height: var(--dj-spinner-size-md, 1.5rem); border: var(--dj-spinner-border-width, 2px) solid var(--dj-spinner-color, currentColor); border-top-color: transparent; border-radius: 50%; vertical-align: middle; animation: dj-spinner-rotate var(--dj-spinner-speed, 0.6s) linear infinite; }
+.dj-spinner-sm { width: var(--dj-spinner-size-sm, 1rem); height: var(--dj-spinner-size-sm, 1rem); }
+.dj-spinner-lg { width: var(--dj-spinner-size-lg, 2rem); height: var(--dj-spinner-size-lg, 2rem); }
+.dj-spinner-primary { --dj-spinner-color: hsl(var(--primary, 222 47% 51%)); }
+.dj-spinner-muted { --dj-spinner-color: hsl(var(--muted-foreground, 215 16% 47%)); }
+@keyframes dj-spinner-rotate { to { transform: rotate(360deg); } }
+/* Slow rather than stop: a frozen spinner reads as a hung page, which is the
+   opposite of what a reduced-motion user needs to see. */
+@media (prefers-reduced-motion: reduce) { .dj-spinner { animation-duration: 2.5s; } }
+
 /* Accessibility — screen-reader-only text (used by spinner, etc.) */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* end djust-components base styles */
+
+/* ---- Code snippet / code block: syntax highlighting (server-side, Pygments) ----
+   Token colours from the theme's own properties so they follow preset and mode;
+   `--dj-code-*` lets a theme override any of them. */
+.dj-code-snippet .hl-c, .dj-code-snippet .hl-c1, .dj-code-snippet .hl-cm, .dj-code-snippet .hl-cp,
+.code-block .hl-c, .code-block .hl-c1, .code-block .hl-cm, .code-block .hl-cp { color: var(--dj-code-comment, hsl(var(--muted-foreground))); font-style: italic; }
+.dj-code-snippet .hl-k, .dj-code-snippet .hl-kn, .dj-code-snippet .hl-kd, .dj-code-snippet .hl-kc, .dj-code-snippet .hl-ow,
+.code-block .hl-k, .code-block .hl-kn, .code-block .hl-kd, .code-block .hl-kc, .code-block .hl-ow { color: var(--dj-code-keyword, hsl(var(--primary))); font-weight: 600; }
+.dj-code-snippet .hl-s, .dj-code-snippet .hl-s1, .dj-code-snippet .hl-s2, .dj-code-snippet .hl-sd, .dj-code-snippet .hl-sa,
+.code-block .hl-s, .code-block .hl-s1, .code-block .hl-s2, .code-block .hl-sd, .code-block .hl-sa { color: var(--dj-code-string, hsl(var(--success, 142 71% 35%))); }
+.dj-code-snippet .hl-nf, .dj-code-snippet .hl-fm, .dj-code-snippet .hl-nc, .dj-code-snippet .hl-nn,
+.code-block .hl-nf, .code-block .hl-fm, .code-block .hl-nc, .code-block .hl-nn { color: var(--dj-code-name, hsl(var(--info, 199 89% 40%))); }
+.dj-code-snippet .hl-nd, .dj-code-snippet .hl-nb, .dj-code-snippet .hl-bp,
+.code-block .hl-nd, .code-block .hl-nb, .code-block .hl-bp { color: var(--dj-code-builtin, hsl(var(--warning, 38 92% 40%))); }
+.dj-code-snippet .hl-mi, .dj-code-snippet .hl-mf, .dj-code-snippet .hl-m,
+.code-block .hl-mi, .code-block .hl-mf, .code-block .hl-m { color: var(--dj-code-number, hsl(var(--warning, 38 92% 40%))); }
+.dj-code-snippet .hl-nt, .code-block .hl-nt { color: var(--dj-code-tag, hsl(var(--primary))); }
+.dj-code-snippet .hl-na, .code-block .hl-na { color: var(--dj-code-attr, hsl(var(--info, 199 89% 40%))); }
+.dj-code-snippet .hl-o, .dj-code-snippet .hl-p, .code-block .hl-o, .code-block .hl-p { color: var(--dj-code-punct, hsl(var(--muted-foreground))); }
+.dj-code-snippet .hl-err, .code-block .hl-err { color: inherit; }

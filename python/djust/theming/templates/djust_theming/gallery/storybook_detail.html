@@ -1,246 +1,108 @@
 {% extends "djust_theming/gallery/storybook_base.html" %}
-{% load theme_tags theme_components %}
+{% load theme_tags theme_components djust_components %}
 
 {% block title %}{{ display_name }} — Component Storybook{% endblock %}
+{% block content_class %}sb-content--with-rail{% endblock %}
 
 {% block content %}
-{# ===== Header ===== #}
-<nav class="sb-breadcrumb">
-  <a href="../">Storybook</a> <span>/</span>
-  {% if category %}<a href="{% url 'djust_theming:storybook_category' category %}">{{ category }}</a> <span>/</span>{% endif %}
-  <span>{{ display_name }}</span>
-</nav>
+<article>
+{% theme_breadcrumb items=crumbs %}
 
 <h1 class="sb-comp-title">{{ display_name }}</h1>
-
+{% if description %}<p class="sb-comp-desc">{{ description }}</p>{% endif %}
 <div class="sb-comp-meta">
+  {% theme_badge component_type variant=component_type %}
   {% if component_type == "template" %}
     <span>{{ required_context|length }} required</span>
     <span>{{ optional_context|length }} optional</span>
     <span>{{ available_slots|length }} slot{{ available_slots|length|pluralize }}</span>
     <span>{{ accessibility|length }} a11y rule{{ accessibility|length|pluralize }}</span>
-  {% else %}
-    <span style="background: hsl(var(--muted, 220 13% 91%) / 0.5); padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.6875rem;">python component</span>
-    {% if category %}<span>{{ category }}</span>{% endif %}
-    {% if python_params %}<span>{{ python_params|length }} param{{ python_params|length|pluralize }}</span>{% endif %}
+  {% elif python_params %}
+    <span>{{ python_params|length }} param{{ python_params|length|pluralize }}</span>
   {% endif %}
 </div>
 
-{# ===== Live Preview (template components) ===== #}
-{% if component_type == "template" and examples %}
-<div class="sb-section">
-  <div class="sb-section-title">LIVE PREVIEW <span class="sb-badge sb-badge-count">{{ examples|length }}</span></div>
-  <div class="sb-preview">
-    {% for ex in examples %}
-      <div>
-        {% if name == "button" %}{% theme_button ex.text variant=ex.variant size=ex.size %}
-        {% elif name == "badge" %}{% theme_badge ex.text variant=ex.variant %}
-        {% elif name == "card" %}{% theme_card title=ex.title description=ex.description %}
-        {% elif name == "alert" %}{% theme_alert ex.message variant=ex.variant %}
-        {% elif name == "input" %}{% theme_input ex.name label=ex.label placeholder=ex.placeholder type=ex.type %}
-        {% elif name == "checkbox" %}{% theme_checkbox ex.name label=ex.label description=ex.description %}
-        {% elif name == "textarea" %}{% theme_textarea ex.name label=ex.label placeholder=ex.placeholder rows=ex.rows %}
-        {% elif name == "select" %}{% theme_select ex.name label=ex.label options=ex.options placeholder=ex.placeholder %}
-        {% elif name == "modal" %}{% theme_modal ex.id title=ex.title size=ex.size %}
-        {% elif name == "dropdown" %}{% theme_dropdown ex.id label=ex.label align=ex.align %}
-        {% elif name == "radio" %}{% theme_radio ex.name label=ex.label options=ex.options selected=ex.selected %}
-        {% else %}
-          <span style="font-size: 0.8125rem; color: hsl(var(--muted-foreground));">
-            {{ name }}({% for key, val in ex.items %}{{ key }}={{ val }}{% if not forloop.last %}, {% endif %}{% endfor %})
-          </span>
-        {% endif %}
-      </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
+{% comment %}
+===== Preview — one bound component (ADR-032) =====
+`{{ preview }}` is the only read of the component on this page, so an event
+that changes only its state (a playground chip, an accordion toggle) patches
+the preview's subtree instead of re-rendering the page. Keep it the bare
+variable.
+{% endcomment %}
+{{ preview }}
 
-{# ===== Python Component Preview ===== #}
-{% if component_type == "python" %}
-  {% if python_examples_html %}
-  <div class="sb-section">
-    <div class="sb-section-title">EXAMPLES <span class="sb-badge sb-badge-count">{{ python_examples_html|length }}</span></div>
-    {% for ex in python_examples_html %}
-    <div style="margin-bottom: 1rem;">
-      {% if ex.html %}
-      <div class="sb-preview" style="margin-bottom: 0.5rem;">
-        {{ ex.html|safe }}
-      </div>
-      {% endif %}
-      <div class="sb-code" style="margin-top: 0.5rem;">
-        <div class="sb-code-header">
-          <div class="sb-code-dots">
-            <span class="sb-code-dot" style="background:#ff5f57;"></span>
-            <span class="sb-code-dot" style="background:#febc2e;"></span>
-            <span class="sb-code-dot" style="background:#28c840;"></span>
-          </div>
-          <span>python</span>
-        </div>
-        <pre class="sb-code-body">{{ name }}({{ ex.kwargs_display }})</pre>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="sb-section">
-    <div class="sb-section-title">PREVIEW</div>
-    <div class="sb-preview" style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">
-      Preview not available — component requires runtime dependencies or no examples defined.
-    </div>
-  </div>
-  {% endif %}
-{% endif %}
-
-{# ===== Usage ===== #}
-<div class="sb-section">
-  <div class="sb-section-title">USAGE</div>
-  <div class="sb-code">
-    <div class="sb-code-header">
-      <div class="sb-code-dots">
-        <span class="sb-code-dot" style="background:#ff5f57;"></span>
-        <span class="sb-code-dot" style="background:#febc2e;"></span>
-        <span class="sb-code-dot" style="background:#28c840;"></span>
-      </div>
-      {% if component_type == "template" %}<span>template</span>{% else %}<span>python</span>{% endif %}
-    </div>
-    {% if component_type == "template" %}
-    <pre class="sb-code-body">{% verbatim %}{%{% endverbatim %} load theme_components {% verbatim %}%}{% endverbatim %}
-
-{% verbatim %}{%{% endverbatim %} theme_{{ name }}{% for p in required_context %} {{ p.name }}{% endfor %}{% for p in optional_context %} {{ p.name }}={{ p.default|default:"..." }}{% endfor %} {% verbatim %}%}{% endverbatim %}</pre>
-    {% else %}
-    <pre class="sb-code-body">from djust_components.components.{{ name }} import {{ display_name|cut:" " }}
-
-component = {{ display_name|cut:" " }}({% for p in python_params %}{% if not forloop.first %}
-    {% endif %}{{ p.name }}{% if p.default != "—" %}={{ p.default }}{% endif %}{% if not forloop.last %},{% endif %}{% endfor %})
-html = component.render()</pre>
+<section id="sb-usage" class="sb-section">
+  {% card title="Usage" %}
+    {% comment %}
+    The two-file example a developer actually writes: the LiveView that owns
+    the component and the template line that renders it (`_usage_snippet`).
+    {% endcomment %}
+    <div class="sb-subtitle">views.py</div>
+    {{ usage_html.view }}
+    <div class="sb-subtitle">my_template.html</div>
+    {{ usage_html.template }}
+    {% if events %}
+    <p class="sb-note">Events this component sends to the view: {% for ev in events %}<code>{{ ev }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
     {% endif %}
-  </div>
-</div>
+  {% endcard %}
+</section>
 
-{# ===== Python Params ===== #}
-{% if component_type == "python" and python_params %}
-<div class="sb-section">
-  <div class="sb-section-title">PARAMETERS <span class="sb-badge sb-badge-count">{{ python_params|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Name</th><th>Type</th><th>Default</th></tr>
-    </thead>
-    <tbody>
-      {% for p in python_params %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.annotation|default:"—" }}</code></td>
-        <td>{{ p.default }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+{% if props_rows %}
+<section id="sb-props" class="sb-section">
+  {% card title="Props" %}
+    {% theme_table headers=props_headers rows=props_rows class="sb-props" %}
+  {% endcard %}
+</section>
+{% elif params_rows %}
+<section id="sb-props" class="sb-section">
+  {% card title="Parameters" %}
+    {% theme_table headers=params_headers rows=params_rows class="sb-props" %}
+  {% endcard %}
+</section>
 {% endif %}
 
-{# ===== Props — Required (template components) ===== #}
-{% if component_type == "template" and required_context %}
-<div class="sb-section">
-  <div class="sb-section-title">PROPS — REQUIRED <span class="sb-badge sb-badge-count">{{ required_context|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Name</th><th>Type</th><th>Default</th></tr>
-    </thead>
-    <tbody>
-      {% for p in required_context %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.type }}</code></td>
-        <td>{{ p.default|default:"—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+{% if a11y_rows %}
+<section id="sb-a11y" class="sb-section">
+  {% card title="Accessibility" %}
+    {% theme_table headers=a11y_headers rows=a11y_rows %}
+  {% endcard %}
+</section>
 {% endif %}
 
-{# ===== Props — Optional (template components) ===== #}
-{% if component_type == "template" and optional_context %}
-<div class="sb-section">
-  <div class="sb-section-title">PROPS — OPTIONAL <span class="sb-badge sb-badge-count">{{ optional_context|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Name</th><th>Type</th><th>Default</th></tr>
-    </thead>
-    <tbody>
-      {% for p in optional_context %}
-      <tr>
-        <td><code>{{ p.name }}</code></td>
-        <td><code>{{ p.type }}</code></td>
-        <td>{{ p.default|default:"—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
-
-{# ===== Accessibility ===== #}
-{% if accessibility %}
-<div class="sb-section">
-  <div class="sb-section-title">ACCESSIBILITY <span class="sb-badge sb-badge-count">{{ accessibility|length }}</span></div>
-  <table class="sb-table">
-    <thead>
-      <tr><th>Requirement</th><th>Element</th><th>Attribute</th><th>Value</th></tr>
-    </thead>
-    <tbody>
-      {% for a in accessibility %}
-      <tr>
-        <td>{{ a.description }}</td>
-        <td><code>{{ a.selector_hint }}</code></td>
-        <td><code>{{ a.attr }}</code></td>
-        <td>{{ a.value|default:"(present)" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
-
-{# ===== Available Slots ===== #}
 {% if available_slots %}
-<div class="sb-section">
-  <div class="sb-section-title">AVAILABLE SLOTS <span class="sb-badge sb-badge-count">{{ available_slots|length }}</span></div>
-  <div>
-    {% for slot in available_slots %}
-    <span class="sb-pill">{{ slot }}</span>
-    {% endfor %}
-  </div>
-</div>
+<section id="sb-slots" class="sb-section">
+  {% card title="Slots" %}
+    <div class="sb-badges">{% for slot in available_slots %}{% theme_badge slot variant="secondary" %}{% endfor %}</div>
+  {% endcard %}
+</section>
 {% endif %}
 
-{# ===== CSS Variables ===== #}
-{% if css_variables %}
-<div class="sb-section">
-  <div class="sb-section-title">CSS VARIABLES <span class="sb-badge sb-badge-count">{{ css_variables|length }}</span></div>
-  <div>
-    {% for var in css_variables %}
-    <span class="sb-pill">{{ var }}</span>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
+{% comment %}
+Collapsed by default: the paths to override and the template source are for
+the reader who has decided to change the component, not the one choosing it.
+A native `details` — the framework has no block-form collapsible yet.
+{% endcomment %}
+<details id="sb-source" class="sb-section sb-details">
+  <summary>Source &amp; styles</summary>
+  {% card %}
+    {% theme_table headers=styles_headers rows=styles_rows %}
+    {% if css_variables %}
+    <div class="sb-subtitle" id="sb-css-variables">CSS variables</div>
+    <div class="sb-badges">{% for var in css_variables %}{% theme_badge var variant="secondary" %}{% endfor %}</div>
+    {% endif %}
+    {% if template_source %}
+    <div class="sb-subtitle">Template source — {{ name }}.html</div>
+    {{ template_source_html }}
+    {% endif %}
+  {% endcard %}
+</details>
 
-{# ===== Template Source ===== #}
-{% if template_source %}
-<div class="sb-section">
-  <div class="sb-section-title">TEMPLATE SOURCE</div>
-  <div class="sb-code">
-    <div class="sb-code-header">
-      <div class="sb-code-dots">
-        <span class="sb-code-dot" style="background:#ff5f57;"></span>
-        <span class="sb-code-dot" style="background:#febc2e;"></span>
-        <span class="sb-code-dot" style="background:#28c840;"></span>
-      </div>
-      <span>{{ name }}.html</span>
-    </div>
-    <pre class="sb-code-body">{{ template_source }}</pre>
-  </div>
-</div>
-{% endif %}
+<nav class="sb-pager" aria-label="Previous and next component">
+  {% for item in pager_items %}{% theme_nav_item item.label item.url class="sb-pager-link" %}{% endfor %}
+</nav>
+</article>
+
+<aside class="sb-rail" aria-label="On this page">
+  {% table_of_contents items=toc_items title="On this page" %}
+</aside>
 {% endblock %}

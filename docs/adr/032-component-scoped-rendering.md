@@ -84,6 +84,7 @@ All on one machine, run alone (the first pass, taken while three builds ran in p
 | M7 | Option 3 — per-frame context memo (#2914): toggle / `render_with_diff` | 186.4 → **21.1 ms** / 180.5 → 15.3 ms; + interning **19.8** / 14.0 ms; 17 frames byte-identical, 14/14 stress shapes byte-identical, suite green |
 | M8 | Option 4 — `namedtuple` class interning alone (#2913) | 186 → **138 ms** (5 277 class creations → 1 per process); 1 149 tests green |
 | M9 | Option 5 — sidebar as `{% live_render %}` child, synthetic twin of the page | parent event 137 → **5.9 ms** (→ 3.7 with a child memo); the win is the loop leaving the tag bridge, the memo is worth ~2 ms; sidebar events become a 16-18 KB full-HTML morph instead of an 8 KB patch |
+| M10 | **After S0–S3**, real browser (Chrome, click → the accordion item's class changes, 8 toggles): the #2887 branch before any of this **~200 ms**; with #2915 + #2916 + the scoped preview **15–35 ms, median ~19 ms**. In-process (`ViewRuntime.dispatch_event`, same page): 141 → 16.5 (S0/S0b) → ~9 (scoped preview) → **~5 ms** (the sidebar's constant list out of the snapshot). |
 
 Reading M7-M9 together: once the bridge is memoised, the sidebar loop costs what Option 5 measured it at outside the bridge (~5 ms), so converting the sidebar to a child is no longer needed for this page.
 

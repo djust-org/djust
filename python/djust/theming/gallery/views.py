@@ -8,6 +8,8 @@ import json
 import re
 
 from django.conf import settings
+from typing import Any
+
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -17,18 +19,46 @@ from django.http import (
     JsonResponse,
 )
 from django.template.loader import render_to_string
-from django.utils.html import escape
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 
 from .context import build_gallery_context, serialize_all_design_systems, serialize_all_presets
 from djust.theming.theme_packs import DESIGN_SYSTEMS
-from .storybook import build_storybook_detail_context, build_storybook_index_context
-from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.presets import list_presets
 from djust.theming.css_generator import ThemeCSSGenerator as ColorCSSGenerator
 
 # Allowed CSS token names: lowercase letters, digits, hyphens, underscores only.
 _VALID_TOKEN_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+def _initial_preset(request: HttpRequest) -> str:
+    """The preset the gallery should open with.
+
+    ``?preset=`` wins — that is the visitor asking for a specific one. With no
+    query parameter the default is the preset the PROJECT configured, not a
+    hardcoded ``"default"``.
+
+    The gallery is a theme browser. Opening it on a site that has configured a
+    preset (directly, or through a theme pack that implies one) and being shown
+    a different palette misrepresents the site's own theme — which is the one
+    thing the page exists to show. Falls back to ``"default"`` only when the
+    project has not configured anything or the resolved preset is not one the
+    registry knows.
+    """
+    from djust.theming._registry_accessor import get_registry
+    from djust.theming.manager import get_theme_manager
+
+    requested = request.GET.get("preset")
+    if requested and get_registry().has_preset(requested):
+        return str(requested)
+
+    try:
+        configured = get_theme_manager(request).get_state().preset
+    except Exception:  # noqa: BLE001 — never fail the gallery over a preset name
+        configured = None
+
+    if configured and get_registry().has_preset(configured):
+        return configured
+    return "default"
 
 
 @xframe_options_sameorigin
@@ -47,14 +77,8 @@ def gallery_view(request: HttpRequest) -> HttpResponse:
     if denied:
         return denied
 
-    # Read preset from query param
-    preset_name = request.GET.get("preset", "default")
-
-    # Validate and normalise preset name
-    from djust.theming._registry_accessor import get_registry
-
-    if not get_registry().has_preset(preset_name):
-        preset_name = "default"
+    # Preset: ?preset= wins, else the project's configured one.
+    preset_name = _initial_preset(request)
 
     # Generate unlayered preset override CSS for the gallery.
     # Using generate_variables_only() emits bare :root {} / .dark {} blocks without
@@ -91,7 +115,7 @@ def editor_view(request: HttpRequest) -> HttpResponse:
     if denied:
         return denied
 
-    preset_name = request.GET.get("preset", "default")
+    preset_name = _initial_preset(request)
 
     ctx = build_gallery_context(preset_name=preset_name)
     ctx["request"] = request
@@ -240,104 +264,73 @@ def diff_view(request: HttpRequest) -> HttpResponse:
 # ---------------------------------------------------------------------------
 
 
-def storybook_index_view(request: HttpRequest) -> HttpResponse:
-    """Render the component storybook index -- lists all components.
+def _serve_liveview(view_cls: Any, request: HttpRequest, **kwargs: Any) -> HttpResponse:
+    """Serve a storybook LiveView for a plain HTTP request.
 
-    Access control: same as gallery (DEBUG=True or is_staff).
+    A caller that built the request by hand (the tests do, with
+    ``request.session = {}``) has no real session; the LiveView needs one
+    with a ``session_key``. ``Http404`` becomes the response it would be
+    behind the URL resolver.
+    """
+    from django.contrib.sessions.backends.signed_cookies import SessionStore
+    from django.http import Http404
+
+    session = getattr(request, "session", None)
+    if session is None or not hasattr(session, "session_key"):
+        # Cookie-backed: needs neither the database nor a cache, so a
+        # hand-built request works wherever this is called from.
+        store = SessionStore()
+        store.create()
+        request.session = store
+    try:
+        return view_cls.as_view()(request, **kwargs)
+    except Http404 as exc:
+        # The message carries the requested name — user input — so it is
+        # escaped, as the function views always did (test_gallery_xss).
+        from django.utils.html import escape
+
+        return HttpResponseNotFound(escape(str(exc)))
+
+
+def storybook_index_view(request: HttpRequest) -> HttpResponse:
+    """The storybook index — the LiveView, served for an HTTP GET.
+
+    Unrouted (`urls.py` points at the LiveViews); kept as the callable the
+    tests and any importer address. It used to render the template with a
+    static context of its own, which drifted from what the page needs
+    (breadcrumb, playground, table rows …) the moment the LiveView grew them.
+    Delegating keeps one renderer.
     """
     denied = _check_access(request)
     if denied:
         return denied
+    from .live_views import StorybookIndexView
 
-    ctx = build_storybook_index_context()
-    ctx["request"] = request
-    ctx["all_components"] = ctx.get("components", [])
-    ctx["current_component"] = None
-
-    html = render_to_string(
-        "djust_theming/gallery/storybook_index.html",
-        ctx,
-        request=request,
-    )
-    return HttpResponse(html)
+    return _serve_liveview(StorybookIndexView, request)
 
 
 def storybook_detail_view(request: HttpRequest, component_name: str) -> HttpResponse:
-    """Render the storybook detail page for a single component.
+    """One component's storybook page — the LiveView, served for an HTTP GET.
 
-    Handles both template-based (24 contracted) and Python (169 total) components.
-    Returns 404 if the component name is not recognized.
+    Keeps the gallery's access gate on this path (the routed LiveView is
+    deliberately ungated, a separate defect tracked on its own).
     """
     denied = _check_access(request)
     if denied:
         return denied
+    from .live_views import StorybookDetailView
 
-    from .component_registry import _COMPONENT_TO_CATEGORY
-
-    if component_name not in COMPONENT_CONTRACTS and component_name not in _COMPONENT_TO_CATEGORY:
-        return HttpResponseNotFound(f"Unknown component: {escape(component_name)}")
-
-    try:
-        ctx = build_storybook_detail_context(component_name)
-    except KeyError:
-        return HttpResponseNotFound(f"Unknown component: {escape(component_name)}")
-
-    ctx["request"] = request
-    # Pass full component list for sidebar navigation
-    index_ctx = build_storybook_index_context()
-    ctx["all_components"] = index_ctx.get("components", [])
-    ctx["current_component"] = component_name
-
-    html = render_to_string(
-        "djust_theming/gallery/storybook_detail.html",
-        ctx,
-        request=request,
-    )
-    return HttpResponse(html)
+    return _serve_liveview(StorybookDetailView, request, component_name=component_name)
 
 
 def storybook_category_view(request: HttpRequest, category: str) -> HttpResponse:
-    """Render a storybook category page showing all components in the category."""
+    """A category's storybook page — the LiveView, served for an HTTP GET."""
     denied = _check_access(request)
     if denied:
         return denied
+    from .live_views import StorybookCategoryView
 
-    from .component_registry import COMPONENT_CATEGORIES, get_all_components_with_metadata
-
-    if category not in COMPONENT_CATEGORIES:
-        return HttpResponseNotFound(f"Unknown category: {escape(category)}")
-
-    all_components = get_all_components_with_metadata()
-    category_components = [c for c in all_components if c["category"] == category]
-
-    # Enrich template components with contract data
-    enriched = []
-    for comp in category_components:
-        name = comp["name"]
-        if name in COMPONENT_CONTRACTS:
-            contract = COMPONENT_CONTRACTS[name]
-            comp = dict(comp)
-            comp["required_count"] = len(contract.required_context)
-            comp["optional_count"] = len(contract.optional_context)
-            comp["slot_count"] = len(contract.available_slots)
-            comp["a11y_count"] = len(contract.accessibility)
-        enriched.append(comp)
-
-    index_ctx = build_storybook_index_context()
-    ctx = {
-        "request": request,
-        "category": category,
-        "category_components": enriched,
-        "all_components": index_ctx.get("components", []),
-        "current_component": None,
-    }
-
-    html = render_to_string(
-        "djust_theming/gallery/storybook_category.html",
-        ctx,
-        request=request,
-    )
-    return HttpResponse(html)
+    return _serve_liveview(StorybookCategoryView, request, category=category)
 
 
 # ---------------------------------------------------------------------------

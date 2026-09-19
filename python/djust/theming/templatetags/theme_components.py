@@ -65,40 +65,61 @@ def theme_button(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "button")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "text": text,
         "variant": variant,
         "size": size,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
 
 @register.simple_tag(takes_context=True)
 def theme_card(
-    context: Context, title: Optional[str] = None, footer: Optional[str] = None, **attrs: Any
+    context: Context,
+    title: Optional[str] = None,
+    footer: Optional[str] = None,
+    body: Optional[str] = None,
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed card container.
 
     Args:
         title: Optional card title
+        body: Optional card body. Passed through as `slot_body`, which is the
+            name `card.html` reads, so callers have one body argument rather
+            than two spellings of it.
         footer: Optional card footer content
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_card title="Card Title" %}
-            <p>Card content goes here</p>
-        {% end_theme_card %}
+        {% theme_card title="Card Title" body="Card content goes here" %}
+
+    Each part is optional and each is dropped when absent, so a card with only
+    a body is as valid as one with all three.
+
+    A card body is a string, not a block — this is a `simple_tag`, so it takes
+    no `{% end_theme_card %}` and cannot wrap other template tags.
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "card")
+    slots, remaining_attrs = _extract_slots(attrs)
+    if body is not None:
+        slots.setdefault("slot_body", body)
     ctx = {
         "title": title,
         "footer": footer,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -119,11 +140,17 @@ def theme_badge(context: Context, text: str, variant: str = "default", **attrs: 
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "badge")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "text": text,
         "variant": variant,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -153,13 +180,19 @@ def theme_alert(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "alert")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "message": message,
         "title": title,
         "variant": variant,
         "dismissible": dismissible,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -188,49 +221,106 @@ def theme_input(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "input")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "name": name,
         "label": label,
         "placeholder": placeholder,
         "type": type,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
+        # Everything the template does not read by name — `dj_input`,
+        # `dj_debounce`, `autocomplete`, `aria_label` … — reaches the
+        # `<input>` as attributes (underscores become hyphens), so a live
+        # search box can be this component rather than a hand-written input.
+        "extra_attrs": _passthrough_attrs(
+            remaining_attrs, skip=("class", "id", "value", "required", "disabled", "readonly")
+        ),
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
 
+def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
+    """``key="value"`` pairs for the attrs a component template does not
+    handle itself. ``dj_input`` → ``dj-input``; values are escaped; ``True``
+    emits a bare attribute, ``False``/``None`` nothing."""
+    from django.utils.html import escape
+
+    parts = []
+    for key, value in attrs.items():
+        if key in skip or value is None or value is False:
+            continue
+        name = key.replace("_", "-")
+        parts.append(name if value is True else f'{name}="{escape(value)}"')
+    return mark_safe(" ".join(parts))
+
+
 @register.simple_tag(takes_context=True)
 def theme_modal(
-    context: Context, id: str, title: Optional[str] = None, size: str = "md", **attrs: Any
+    context: Context,
+    id: str,
+    title: Optional[str] = None,
+    size: str = "md",
+    is_open: bool = False,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed modal dialog.
 
     Args:
-        id: Unique modal identifier (used for data-theme-modal-open triggers)
+        id: Unique modal identifier
         title: Optional modal title
         size: 'sm', 'md', 'lg'
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id` on the close control. Required when a page
+            declares more than one modal descriptor — the framework wires one
+            `toggle_modal` handler and cannot auto-resolve which instance an
+            event belongs to. A page with a single modal can omit it.
+        is_open: Whether the dialog renders open. Server-driven: the host
+            LiveView's `Modal` descriptor owns this, and the close control
+            dispatches `toggle_modal`. Defaults to closed, which is what a
+            static page gets — and a static page has no server to dispatch to,
+            so a modal needs a LiveView host to open at all.
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_modal id="confirm" title="Confirm Action" size="md" %}
-        <!-- Trigger: <button data-theme-modal-open="confirm">Open</button> -->
+        {% theme_modal id="confirm" title="Confirm Action" size="md" is_open=modal.is_open %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "modal")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "id": id,
         "title": title,
         "size": size,
-        "attrs": attrs,
+        "is_open": is_open,
+        "component_id": component_id,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
 
 @register.simple_tag(takes_context=True)
 def theme_dropdown(
-    context: Context, id: str, label: str, align: str = "left", **attrs: Any
+    context: Context,
+    id: str,
+    label: str,
+    align: str = "left",
+    is_open: bool = False,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed dropdown menu.
@@ -239,26 +329,48 @@ def theme_dropdown(
         id: Unique dropdown identifier
         label: Trigger button text
         align: Menu alignment ('left' or 'right')
+        is_open: Whether the menu renders open. Server-driven: the host
+            LiveView's `Dropdown` descriptor owns this and the trigger
+            dispatches `toggle_dropdown`.
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id`. Required when a page declares more than one
+            descriptor of the same type: the framework wires one
+            `toggle_dropdown` handler and cannot auto-resolve which instance an
+            event belongs to, so the trigger must say. A page with a single
+            dropdown can omit it.
         **attrs: Additional HTML attributes
 
     Usage:
-        {% theme_dropdown id="actions" label="Actions" align="right" %}
+        {% theme_dropdown id="actions" label="Actions" align="right" is_open=menu.is_open %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "dropdown")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "id": id,
         "label": label,
         "align": align,
-        "attrs": attrs,
+        "is_open": is_open,
+        "component_id": component_id,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
 
 @register.simple_tag(takes_context=True)
 def theme_tabs(
-    context: Context, id: str, tabs: Any = None, active: int = 0, **attrs: Any
+    context: Context,
+    id: str,
+    tabs: Any = None,
+    active: int = 0,
+    component_id: str = "",
+    **attrs: Any,
 ) -> SafeString:
     """
     Render themed tabs with panels.
@@ -266,7 +378,12 @@ def theme_tabs(
     Args:
         id: Unique tabs identifier
         tabs: List of dicts with 'label' and 'content' keys
-        active: Zero-based index of the initially active tab
+        active: Zero-based index of the active tab. Server-driven: the host
+            LiveView's `Tabs` descriptor owns this and the tab buttons dispatch
+            `set_tab` with their index.
+        component_id: Name of the descriptor this instance belongs to, emitted
+            as `data-component-id`. Required when a page declares more than one
+            tabs descriptor; a page with a single tab set can omit it.
         **attrs: Additional HTML attributes
 
     Usage:
@@ -278,6 +395,7 @@ def theme_tabs(
         "id": id,
         "tabs": tabs or [],
         "active": active,
+        "component_id": component_id,
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }
@@ -308,13 +426,19 @@ def theme_table(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "table")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "headers": headers or [],
         "rows": rows or [],
         "variant": variant,
         "caption": caption,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -343,6 +467,11 @@ def theme_pagination(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "pagination")
+    # `slot_*` keywords are context, not attributes — the template
+    # reads them by name. Without this they stay in `attrs`, which
+    # templates only ever read as `attrs.class` / `attrs.id`, so a
+    # caller-supplied slot rendered as nothing at all.
+    slots, remaining_attrs = _extract_slots(attrs)
 
     # Build page range (show up to 5 pages around current)
     window = 2
@@ -379,8 +508,9 @@ def theme_pagination(
         "last_ellipsis": last_ellipsis,
         "prev_url": prev_url,
         "next_url": next_url,
-        "attrs": attrs,
+        "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
+        **slots,
     }
     return mark_safe(tmpl.render(ctx))
 
@@ -820,6 +950,8 @@ def theme_nav_group(
     items: Any = None,
     icon: Optional[str] = None,
     expanded: bool = True,
+    badge: Optional[str] = None,
+    toggle_event: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -844,6 +976,11 @@ def theme_nav_group(
         "items": items or [],
         "icon": icon,
         "expanded": expanded,
+        # A count on the heading, and an optional server event the heading
+        # click also sends (``data-value`` = the label) so the expanded state
+        # can live on the server and survive a re-render.
+        "badge": badge,
+        "toggle_event": toggle_event,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
         **slots,

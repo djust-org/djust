@@ -3426,12 +3426,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         if not url:
             return None
+        from urllib.parse import unquote
+
         from django.urls import Resolver404, resolve
 
         from .live_view import LiveView
 
         try:
-            match = resolve(url)
+            # Decoded, like the other two `resolve()` call sites that take a
+            # client-supplied URL — see `_resolve_url_kwargs` (runtime.py).
+            match = resolve(unquote(url))
         except Resolver404:
             return None
         except Exception:  # noqa: BLE001 — never let URL resolution break mount
@@ -3460,6 +3464,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         old request. The caller treats a ``None`` return as "staging
         impossible, unmount all staged stickys".
         """
+        from urllib.parse import unquote
+
         from django.test import RequestFactory
         from django.urls import resolve, Resolver404
 
@@ -3489,7 +3495,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # they'd either ``AttributeError`` or read stale data from the
         # old request.
         try:
-            request.resolver_match = resolve(page_url)
+            # `unquote` for the same reason as `_resolve_url_kwargs`
+            # (runtime.py): `resolve` expects an already-decoded path, and this
+            # one is a browser-supplied URL. An encoded segment would hand
+            # `check_permissions` a mangled kwarg — and these kwargs are what a
+            # sticky view's object-level check reads, so the failure mode is an
+            # authorization decision made against the wrong identifier.
+            request.resolver_match = resolve(unquote(page_url))
         except Resolver404:
             logger.warning(
                 "resolve() failed for live_redirect URL %s; sticky auth cannot be re-checked",

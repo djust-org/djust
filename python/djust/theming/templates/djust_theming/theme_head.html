@@ -1,16 +1,33 @@
 {# Theme head block: anti-FOUC script, CSS, and optional JS include #}
 {# Safety: autoescape off is safe here — all variables (css_block, direction, etc.) #}
 {# are framework-generated in theme_tags.py, not user input. #}
-{# cookie_prefix_js is a JSON-encoded string ("" or "<ns>_"), framework-generated. #}
+{# cookie_prefix_js and resolved_mode_js are JSON-encoded strings, framework-generated. #}
 {% load static %}
 {% autoescape off %}
 <script>
 (function() {
     window.__djust_theme_cookie_prefix = {{ cookie_prefix_js }};
+    /* Single source of truth for the default mode, read by BOTH this script and
+       theme.js (via getMode()). theme.js loads `defer`, so it runs after this
+       one and re-applies the mode — when it resolved its own fallback the two
+       could disagree, and the later one won. */
+    window.__djust_theme_default_mode = {{ resolved_mode_js|default:'"system"' }};
     {% if loading_class %}document.documentElement.classList.add('loading');
     {% endif %}var storageKey = 'djust-theme-mode';
-    var storedMode = localStorage.getItem(storageKey);
-    var mode = storedMode || 'system';
+    var storedMode = null;
+    try {
+        storedMode = localStorage.getItem(storageKey);
+    } catch (e) {
+        /* Storage can throw outright (private windows, blocked site data).
+           An explicit visitor choice is a nicety; the theme itself is not,
+           so fall through to the server-resolved mode rather than aborting
+           the script and leaving the page unstyled. */
+    }
+    /* Fallback is the mode the SERVER resolved — config default, session, or
+       cookie — not a hardcoded 'system'. A project configuring
+       default_mode: 'dark' used to come up light on any machine whose OS
+       preferred light. */
+    var mode = storedMode || window.__djust_theme_default_mode || 'system';
     var resolvedMode = mode;
     if (mode === 'system') {
         resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -22,10 +39,18 @@
 </script>
 {{ css_block }}
 {{ deferred_css_block }}
-{% if include_component_link %}<link rel="stylesheet" href="{% static 'djust_theming/css/components.css' %}">{% endif %}
-{% if include_components_app_link %}<link rel="stylesheet" href="{% static 'djust_components/components.css' %}">{% endif %}
+{% comment %}
+`?v={{ asset_version }}` on each of these, because none of them had a
+cache-buster and Django's static server sends no `Cache-Control` — so a browser
+applied heuristic freshness to `components.js` / `components.css` and kept the
+copy it already had. An edit to either was invisible on the page it was made
+for. The token is derived from the assets' newest mtime (see
+`_theme_asset_version`), so it moves on an edit rather than on a release.
+{% endcomment %}
+{% if include_component_link %}<link rel="stylesheet" href="{% static 'djust_theming/css/components.css' %}?v={{ asset_version }}">{% endif %}
+{% if include_components_app_link %}<link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={{ asset_version }}">{% endif %}
 {{ component_css_block }}
-<link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}" media="print">
-{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}" defer></script>
-<script src="{% static 'djust_theming/js/components.js' %}" defer></script>{% endif %}
+<link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}?v={{ asset_version }}" media="print">
+{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}?v={{ asset_version }}" defer></script>
+<script src="{% static 'djust_theming/js/components.js' %}?v={{ asset_version }}" defer></script>{% endif %}
 {% endautoescape %}

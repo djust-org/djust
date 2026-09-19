@@ -38,6 +38,9 @@ class SegmentedProgress(Component):
         steps: List of step labels (strings) or dicts with "label" key
         current: Current step number (1-indexed)
         size: Size variant (sm, md, lg)
+        event: djust event dispatched when a step is clicked. Each step sends
+            its 1-based number as `value`, so a host sets `current` to it. Pass
+            an empty string to render the steps as static indicators instead.
         custom_class: Additional CSS classes
     """
 
@@ -46,6 +49,7 @@ class SegmentedProgress(Component):
         steps: Optional[List[Union[str, Dict]]] = None,
         current: int = 0,
         size: str = "md",
+        event: str = "set_segment",
         custom_class: str = "",
         **kwargs: Any,
     ) -> None:
@@ -53,12 +57,14 @@ class SegmentedProgress(Component):
             steps=steps or [],
             current=current,
             size=size,
+            event=event,
             custom_class=custom_class,
             **kwargs,
         )
         self.steps = steps or []
         self.current = current
         self.size = size
+        self.event = event
         self.custom_class = custom_class
 
     def _render_custom(self) -> str:
@@ -83,11 +89,21 @@ class SegmentedProgress(Component):
                 state = "active"
             else:
                 state = "pending"
+            # A step is a `<button>` when the component is told where to send
+            # clicks and a plain `<div>` when it is not: a progress indicator
+            # that is not wired to anything should not be focusable or announce
+            # itself as clickable. `stepper` — the clickable sibling of this
+            # component — dispatches the same way.
+            click_attrs = self.event_attrs(self.event, value=step_num)
+            click = f" {click_attrs}" if click_attrs else ""
+            tag = "button" if self.event else "div"
+            type_attr = ' type="button"' if self.event else ""
             segments.append(
-                f'<div class="dj-segmented-progress__step dj-segmented-progress__step--{state}">'
-                f'<div class="dj-segmented-progress__indicator">{step_num}</div>'
-                f'<div class="dj-segmented-progress__label">{label}</div>'
-                f"</div>"
+                f'<{tag} class="dj-segmented-progress__step '
+                f'dj-segmented-progress__step--{state}"{type_attr}{click}>'
+                f'<span class="dj-segmented-progress__indicator">{step_num}</span>'
+                f'<span class="dj-segmented-progress__label">{label}</span>'
+                f"</{tag}>"
             )
 
         parts = []

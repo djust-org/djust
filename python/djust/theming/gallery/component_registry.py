@@ -13,6 +13,9 @@ Provides:
 import importlib
 import inspect
 import logging
+from typing import Any
+
+from django.utils.html import escape
 
 from djust._log_utils import sanitize_for_log
 
@@ -254,8 +257,22 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Uptime", "value": "99.9%", "trend": "flat"},
     ],
     "switch": [
-        {"name": "notifications", "label": "Enable notifications", "checked": True},
-        {"name": "dark_mode", "label": "Dark mode", "checked": False},
+        # `action` is what the input's `dj-change` is built from, and a switch
+        # with no `dj-change` cannot move: its slider is drawn from the
+        # server-rendered `.dj-switch-checked`, so a browser-side toggle of the
+        # hidden checkbox changes nothing anyone can see.
+        {
+            "name": "notifications",
+            "label": "Enable notifications",
+            "checked": True,
+            "action": "toggle_switch",
+        },
+        {
+            "name": "dark_mode",
+            "label": "Dark mode",
+            "checked": False,
+            "action": "toggle_switch",
+        },
     ],
     "kbd": [
         {"keys": ["⌘", "K"]},
@@ -266,20 +283,38 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Django", "variant": "info"},
         {"label": "New", "variant": "success"},
     ],
+    # `max_stars`, not `max` — and `name` is not a parameter at all. Both old
+    # examples passed the wrong keys, so the star count and the value fell back
+    # to defaults while the preview still looked plausible.
+    #
+    # One example rather than two: every example on a storybook page is
+    # rendered against the *same* live state, so a second, deliberately
+    # different rating (`readonly`, value 2) would silently mirror whatever the
+    # first one was clicked to. `readonly` is documented in the PARAMETERS
+    # table below rather than demonstrated at its own rating's expense.
     "rating": [
-        {"value": 4, "max": 5, "name": "rating1"},
-        {"value": 2, "max": 5, "name": "rating2", "readonly": True},
+        {"value": 4, "max_stars": 5},
     ],
+    # `Meter` renders `segments` against a `total` — it has no `value`/`min`/`max`
+    # at all. The old example passed those three, every one of them landed in
+    # `**kwargs` and went nowhere, and the preview showed an empty bar under a
+    # label: a component that looked broken because its example used an API it
+    # has never had.
     "meter": [
-        {"value": 70, "min": 0, "max": 100, "label": "Storage"},
-        {"value": 30, "min": 0, "max": 100, "label": "Memory"},
+        {"segments": [{"value": 70, "label": "Used"}], "total": 100, "label": "Storage"},
+        {"segments": [{"value": 30, "label": "Used"}], "total": 100, "label": "Memory"},
     ],
     "callout": [
-        {"message": "This is an important notice.", "variant": "info", "title": "Info"},
-        {"message": "Warning: action is irreversible.", "variant": "warning", "title": "Warning"},
+        {"content": "This is an important notice.", "variant": "info", "title": "Info"},
+        {"content": "Warning: action is irreversible.", "variant": "warning", "title": "Warning"},
     ],
     "collapsible": [
-        {"title": "Show details", "content": "Hidden content shown when expanded."},
+        {"trigger": "Show details", "content": "Hidden content shown when expanded."},
+        {
+            "trigger": "Already open",
+            "content": "This one starts expanded.",
+            "is_open": True,
+        },
     ],
     "toggle_group": [
         {
@@ -289,18 +324,12 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "segmented_progress": [
-        {
-            "segments": [
-                {"label": "Done", "value": 40, "variant": "success"},
-                {"label": "In Progress", "value": 30, "variant": "warning"},
-                {"label": "Todo", "value": 30},
-            ]
-        },
+        {"steps": ["Cart", "Address", "Payment", "Done"], "current": 3, "size": "md"}
     ],
     "empty_state": [
         {
             "title": "No results found",
-            "message": "Try adjusting your search or filters.",
+            "description": "Try adjusting your search or filters.",
             "icon": "🔍",
         },
     ],
@@ -312,25 +341,18 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "page_alert": [
-        {"message": "Your trial expires in 3 days.", "variant": "warning", "dismissible": True},
+        {"message": "Your trial expires in 3 days.", "type": "warning", "dismissible": True},
     ],
-    "status_dot": [
-        {"status": "online", "label": "Online"},
-        {"status": "offline", "label": "Offline"},
-        {"status": "busy", "label": "Busy"},
-    ],
+    "status_dot": [{"status": "running", "variant": "success", "size": "md"}],
     "status_indicator": [
         {"status": "running", "label": "Service running"},
         {"status": "stopped", "label": "Service stopped"},
     ],
     "connection_status": [
-        {"connected": True},
-        {"connected": False},
+        {},
+        {"reconnecting_text": "Connection lost...", "connected_text": "Back online!"},
     ],
-    "live_indicator": [
-        {"active": True, "label": "Live"},
-        {"active": False, "label": "Offline"},
-    ],
+    "live_indicator": [{"user": {"name": "Ada"}, "field": "Title", "action": "typing"}],
     "thinking_indicator": [
         {"label": "Thinking..."},
     ],
@@ -338,22 +360,26 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"text": "npm install djust-theming", "label": "Copy"},
     ],
     "copyable_text": [
-        {"text": "pip install djust-theming", "label": "Install"},
+        {"text": "pip install djust-theming"},
+        {"text": "sk-abc123xyz", "copied_label": "Key copied!"},
     ],
     "icon": [
-        {"name": "check", "size": 24},
-        {"name": "x", "size": 24},
-        {"name": "search", "size": 24},
+        {"name": "check", "size": "md"},
+        {"name": "x", "size": "sm"},
+        {"name": "search", "size": "lg"},
     ],
     "qr_code": [
-        {"data": "https://djust.org", "size": 150},
+        {"data": "https://djust.org", "size": "md"},
     ],
     "countdown": [
-        {"target": "2026-12-31", "label": "Until New Year"},
+        {"target": "2026-12-31"},
+        {"target": "2026-12-31", "labels": {"days": "sleeps", "seconds": "secs"}},
     ],
-    "relative_time": [
-        {"timestamp": "2026-03-01T12:00:00"},
-    ],
+    # `auto_update` left at its default: without it the component renders the
+    # raw ISO string as its text content rather than a relative label, because
+    # the formatting is the client's job. Disabling it made the preview look
+    # like a broken component.
+    "relative_time": [{"datetime": "2026-09-17T09:00:00Z"}],
     "animated_number": [
         {"value": 1234, "duration": 1000},
     ],
@@ -361,20 +387,21 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"value": 42, "label": "online"},
     ],
     "token_counter": [
-        {"count": 1500, "max": 4096, "label": "tokens"},
+        {"current": 1500, "max": 4096, "label": "tokens"},
+        {"current": 3800, "max": 4096, "label": "tokens"},
     ],
     "progress_circle": [
-        {"value": 75, "max": 100, "label": "75%"},
-        {"value": 33, "max": 100, "label": "33%"},
+        {"value": 75},
+        {"value": 33, "color": "warning"},
     ],
     "code_snippet": [
         {"code": "pip install djust", "language": "bash"},
     ],
     "code_block": [
-        {"code": 'print("Hello, world!")', "language": "python", "title": "example.py"},
+        {"code": 'print("Hello, world!")', "language": "python", "filename": "example.py"},
     ],
     "markdown": [
-        {"content": "# Hello\n\nThis is **markdown** rendered inline."},
+        {"text": "# Hello\n\nThis is **markdown** rendered inline."},
     ],
     "json_viewer": [
         {"data": {"name": "djust", "version": "0.4.0", "stable": True}},
@@ -398,11 +425,11 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     ],
     "activity_feed": [
         {
-            "items": [
-                {"actor": "Alice", "action": "created issue", "target": "#123", "time": "2h ago"},
-                {"actor": "Bob", "action": "merged PR", "target": "#45", "time": "4h ago"},
+            "events": [
+                {"user": "Ada", "action": "commented on", "target": "PR #412", "time": "2m ago"},
+                {"user": "Grace", "action": "merged", "target": "main", "time": "1h ago"},
             ]
-        },
+        }
     ],
     "notification_badge": [
         {"count": 5},
@@ -410,12 +437,12 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"count": 0},
     ],
     "avatar_group": [
-        {"avatars": [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}], "max": 3},
+        {
+            "users": [{"name": "Ada Lovelace"}, {"name": "Grace Hopper"}, {"name": "Alan Turing"}],
+            "max_display": 2,
+        }
     ],
-    "ribbon": [
-        {"label": "New", "variant": "success"},
-        {"label": "Beta", "variant": "warning"},
-    ],
+    "ribbon": [{"text": "New", "variant": "primary", "position": "top-right"}],
     "fab": [
         {"label": "Create", "icon": "+"},
     ],
@@ -426,31 +453,28 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"label": "Save", "options": [{"label": "Save and continue"}, {"label": "Save as draft"}]},
     ],
     "theme_toggle": [
-        {"label": "Toggle theme"},
+        {"current": "system"},
+        {"current": "dark"},
     ],
     "stepper": [
-        {"steps": [{"label": "Account"}, {"label": "Details"}, {"label": "Review"}], "current": 1},
+        {"steps": [{"label": "Account"}, {"label": "Details"}, {"label": "Review"}], "active": 1},
     ],
     "toolbar": [
         {
-            "items": [
-                {"label": "Bold", "action": "bold"},
-                {"label": "Italic", "action": "italic"},
-                {"label": "Underline", "action": "underline"},
-            ]
-        },
+            "content": '<button type="button">Bold</button><button type="button">Italic</button>',
+            "align": "left",
+        }
     ],
     "announcement_bar": [
-        {"message": "🎉 djust v1.0 is now available!", "variant": "success"},
+        {"content": "Scheduled maintenance on Sunday.", "variant": "warning", "dismissible": True}
     ],
     "cookie_consent": [
         {"message": "We use cookies to improve your experience."},
     ],
-    "feedback_widget": [
-        {"question": "Was this helpful?"},
-    ],
+    "feedback_widget": [{"mode": "thumbs", "value": "up"}],
     "streaming_text": [
-        {"text": "Generating response...", "active": True},
+        {"text": "Generating response..."},
+        {"text": "Streaming with a markdown cursor.", "markdown": True},
     ],
 }
 
@@ -504,6 +528,33 @@ def get_all_components_with_metadata() -> list[dict]:
     return result
 
 
+def _load_component_class(component_name: str) -> tuple[Any, str]:
+    """``(cls, class_name)`` for a python component, or ``(None, "")``.
+
+    The class is NOT always the snake→CamelCase of the module name: ``qr_code``
+    defines ``QRCode``, and guessing ``QrCode`` silently produced an empty
+    preview, an empty signature table and a broken import line. Reading the
+    module is what keeps the storybook's USAGE import, its PARAMETERS table and
+    its rendered example agreeing with each other.
+
+    Never raises — callers decide what a missing class means.
+    """
+    module_path = f"djust.components.components.{component_name}"
+    try:
+        module = importlib.import_module(module_path)
+    except Exception:  # noqa: BLE001 — an unimportable component is a finding, not a crash
+        logger.debug("component module unavailable: %s", sanitize_for_log(module_path))
+        return None, ""
+
+    _path, names = get_python_component_import(component_name)
+    for class_name in names:
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls, class_name
+    logger.debug("no component class found in %s", sanitize_for_log(module_path))
+    return None, ""
+
+
 def render_python_component_example(component_name: str, kwargs_dict: dict) -> str:
     """Import and render a djust-component by name.
 
@@ -512,10 +563,17 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
 
     Returns rendered HTML string, or an error message string if import/render fails.
     """
-    class_name = _to_class_name(component_name)
+    cls, _class_name = _load_component_class(component_name)
+    if cls is None:
+        # Visible, not silent. Returning "" left the example slot blank with no
+        # hint why — which is how three components shipped with a preview that
+        # rendered nothing at all.
+        return (
+            f'<div class="dj-component-preview-error" role="status">'
+            f"No component class found for <code>{escape(component_name)}</code>."
+            f"</div>"
+        )
     try:
-        module = importlib.import_module(f"djust.components.components.{component_name}")
-        cls = getattr(module, class_name)
         instance = cls(**kwargs_dict)
         # cls comes from a dynamic getattr (Any), so .render() is Any; coerce
         # to ``str`` at the boundary (render() returns the rendered HTML str).
@@ -526,12 +584,19 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         )
         return ""
     except Exception as exc:
-        logger.debug(
+        # Same reasoning as the missing-class branch above: a blank preview
+        # with a DEBUG-only log is indistinguishable from a component that
+        # legitimately renders nothing.
+        logger.warning(
             "Could not render component %s: %s",
             sanitize_for_log(component_name),
             sanitize_for_log(str(exc)),
         )
-        return ""
+        return (
+            f'<div class="dj-component-preview-error" role="status">'
+            f"<code>{escape(component_name)}</code> failed to render: "
+            f"<code>{escape(type(exc).__name__)}: {escape(str(exc))}</code></div>"
+        )
 
 
 def get_python_component_signature(component_name: str) -> list[dict] | None:
@@ -540,10 +605,10 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
     Returns a list of dicts with keys: name, kind, default, annotation.
     Returns None if the component cannot be imported.
     """
-    class_name = _to_class_name(component_name)
+    cls, _class_name = _load_component_class(component_name)
+    if cls is None:
+        return None
     try:
-        module = importlib.import_module(f"djust.components.components.{component_name}")
-        cls = getattr(module, class_name)
         sig = inspect.signature(cls.__init__)
         params = []
         for param_name, param in sig.parameters.items():
@@ -566,3 +631,617 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
         return params
     except Exception:
         return None
+
+
+def get_python_component_import(component_name: str) -> tuple[str, list[str]]:
+    """``(module_path, class_names)`` to document for a python component.
+
+    The class is NOT always the snake→CamelCase of the module name, and three
+    components prove it: ``qr_code`` defines ``QRCode`` (not ``QrCode``),
+    ``form_validation`` defines two components (``FormErrors``, ``FieldError``),
+    and ``server_event_toast`` defines only a mixin — no component class at all.
+
+    Guessing produced a USAGE snippet that did not import. This reads the module
+    and reports what is actually there: the single component class when there is
+    one, every component class when there are several, and an empty list when
+    the module has none (the caller then documents no import rather than a wrong
+    one).
+    """
+    import inspect
+
+    from djust.components.base import Component
+
+    module_path = f"djust.components.components.{component_name}"
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError:
+        return module_path, []
+
+    owns = [
+        name
+        for name, obj in vars(module).items()
+        if inspect.isclass(obj) and obj.__module__ == module.__name__ and issubclass(obj, Component)
+    ]
+    owns.sort()
+
+    guessed = _to_class_name(component_name)
+    if guessed in owns:
+        return module_path, [guessed]
+    return module_path, owns
+
+
+# --- Derived examples -------------------------------------------------------
+#
+# Examples generated from each component's own __init__ signature: required
+# parameters get a typed placeholder, optional ones keep their default. Each
+# one is asserted to render non-empty markup by
+# tests/test_gallery_component_sweep.py, so a component that cannot render with
+# its own signature is a failing test rather than a blank preview.
+#
+# Components absent here render nothing until opened (a closed `modal`, a
+# `bottom_sheet`, a `tour`), which is correct — a blank preview would be
+# misleading, so their pages keep the explicit "no examples" message.
+PYTHON_COMPONENT_EXAMPLES.update(
+    {
+        "agent_step": [{}],
+        "alert": [{"message": "Example"}],
+        "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
+        "approval_gate": [{}],
+        "aspect_ratio": [{}],
+        "audit_log": [{}],
+        "avatar": [{"initials": "JD", "alt": "Jane Doe", "size": "md"}],
+        "badge": [{"label": "Example"}],
+        "bar_chart": [
+            {
+                "data": [12, 19, 8, 15],
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+                "title": "Quarterly revenue",
+            }
+        ],
+        "breadcrumb": [
+            {
+                "items": [
+                    {"label": "Home", "url": "/"},
+                    {"label": "Library", "url": "/library/"},
+                    {"label": "Data", "active": True},
+                ]
+            }
+        ],
+        "breadcrumb_dropdown": [
+            {
+                "items": [
+                    {"label": "Home", "url": "/"},
+                    {"label": "Library", "url": "/library/"},
+                    {"label": "Data", "url": "/library/data/"},
+                    {"label": "Tables", "url": "/library/data/tables/"},
+                    {"label": "Current page"},
+                ],
+                "max_visible": 3,
+            }
+        ],
+        "button": [{"label": "Example"}],
+        "calendar_heatmap": [{}],
+        "calendar_view": [{}],
+        "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
+        "carousel": [
+            {
+                "images": [
+                    {
+                        "src": "https://picsum.photos/seed/one/600/300",
+                        "alt": "First slide",
+                        "caption": "Slide one",
+                    },
+                    {
+                        "src": "https://picsum.photos/seed/two/600/300",
+                        "alt": "Second slide",
+                        "caption": "Slide two",
+                    },
+                ],
+                "active": 0,
+            }
+        ],
+        "chat_bubble": [{}],
+        "collab_selection": [{}],
+        "color_picker": [
+            {
+                "name": "accent",
+                "event": "set_color",
+                "value": "#3b82f6",
+                "label": "Accent",
+                "swatches": ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"],
+            }
+        ],
+        "combobox": [
+            {
+                "name": "language",
+                "event": "set_language",
+                "label": "Language",
+                "value": "python",
+                "options": [
+                    {"value": "python", "label": "Python"},
+                    {"value": "rust", "label": "Rust"},
+                    {"value": "go", "label": "Go"},
+                ],
+            }
+        ],
+        "command_palette": [{}],
+        "comparison_table": [
+            {
+                "plans": [
+                    {"name": "Free", "price": "$0"},
+                    {"name": "Pro", "price": "$20", "highlighted": True},
+                    {"name": "Team", "price": "$60"},
+                ],
+                "features": [
+                    {"name": "Projects", "values": ["1", "Unlimited", "Unlimited"]},
+                    {"name": "Support", "values": ["Community", "Email", "Priority"]},
+                ],
+            }
+        ],
+        "content_loader": [{"loaded": False, "placeholder": "<p>Loading…</p>"}],
+        "context_menu": [{}],
+        "conversation_thread": [
+            {
+                "messages": [
+                    {
+                        "sender": "user",
+                        "name": "You",
+                        "text": "Summarise this thread.",
+                        "time": "10:04",
+                    },
+                    {
+                        "sender": "assistant",
+                        "name": "Assistant",
+                        "text": "Three points so far.",
+                        "time": "10:04",
+                    },
+                ]
+            }
+        ],
+        "cron_input": [{}],
+        "currency_input": [{}],
+        "cursors_overlay": [{}],
+        "dashboard_grid": [
+            {
+                "panels": [
+                    {
+                        "id": "p1",
+                        "title": "Revenue",
+                        "col": 1,
+                        "row": 1,
+                        "width": 2,
+                        "height": 1,
+                        "content": "<p>$12,345</p>",
+                    },
+                    {
+                        "id": "p2",
+                        "title": "Users",
+                        "col": 3,
+                        "row": 1,
+                        "width": 2,
+                        "height": 1,
+                        "content": "<p>1,234</p>",
+                    },
+                ]
+            }
+        ],
+        "data_card_grid": [
+            {
+                "columns": 3,
+                "items": [
+                    {"title": "Alpha", "description": "First example project.", "category": "Web"},
+                    {"title": "Beta", "description": "Second example project.", "category": "Web"},
+                    {"title": "Gamma", "description": "Third example project.", "category": "CLI"},
+                ],
+            }
+        ],
+        "data_grid": [
+            {
+                "columns": [
+                    {"key": "name", "label": "Name"},
+                    {"key": "owner", "label": "Owner"},
+                    {"key": "status", "label": "Status"},
+                ],
+                "rows": [
+                    {"name": "Alpha", "owner": "Ada", "status": "Active"},
+                    {"name": "Beta", "owner": "Grace", "status": "Paused"},
+                ],
+            }
+        ],
+        "data_table": [
+            {
+                "columns": [
+                    {"key": "name", "label": "Name"},
+                    {"key": "status", "label": "Status"},
+                    {"key": "updated", "label": "Updated"},
+                ],
+                "rows": [
+                    {"name": "Alpha", "status": "Active", "updated": "2m ago"},
+                    {"name": "Beta", "status": "Paused", "updated": "1h ago"},
+                    {"name": "Gamma", "status": "Active", "updated": "yesterday"},
+                ],
+            }
+        ],
+        "date_picker": [{}],
+        "dependent_select": [{}],
+        "diff_viewer": [{}],
+        # Was `[{}]` — every argument defaulted, so the preview rendered a button
+        # reading "Menu" and nothing else. `Dropdown` renders its menu only when
+        # `is_open`, so a closed preview with no `content` is a lone button with
+        # nothing to open: the descriptor worked perfectly and there was nothing to
+        # show. The menu items are ordinary markup because the component takes
+        # `content` as a string rather than a list.
+        "dropdown": [
+            {
+                "label": "Actions",
+                "content": (
+                    '<a class="dropdown-item" role="menuitem" href="#">Edit</a>'
+                    '<a class="dropdown-item" role="menuitem" href="#">Duplicate</a>'
+                    '<a class="dropdown-item" role="menuitem" href="#">Archive</a>'
+                ),
+            }
+        ],
+        "error_boundary": [{}],
+        "expandable_text": [{}],
+        "fieldset": [
+            {"legend": "Shipping address", "content": '<label>Street <input type="text"></label>'}
+        ],
+        "file_dropzone": [{}],
+        "file_tree": [
+            {
+                "nodes": [
+                    {
+                        "name": "src",
+                        "type": "folder",
+                        "children": [
+                            {"name": "app.py", "type": "file"},
+                            {"name": "util.py", "type": "file"},
+                        ],
+                    },
+                    {"name": "README.md", "type": "file"},
+                ],
+                "selected": "src/app.py",
+            }
+        ],
+        "filter_bar": [{"content": "<span>Status: Active</span>", "active_count": 1}],
+        "form_array": [{}],
+        "form_group": [
+            {
+                "label": "Email",
+                "content": '<input type="email" placeholder="you@example.com">',
+                "helper": "We never share it.",
+            }
+        ],
+        "gantt_chart": [
+            {
+                "title": "Sprint plan",
+                "tasks": [
+                    {"name": "Design", "start": 0, "duration": 3},
+                    {"name": "Build", "start": 2, "duration": 5},
+                    {"name": "Ship", "start": 6, "duration": 2},
+                ],
+            }
+        ],
+        "gauge": [{}],
+        "heatmap": [
+            {
+                "data": [[1, 4, 2], [3, 0, 5], [2, 6, 1]],
+                "x_labels": ["Mon", "Tue", "Wed"],
+                "y_labels": ["Week 1", "Week 2", "Week 3"],
+            }
+        ],
+        "hover_card": [
+            {"trigger": "Hover me", "content": "<p>Shown on hover.</p>", "position": "top"}
+        ],
+        "image_cropper": [{}],
+        "image_upload_preview": [{}],
+        "import_wizard": [{}],
+        "inline_edit": [{"name": "title", "value": "Click to edit", "editing": False}],
+        "input_group": [
+            {
+                "content": '<span>$</span><input type="number" value="20"><span>.00</span>',
+                "size": "md",
+            }
+        ],
+        "kanban_board": [
+            {
+                "columns": [
+                    {
+                        "id": "todo",
+                        "title": "To do",
+                        "cards": [{"id": "c1", "title": "Write docs"}],
+                    },
+                    {
+                        "id": "doing",
+                        "title": "In progress",
+                        "cards": [{"id": "c2", "title": "Fix crash"}],
+                    },
+                    {"id": "done", "title": "Done", "cards": []},
+                ]
+            }
+        ],
+        "line_chart": [
+            {
+                "series": [
+                    {"name": "This year", "data": [4, 8, 6, 11]},
+                    {"name": "Last year", "data": [3, 5, 7, 8]},
+                ],
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+            }
+        ],
+        # The overlay is drawn over `content` and only while `active`; with
+        # neither supplied the preview was an empty wrapper, which reads as a
+        # broken component rather than as a component with nothing to show.
+        "loading_overlay": [
+            {
+                "content": (
+                    '<p style="margin:0 0 0.5rem">This card stays visible '
+                    "underneath the overlay.</p>"
+                    '<button type="button" dj-click="toggle_loading">'
+                    "Toggle the overlay</button>"
+                ),
+                "text": "Loading…",
+            },
+            {
+                "content": '<p style="margin:0">Already loading on first paint.</p>',
+                "active": True,
+                "text": "Uploading…",
+            },
+        ],
+        "log_viewer": [
+            {
+                "lines": [
+                    "[info] server started",
+                    "[info] connected to database",
+                    "[warn] slow query: 1.2s",
+                ]
+            }
+        ],
+        "map_picker": [{"lat": 51.5074, "lng": -0.1278}],
+        "markdown_editor": [{}],
+        "markdown_textarea": [{}],
+        "masonry_grid": [
+            {
+                "items": [
+                    {"content": "<p>First card</p>", "height": "120px"},
+                    {"content": "<p>Second card</p>", "height": "90px"},
+                    {"content": "<p>Third card</p>", "height": "140px"},
+                ]
+            }
+        ],
+        "mentions_input": [
+            {
+                "name": "comment",
+                "users": [
+                    {"id": "u1", "name": "Ada Lovelace"},
+                    {"id": "u2", "name": "Grace Hopper"},
+                ],
+                "placeholder": "Mention someone…",
+            }
+        ],
+        "model_selector": [
+            {
+                "name": "model",
+                "label": "Model",
+                "options": [
+                    {
+                        "value": "claude-opus-5",
+                        "label": "Opus 5",
+                        "description": "Most capable",
+                        "context_window": "200k",
+                        "tier": "premium",
+                    },
+                    {
+                        "value": "claude-sonnet-5",
+                        "label": "Sonnet 5",
+                        "description": "Balanced",
+                        "context_window": "200k",
+                        "tier": "standard",
+                    },
+                    {
+                        "value": "claude-haiku-4-5",
+                        "label": "Haiku 4.5",
+                        "description": "Fast and cost-effective",
+                        "context_window": "200k",
+                        "tier": "free",
+                    },
+                ],
+                "value": "claude-sonnet-5",
+                "event": "select_model",
+            },
+        ],
+        "multi_select": [
+            {
+                "name": "frameworks",
+                "label": "Frameworks",
+                "options": [
+                    {"value": "django", "label": "Django"},
+                    {"value": "flask", "label": "Flask"},
+                    {"value": "fastapi", "label": "FastAPI"},
+                ],
+                "selected": ["django"],
+            }
+        ],
+        "multimodal_input": [{"name": "prompt", "placeholder": "Ask anything…"}],
+        "nav_menu": [
+            {
+                "brand": "MyApp",
+                "items": [
+                    {"label": "Home", "href": "/", "active": True},
+                    {"label": "Docs", "href": "/docs/"},
+                    {"label": "Blog", "href": "/blog/"},
+                ],
+            }
+        ],
+        "notification_center": [{}],
+        "notification_popover": [
+            {
+                "notifications": [
+                    {
+                        "id": "n1",
+                        "title": "New comment",
+                        "body": "Ada replied to your post.",
+                        "time": "2m",
+                        "read": False,
+                    },
+                    {
+                        "id": "n2",
+                        "title": "Deploy finished",
+                        "body": "build #412 is live.",
+                        "time": "1h",
+                        "read": True,
+                    },
+                ],
+                "unread_count": 1,
+            }
+        ],
+        "number_stepper": [{}],
+        "org_chart": [
+            {
+                "nodes": [
+                    {"id": "ceo", "name": "Ada Lovelace", "title": "CEO"},
+                    {"id": "cto", "name": "Grace Hopper", "title": "CTO", "parent": "ceo"},
+                    {"id": "eng", "name": "Alan Turing", "title": "Engineer", "parent": "cto"},
+                ]
+            }
+        ],
+        "otp_input": [{"name": "code", "digits": 6, "label": "Verification code"}],
+        "pagination": [{}],
+        "pie_chart": [
+            {
+                "segments": [
+                    {"label": "Direct", "value": 45},
+                    {"label": "Search", "value": 35},
+                    {"label": "Referral", "value": 20},
+                ],
+                "title": "Traffic sources",
+            }
+        ],
+        "pivot_table": [
+            {
+                "rows": "region",
+                "cols": "quarter",
+                # `values` names the numeric field to aggregate. Without it the
+                # table renders its header row and nothing else — a pivot with
+                # no numbers, which looks like a broken component rather than a
+                # missing argument.
+                "values": "revenue",
+                "data": [
+                    {"region": "North", "quarter": "Q1", "revenue": 120},
+                    {"region": "North", "quarter": "Q2", "revenue": 150},
+                    {"region": "South", "quarter": "Q1", "revenue": 90},
+                ],
+            }
+        ],
+        "popover": [{}],
+        "presence_avatars": [{}],
+        "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
+        "reactions": [
+            {
+                "options": ["", "👍", "🎉", "❤️"],
+                "counts": {"👍": 3, "🎉": 1, "❤️": 0},
+                "active": ["👍"],
+            }
+        ],
+        "resizable_panel": [{"content": "<p>Drag the edge to resize.</p>"}],
+        "responsive_image": [
+            {
+                "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='90'%3E%3Crect width='160' height='90' fill='%233b82f6'/%3E%3C/svg%3E",
+                "alt": "A blue placeholder",
+            }
+        ],
+        "rich_select": [{}],
+        "rich_text_editor": [{}],
+        "scroll_area": [{"content": "<p>Scrollable body text.</p>" * 12}],
+        "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
+        "scroll_to_top": [{}],
+        "sheet": [{}],
+        "sidebar": [
+            {
+                "title": "Workspace",
+                "items": [
+                    {"label": "Dashboard", "href": "/", "active": True},
+                    {"label": "Projects", "href": "/projects/"},
+                    {"label": "Settings", "href": "/settings/"},
+                ],
+            }
+        ],
+        "signature_pad": [{}],
+        "skeleton": [{}],
+        "skeleton_factory": [{}],
+        "sortable_grid": [
+            {
+                "items": [
+                    {"id": "a", "label": "Alpha"},
+                    {"id": "b", "label": "Beta"},
+                    {"id": "c", "label": "Gamma"},
+                ]
+            }
+        ],
+        "sortable_list": [
+            {
+                "items": [
+                    {"id": "1", "label": "First item"},
+                    {"id": "2", "label": "Second item"},
+                    {"id": "3", "label": "Third item"},
+                ]
+            }
+        ],
+        "source_citation": [{}],
+        "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
+        "split_pane": [{}],
+        "sticky_header": [{}],
+        "tabs": [
+            {
+                "tabs": [{"id": "one", "label": "Overview"}, {"id": "two", "label": "Activity"}],
+                "active": "one",
+                "content": "<p>Overview content.</p>",
+            }
+        ],
+        "tag_input": [
+            {"name": "labels", "label": "Labels", "event": "add_tag", "tags": ["django", "rust"]}
+        ],
+        "time_picker": [{"name": "start", "value": "09:30", "label": "Start time"}],
+        "toast": [{"message": "Example"}],
+        "tooltip": [
+            {
+                "text": "Helpful hint",
+                "content": '<button type="button">Hover me</button>',
+                "position": "top",
+            }
+        ],
+        "tree_view": [
+            {
+                "nodes": [
+                    {
+                        "id": "src",
+                        "label": "src",
+                        "expanded": True,
+                        "children": [
+                            {"id": "src/app", "label": "app.py"},
+                            {"id": "src/util", "label": "util.py"},
+                        ],
+                    },
+                    {"id": "tests", "label": "tests", "children": []},
+                ]
+            }
+        ],
+        "treemap": [
+            {
+                "data": [
+                    {"name": "Search", "size": 45},
+                    {"name": "Direct", "size": 30},
+                    {"name": "Social", "size": 15},
+                ]
+            }
+        ],
+        "truncated_list": [
+            {
+                "items": ["First item", "Second item", "Third item", "Fourth item", "Fifth item"],
+                "max": 3,
+            }
+        ],
+        "virtual_list": [{}],
+        "voice_input": [{"lang": "en-US"}],
+    }
+)

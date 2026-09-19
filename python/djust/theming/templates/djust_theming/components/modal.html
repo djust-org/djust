@@ -1,4 +1,37 @@
-<div class="{{ css_prefix }}modal-backdrop" data-theme-modal="{{ id }}" style="display:none;">
+{% comment %}
+Server-driven modal. `is_open` comes from the host LiveView's `Modal`
+descriptor, and the close control dispatches `toggle_modal`.
+
+Visibility is an inline `display`, not the `hidden` attribute, and that is
+forced: `.modal-backdrop` is `display: flex` in BOTH
+`theming/css/components.css` and `scaffold.css`, and an author rule beats the
+UA's `[hidden] { display: none }` regardless of specificity — so `hidden` here
+would render the dialog permanently visible. Emitting the inline style is also
+what the retired JS did, so nothing about the cascade changes.
+
+Escape-to-close now works through the framework rather than `components.js`:
+`51-keyboard-nav.js:_closeModal` locates a dialog's close control with
+`[dj-click]` and dispatches it, which this button carries. Focus trapping and
+`aria-modal` come from the same module.
+
+`data-theme-modal` / `data-theme-modal-close` below are the client fallback,
+and they are load-bearing for plain pages: `components.js` finds the backdrop
+with `[data-theme-modal="<id>"]`, so removing them (as a first pass at this did)
+leaves the theming gallery's triggers pointing at nothing. LiveView pages never
+use them — the guard in `components.js` stands down when a djust mount root is
+present.
+
+One behaviour is deliberately dropped: click-the-backdrop-to-close. It cannot
+be expressed with a plain `dj-click` on the backdrop, because the event bubbles
+— clicking anywhere inside the dialog would close it. There is no `dj-self`
+modifier in the client to guard it. The close button and Escape both still
+work. Restoring it needs either that modifier or a sibling scrim element
+positioned behind the dialog, which is a markup change worth making on purpose
+rather than as a side effect of this one.
+{% endcomment %}
+<div class="{{ css_prefix }}modal-backdrop"
+     data-theme-modal="{{ id }}"
+     {% if is_open %}data-open="true"{% else %}style="display:none;"{% endif %}>
     <div class="{{ css_prefix }}modal {{ css_prefix }}modal-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
          role="dialog"
          aria-modal="true"
@@ -7,7 +40,10 @@
         {% if slot_close %}
         {{ slot_close|safe }}
         {% else %}
-        <button class="{{ css_prefix }}modal-close" data-theme-modal-close aria-label="Close">
+        <button class="{{ css_prefix }}modal-close" aria-label="Close"
+                data-theme-modal-close
+                dj-click="toggle_modal" data-value="{{ id }}"
+                {% if component_id %}data-component-id="{{ component_id }}"{% endif %}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>

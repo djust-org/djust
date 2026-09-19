@@ -54,6 +54,9 @@ class ModelSelector(Component):
                  context_window, tier)
         value: Currently selected model value
         event: djust event fired on selection
+        toggle_event: djust event fired when the trigger is clicked. The host
+            owns `is_open` — this component renders it, it does not track it.
+        is_open: Whether the option list is showing
         placeholder: Placeholder text
         disabled: Whether selector is disabled
         label: Optional label text
@@ -73,6 +76,8 @@ class ModelSelector(Component):
         options: Optional[list] = None,
         value: str = "",
         event: str = "select_model",
+        toggle_event: str = "toggle_model_selector",
+        is_open: bool = False,
         placeholder: str = "Select a model...",
         disabled: bool = False,
         label: str = "",
@@ -84,6 +89,8 @@ class ModelSelector(Component):
             options=options,
             value=value,
             event=event,
+            toggle_event=toggle_event,
+            is_open=is_open,
             placeholder=placeholder,
             disabled=disabled,
             label=label,
@@ -94,6 +101,8 @@ class ModelSelector(Component):
         self.options = options or []
         self.value = str(value) if value else ""
         self.event = event
+        self.toggle_event = toggle_event
+        self.is_open = is_open
         self.placeholder = placeholder
         self.disabled = disabled
         self.label = label
@@ -140,15 +149,24 @@ class ModelSelector(Component):
         if self.label:
             label_html = f'<label class="dj-model-sel__label">{html.escape(self.label)}</label>'
 
+        # `data-open` is what `components.css` keys the open state on. Without
+        # it the option list carried `display: none` and no rule anywhere turned
+        # it back on, so the dropdown could be populated and still never open —
+        # the trigger had nothing to dispatch either.
+        toggle_attrs = self.event_attrs(self.toggle_event, value=self.name)
+        open_attr = ' data-open="true"' if self.is_open else ""
+        expanded = "true" if self.is_open else "false"
+
         return (
-            f'<div class="{cls}">'
+            f'<div class="{cls}"{open_attr}>'
             f"{label_html}"
             f'<input type="hidden" name="{e_name}" value="{html.escape(self.value)}">'
-            f'<div class="dj-model-sel__trigger" tabindex="0" role="combobox" '
-            f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}>'
+            f'<button type="button" class="dj-model-sel__trigger" role="combobox" '
+            f"{toggle_attrs} "
+            f'aria-expanded="{expanded}" aria-haspopup="listbox"{disabled_attr}>'
             f"{selected_html}"
             f'<span class="dj-model-sel__chevron">&#9662;</span>'
-            f"</div>"
+            f"</button>"
             f'<div class="dj-model-sel__dropdown" role="listbox">'
             f"{''.join(opt_parts)}"
             f"</div></div>"
