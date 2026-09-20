@@ -109,20 +109,21 @@ This registers three routes:
 - `POST /djust/sse/<session_id>/message/`    — canonical client-to-server frame endpoint (mount, event, url_change, …)
 - `POST /djust/sse/<session_id>/event/`      — legacy alias kept for back-compat; new code should target `/message/`
 
-### 2. Include the SSE JS bundle
+### 2. Use the shipped client bundle
 
-The SSE transport is implemented in `03b-sse.js`. Include it alongside the
-main djust bundle in your base template, **after** `djust.js`:
+SSE is already included in `client.js` and `client.min.js`. If your base template
+already loads the djust client, do not load another copy or an internal source
+module. A manually configured base template can use this inside `<head>`:
 
 ```html
-{% load static %}
-<script src="{% static 'djust/djust.js' %}"></script>
-<script src="{% static 'djust/src/03b-sse.js' %}"></script>
+{% load static live_tags %}
+{% djust_client_config %}
+<script src="{% static 'djust/client.min.js' %}" defer></script>
 ```
 
-Alternatively, if you build a custom bundle, add `03b-sse.js` to your build
-pipeline. It must appear **after** `03-websocket.js` and **before**
-`14-init.js`.
+The configuration tag supplies URL prefixes and the navigation route map.
+`src/03b-sse.js` is a build input sharing the bundle's internal scope, not a
+standalone browser script.
 
 ### 3. That's it
 

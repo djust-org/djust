@@ -305,12 +305,13 @@ reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
 
-The SSE slice's full Python run across all three roots completed with 29,758
-passed, 952 skipped, and two failures: an obsolete SSE no-op-lock expectation
-and a source pin predating the explicit-policy mount-HTML rule. The lock test now
-asserts actual serialization, and the mount pin preserves the legacy-only rule;
-the affected 23-test set passes. The full suite must be rerun after these changes.
-All 1,952 JavaScript tests pass. These counts do not establish ADR acceptance.
+The SSE slice's full Python run at `e5230a5b0` across all three roots completed
+with 29,761 passed and 952 skipped (four workers; benchmarks disabled under xdist).
+An earlier run exposed an obsolete SSE no-op-lock expectation and a source pin
+predating the explicit-policy mount-HTML rule. The lock test now asserts actual
+serialization, and the mount pin preserves the legacy-only rule. All 1,952
+JavaScript tests pass, as do full-package mypy and pre-commit checks. These counts
+do not establish ADR acceptance, performance guarantees, or Rust-suite coverage.
 
 The earlier DB-session import-ban correction remains narrowly scoped: the imported
 class is used only in the explicit adapter's concrete implementation allowlist,
