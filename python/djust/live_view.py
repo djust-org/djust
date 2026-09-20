@@ -855,7 +855,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         persisted in subsequent save cycles.
 
         Non-serializable values (locks, file handles, etc.) are silently skipped.
+        This is a legacy-only API; explicit persistence uses a bound adapter.
         """
+        from ._exposure import require_legacy_state_api
+
+        require_legacy_state_api(self)
         result: Dict[str, Any] = {}
         user_keys: Set[str] = getattr(self, "_user_private_keys", set())
         for key in user_keys:
@@ -891,7 +895,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         return result
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore previously-saved private attributes onto this instance."""
+        """Restore legacy private attributes; explicit views require a bound adapter."""
+        from ._exposure import require_legacy_state_api
+
+        require_legacy_state_api(self)
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
@@ -980,7 +987,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def _capture_snapshot_state(self, *, strict: bool = False) -> Dict[str, Any]:
         """Return a JSON-serializable snapshot of public view state.
 
-        Filters out private (``_``-prefixed) attributes, framework-internal
+        Explicit policy returns only declared ``persist="client"`` values,
+        detached and bounded regardless of ``strict``. It does not infer any
+        component state. The returned dict is not a signed restore capability;
+        explicit restoration must use the bound snapshot adapter.
+
+        Legacy policy filters out private (``_``-prefixed) attributes, framework-internal
         attrs enumerated in ``_FRAMEWORK_INTERNAL_ATTRS``, callables, and any
         value that fails a ``DjangoJSONEncoder`` round-trip. Used by the
         client to post a ``STATE_SNAPSHOT`` message to the service worker
@@ -1000,9 +1012,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         ``self._components`` they're captured the same way as legacy-
         instantiated ones.
 
-        The server never calls this directly — it's primarily exposed for
-        testing and observability. Restoration uses
-        :meth:`_restore_snapshot`.
+        Legacy transport snapshot capture and time-travel use this raw helper.
+        Legacy restoration uses :meth:`_restore_snapshot` after transport validation.
 
         Args:
             strict: When True, reject (DEBUG: raise / prod: warn+skip) any
@@ -1014,6 +1025,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 capture (``time_travel.py``) intentionally leaves this False
                 to preserve its existing lossy-snapshot-by-design behavior.
         """
+        from ._exposure import explicit_state_projection, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            return explicit_state_projection(self, "snapshot")
+
         from .components.base import Component
 
         result: Dict[str, Any] = {}
@@ -1091,7 +1107,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         Failures on individual components are logged and the bad
         component is skipped — degrade gracefully rather than break
         the whole snapshot.
+
+        This legacy reflective helper is unavailable under explicit policy.
+        A component descriptor does not grant permission to export its state.
         """
+        from ._exposure import require_legacy_state_api
+
+        require_legacy_state_api(self)
         registry = getattr(self, "_components", None)
         if not registry:
             return {}
@@ -1141,9 +1163,14 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         The state is the JSON-decoded payload from the client — treat it
         as untrusted and never pass it to ``exec``/``eval`` or raw
         ``setattr``.
+
+        Explicit policy rejects this legacy raw-dict hook. Its adapter validates
+        the full signed, identity-bound schema before returning assignable values.
         """
+        from ._exposure import require_legacy_state_api
         from .security import safe_setattr
 
+        require_legacy_state_api(self)
         for key, value in state.items():
             safe_setattr(self, key, value, allow_private=False)
 
@@ -1243,14 +1270,24 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def get_state(self) -> Dict[str, Any]:
         """Get serializable state from this LiveView instance.
 
-        Iterates over public (non-underscore) instance attributes and validates
+        Explicit policy exports only declared ``client=True`` fields using the
+        bounded JSON contract. Rendering context and server-only state are not
+        inputs. Returned values are detached; failures never use legacy fallback.
+
+        Legacy policy iterates over public (non-underscore) instance attributes and validates
         that each value can be serialized. In DEBUG mode, raises TypeError with
         a helpful message for non-serializable values. In production, logs an
         error and skips the attribute.
 
         Returns:
-            Dictionary of {attribute_name: value} for all serializable public state.
+            Client-permitted declared values under explicit policy; serializable
+            public state under legacy policy.
         """
+        from ._exposure import explicit_state_projection, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            return explicit_state_projection(self, "client")
+
         from django.conf import settings
 
         state = {}

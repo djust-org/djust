@@ -288,6 +288,46 @@ SSE happy-path browser evidence does not establish WebSocket, cross-worker,
 sticky-child, or all failure-path browser parity. Explicit policy is still
 constructor-gated and ADRs 034–038 remain Proposed.
 
+## Direct state API boundaries
+
+The staged explicit policy now routes direct state reads through the same
+declaration compiler and bounded JSON projection as the transport adapters:
+
+| API | Explicit-policy behavior |
+| --- | --- |
+| `get_state()` | Detached values for `client=True` declarations only |
+| `_capture_snapshot_state(strict=...)` | Detached values for `persist="client"` declarations only; strict validation regardless of the legacy `strict` flag |
+| `_get_private_state()` | Rejects inferred private persistence; use the bound server adapter |
+| `_capture_components_snapshot()` | Rejects reflective component export; a descriptor is not a state-exposure grant |
+| `_restore_snapshot()` / `_restore_private_state()` | Rejects raw dictionaries before inspection or assignment; use validated bound adapters |
+
+Unknown or unreadable policies cannot select legacy reflection. Invalid values,
+resource limits, inherited grants and factory errors fail closed without leaking
+exception values or retrying with context, `__dict__`, or a fallback encoder.
+Policy lookup distinguishes a genuinely absent declaration from a descriptor
+raising `AttributeError`; the latter cannot select the legacy default, including
+in debug projections.
+Declaring a field for rendering does not make it raw client state or a snapshot.
+
+The legacy sticky adapter also rejects explicit children before reading context
+or writing a session, and rejects explicit/mixed-policy restoration before any
+public assignments. This is a **temporary unsupported boundary**, not completion
+of sticky-child support. Its dedicated bound provider adapter, mixed-policy
+semantics and restoration tests remain required before explicit mode can ship.
+The production constructor guard is unchanged. New direct-API tests use
+uninitialized synthetic views only; existing transport and sticky regression
+tests cover legacy compatibility.
+
+The audio mixin's private-restore override rejects nonlegacy policy before
+filtering the payload; calling the guarded base method afterwards is too late
+because Python evaluates the filtered argument first. A hostile-payload
+regression failed before this entry guard and passes with it.
+
+The setattr structural net now matches the exact developer-returned dictionary
+application in its lexical scope instead of pinning source line numbers.
+Canaries permit blank-line shifts but reject a client-payload substitution,
+an extra adjacent assignment and the same block in a different scope.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.
@@ -304,6 +344,15 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The direct-state API slice completed the full Python run across all three roots:
+29,809 passed and 952 skipped (four workers; benchmarks disabled under xdist).
+The focused direct-state/structural tests passed 62 cases, and full-package mypy
+passed all 1,004 source files. The preceding full run's only two failures were
+obsolete line-number whitelist entries, replaced by the exact AST matcher and
+mutation canaries above. Audio's pre-filter rejection also has failing-before,
+passing-after evidence. No JavaScript or Rust implementation changed in this
+slice; these Python results do not establish browser or Rust-suite coverage.
 
 The SSE slice's full Python run at `e5230a5b0` across all three roots completed
 with 29,761 passed and 952 skipped (four workers; benchmarks disabled under xdist).

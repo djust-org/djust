@@ -183,6 +183,10 @@ class AudioMixin:
         }
 
     def _restore_private_state(self, private_state):
+        from ._exposure import require_legacy_state_api
+
+        # Reject before filtering: the base guard runs after argument evaluation.
+        require_legacy_state_api(self)
         super()._restore_private_state(
             {
                 key: value

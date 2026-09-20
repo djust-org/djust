@@ -171,7 +171,12 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
     bounds this with ``asyncio.wait_for`` and try/except (saves never break
     event handling).
     """
+    from .._exposure import require_legacy_state_api
     from ..serialization import normalize_django_value as _normalize
+
+    # This adapter infers state from rendering context. Explicit children need
+    # a separately bound provider adapter, even if they override private hooks.
+    require_legacy_state_api(child)
 
     key = sticky_child_session_key(parent_path, child.sticky_id)
 
@@ -207,7 +212,10 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
     — Django saves the session at response time. Serializes the same
     public + private shape as the async variant.
     """
+    from .._exposure import require_legacy_state_api
     from ..serialization import normalize_django_value as _normalize
+
+    require_legacy_state_api(child)
 
     key = sticky_child_session_key(parent_path, child.sticky_id)
 
@@ -335,6 +343,12 @@ def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_pat
     wraps the call in ``try/except`` and falls through to a fresh ``mount()``
     — the tag wrapper, not this helper, is the render-safety boundary.
     """
+    from .._exposure import require_legacy_state_api
+
+    # Reject before applying PUBLIC state: a later private-hook rejection
+    # would otherwise leave a partly restored explicit subtree behind.
+    require_legacy_state_api(parent)
+    require_legacy_state_api(child)
     if session is None:
         return False
     if not sticky_child_should_persist(child, parent):

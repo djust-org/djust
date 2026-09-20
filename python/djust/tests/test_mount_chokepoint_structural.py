@@ -192,81 +192,43 @@ class TestDynamicImportChokepoint:
 # internals (decorators.py, formsets.py, live_view default-assigns).
 _VIEW_TARGET_NAMES = {"view", "view_instance", "component"}
 
-# Whitelist of (filename, lineno) for bare-``setattr`` sites that write a
-# non-literal key onto a view-like target but are NOT a client-controlled-key
-# application. Each MUST be justified by a comment here.
-_SETATTR_WHITELIST = {
-    # live_view.py function-view decorator: applies the DEVELOPER's own returned
-    # state dict onto a locally-constructed DynamicLiveView. The keys come from the
-    # app author's function return value (``result = func(request, ...)`` →
-    # ``for key, value in result.items(): setattr(view, key, value)``), NOT from a
-    # client frame — so they don't need safe_setattr's client-key guard. Two
-    # adjacent lines (callable vs not).
-    # Line numbers shifted +25 in ADR-033 S2 when ``_is_serializable`` learned
-    # to accept a plain ``Component`` and the strict snapshot learned to look
-    # inside its state (its state persists).
-    # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
-    # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
-    # in ``LiveView.__init__``; shifted +8 again in ADR-023 M2 when type
-    # annotations were added to live_view.py (optional-import block grew);
-    # shifted +10 in #1981 (PR #1982) when ``_changed_keys``/``_force_full_html``
-    # were added to ``_FRAMEWORK_INTERNAL_ATTRS`` (comment block grew);
-    # shifted +12 (1213/1215 → 1225/1227) by later live_view.py growth, re-verified
-    # sanctioned in #2032 (v1.1.0-7): the sites are still the DynamicLiveView
-    # developer-dict application, not a new client-controlled setattr;
-    # shifted +67 (1225/1227 → 1292/1294) when the
-    # ``_reject_orm_value_in_state_persistence`` guard + docstring (PR #2022,
-    # state-snapshot-persistence ORM early-validation) were added ahead of the
-    # state-snapshot section — re-derived against the rebased live_view.py and
-    # re-verified sanctioned: still the DynamicLiveView developer-dict
-    # application (class at line 1277, ``result = func(request, ...)`` at 1288),
-    # not a new client-controlled setattr;
-    # shifted +24 (1292/1294 → 1316/1318) by the PR #2022 review fix: the
-    # ``NonPersistableStateError`` class (+ guard/docstring growth) was added
-    # to live_view.py ahead of the LiveView class so the runtime's #1788
-    # fail-soft wrapper can re-raise the deliberate DEBUG rejection —
-    # re-verified sanctioned: still the same two DynamicLiveView
-    # developer-dict setattr lines, not a new client-controlled setattr;
-    # shifted +3 (1316/1318 → 1319/1321) by #2239: the
-    # ``StateRoundtripJSONEncoder`` import plus the reflow of the
-    # ``_capture_components_snapshot`` capture call that now uses it —
-    # re-verified sanctioned: still the same two DynamicLiveView
-    # developer-dict setattr lines;
-    # shifted +7 (1319/1321 → 1326/1328) by #2252: the
-    # ``decode_state_roundtrip`` import plus its call (+ comment) in
-    # ``_restore_private_state``, which un-tags a session-restored ``Decimal``
-    # before it is assigned — re-verified sanctioned: still the same two
-    # DynamicLiveView developer-dict setattr lines, and the #2252 restore
-    # itself uses ``setattr`` on a PRIVATE key set already filtered by
-    # ``_framework_attrs`` (not a view-like target this walker flags);
-    # shifted +17 (1326/1328 -> 1343/1345) by #1561: the
-    # ``time_travel_excluded_fields`` class attribute + its comment block were
-    # added next to ``time_travel_enabled``, far above these lines --
-    # re-verified sanctioned: still the same two DynamicLiveView
-    # developer-dict setattr lines (class at 1328, ``result = func(request,
-    # ...)`` at 1339), not a new client-controlled setattr.
-    # shifted +20 (1343/1345 → 1363/1365) by #2664: the lazily-assigned
-    # framework bookkeeping block added to ``_FRAMEWORK_INTERNAL_ATTRS``
-    # (``_prev_context_fingerprints`` etc.) — re-verified sanctioned: still
-    # the same two DynamicLiveView developer-dict setattr lines.
-    # +3 (1363/1365 → 1366/1368) by the #2682 review fix: the membership-rule
-    # comment on that block grew while ``_action_state``/``_dirty_baseline``
-    # were removed from it. Still the same two sites.
-    # +12 (1366/1368 → 1378/1380) by the #2682 re-review: the
-    # ``_dirty_baseline`` rationale comment + ``_dirty_baseline_version``
-    # bump in ``_capture_dirty_baseline``. Still the same two sites.
-    # -1 (1378/1380 → 1377/1379) by #2739: ``_template_deps`` removed from
-    # ``_FRAMEWORK_INTERNAL_ATTRS`` with the never-firing context filter
-    # that was its only writer. Still the same two sites.
-    # +14 (1377/1379 → 1391/1393) by ADR-031 PR 1: the ``BoundComponent`` arms
-    # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
-    # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
-    # import in live_view.py.
-    # ADR-038 construction guard moved these to 1456/1458. Re-inspected:
-    # still the developer-returned dictionary, not restored/client state.
-    ("live_view.py", 1456),
-    ("live_view.py", 1458),
-}
+# Only the exact developer-returned dictionary application is sanctioned.
+# Match its AST and lexical scope, not moving line numbers or an entire function.
+_DEVELOPER_STATE_APPLICATION = ast.parse("""
+view = DynamicLiveView()
+result = func(request, *args, **kwargs)
+if isinstance(result, dict):
+    for key, value in result.items():
+        if not callable(value):
+            setattr(view, key, value)
+        else:
+            setattr(view, key, value)
+""").body
+
+
+def _sanctioned_setattr_lines(tree: ast.Module) -> set[int]:
+    scope = tree.body
+    for name in ("live_view", "decorator", "wrapper"):
+        matches = [
+            node for node in scope if isinstance(node, ast.FunctionDef) and node.name == name
+        ]
+        if len(matches) != 1:
+            return set()
+        scope = matches[0].body
+    expected = [ast.dump(node) for node in _DEVELOPER_STATE_APPLICATION]
+    matches = [
+        scope[index : index + len(expected)]
+        for index in range(len(scope) - len(expected) + 1)
+        if [ast.dump(node) for node in scope[index : index + len(expected)]] == expected
+    ]
+    if len(matches) != 1:
+        return set()
+    return {
+        node.lineno
+        for statement in matches[0]
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Call) and _setattr_target_name(node) == "view"
+    }
 
 
 def _setattr_target_name(node: ast.Call) -> str | None:
@@ -317,8 +279,9 @@ class TestSetattrChokepoint:
         for path in _TOP_LEVEL_MODULES:
             label = _module_label(path)
             tree = _parse(path)
+            sanctioned = _sanctioned_setattr_lines(tree) if label == "live_view.py" else set()
             for lineno in _find_unsafe_setattrs(tree):
-                if (label, lineno) not in _SETATTR_WHITELIST:
+                if lineno not in sanctioned:
                     violations.append(f"{label}:{lineno}")
         assert not violations, (
             "Bare setattr(view-like, <non-literal key>, ...) found outside "
@@ -328,23 +291,45 @@ class TestSetattrChokepoint:
         )
 
     def test_whitelisted_setattr_sites_still_present(self):
-        """Pin the whitelisted setattr sites (count-test, #1125)."""
-        # Group expected sites by file, then assert each line still contains a
-        # flagged setattr (so a refactor that moves them updates the whitelist).
-        by_file: dict[str, set[int]] = {}
-        for label, lineno in _SETATTR_WHITELIST:
-            by_file.setdefault(label, set()).add(lineno)
-        for label, expected_lines in by_file.items():
-            path = _PKG_DIR / label
-            assert path.exists(), f"whitelisted module {label} no longer exists"
-            tree = _parse(path)
-            found = set(_find_unsafe_setattrs(tree))
-            missing = expected_lines - found
-            assert not missing, (
-                f"whitelisted setattr site(s) {label}:{sorted(missing)} no longer "
-                f"present at the expected line(s); the function-view decorator was "
-                f"moved/refactored — update _SETATTR_WHITELIST deliberately."
-            )
+        """Require both exact developer-dict sites, independent of line shifts."""
+        tree = _parse(_PKG_DIR / "live_view.py")
+        sanctioned = _sanctioned_setattr_lines(tree)
+        assert len(sanctioned) == 2
+        assert sanctioned <= set(_find_unsafe_setattrs(tree))
+
+    def test_sanctioned_sites_allow_line_shifts(self):
+        source = (_PKG_DIR / "live_view.py").read_text()
+        original = _sanctioned_setattr_lines(ast.parse(source))
+        shifted = _sanctioned_setattr_lines(ast.parse("\n" * 19 + source))
+        assert len(original) == 2
+        assert shifted == {line + 19 for line in original}
+
+    def test_client_payload_is_not_sanctioned(self):
+        source = (_PKG_DIR / "live_view.py").read_text()
+        old = "result = func(request, *args, **kwargs)"
+        assert source.count(old) == 1
+        mutated = source.replace(old, "result = request.POST")
+        tree = ast.parse(mutated)
+        assert not _sanctioned_setattr_lines(tree)
+        assert len(list(_find_unsafe_setattrs(tree))) == 2
+
+    def test_adjacent_setattr_is_not_sanctioned(self):
+        source = (_PKG_DIR / "live_view.py").read_text()
+        old = "            # Handle the request"
+        assert source.count(old) == 1
+        mutated = source.replace(old, "            setattr(view, key, request.POST)\n" + old)
+        tree = ast.parse(mutated)
+        sanctioned = _sanctioned_setattr_lines(tree)
+        assert len(sanctioned) == 2
+        assert len(set(_find_unsafe_setattrs(tree)) - sanctioned) == 1
+
+    def test_same_block_in_wrong_scope_is_not_sanctioned(self):
+        source = (_PKG_DIR / "live_view.py").read_text()
+        old = "def live_view("
+        assert source.count(old) == 1
+        tree = ast.parse(source.replace(old, "def transport_handler("))
+        assert not _sanctioned_setattr_lines(tree)
+        assert len(list(_find_unsafe_setattrs(tree))) == 2
 
 
 # --------------------------------------------------------------------------- #
