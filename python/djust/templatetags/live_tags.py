@@ -24,6 +24,8 @@ import threading
 from collections.abc import Iterator
 from typing import Any, Dict, Optional
 
+from .._child_rendering import reconcile_child_render, record_rendered_child
+
 from django import template
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -1501,6 +1503,7 @@ def _match_sticky_child(
     return False
 
 
+@reconcile_child_render(owner_wrapper=True)
 def _render_sticky_child_html(
     child: Any,
     view_id: str,
@@ -1873,6 +1876,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     sticky_id_value,
                     view_path,
                 )
+                record_rendered_child(survivor)
                 return mark_safe('<div dj-sticky-slot="' + escape(sticky_id_value) + '"></div>')
 
     # PR-B (ADR-015): ``lazy=True`` opt-in. Defer the child mount +

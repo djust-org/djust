@@ -10,6 +10,7 @@ import msgpack
 from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from ._child_rendering import reconcile_child_render
 from .change_detection import (
     CONTAINER_TYPES,
     deep_fingerprint,
@@ -498,6 +499,7 @@ def _emit_full_html_update(
     )
 
 
+@reconcile_child_render()
 def render_embedded_child_html(child_view: Any) -> str:
     """Render an embedded child view's template and return its inner HTML.
 

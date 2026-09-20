@@ -9,6 +9,7 @@ import os
 import re
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from .._child_rendering import reconcile_child_render
 from ..utils import get_template_dirs
 
 if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
@@ -999,6 +1000,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return html[:start_pos] + stripped_div + html[result[1] :]
         return html
 
+    @reconcile_child_render(whole_page=True)
     def render_full_template(
         self,
         request: Optional["HttpRequest"] = None,
@@ -1236,6 +1238,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 exc_info=True,
             )
 
+    @reconcile_child_render()
     def render_with_diff(
         self,
         request: Optional["HttpRequest"] = None,

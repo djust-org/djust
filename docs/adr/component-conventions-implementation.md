@@ -599,6 +599,61 @@ GET/reconnect-wide sweeps, scoped child background dispatch, lazy/nonsticky and
 mixed-policy providers, repeated/nested event routing, browser/cross-worker
 verification and the remaining ADR034–037 work still block activation.
 
+### Render-aware eager child pruning
+
+The staged eager-sticky provider now reconciles runtime ownership from completed
+server renders. Only children invoked through the server component renderer are
+candidates; markup alone cannot create or retain a registered child. The final
+HTML decides which of those candidates survived rendering and page-shell/root
+composition. Unregistered wrappers cannot hide a real candidate, and inert
+`textarea`/`template` output does not keep a component alive.
+
+Nested plans commit after the outer wrapped render succeeds. HTTP and shared
+runtime calls also wrap subclass render overrides, so raising after a call to
+the base renderer does not prematurely commit its removal plan. Full-page
+renders and live-root renders have different authority: root updates preserve
+known shell children, while a completed full render can remove them. The named
+template inheritance fallback is explicitly a root fragment, not proof of a
+completed shell. Runtime unregister/disposal clears region references as well
+as the child registry.
+
+Server child writes now maintain a bounded, versioned slot-path index. It stores
+paths and shell membership, not arbitrary deletion keys or application values.
+Pruning derives keys again from the current authorized request route. A malformed
+index fails without deleting entries; a copied/forged slot path cannot select
+another route's child key or a Django authentication key. The index has at most
+256 paths, at most 16 ancestry levels, and the normal bounded JSON validation.
+Single-child initial saves record their path, so a later completed render can
+clean up state from a failed initial render. These initial writes are not made
+transactional with the whole parent render.
+
+Parent events, shared-runtime mounts and HTTP GET/POST sweep the reconciled
+registry. Routed child events use the same post-render batch rather than a
+separate pre-render child flush, so removed descendants are pruned before an
+`embedded_update` success frame. The existing 150ms runtime storage deadline is
+owned by the shared helper. Failed/cancelled flushes restore local staged keys
+and the modified flag, not an uncertain remote commit or application effects.
+
+A fresh root-only instance preserves previously indexed shell state it has not
+rendered; this is storage preservation, **not** evidence of shell-instance
+reconstruction or shell-event routing on reconnect. Full-render provenance lets
+an owner that actually knew a shell remove it via explicit unregister. Unindexed
+envelopes from older gated prototypes cannot be reconstructed by guessing hash
+keys; migration/expiry handling remains an activation concern.
+
+The focused tests include real Rust full-page/root renders, Django child renders,
+parent and routed-child events, nested same-name slots, failed render overrides,
+fragment fallbacks, shell preservation/removal, forged markup, inert output,
+index corruption, route confinement and failed-prune local rollback. Verification:
+488 focused tests passed; the full Python suite across all three roots passed
+30,024 tests with 952 skips, and mypy passed for 1,017 source files. The first
+full run exposed an outdated mount-order source pin; it now checks the
+reconciliation wrapper and its delegation, while retaining the real second-mount
+backend-clone regression. All 10 restore-contract tests also passed separately.
+Source/security review found no further issue in this slice. This does not
+enable explicit exposure, finish lazy/nonsticky or mixed-policy providers,
+prove browser/cross-worker behavior, or complete ADR034–037.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.

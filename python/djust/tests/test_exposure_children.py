@@ -194,10 +194,11 @@ def test_storage_failure_has_no_legacy_or_client_fallback(setup, monkeypatch):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(adapter.session, "save", fail)
-    with pytest.raises(OSError, match="storage unavailable"):
+    before = dict(adapter.session.items())
+    with pytest.raises(ExposureError, match="persistence unavailable"):
         adapter.save({"selected": 3, "preview": "CLIENT_SENTINEL"})
-    assert set(adapter.session.keys()) == {adapter.key}
-    assert "CLIENT_SENTINEL" not in repr(adapter.session[adapter.key])
+    assert dict(adapter.session.items()) == before
+    assert "CLIENT_SENTINEL" not in repr(dict(adapter.session.items()))
 
 
 def test_changed_ancestor_invalidates_nested_child_even_if_direct_parent_matches(setup):

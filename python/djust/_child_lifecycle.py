@@ -29,6 +29,11 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
         owner = getattr(current, "_parent_view", None)
         slot = getattr(current, "_view_id", None)
         owner_registry = getattr(owner, "_child_views", None)
+        owner_regions = getattr(owner, "_explicit_child_render_regions", None)
+        if type(owner_regions) is dict:
+            region = owner_regions.get(slot)
+            if type(region) is tuple and len(region) == 2 and region[0] is current:
+                owner_regions.pop(slot)
         if type(owner_registry) is dict and owner_registry.get(slot) is current:
             owner_registry.pop(slot)
         registry = getattr(current, "_child_views", None)
@@ -46,6 +51,7 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
         # Sessionless reuse identities hold the root by identity. A disposed
         # child must not retain that hidden ownership reference or be reusable.
         current._explicit_child_reuse_identity = None
+        current._explicit_child_render_regions = {}
         current._deferred_callbacks = []
         ordered.append(current)
 

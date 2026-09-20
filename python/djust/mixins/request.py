@@ -299,14 +299,21 @@ class RequestMixin:
         # _sync_state_to_rust() internally, so self._rust_view is ready
         # after this returns.
         t0 = time.perf_counter()
-        html = self.render_full_template(request, serialized_context=state_serializable)
+        from .._child_rendering import render_view_full_template, render_view_with_diff
+
+        html = render_view_full_template(self, request, serialized_context=state_serializable)
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
         # Establish VDOM baseline for subsequent PATCH responses.
         t0 = time.perf_counter()
-        _, _, _ = self.render_with_diff(request)
+        _, _, _ = render_view_with_diff(self, request)
         t_render_diff = (time.perf_counter() - t0) * 1000
+
+        if not uses_legacy_exposure(self):
+            from .._exposure_child_persistence import save_child_states
+
+            save_child_states(self, request)
 
         # Clear context cache so WebSocket events get fresh data
         self._cached_context = None
@@ -859,8 +866,10 @@ class RequestMixin:
             # fallback returns logged-out HTML. Fixes #705.
             # Unified via _processor_context context manager (#717).
             with self._processor_context(request):
+                from .._child_rendering import render_view_with_diff
+
                 t0_render = time.perf_counter()
-                html, patches_json, version = self.render_with_diff(request)
+                html, patches_json, version = render_view_with_diff(self, request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
 
             if not legacy_exposure:

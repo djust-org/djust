@@ -305,17 +305,23 @@ def test_the_mount_path_syncs_explicitly_between_init_and_its_first_render() -> 
     """``dispatch_mount`` (the converged WS + SSE + runtime mount seam) does
     not rely on ``render_with_diff``'s own sync: it calls
     ``_initialize_rust_view`` (where the clone is attached), then
-    ``_sync_state_to_rust``, then ``render_with_diff`` — so the first render
+    ``_sync_state_to_rust``, then the ``render_view_with_diff`` reconciliation
+    wrapper — so the first render
     of a cache-HIT clone is always a synced one. (The sync marks
     ``_sync_done_this_cycle`` so ``render_with_diff`` does not sync twice —
     one mechanism handing off, not two shadowing each other.)"""
     from djust import runtime
+    from djust._child_rendering import render_view_with_diff
 
     src = inspect.getsource(runtime.ViewRuntime.dispatch_mount)
     init = src.index("view_instance._initialize_rust_view)(request)")
     sync = src.index("view_instance._sync_state_to_rust)()")
-    render = src.index("view_instance.render_with_diff")
+    render = src.index("await sync_to_async(render_view_with_diff)(")
     assert init < sync < render, f"init={init} sync={sync} render={render}"
+    # The transport wrapper must still delegate to the view's renderer; moving
+    # the mount call behind reconciliation must not sever this structural pin.
+    wrapper = inspect.getsource(inspect.unwrap(render_view_with_diff))
+    assert "return view.render_with_diff(*args, **kwargs)" in wrapper
 
 
 def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:

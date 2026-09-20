@@ -2751,9 +2751,11 @@ class ViewRuntime:
                 # native renderers (NativeRenderer) ``html`` is empty and the wire
                 # payload is the patch list, shipped on the mount frame below so the
                 # native client can bootstrap its widget tree on connect.
-                html, render_patches, rust_version = await sync_to_async(
-                    view_instance.render_with_diff
-                )()
+                from ._child_rendering import render_view_with_diff
+
+                html, render_patches, rust_version = await sync_to_async(render_view_with_diff)(
+                    view_instance
+                )
                 if hasattr(view_instance, "_strip_comments_and_whitespace"):
                     html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
                 if hasattr(view_instance, "_extract_liveview_content"):
@@ -2780,6 +2782,9 @@ class ViewRuntime:
         on_mount_render_ready = getattr(self.transport, "on_mount_render_ready", None)
         if on_mount_render_ready is not None:
             html = await on_mount_render_ready(view_instance, html)
+
+        if not await self._persist_explicit_children_after_event(view_instance, request=request):
+            return
 
         # ---- Mount-frame wire version (#1917, Finding C) ----
         # ``next_mount_version`` stamps the baseline the client calibrates to. WS:
@@ -4068,15 +4073,10 @@ class ViewRuntime:
             try:
                 from .auth.core import enforce_object_permission
 
-                adapter = await sync_to_async(resolve_explicit_child)()
+                await sync_to_async(resolve_explicit_child)()
                 await sync_to_async(enforce_object_permission)(target_view, event_request)
-                if adapter is not None:
-                    values = await sync_to_async(adapter.contract.project_view)(
-                        target_view, "server"
-                    )
-                    await asyncio.wait_for(
-                        adapter.asave(values), timeout=EVENT_STATE_SAVE_TIMEOUT_S
-                    )
+                # The shared post-render batch saves the owner and reconciles
+                # nested slots together; no separate pre-render child flush.
             except Exception:  # noqa: BLE001 — no legacy save or success frame on failure
                 await self.transport.send_error(
                     "Child state unavailable. Please reload the page.", code="state_error"
@@ -4099,6 +4099,8 @@ class ViewRuntime:
             if not explicit_child:
                 raise
             await self.transport.send_error("Child rendering unavailable.", code="render_error")
+            return True
+        if explicit_child and not await self._persist_explicit_children_after_event(view):
             return True
         _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
 
@@ -4812,16 +4814,28 @@ class ViewRuntime:
             logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
         return fields
 
-    async def _persist_explicit_children_after_event(self, view: Any) -> bool:
+    async def _persist_explicit_children_after_event(
+        self, view: Any, *, request: Any = None
+    ) -> bool:
         """Save the authorized child tree before acknowledging a parent event."""
         from ._exposure import ExposureError, uses_legacy_exposure
         from ._exposure_child_persistence import asave_child_states
         from ._exposure_sessions import request_binding
 
-        if uses_legacy_exposure(view) or not getattr(view, "_child_views", None):
+        if uses_legacy_exposure(view):
+            return True
+        if (
+            request is None
+            and not getattr(view, "_child_views", None)
+            and not getattr(view, "_explicit_child_state_tracked", False)
+        ):
+            # Mount scans for an existing index under fresh authorization.
+            # A view with no children/index has no child persistence work;
+            # retain the independent snapshot-invalidation acknowledgement.
             return True
         try:
-            request = getattr(view, "_djust_event_request", None)
+            if request is None:
+                request = getattr(view, "_djust_event_request", None)
             if request is None or (
                 await sync_to_async(request_binding)(request) != self._explicit_mount_binding
             ):
@@ -4903,7 +4917,9 @@ class ViewRuntime:
             html, patches, version = scoped
         else:
             try:
-                html, patches, version = await sync_to_async(view.render_with_diff)()
+                from ._child_rendering import render_view_with_diff
+
+                html, patches, version = await sync_to_async(render_view_with_diff)(view)
             except Exception as exc:
                 response = handle_exception(
                     exc,

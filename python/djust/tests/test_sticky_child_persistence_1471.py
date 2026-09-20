@@ -859,7 +859,6 @@ def test_the_event_save_is_still_bounded():
         "_persist_state_after_event": 1,
         "_persist_sticky_child_after_event": 1,
         "_persist_explicit_children_after_event": 1,
-        "_dispatch_sticky_child_event": 1,
     }, "Each legacy and explicit child save must retain its exact storage deadline"
 
 

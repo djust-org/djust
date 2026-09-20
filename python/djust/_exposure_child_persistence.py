@@ -4,13 +4,12 @@ Only declared server state is captured. This is not rendered-slot discovery or
 pruning: callers must separately reconcile removed slots after complete renders.
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.base import SessionBase
 
+from ._child_state_index import prepare_child_batch, staged_updates
 from ._exposure import ExposureContract, ExposureError, clone_json_state
 from ._exposure_children import ChildStateSession, child_event_adapter
 from .auth.core import check_view_auth, enforce_object_permission
@@ -90,38 +89,21 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
         raise ExposureError("Child state persistence unavailable") from None
 
 
-@contextmanager
-def _staged_children(
-    captured: list[tuple[ChildStateSession, dict[str, Any]]],
-) -> Iterator[SessionBase]:
-    """Undo local staging on failure/cancellation, not an uncertain backend commit."""
-    session = captured[0][0].session
-    missing = object()
-    previous = {adapter.key: session.get(adapter.key, missing) for adapter, _ in captured}
-    was_modified = session.modified
-    completed = False
+def _capture_batch(root: Any, request: Any) -> tuple[SessionBase, dict[str, Any], set[str]] | None:
     try:
-        for adapter, envelope in captured:
-            adapter._check_session()
-            session[adapter.key] = envelope
-        yield session
-        completed = True
-    finally:
-        if not completed:
-            for key, value in previous.items():
-                if value is missing:
-                    session.pop(key, None)
-                else:
-                    session[key] = value
-            session.modified = was_modified
+        batch = prepare_child_batch(_capture_children(root, request), root, request)
+        root._explicit_child_state_tracked = batch is not None
+        return batch
+    except Exception:  # noqa: BLE001
+        raise ExposureError("Child state persistence unavailable") from None
 
 
 def save_child_states(root: Any, request: Any) -> None:
     """Capture authorized descendants and flush their server envelopes once."""
-    captured = _capture_children(root, request)
-    if captured:
+    batch = _capture_batch(root, request)
+    if batch:
         try:
-            with _staged_children(captured) as session:
+            with staged_updates(*batch) as session:
                 session.save()
         except Exception:  # noqa: BLE001 — HTTP errors must not expose backend details
             raise ExposureError("Child state persistence unavailable") from None
@@ -129,10 +111,10 @@ def save_child_states(root: Any, request: Any) -> None:
 
 async def asave_child_states(root: Any, request: Any) -> None:
     """Async storage flush; validation/projection stays in the Django thread."""
-    captured = await sync_to_async(_capture_children)(root, request)
-    if captured:
+    batch = await sync_to_async(_capture_batch)(root, request)
+    if batch:
         try:
-            with _staged_children(captured) as session:
+            with staged_updates(*batch) as session:
                 await session.asave()
         except Exception:  # noqa: BLE001 — never expose private backend errors
             raise ExposureError("Child state persistence unavailable") from None

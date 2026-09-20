@@ -142,6 +142,19 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def child_state_key(route: str, slots: tuple[str, ...]) -> str:
+    """Derive a storage key from a server route and validated slot ancestry."""
+    if (
+        type(route) is not str
+        or not 1 <= len(route) <= 2048
+        or type(slots) is not tuple
+        or not 1 <= len(slots) <= 16
+        or any(type(slot) is not str or not 1 <= len(slot) <= 128 for slot in slots)
+    ):
+        raise ExposureError("Invalid child state key scope")
+    return "_djust_explicit_child_" + _digest(clone_json_state([route, list(slots)]))
+
+
 class ChildStateSession(ServerStateSession):
     """Reuse the server envelope with an exact, bounded child ownership binding.
 
@@ -194,4 +207,18 @@ class ChildStateSession(ServerStateSession):
         # The logical route/slot key deliberately excludes class/schema/inputs.
         # They remain in the validated envelope binding, so replacement meets
         # and rejects prior state rather than hiding it at a fresh storage key.
-        self.key = "_djust_explicit_child_" + _digest([binding.view, list(slots)])
+        self.route = binding.view
+        self.slots = slots
+        self.key = child_state_key(binding.view, slots)
+
+    def save(self, values: dict[str, Any]) -> None:
+        """Write server state and its scoped slot index with sanitized failures."""
+        from ._child_state_index import save_indexed_child
+
+        save_indexed_child(self, values)
+
+    async def asave(self, values: dict[str, Any]) -> None:
+        """Async equivalent, including index tracking and local rollback."""
+        from ._child_state_index import asave_indexed_child
+
+        await asave_indexed_child(self, values)
