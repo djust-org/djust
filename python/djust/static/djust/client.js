@@ -6640,6 +6640,26 @@ const globalLoadingManager = {
     // Map of element -> { originalState, modifiers }
     registeredElements: new Map(),
     pendingEvents: new Set(),
+    // event name -> owner element (null for page scope) -> triggering elements.
+    // DOM identity intentionally prevents a replacement with the same ID from
+    // inheriting work queued on the removed component.
+    pendingScopes: new Map(),
+
+    scopeFor(element) {
+        return element ? element.closest('[data-djust-embedded], [data-component-id]') : null;
+    },
+
+    syncPending() {
+        this.pendingEvents.clear();
+        this.pendingScopes.forEach((scopes, eventName) => {
+            scopes.forEach((triggers, owner) => {
+                if (!triggers.size || (owner && !owner.isConnected)) scopes.delete(owner);
+            });
+            if (scopes.size) this.pendingEvents.add(eventName);
+            else this.pendingScopes.delete(eventName);
+        });
+        document.body.classList.toggle('djust-global-loading', this.pendingEvents.size > 0);
+    },
 
     // Register an element with dj-loading attributes
     register(element, eventName) {
@@ -6701,6 +6721,7 @@ const globalLoadingManager = {
 
     // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
+        this.syncPending();
         // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
         this.registeredElements.forEach((_config, element) => {
             if (!element.isConnected) {
@@ -6739,13 +6760,24 @@ const globalLoadingManager = {
                 this.register(element, eventName);
             }
         });
+        this.registeredElements.forEach((config, element) => {
+            if (this.pendingScopes.get(config.eventName)?.has(this.scopeFor(element))) {
+                this.applyLoadingState(element, config);
+            }
+        });
         if (globalThis.djustDebug) {
             djLog(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
     startLoading(eventName, triggerElement) {
-        this.pendingEvents.add(eventName);
+        const owner = this.scopeFor(triggerElement);
+        let scopes = this.pendingScopes.get(eventName);
+        if (!scopes) this.pendingScopes.set(eventName, scopes = new Map());
+        let triggers = scopes.get(owner);
+        if (!triggers) scopes.set(owner, triggers = new Set());
+        triggers.add(triggerElement || null);
+        this.syncPending();
 
         // Apply loading state to trigger element
         if (triggerElement) {
@@ -6764,12 +6796,10 @@ const globalLoadingManager = {
 
         // Apply loading state to all registered elements watching this event
         this.registeredElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
+            if (config.eventName === eventName && this.scopeFor(element) === owner) {
                 this.applyLoadingState(element, config);
             }
         });
-
-        document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
             djLog(`[Loading] Started: ${eventName}`);
@@ -6777,7 +6807,26 @@ const globalLoadingManager = {
     },
 
     stopLoading(eventName, triggerElement) {
-        this.pendingEvents.delete(eventName);
+        const scopes = this.pendingScopes.get(eventName);
+        if (!scopes) return;
+        let owner;
+        if (triggerElement) {
+            // The reply can remove its trigger during morphing. Resolve from
+            // the original pending record, not the trigger's current ancestry.
+            for (const [scope, triggers] of scopes) {
+                if (triggers.delete(triggerElement)) {
+                    owner = scope;
+                    break;
+                }
+            }
+        } else if (scopes.has(null)) {
+            // Legacy page-level background completion has no trigger. It may
+            // finish page work, but never clear an embedded component's work.
+            owner = null;
+            scopes.get(null).clear();
+        }
+        if (owner === undefined) return;
+        this.syncPending();
 
         // Remove loading state from trigger element
         if (triggerElement) {
@@ -6791,12 +6840,11 @@ const globalLoadingManager = {
 
         // Remove loading state from all registered elements watching this event
         this.registeredElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
-                this.removeLoadingState(element, config);
+            if (config.eventName === eventName && this.scopeFor(element) === owner) {
+                if (scopes.has(owner)) this.applyLoadingState(element, config);
+                else this.removeLoadingState(element, config);
             }
         });
-
-        document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
             djLog(`[Loading] Stopped: ${eventName}`);

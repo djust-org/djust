@@ -715,10 +715,39 @@ All 1,965 JavaScript tests across 186 files passed, including the 13 focused
 client regressions; ESLint and source/security review passed. Generated bundles
 were rebuilt from source, not hand-edited.
 
-The loading manager is still globally keyed by event name; full same-name
-multi-child loading isolation, concurrent no-ref SSE acknowledgements and
-multi-task background pending indicators require further work. This change
-does not claim those contracts or activate explicit exposure.
+That response fix did not itself change the globally keyed loading manager;
+the next section describes component ownership there. Concurrent no-ref SSE
+acknowledgements and multi-task background pending indicators still require
+further work. Neither change activates explicit exposure.
+
+### Component-owned loading state
+
+Loading records now combine event name, nearest native embedded-view/component
+wrapper, and triggering element. Existing `pendingEvents` remains an aggregate
+set of names; it is not the ownership key. A `save` in one component therefore
+does not disable another component's controls merely because it also handles
+`save`. Stopping one scope preserves another scope's indicators and the page's
+global loading class while work remains.
+
+Ownership uses the wrapper DOM instance, not an ID string. A replacement wrapper
+with the same ID does not inherit removed work. Nested components use their
+nearest owner. Scanning removes disconnected scopes and reapplies pending state
+to newly morphed controls in an existing scope. A reply can remove its trigger:
+completion finds the original pending record instead of using detached DOM
+ancestry. A no-trigger legacy page completion clears page-scoped work only.
+
+All seven initial scope regressions failed against the old manager. The focused
+group now passes 32 tests, including referenced same-handler replies through the
+actual WebSocket client. A browser frame-replay fixture verified both buttons
+disabled, then only the left enabled after its reply, then both enabled with no
+pending work. This is not a live backend-session/browser test. The full
+JavaScript suite passed 1,975 tests across 187 files; ESLint and source review
+passed. Bundles were regenerated from source.
+
+Records coalesce repeated dispatches from the same element within one scope;
+they are not a per-request counter. Overlapping same-trigger requests, concurrent
+no-ref SSE replies, error/disconnect draining and multi-task background loading
+still need correlated lifecycle coverage before the broader ADR is accepted.
 
 ## Readiness audit
 
