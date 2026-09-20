@@ -830,18 +830,45 @@ def test_the_event_save_is_still_bounded():
         "arithmetic on the bound at the call site defeats it — change the "
         "constant instead, where the pin above can see it"
     )
-    assert src.count("timeout=EVENT_STATE_SAVE_TIMEOUT_S") == 2, (
-        "both save call sites (the event path and the async-work path) must be "
-        "bounded; one unbounded site is enough to stall"
+    import ast
+
+    runtime_class = next(
+        node
+        for node in ast.parse(src).body
+        if isinstance(node, ast.ClassDef) and node.name == "ViewRuntime"
     )
+    bounded_sites = {
+        method.name: sum(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "asyncio"
+            and node.func.attr == "wait_for"
+            and any(
+                keyword.arg == "timeout"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "EVENT_STATE_SAVE_TIMEOUT_S"
+                for keyword in node.keywords
+            )
+            for node in ast.walk(method)
+        )
+        for method in runtime_class.body
+        if isinstance(method, ast.AsyncFunctionDef)
+    }
+    assert {name: count for name, count in bounded_sites.items() if count} == {
+        "_persist_state_after_event": 1,
+        "_persist_sticky_child_after_event": 1,
+        "_dispatch_sticky_child_event": 1,
+    }, "Each legacy and explicit child save must retain its exact storage deadline"
 
 
 def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
-    """Every bounded save site must swallow its TimeoutError, with a warning.
+    """Legacy best-effort save helpers swallow TimeoutError, with a warning.
 
     A timed-out save must never propagate, or a slow session backend becomes a
     user-visible event failure. And it must never be silent, or the drop is
-    undebuggable.
+    undebuggable. Explicit routed children instead send a static state error;
+    their cancellation/no-success-frame behavior is tested separately.
 
     The first version of this checked only the FIRST handler
     (``split(..., 1)[1]``) and only the text BEFORE the log

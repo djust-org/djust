@@ -2282,6 +2282,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # Initial child state is server-only even when legacy browser snapshot
         # persistence is disabled. Current object authorization has passed.
         explicit_adapter.save(explicit_adapter.contract.project_view(child, "server"))
+        child._explicit_child_mount_binding = explicit_adapter.binding
 
     # 6-9. Sticky branch: render via the shared helper so the fresh-mount path
     #      and the #1813 (b1) live-instance-reuse hatch emit byte-identical

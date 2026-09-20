@@ -98,6 +98,37 @@ def record_child_mount_inputs(child: Any, mount_inputs: dict[str, Any]) -> None:
     child._explicit_child_mount_inputs = json.dumps(
         clone_json_state(mount_inputs), sort_keys=True, separators=(",", ":")
     )
+    child._explicit_child_schema = ExposureContract.from_view_class(type(child)).schema
+
+
+def child_event_adapter(child: Any, root: Any, request: Any) -> "ChildStateSession | None":
+    """Resolve a mounted child only through current ownership and mount binding."""
+    try:
+        if request is None:
+            raise ExposureError("Missing authorized event request")
+        current = child
+        seen: set[int] = set()
+        while current is not root:
+            if id(current) in seen or len(seen) >= 16:
+                raise ExposureError("Invalid child event ancestry")
+            seen.add(id(current))
+            parent = getattr(current, "_parent_view", None)
+            slot = getattr(current, "_view_id", None)
+            registry = getattr(parent, "_child_views", None)
+            if type(registry) is not dict or registry.get(slot) is not current:
+                raise ExposureError("Child event owner is not registered")
+            current = parent
+        contract = ExposureContract.from_view_class(type(child))
+        if contract.schema != getattr(child, "_explicit_child_schema", None):
+            raise ExposureError("Child declarations changed")
+        inputs = json.loads(child._explicit_child_mount_inputs)
+        adapter = child_state_adapter(child, child._parent_view, request, child._view_id, inputs)
+        expected = getattr(child, "_explicit_child_mount_binding", None)
+        if (adapter.binding if adapter is not None else None) != expected:
+            raise ExposureError("Child event identity changed")
+        return adapter
+    except Exception:  # noqa: BLE001 — no values from providers in event errors
+        raise ExposureError("Child event state unavailable") from None
 
 
 def _digest(value: Any) -> str:

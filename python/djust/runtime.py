@@ -46,6 +46,7 @@ import re
 import time
 from functools import wraps
 from typing import (
+    TYPE_CHECKING,
     Any,
     Awaitable,
     AsyncIterator,
@@ -60,6 +61,9 @@ from typing import (
 )
 
 from asgiref.sync import sync_to_async
+
+if TYPE_CHECKING:
+    from ._exposure_children import ChildStateSession
 
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
@@ -3918,6 +3922,38 @@ class ViewRuntime:
             )
             return True
 
+        from ._exposure import ExposureError, uses_legacy_exposure
+
+        explicit_child = not uses_legacy_exposure(target_view)
+        event_request = getattr(view, "_djust_event_request", None)
+
+        def resolve_explicit_child() -> ChildStateSession | None:
+            from ._exposure_children import child_event_adapter
+            from ._exposure_sessions import request_binding
+            from .auth.core import check_view_auth
+
+            if (
+                uses_legacy_exposure(view)
+                or event_request is None
+                or request_binding(event_request) != self._explicit_mount_binding
+            ):
+                raise ExposureError("Missing current child event authorization")
+            adapter = child_event_adapter(target_view, view, event_request)
+            target_view.request = event_request
+            if check_view_auth(target_view, event_request) is not None:
+                raise ExposureError("Child event authorization denied")
+            return adapter
+
+        if explicit_child:
+            try:
+                await sync_to_async(resolve_explicit_child)()
+            except Exception:  # noqa: BLE001 — fail closed without provider values
+                await self.transport.send_error(
+                    "Child event authorization failed. Please reload the page.",
+                    code="permission_denied",
+                )
+                return True
+
         # Validate the handler against the CHILD (not the parent) — mirrors WS
         # using ``target_view`` for handler lookup (websocket.py:3498).
         handler = await _validate_event_security(
@@ -3962,6 +3998,10 @@ class ViewRuntime:
             try:
                 await _call_handler(handler, coerced_params if coerced_params else None)
             except Exception as exc:
+                if explicit_child:
+                    _tt_error = "Child event failed"
+                    await self.transport.send_error("Child event failed.", code="event_error")
+                    return True
                 _tt_error = str(exc)[:200]
                 response = handle_exception(
                     exc,
@@ -4003,7 +4043,25 @@ class ViewRuntime:
         # satisfied; the predicate carries the opt-in gate.
         from .mixins.sticky import sticky_child_should_persist, warn_sticky_child_optin_skip
 
-        if sticky_child_should_persist(target_view, self.view_instance):
+        if explicit_child:
+            try:
+                from .auth.core import enforce_object_permission
+
+                adapter = await sync_to_async(resolve_explicit_child)()
+                await sync_to_async(enforce_object_permission)(target_view, event_request)
+                if adapter is not None:
+                    values = await sync_to_async(adapter.contract.project_view)(
+                        target_view, "server"
+                    )
+                    await asyncio.wait_for(
+                        adapter.asave(values), timeout=EVENT_STATE_SAVE_TIMEOUT_S
+                    )
+            except Exception:  # noqa: BLE001 — no legacy save or success frame on failure
+                await self.transport.send_error(
+                    "Child state unavailable. Please reload the page.", code="state_error"
+                )
+                return True
+        elif sticky_child_should_persist(target_view, self.view_instance):
             await self._persist_sticky_child_after_event(target_view, event_name)
         else:
             warn_sticky_child_optin_skip(target_view, self.view_instance)
@@ -4014,7 +4072,13 @@ class ViewRuntime:
         # + the ``embedded_update`` send (websocket.py:3905-3920 / 4010-4018).
         from .websocket import _emit_full_html_update, render_embedded_child_html
 
-        html = await sync_to_async(render_embedded_child_html)(target_view)
+        try:
+            html = await sync_to_async(render_embedded_child_html)(target_view)
+        except Exception:
+            if not explicit_child:
+                raise
+            await self.transport.send_error("Child rendering unavailable.", code="render_error")
+            return True
         _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
 
         msg: Dict[str, Any] = {

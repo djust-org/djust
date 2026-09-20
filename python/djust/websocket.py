@@ -508,14 +508,21 @@ def render_embedded_child_html(child_view: Any) -> str:
     and :class:`~djust.runtime.ViewRuntime` share ONE implementation — including
     the security-hardened error path below — with no parallel copy to drift.
     """
+    from ._exposure import ExposureError, uses_legacy_exposure
+
+    legacy_child = uses_legacy_exposure(child_view)
     try:
         context = child_view.get_context_data()
+        if not legacy_child and "view" in context:
+            raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
+        from .templatetags.live_tags import active_parent_view
 
         template_str = child_view.get_template()
         engine = engines["django"] if "django" in engines else list(engines.all())[0]
         tmpl = engine.from_string(template_str)
-        html = tmpl.render(context)
+        with active_parent_view(child_view):
+            html = tmpl.render(context)
         # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
         # SOURCE — child update_model events gate against the child's
         # _dj_model_fields, and this is the child's only render path (it
@@ -528,6 +535,8 @@ def render_embedded_child_html(child_view: Any) -> str:
             child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
         return str(html)
     except Exception as e:
+        if not legacy_child:
+            raise ExposureError("Explicit child rendering unavailable") from None
         logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
         # SECURITY (#1646 parallel-path drift): this site bypassed the
         # central handle_exception / create_safe_error_response path, which

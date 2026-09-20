@@ -429,10 +429,48 @@ whole module. A canary detects extra assignments, and an actual child restore
 proves legacy Decimal-tag-shaped dictionaries stay ordinary JSON. Applying the
 legacy decoder on this path would silently change those values.
 
-This does **not** complete child-event saving, changed-identity reuse, lazy child
+The fresh-mount slice does **not** complete child-event saving, changed-identity reuse, lazy child
 mounts, non-sticky provider scopes, pruning, mixed-policy persistence, cross-worker
 restoration or browser reconnect coverage. Those remain activation gates, and
 the explicit constructor guard is still unchanged.
+
+### Shared-runtime child events
+
+The staged explicit routed-child event path now uses the root runtime's freshly
+authorized event request and existing explicit event lock. Before invoking a
+handler it verifies live registry ancestry, the mount-time declaration schema and
+bound child identity, refreshes the child's request, and checks current child view
+permissions. Existing handler/object authorization then runs against that request.
+
+After the handler it revalidates root/child binding, declarations, view and object
+permissions, and saves only the routed child's declared server fields through
+the bound adapter. This is independent of legacy browser-snapshot opt-in. The
+storage await retains the 150ms deadline; timeout cancellation or persistence
+failure sends a static error and no successful embedded update. Handler and
+explicit render errors likewise do not echo or log their exception values.
+Embedded rendering uses the active-child context and rejects raw-view context.
+
+These are not transaction/rollback guarantees: handler side effects have already
+occurred when a post-handler check or save fails. A render failure can occur after
+the state was saved. The response asks for recovery rather than reporting a
+successful update; no automatic handler retry is introduced.
+
+`test_exposure_child_events.py` exercises real shared-runtime mount/event
+dispatch, database sessions, emitted frames and restoration in a fresh runtime.
+Handler-entry counters make stale-scope and revoked-permission tests fail if a
+handler is entered, even if it later raises. The initial five checks failed
+before wiring, and the render-error sentinel failed before the explicit error
+boundary was added. Tests also cover post-handler scope/view/object denial,
+storage failure, error redaction and bounded timeout cancellation.
+
+The timeout inventory pins the exact three runtime save methods, not just a
+substring count. The explicit child storage cancellation test exercises a
+stalled backend; legacy best-effort timeout behavior remains separately tested.
+
+This is not complete child persistence: parent-driven mutations/HTTP sweeps,
+identity-aware reuse, lazy/non-sticky children, pruning, mixed-policy scopes,
+real-browser reconnect and cross-worker evidence remain required. The production
+construction gate remains closed.
 
 ## Readiness audit
 
@@ -450,6 +488,14 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The shared-runtime child-event slice completed 29,896 Python tests with 952
+skipped across all three roots (four workers), 12 focused event tests and 21
+combined legacy/explicit timeout tests. Full-package mypy passed 1,009 source
+files. The prior full run's single failure was the old two-site timeout inventory,
+now replaced by the exact method inventory described above. These tests use real
+runtime dispatch and database sessions with a recording transport, not a browser
+connection or a cross-worker deployment.
 
 The fresh eager-child slice completed 29,884 Python tests with 952 skipped
 across all three roots (four workers). Focused mount/Decimal-inventory coverage

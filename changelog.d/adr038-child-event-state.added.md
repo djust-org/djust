@@ -1,0 +1,1 @@
+- Connect still-gated explicit routed-child events to fresh request authorization, mount-scope validation and bound server persistence in the shared runtime. Save failures and handler/render errors return static failures without private exception values or successful embedded updates; legacy snapshot opt-in is not required.
