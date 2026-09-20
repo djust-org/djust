@@ -38,6 +38,7 @@ __version__ = "1.2.0rc9"
 # ---------------------------------------------------------------------------
 # Core component classes (original djust.components)
 # ---------------------------------------------------------------------------
+import importlib
 from typing import Any
 
 from .base import Component, LiveComponent
@@ -196,10 +197,31 @@ def __getattr__(name: str) -> Any:
     Names already defined here win — ``__getattr__`` is only consulted for a
     missing attribute — so the nine that exist in both namespaces are
     unaffected.
+
+    Two things below are deliberate. ``importlib.import_module`` is the one
+    that matters: ``from . import components`` asks the import machinery for
+    an attribute on THIS module, so until the submodule is bound the lookup
+    re-enters here and recurses until the interpreter gives up — every
+    ``hasattr(djust.components, x)`` for an absent ``x`` crashed instead of
+    answering ``False``. Resolving through ``sys.modules`` cannot form that
+    cycle. Refusing underscored names up front is a cheap extra: it is no
+    longer load-bearing, and on its own it does NOT fix the recursion, since
+    the cycle runs through ``components``, which has no underscore.
     """
-    from . import components as _components
+    if name.startswith("_"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    # `from . import components` is what must NOT appear here. That form asks
+    # the import machinery for the attribute `components` on this module, and
+    # until the submodule is bound that lookup comes straight back into this
+    # function, which asks again — the recursion that made any
+    # `hasattr(djust.components, missing)` blow the stack. `import_module`
+    # resolves through `sys.modules` instead and never consults us.
+    subpackage = importlib.import_module(f"{__name__}.components")
+    if name == "components":
+        return subpackage
 
     try:
-        return getattr(_components, name)
+        return getattr(subpackage, name)
     except AttributeError:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
