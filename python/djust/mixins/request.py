@@ -863,6 +863,11 @@ class RequestMixin:
                 html, patches_json, version = self.render_with_diff(request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
 
+            if not legacy_exposure:
+                from .._exposure_child_persistence import save_child_states
+
+                save_child_states(self, request)
+
             # ADR-018 iter 18a — HTTP sticky-child state save (Decision 4,
             # HTTP side). The POST path has no ``view_id`` routing — it
             # always operates on ``self`` (the parent) — so this is a

@@ -21,7 +21,7 @@ class EventChild(LiveView):
     sticky_id = "menu"
     count = state(1, persist="server")
     secret = state("SERVER_SENTINEL", persist="server")
-    template = "<div>{{ count }}</div>"
+    template = "<div>Count={{ count }}</div>"
 
     def mount(self, request, **kwargs):
         self.count = 1
@@ -62,6 +62,12 @@ class EventParent(LiveView):
         "<div dj-root>{% load live_tags %}{% live_render "
         '"djust.tests.test_exposure_child_events.EventChild" sticky=True object_id=1 %}</div>'
     )
+
+    @event_handler()
+    def change_child(self, skip: bool = False):
+        self._get_child_view("menu").count = 4
+        if skip:
+            self._skip_render = True
 
 
 class TransientEventChild(EventChild):
@@ -116,6 +122,91 @@ async def test_child_event_persists_with_fresh_request_without_snapshot_optin():
     assert "SERVER_SENTINEL" not in json.dumps(transport.sent)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 2
+
+
+@pytest.mark.parametrize("skip", [False, True])
+async def test_parent_event_persists_child_mutation(skip):
+    runtime, transport, request = await mount()
+    transport.sent.clear()
+    await runtime.dispatch_event(
+        {"type": "event", "event": "change_child", "params": {"skip": skip}}
+    )
+    assert runtime.view_instance._get_child_view("menu").count == 4
+    assert not transport.errors, transport.errors
+    assert any(frame.get("type") == "noop" for frame in transport.sent) is skip
+    if not skip:
+        assert "Count=4" in json.dumps(transport.sent)
+    restored, _, _ = await mount(request.session.session_key)
+    assert restored.view_instance._get_child_view("menu").count == 4
+
+
+async def test_parent_save_failure_forces_full_html_on_next_success(monkeypatch):
+    from django.contrib.sessions.backends.db import SessionStore
+
+    runtime, transport, _ = await mount()
+    transport.sent.clear()
+    original = SessionStore.asave
+
+    async def failed_save(self, *args, **kwargs):
+        raise OSError("STORAGE_SECRET_SENTINEL")
+
+    monkeypatch.setattr(SessionStore, "asave", failed_save)
+    event = {"type": "event", "event": "change_child", "params": {}}
+    await runtime.dispatch_event(event)
+    assert transport.errors
+    assert runtime.view_instance._force_full_html
+    assert not any(frame.get("type") in ("patch", "html_update") for frame in transport.sent)
+    monkeypatch.setattr(SessionStore, "asave", original)
+    transport.sent.clear()
+    await runtime.dispatch_event(event)
+    assert any(frame.get("type") == "html_update" for frame in transport.sent)
+    assert "Count=4" in json.dumps(transport.sent)
+    assert not runtime.view_instance._force_full_html
+
+
+@pytest.mark.parametrize("failure", ["auth", "object", "storage", "timeout"])
+async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch, caplog):
+    import asyncio
+
+    from django.contrib.sessions.backends.db import SessionStore
+
+    runtime, transport, request = await mount()
+    transport.sent.clear()
+    if failure == "auth":
+        monkeypatch.setattr(EventChild, "check_permissions", lambda self, request: False)
+    elif failure == "object":
+        monkeypatch.setattr(EventChild, "has_object_permission", lambda self, request, obj: False)
+    else:
+        original = SessionStore.asave
+
+        async def failed_save(self, *args, **kwargs):
+            if failure == "timeout":
+                await asyncio.Event().wait()
+            raise OSError("STORAGE_SECRET_SENTINEL")
+
+        monkeypatch.setattr(SessionStore, "asave", failed_save)
+    await runtime.dispatch_event(
+        {"type": "event", "event": "change_child", "params": {"skip": True}}
+    )
+    assert transport.errors
+    assert not any(
+        frame.get("type") in ("noop", "patch", "html_update") for frame in transport.sent
+    )
+    assert "SECRET_SENTINEL" not in json.dumps(transport.sent)
+    assert "SECRET_SENTINEL" not in caplog.text
+    if failure in ("storage", "timeout"):
+        current_request = runtime.view_instance._get_child_view("menu").request
+        assert all(
+            value["state"]["values"]["count"] == 1
+            for key, value in current_request.session.items()
+            if key.startswith("_djust_explicit_child_")
+        )
+    if failure in ("storage", "timeout"):
+        monkeypatch.setattr(SessionStore, "asave", original)
+    monkeypatch.setattr(EventChild, "check_permissions", lambda self, request: True)
+    monkeypatch.setattr(EventChild, "has_object_permission", lambda self, request, obj: True)
+    restored, _, _ = await mount(request.session.session_key)
+    assert restored.view_instance._get_child_view("menu").count == 1
 
 
 @pytest.mark.parametrize("changed", [False, True])

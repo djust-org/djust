@@ -552,6 +552,53 @@ path currently calls the root async dispatcher, not a child-specific dispatcher.
 The remaining providers and ADR034–037 work are still part of the objective.
 Explicit exposure remains unavailable to applications.
 
+### Parent-driven child persistence
+
+The staged explicit path now saves registered descendants after a successful
+parent-event render, before its success frame, and after HTTP POST rendering.
+An explicit parent's unchanged assign snapshot no longer implies its children
+are unchanged: parent handlers can mutate a child directly. Deliberate
+`_skip_render` still skips rendering, but saves the authorized child tree before
+acknowledging the event. The existing production construction guard is unchanged.
+
+The shared helper walks only the current owned registry, never arbitrary public
+attributes. It checks exact mount identity, schema, request binding, ownership,
+disposal status and current view/object authorization, including nested children.
+Only declared server fields enter the batch. All captures must validate before
+any session entry changes. The batch has a maximum of 256 descendants and one
+aggregate root-contract JSON budget, in addition to each child's contract and
+the existing ancestry limit. After projection and application authorization hooks,
+the helper rechecks the captured scopes and registry membership before writing.
+One backend flush stores the child batch; root persistence remains separate.
+
+The runtime save retains the 150ms deadline. Failure emits a static error instead
+of an update/noop acknowledgement. Because rendering may already have advanced
+the server VDOM, a subsequent successful event is forced to send full HTML.
+HTTP storage exceptions are also sanitized, including chained exception text;
+the new failure regression first reproduced a backend sentinel in both DEBUG
+JSON and logs. Failed or cancelled flushes restore the local session entries
+and modified flag. This is **not** a transaction across the root, children and
+application side effects. A backend may have committed before an error/timeout
+was observed; restoring the in-memory session cannot undo that uncertain commit.
+Synchronous application hooks cannot be preempted by asyncio cancellation.
+
+Tests exercise real shared-runtime parent events, explicit no-render events,
+actual HTTP POST plus fresh GET restoration, direct and nested scopes, a single
+batch flush, no partial writes on authorization/identity/budget failures, total
+budget enforcement, hook-driven registry changes, storage errors/timeouts,
+private error redaction and full-HTML recovery after a withheld update.
+
+Verification: the focused persistence/HTTP/timeout set passed 68 tests; the full
+Python suite passed 30,004 tests with 952 skipped; mypy passed across 1,014 source
+files. These are server/protocol tests, not browser or cross-worker evidence.
+
+This is a **registry sweep, not rendered-slot reconciliation**. A child omitted
+from a new template may still be registered; removing its runtime ownership and
+stored envelope requires a successful-render inventory and scoped pruning index.
+GET/reconnect-wide sweeps, scoped child background dispatch, lazy/nonsticky and
+mixed-policy providers, repeated/nested event routing, browser/cross-worker
+verification and the remaining ADR034–037 work still block activation.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.

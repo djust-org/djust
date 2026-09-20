@@ -3419,9 +3419,16 @@ class ViewRuntime:
         # _render_and_send).
         skip_render = _resolve_skip_render(view)
         force_html = getattr(view, "_force_full_html", False)
+        from ._exposure import uses_legacy_exposure
+
+        # The parent's assign snapshot does not include owned child state.
+        # A handler can mutate a child without changing a parent declaration.
+        has_explicit_children = not uses_legacy_exposure(view) and bool(
+            getattr(view, "_child_views", None)
+        )
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
-            if pre_assigns == post_assigns:
+            if pre_assigns == post_assigns and not has_explicit_children:
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
@@ -3438,12 +3445,14 @@ class ViewRuntime:
             pending = getattr(view, "_pending_push_events", None)
             if pending:
                 post_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
-                if pre_identity == post_identity:
+                if pre_identity == post_identity and not has_explicit_children:
                     skip_render = True
 
         has_async = getattr(view, "_async_pending", None) is not None
 
         if skip_render:
+            if not await self._persist_explicit_children_after_event(view):
+                return
             # (_skip_render was already consumed by _resolve_skip_render
             # above — it is the single owner of that reset, #2834.)
             # Legacy: drain ALL queued side-effects BEFORE the noop, matching the WS
@@ -4803,6 +4812,33 @@ class ViewRuntime:
             logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
         return fields
 
+    async def _persist_explicit_children_after_event(self, view: Any) -> bool:
+        """Save the authorized child tree before acknowledging a parent event."""
+        from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure_child_persistence import asave_child_states
+        from ._exposure_sessions import request_binding
+
+        if uses_legacy_exposure(view) or not getattr(view, "_child_views", None):
+            return True
+        try:
+            request = getattr(view, "_djust_event_request", None)
+            if request is None or (
+                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
+            ):
+                raise ExposureError("Child persistence requires current authorization")
+            await asyncio.wait_for(
+                asave_child_states(view, request), timeout=EVENT_STATE_SAVE_TIMEOUT_S
+            )
+        except Exception:  # noqa: BLE001 — no provider values or success frame on failure
+            # Rendering may already have advanced the server VDOM. The browser
+            # received no matching update, so the next success must send HTML.
+            view._force_full_html = True
+            await self.transport.send_error(
+                "Child state unavailable. Please reload the page.", code="state_error"
+            )
+            return False
+        return True
+
     async def _render_and_send(
         self,
         *,
@@ -4879,6 +4915,9 @@ class ViewRuntime:
                 await self.transport.send(response)
                 return
         _render_ms = (time.perf_counter() - _render_start) * 1000
+
+        if not await self._persist_explicit_children_after_event(view):
+            return
 
         def _send_event_frame(frame: Dict[str, Any]) -> Dict[str, Any]:
             """Stamp the render duration + invoke the DEBUG ``on_event_frame`` fold
