@@ -1,1 +1,0 @@
-- **`theme_nav_group`, `theme_breadcrumb`, `theme_nav_item`**: an item may now set `navigate` to render its link with `dj-navigate`, so a nav pointing at LiveView routes travels over the open socket. Opt-in per item; links without it are unchanged.

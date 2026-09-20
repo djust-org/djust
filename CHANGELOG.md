@@ -7,6 +7,566 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc9] - 2026-09-19
+
+### Added
+
+- A bound component's event now patches only that component's subtree when nothing else changed (ADR-032, #2917). After the handler runs, if the one assign that changed is a class-level component's slot and the view's template reads it only as the bare `{{ nav }}` (never `nav.active`, `nav|length`, `{% for x in nav %}`, and no memoised `@computed` over it), the runtime renders that component alone and Rust splices the new subtree into the page VDOM (`RustLiveView.patch_component_subtree`). The client receives the same `patch` frame as before, with `timing.scope == "component"` when timing is exposed; recovery and versions stay consistent. Any gate failure takes the page render, unchanged. Measured on the theme-gallery accordion: the toggle drops from a page render to a component render.
+- `{{ nav }}` renders a class-level component (ADR-031, PR 2): when the component declares `template` or `template_name`, `str(view.nav)` renders it with the view's `State` as the context plus `component_id`, wrapped in `<div data-component-id="nav">` so `dj-*` events inside it reach the component's handlers; the render is cached on the state's hash (`_render_hash` / `_cached_html`) and never touches `_dirty`. A component without a template still renders as its state's dict repr. `{{ nav.active }}` keeps resolving next to `{{ nav }}`. Docs: the `|safe` advice for components is retired (#2501 is closed and all four paths insert the markup unescaped), and the "auto-promotion gap" section with its non-existent `.descriptor()` workaround is replaced by the class-level component section.
+- Class-level components (`nav = Tabs(active="overview")`) now bind per view (ADR-031, PR 1): `view.nav` is a `BoundComponent` that holds this view's `State` as `view.nav.state`, forwards attribute reads and writes to it, registers itself in `view._components`, and receives any `@event_handler` method the component class defines through a `component_id` event with the bound component as `self` — so a handler reads `self.state.active`. `Meta.event` keeps its view-level alias and also routes through `component_id`. Time-travel snapshots, session save/restore and the HTTP private-state round trip persist the State only. `isinstance(view.nav, Tabs.State)` is now `False`; read `view.nav.state`. Rendering `{{ nav }}` from the component's template is PR 2.
+- Add `djust init`, which adds djust to an existing Django project: it appends a marked settings block (apps, `ASGI_APPLICATION`, channel layer; `TEMPLATES` is left unchanged), replaces a stock `asgi.py` with WebSocket routing, installs `djust`, `channels`, and `uvicorn[standard]` with the project's own tooling, and runs `manage.py check`. `--dry-run` shows the diff; files with uncommitted changes are left alone unless `--force` is passed.
+- **`theme_nav_group`, `theme_breadcrumb`, `theme_nav_item`**: an item may now set `navigate` to render its link with `dj-navigate`, so a nav pointing at LiveView routes travels over the open socket. Opt-in per item; links without it are unchanged.
+
+- **Every storybook page says where the component lives and what styles it.**
+  A component's preview answered "what does it look like" and nothing else — a
+  developer who wanted to change how it looked had to grep the package. Each
+  detail page now carries a `SOURCE & STYLES` table: the template path, with
+  the path to copy it to for an override and the per-theme override path; the
+  module path for a Python component; and, for every stylesheet that matches
+  the component's own classes, its path and the lines that define them.
+
+  The stylesheet rows are computed from the rendered markup rather than kept
+  in a table, so a component that gains a class gains its entry, and the two
+  `components.css` files (the theming package's and the components app's) are
+  told apart by path rather than conflated.
+
+- One-line notice when a newer djust release is available or the installed version has a published security advisory, shown by `djust new`/`init`, at development-server start, and as `djust.U001` in `manage.py check`. Cached for a day, silent on failure, off in CI, with `DEBUG=False`, or via `DJUST_CONFIG = {"update_check": False}` / `DJUST_NO_UPDATE_CHECK=1`. See the "Update and security notices" guide.
+
+### Changed
+
+- The context a bridged inline tag receives (`{% url %}`, `{% regroup %}`, `{% static %}`, any `{% load %}`ed simple/inclusion tag) is now converted once per context-frame version and reused across calls instead of rebuilt from scratch per call (#2914). The rebuild was O(context) per tag call — 75 % of a storybook render carrying a `{% url %}` per sidebar row; that toggle goes 186 ms → 20 ms with byte-identical output. A tag still sees the same names and values; the one visible change, which is Django's own behaviour, is that a tag mutating a nested value it received (a list in the context) is seen by later tags in the same render. The memo holds only the live stack's frames and is cleared when the render returns, so a converted copy of the state never outlives the render. A `{% with y=x.y|safe %}` scope still cannot leak its mark past the scope, and the `block.super` path is unchanged.
+- The theme gallery storybook's live preview is now one bound component (`Preview`) rendered by `{% storybook_preview %}`, so clicking an example — accordion, tabs, modal, dropdown, and every hand-hosted demo event — patches only the preview instead of re-rendering the page and its sidebar (ADR-032 S3, #2917). The descriptor semantics are unchanged: the preview rebuilds the descriptor's State from its values and runs the descriptor's own handler. Events sent without a `component_id` still resolve on the view through thin forwarders.
+- **A plain component is state a handler writes to (ADR-033 S1).**
+  `self.rating.value = 5` in an event handler now re-renders. A
+  `Component`'s constructor kwargs are its `state`; public attribute writes
+  go through to it; every change-detection snapshot (`_snapshot_assigns`,
+  the dirty baseline, `@computed`, `_sync_state_to_rust`) compares the
+  component by that state under the ONE #2900 rule instead of by `id()`, so
+  the in-place write answers `patch` rather than `noop` (M3), and a component
+  rebuilt with the same kwargs no longer counts as changed. The walk is
+  budgeted like a container; a component narrows it with
+  `fingerprint_fields = ("columns",)` (listed keys walked, the rest one-node
+  leaves: scalars by value, containers by identity) or opts out with
+  `_djust_fingerprint_state = False`. `DataTable`, `DataGrid`, `VirtualList`,
+  `BarChart`, `LineChart`, `PieChart` and `Sparkline` declare theirs, so a
+  click never pays a per-row walk. Pinned in
+  `python/djust/tests/test_component_state_adr033.py`.
+- **A plain component's state persists like descriptor state (ADR-033 S2).**
+  The session save and the signed back-navigation snapshot carried a plain
+  component as its rendered HTML (or dropped it), so `self.rating.value = 5`
+  was lost on reconnect. Both now write
+  `{"__djust_component__": "<module>.<class>", "state": {...}}` and
+  `decode_state_roundtrip` rebuilds the component from it — resolved only
+  among already-imported `Component` classes, through the class's own
+  constructor, leaving the tag as a dict when it cannot. A reconnect after the
+  write renders five stars
+  (`python/djust/tests/test_component_state_persistence_adr033.py`).
+- **Values are typed on the wire and an instance carries a `name` (ADR-033 S3).**
+  `Component.event_attrs(event, trigger="click", **params)` renders the
+  attributes an element emits an event with: `dj-<trigger>` plus one typed
+  `dj-value-*` per keyword (`int` → `:int`, `bool` → `:bool`, `float` →
+  `:float`, `str` untyped), so a handler receives `4`, not `"4"`, and the
+  `int(value)` line disappears. `Component(name="row-7")` is state and rides
+  along as `dj-value-name` on every trigger (for a class without a `name`
+  parameter of its own — a form-field component keeps `name` as the field
+  name and is not named on the wire), so one handler serves several
+  instances: `def set_rating(self, value, name=None, **kwargs)`. Every shipped
+  component that emits an event now goes through the helper (the untyped
+  `data-value` form is no longer emitted; the client still reads it), pinned
+  by `python/djust/tests/test_component_typed_events_sweep_adr033.py`.
+- **Compatibility notes (ADR-033).** A handler annotated `value: str` still
+  receives text for a typed wire value (`"4"`, `"true"`). `event_attrs` renders
+  a UUID/date/Decimal as its `str()`, untyped. `state` is a reserved
+  `Component` constructor kwarg (`TypeError`). `get_template_dirs()` clears its
+  cache on `setting_changed`, so `override_settings(TEMPLATES=...)` no longer
+  leaks a temporary directory into later `template_name` views in a test run.
+- **Component catalogue**: moving between its pages is now a redirect over the open WebSocket rather than a full document load. Every card, sidebar entry, breadcrumb and pager link carries `dj-navigate`, and the catalogue's document emits `{% djust_client_config %}` so those paths resolve. The three views also set `page_title`, so the browser tab follows a navigation that never reloaded the page.
+- **The component storybook is now the component catalogue, at
+  `/theme/components/`.** It was `/theme/gallery/storybook/`, a fourth name for
+  a family of pages that the documentation and the marketing site already call
+  "components". The theme gallery moves alongside it from `/theme/gallery/` to
+  `/theme/themes/`. Every old path redirects permanently and carries its
+  captured component or category, so a bookmark lands on the page it named.
+  The older `djust.components` gallery keeps its own pages, now under
+  `/theme/components-legacy/`.
+- **A host site can wrap the catalogue in its own chrome.** The pages render
+  inside the template
+  `theming/templates/djust_theming/catalogue/_document.html`; an app listed
+  before `djust.theming` in `INSTALLED_APPS` that ships a template at the same
+  name replaces the framework's document and topbar, which is how `djust.org` puts
+  these pages inside its own navigation. Not a setting: djust's Rust engine
+  resolves `{% extends %}` targets literally, so the template loader is the
+  override mechanism that works on both engines. The contract a replacement
+  meets is documented in the file and in `guides/components.md`.
+- **Each component page says which djust it runs and links to its prose.** The
+  topbar carries the running version, and every component links to its entry
+  in the generated reference and to the components guide
+  (`DJUST_THEMING_DOCS_URL`, default `https://docs.djust.org`) — the catalogue
+  runs a release while the documentation site pins a checkout, and those can
+  differ.
+- **`describe_component(name)` is the registry's data contract.**
+  `djust.theming.gallery.component_registry` exposes one call returning a
+  component's description, import line, parameters, examples, events,
+  accessibility rules, slots and style paths, with the keys pinned as
+  `COMPONENT_DESCRIPTION_KEYS`. `docs.djust.org` generates its reference page
+  from it, so the live catalogue and the written reference cannot describe a
+  component differently.
+  Renames, for anyone importing them: `theming.gallery.storybook` →
+  `theming.gallery.catalogue`, `Storybook*View` → `Components*View`,
+  `{% storybook_preview %}` / `{% storybook_thumbnail %}` →
+  `{% component_preview %}` / `{% component_thumbnail %}`, the URL names
+  `storybook*` → `components*`, and the pages' CSS prefix `sb-` → `dc-`.
+- **`describe_component` carries what the class alone cannot.** Parameter
+  descriptions now come from the component's own `Args:` block (the signature
+  and the template contract record a name and a type, never a meaning, so
+  every row read `—`); a contracted component also names its Python class and
+  constructor under `python_class`, because `{% theme_alert %}` and `Alert`
+  are two ways to render one component; a private sentinel default is
+  reported as `NOT_SUPPLIED` rather than `<object object at 0x…>`, whose
+  address changed on every run; and `required` / `kind` are read from the
+  signature, so a `None` default is not a missing one and `**kwargs` is not a
+  parameter named "kwargs". `docs.djust.org` generates its component
+  reference from this call.
+- **Documented when not to use `dj-navigate`.** It swaps the contents of
+  `[dj-root]` and nothing else, so a target page that needs its own
+  stylesheet or script in `<head>` — the component catalogue, or any page
+  from another application — arrives as unstyled markup, with the previous
+  page's `<title>` still in the tab. Nothing errors. `guides/navigation.md`
+  now names the symptom and says to link such pages with a plain `href`, and
+  `guides/components.md` says it for the catalogue specifically.
+- **Index cards show the component again.** The card thumbnail answered ""
+  for anything outside `COMPONENT_CONTRACTS`, from when the registry carried
+  examples for the 24 contracted components only. It carries them for 149
+  python components too, so the rule was blanking nine cards out of ten on a
+  page whose job is to let someone recognise a component by looking at it.
+  172 of 179 cards now render a preview; the rest are components that render
+  nothing until opened (a tour, a bottom sheet), where a blank is the honest
+  answer, and two that still have no example. `table_of_contents` gained one.
+- **The index grid no longer has holes in it.** Each card is an `<a>`, and 13
+  components preview markup that contains links (breadcrumb, nav, pagination,
+  a table of contents). An `<a>` inside an `<a>` is invalid HTML: the browser
+  closes the card's link before the inner one, which lifts the card out of
+  its own link and leaves an empty anchor holding a grid cell. A card
+  thumbnail now renders `a` and `button` as `span`, keeping their classes so
+  the preview still looks like the component. The same change removes
+  keyboard-focusable controls from a region marked `aria-hidden`.
+- **A theme pack's icon style no longer repaints charts.** The generated
+  rules target every `svg` on the page with `!important` — they have to beat
+  the `fill` and `stroke` attributes an inline icon writes — so every chart
+  djust ships lost its fills and became an outline, and `stroke: currentColor`
+  on the root `svg` inherited into `<text>`, rendering labels stroked as well
+  as filled and far too bold. The rules now exclude a component's own drawing
+  surface, which djust names `dj-<component>__svg`; `gauge` and
+  `progress_circle` were missing that class and now carry it. A host's inline
+  icons still get the treatment, which is what the setting is for.
+- The `djust new` starter page is now a themed demo: a live list, a preset and light/dark switcher built on `djust.theming`, and links to the documentation, styled with plain CSS driven by theme tokens instead of the Tailwind CDN. `djust new --bare` generates a one-button placeholder page instead.
+- `djust new` projects now start with `cd <name> && make dev`: the generated `Makefile` uses the project's `.venv` interpreter so no activation is needed, setup finishes with `manage.py check`, and `requirements.txt` requires at least the djust version that generated the project instead of `djust>=0.3.0`.
+- The `djust new` starter page is now drawn entirely from the active theme pack: it uses the theming components (`.card`, `.btn`, `.input`, `.badge`), ships the `{% theme_panel %}` gear menu (mode, all packs, presets, design systems, layouts), eight quick-pick pack chips, and wires `djust.theming.urls` for `theme.css` and the component gallery at `/theme/gallery/`.
+- **The storybook index and category pages are LiveViews, and none of the
+  storybook's interactivity is bespoke JavaScript any more.** The index, the
+  category pages and the shared sidebar carried ~100 lines of inline `<script>`
+  that filtered components by writing `style.display` — on a page whose entire
+  purpose is demonstrating djust. The sidebar search is now `dj-input` with
+  `dj-debounce`, the category chips and sidebar headers are `dj-click`, and the
+  filtering happens in Python (`StorybookSidebarMixin`). Grouping the *filtered*
+  list with `{% regroup %}` also retires the empty-category cleanup the script
+  hand-rolled, and an empty result is now a rendered state rather than a grid of
+  hidden cards. The index and category pages keep their existing access gate
+  (`DJUST_THEMING_GALLERY_PUBLIC` / `DEBUG` / `is_staff`), now enforced on every
+  transport via `check_permissions` rather than only on the initial HTTP GET.
+- **Gallery templates no longer name their view class.** They emit the mount
+  root and nothing else; `mixins/request.py` derives the path from the class
+  doing the render and stamps it. Naming it by hand is how all ten
+  components-gallery views came to declare a module that has never existed
+  (#2893) — a path the server computes cannot drift from the class that
+  rendered the page.
+
+- **The storybook's USAGE block shows the two files a developer writes.** It
+  documented the component in isolation — `Progress(value=0, max=100,
+  label=None)` followed by `component.render()` — which is not the shape of any
+  real call: it showed the signature's defaults rather than the arguments that
+  produce the preview above it, and it left out the `{{ component|safe }}` that
+  actually puts the component on a page. It now shows the view that holds the
+  state and the template that renders it.
+
+  For a template component the snippet is the tag, with the values a view
+  would hold passed by name; anything a template cannot write as a literal —
+  a list of dicts, a page's nav items — is assigned on the view and passed by
+  name, because `repr()` of a list is a `TemplateSyntaxError` rather than a
+  value. Every snippet for a contracted component is compiled and rendered in
+  the test suite, so the block whose whole job is to be copy-pasteable cannot
+  ship something that raises.
+
+- Storybook usage snippets now show the event side of a component: a descriptor (`Accordion`, `Tabs`, `Modal`, …) is shown in its class-level form, whose `Meta.event` the descriptor answers itself; any other event the markup emits (`dj-click="set_rating"`) gets an `@event_handler` stub that rebuilds the component with the kwarg the event drives. The template line is `{{ component }}` — `render()` marks the HTML safe, so `|safe` was never needed. `code_snippet` and `code_block` highlight their code on the server when Pygments is importable (an optional dependency; plain escaped text otherwise), with token colours drawn from the theme's properties (`--dj-code-*` to override).
+- **Storybook usage follows ADR-033.** The generated view holds the component
+  in `mount()` and its handler writes to it (`self.component.value = value`),
+  with no `int(value)` and no `get_context_data` rebuild; the storybook's own
+  demo handlers do the same and the wire-value coercion they carried is gone.
+  The parameters table marks `event` as a rename of the verb — an instance's
+  identity is `name`. `docs/website/core-concepts/components.md` and
+  `guides/components.md` carry the state-written-through form, the `name`
+  convention and the "which shape when" rule (D7).
+- The theme gallery storybook is docs-first and built from the components it documents (#2917 follow-up). Topbar: `theme_nav` sections plus the framework's theme switcher (preset + light/dark) on every page. Sidebar: a `theme_input` search with a `/` shortcut, one `theme_nav_group` per category with counts and server-tracked expansion, a session-backed "Recently viewed" group, and a slide-in behind a menu button on narrow screens. Index and category pages: `card`s with a one-line description and, for template components, a rendered thumbnail; the category filter is a `toggle_group`. Component pages: one **Preview** card — a `toggle_group` per enumerable example kwarg, the first example rendered with those choices and the call that produces it in a `code_snippet` (a chip click is a component-scoped patch), then only the examples the chips cannot reproduce; copyable usage; one props table (`theme_table`) with a Required column; accessibility; slots; a collapsed source-and-styles panel; previous/next `theme_nav_item`s in sidebar order; a `table_of_contents` rail. Two components grew to serve it: `theme_input` passes unknown attributes (`dj_input`, `autocomplete`, `aria_label`…) to the `<input>`, and `theme_nav_group` takes a `badge` on the heading, an `active` item, and a `toggle_event` so its expanded state can live on the server.
+- **The theming `tabs`, `dropdown` and `modal` components take their state from
+  the server.** Each interactive element now dispatches an event — `set_tab`,
+  `toggle_dropdown`, `toggle_modal` — and the markup renders from the host
+  LiveView's descriptor state, so `{% theme_tabs active=tabs.active %}`,
+  `{% theme_dropdown is_open=menu.is_open %}` and
+  `{% theme_modal is_open=modal.is_open %}` drive them. The modal's visibility
+  is an inline `display` because `.modal-backdrop` is `display: flex` in both
+  `theming/css/components.css` and `scaffold.css`, and an author rule beats the
+  UA's `[hidden]` rule. Adding `dj-click` to the close control also makes Escape
+  close a dialog through the framework: `51-keyboard-nav.js` finds a dialog's
+  close target with `[dj-click]`.
+- **Fixed: a DEP-002 descriptor was unreachable on any page with more than one
+  descriptor of its type.** `data-component-id` routing checked only
+  `view._components` (LiveComponents), so a descriptor's id — the documented way
+  to disambiguate — was reported as `Component not found` before the descriptor's
+  own handler could see it. Routing now falls through when the id names a
+  descriptor, which is what makes several modals or dropdowns on one page work.
+- **`components.js` stands down on any page djust is driving.** When the markup
+  carries a djust mount root the server owns these components, and binding
+  client-side as well would put two writers on the same DOM. Plain pages keep
+  the fallback: the theme gallery is still a plain Django view, because it
+  renders all 25 `{% theme_* %}` tags and those are registered with Django's
+  template engine only — as a LiveView it raises `Invalid block tag:
+  'theme_button'`. Registering them with the Rust engine is a prerequisite for
+  making that page server-driven.
+
+### Fixed
+
+- **Django admin changelist/change pages 500 under the recommended
+  `TEMPLATES` shape (#2872).** With `DjustTemplateBackend` first
+  (`APP_DIRS: True` — what `djust new --with-db` generates and djust.C016
+  hints), the admin's `InclusionAdminNode` tags called
+  `context.template.engine.select_template`, which inside a djust render
+  delegates to the active backend — and the backend implemented only
+  `get_template`. `DjustTemplateBackend` now mirrors
+  `django.template.engine.Engine.select_template` (first existing name wins,
+  `TemplateDoesNotExist` listing every name otherwise), which also serves an
+  `inclusion_tag` registered with a list of names and `{% include [...] %}`.
+  New cases in `TestAdminChangelistUnderRecommendedShape` and
+  `TestSelectTemplateSemantics`
+  (`python/tests/test_admin_changelist_select_template_2872.py`).
+- **Four `djust new` flags generated projects that did not work, though all four are documented as working (#2876).** `--with-streaming` emitted `"[%%s] %%s" %% (...)` into the generated `views.py` (a `SyntaxError`, so `manage.py check` exited 1); `--from-schema` emitted `def create(self, , **kwargs):` for a model with no text-like fields (also a `SyntaxError`); `--with-auth` spliced `{%% if ... %%}` into `base.html` (a `DjustTemplateSyntaxError: Invalid block tag`, leaving the page rendering as a bare fragment) and still used base-template classes that no longer exist; and `--with-presence` raised `AttributeError: 'AppView' object has no attribute 'presence_list'` on the first request. The escaping defects share a root cause worth stating: a fragment spliced into a template as a **substitution value** (`%(template_extra)s`) must carry single-`%` template tags, while a fragment that is itself `%`-formatted must escape them as `%%` — the generator had these two contexts crossed, so it emitted literal `%%` where a tag was wanted and an empty parameter slot where none was. The `--with-presence` failure was a wiring mismatch between the generated view and the presence record shape. 67 parametrized cases in `python/djust/tests/test_scaffold_flag_projects.py` (`test_flag_combo_checks_and_renders`, `test_from_schema_checks_and_renders`, `test_context_values_carry_no_percent_escaping`): each flag and flag combination is generated, then `manage.py check` is run and `/` is rendered through the Django test client — the same `RENDER_PROBE` shape #2875 added for `--with-db`, which is what would have caught all four.
+
+- **Fix every LiveView in the component gallery failing to mount (#2893).**
+  `_base.html` declared its view as
+  `dj-view="djust_components.gallery.live_views.{{ view_class }}"`, and
+  `djust_components` is the *static/template* namespace — the directory
+  `static/djust_components/` — not a Python package. The real module is
+  `djust.components.gallery.live_views`. `security/mount.py:276` resolves the
+  attribute with `importlib.import_module`, so all ten of the gallery's views
+  (the index and all nine categories) were refused:
+
+      View djust_components.gallery.live_views.GalleryIndexView is not allowed
+
+  The failure was invisible from the HTTP side: the initial GET renders the
+  whole page server-side, so the gallery returned 200, showed its components
+  and styled them correctly — while no control responded, because nothing was
+  ever listening. A `<div>` naming a module that does not exist looks exactly
+  like a `<div>` naming one that does. 5 regression cases in
+  `python/djust/tests/test_gallery_view_mount_path.py` (23 parametrized
+  instances), which read the `dj-view` attribute out of the *rendered* page
+  and mount that exact string over a real `WebsocketCommunicator`; gate-off
+  (restoring the pre-fix path) fails 21 of the 23.
+
+- `{{ v }}` on a `dict` subclass with its own spelling — a `QueryDict` (`{{ request.GET }}`), an `OrderedDict`, a `defaultdict`, a user class with `__str__` — now renders `str(v)` as Django does, instead of the map display (#2899, the dict half of #2704). The object crosses as the opaque carrier, so `{{ v.key }}`, `{{ v|length }}` and `{% if v %}` still read the live mapping; a subclass that inherits the dict spelling (`TypedState`, a bare `class D(dict)`) is unchanged. A `MultiValueDict` held in view *state* keeps its last-value map (#2556) so it survives a state-backend round trip. `scripts/filter-parity-differential.py` gains the `d-subclass` input. Limits: a carrier holds the live object, so after a state-backend round trip `{{ v.key }}` and `|json_script` fall back to the string spelling (as for every carrier since #2448), and a snapshot restore hands the view a plain `dict`; a subclass assigned to view state is fingerprinted as a dict for change detection but pays the carrier's `str()`/`repr()`/iteration per render, so a very large one belongs in `_private` state or a plain `dict`.
+- A class-level component's state change no longer answers `noop` (#2900): the slot that held the `State` dict before ADR-031 holds a `BoundComponent` since #2895, and the runtime's skip gate (`_snapshot_assigns`) compared it by `id()`, so a handler that mutated the State through the `Meta.event` alias (a plain view event — click a tab) left the pre/post snapshots equal and the render was skipped. One rule now, `change_detection.fingerprints_by_content` + `deep_fingerprint` unwrapping the wrapper to its State, asked by `_snapshot_assigns`, `@computed` and `_sync_state_to_rust` (which had its own copy since #2897). Pinned on the frame a real WebSocket receives. An instance-assigned component is still a leaf by `id()`. The dirty baseline (`is_dirty`) still skips the `_component_*` slot — tracked separately.
+- A `Value::NamedTuple` crossing back to Python (a `{% regroup %}` row reaching a bridged tag, `get_state()`, the assignments export) now gets ONE `collections.namedtuple` class per `(name, fields)` shape instead of a new class per value (#2913). Every bridged tag call converts the whole context, so a page with ten regrouped rows and a `{% url %}` per sidebar link minted ~1 760 classes per render — about 50 ms of a 186 ms storybook toggle. `type(a) is type(b)` now holds for two rows of one shape, as it does in Python; `__module__` is pinned to `djust._rust`.
+- A `component_id` event whose handler changed nothing now answers `noop`, as a view event does, instead of re-rendering the page and shipping it as an `html_update` (#2922).
+- Bridge wrapper-shaped raw block tags on `{% load %}` (ADR-030). A raw `@register.tag` that parses one body up to `{% end<name> %}` and renders it as-is now takes the same rendered-body path as `simple_block_tag`, so the Rust engine renders the body and Django's own node wraps it; this un-breaks `callout`, `aspect_ratio`, `scroll_area`, `sticky_header` and `tab` in the component gallery and any third-party wrapper tag. Tags with an intermediate token, direct token reads, or nodelist introspection are still refused, and the error now names the reason instead of pointing at a registration kind to wait for.
+- **Storybook registry and ADR-033 narrowing gaps.** `dropdown_menu`,
+  `infinite_scroll`, `terminal` and `wizard` are registered with examples, so
+  they appear in the storybook and are covered by the typed-events pin;
+  `DependentSelect`, `MasonryGrid` and `Treemap` declare `fingerprint_fields`
+  like the other data-holding components; the pin resolves classes through the
+  registry's own resolver, so `qr_code` (`QRCode`) is exercised instead of
+  skipped.
+- **Back/forward cache**: going back to a djust page no longer logs a WebSocket error, and the page reconnects at once instead of waiting out a backoff. Closing every socket is a requirement of entering the browser's back/forward cache, not a fault, and the browser dispatches that close on the restored page rather than the frozen one, so djust now keeps quiet until its replacement socket is up.
+- **Component catalogue**: the gauge and calendar heatmap previews now carry example data. Both registry entries passed no arguments, so the gauge previewed at zero with no label and every heatmap cell sat at the empty level.
+- **Fix the component gallery's index page rendering 18 dead links.** Its
+  category cards and the sidebar both link through `{{ cat.url }}`, and the
+  index's `_category_cards` list — built in `GalleryIndexView.mount`, unlike
+  the category views' which already carried the key — was constructed without
+  a `"url"` entry. The attribute therefore resolved to the empty string and
+  every link rendered as `href=""`: nine cards and nine sidebar entries
+  pointing at the current page while looking like ordinary links. The key is
+  now populated from `_category_url`, so the links point at the category
+  LiveViews under whatever mount point the gallery is served from.
+- **CI**: the per-shard test-duration artifact now uploads even when that shard's tests fail. The drift gate lives in the pytest step, and its documented repair needs all four shard artifacts, so the shard that failed the gate was the one shard that uploaded nothing and the repair deadlocked on the run that needed it.
+- **`dj-navigate` and `dj-patch` links**: a modified or middle click now opens a new tab or window as it should. Both directives called `preventDefault()` before looking at the event, so Cmd, Ctrl, Shift, Alt and middle clicks were swallowed. The delegated auto-navigate listener always got this right; the directives now use the same rule.
+- **Back button after a `dj-navigate`**: a click now pushes one history entry, and back returns to the previous view. Two defects combined here. The marker recording that a link was already bound was a `data-` attribute, which server HTML never carries, so every morph or patch that reused the node stripped it and the next bind pass added another click listener — after five patches one click pushed six identical entries and back appeared dead. And the choice between re-mounting a view and patching it was read off a flag on the history entry, which the entry the document was loaded on does not have, so the first back from a `dj-navigate` was read as a same-page parameter change: the URL moved and the content did not. That decision now compares pathnames, which is what it always meant; djust does not write to an entry it did not create.
+- **`live_redirect` mount**: anything a view queues during `mount()` — `page_title`, `page_meta`, flash, push events — is now flushed to the client. An HTTP load carries these in the rendered document, so nothing queued at mount ever needed sending; a redirect mount has no document render, and a view that set `self.page_title` in `mount()` left the tab naming the page the reader had navigated away from.
+- Make project scaffolding install into the newly created virtual environment even when another environment is active. Stop setup and report an error if environment creation, dependency installation, or migrations fail, instead of reporting success for an incomplete project.
+- **Answer every `dj-click` the storybook's own previews emit.** Twenty events
+  across seventeen components had no handler — `rating`'s `set_rating` was the
+  one reported, and it errored on click; so would the other nineteen
+  (`toggle_group`, `stepper`, `date_picker`, `page_alert`, `split_button`,
+  `markdown_textarea`, `notification_center`, `command_palette`, `form_array`, …).
+  A component renders `dj-click` because a host is expected to answer it — on a
+  storybook page this view *is* the host, and an unanswered event is a server
+  error rather than a no-op. They are driven from one table mapping each event to
+  the single state kwarg it sets, installed as handlers the way the framework
+  installs its own descriptor events.
+- **Style the components whose `dj-` class families had no CSS.** `Switch`, `Tag`
+  and `StatCard` rendered as raw browser controls or bare text: the theming
+  `.switch*` / `.tag*` families were styled, the `dj-`-prefixed ones the python
+  components emit were not, and `.dj-stat-card*` existed nowhere. Markdown
+  rendered unstyled too — it emits `dj-prose` while `prose.css` styles the
+  unprefixed `.prose`.
+- **Give eleven data components examples that contain data.** `data_table`,
+  `data_grid`, `comparison_table`, `tree_view`, `breadcrumb`, `multi_select`,
+  `combobox`, `tag_input`, `otp_input`, `time_picker` and `color_picker` all had
+  an example of `[{}]`, so each rendered with every argument at its default —
+  a `data_table` preview was an empty `<table>` with no columns and no rows, and
+  a `tree_view` preview was nothing to look at. The shapes come from each
+  component's own docstring rather than from guessing at the signature, which is
+  how `meter` came to be passed `value`/`min`/`max` for a `segments`/`total`
+  API.
+- **The storybook's interactive previews stopped responding after ADR-031
+  merged.** `tabs`, `dropdown`, `modal` and the other five `_INTERACTIVE`
+  descriptors read their live state from `getattr(view, name)`, which ADR-031
+  changed: a class-level descriptor now resolves to a `BoundComponent` whose
+  per-view state is `.state`, where it used to resolve to the `State` itself —
+  a `dict`. The merge was gated on `isinstance(descriptor, dict)`, so it
+  silently contributed nothing and every preview lost the state it renders
+  from. The components gallery got the unwrap when ADR-031 landed; the
+  theming storybook's own copy did not — one pattern, two galleries, one of
+  them fixed, which is the parallel-path shape the rebase exposed.
+- **Fix six component previews on the storybook, five of which were examples
+  written against an API the component does not have.** `Meter` renders
+  `segments` against a `total` and was being passed `value`/`min`/`max` — all
+  three landed in `**kwargs` and the preview showed an empty bar under a label.
+  `Rating` was passed `max` (the parameter is `max_stars`) plus a `name` it does
+  not take. The `Dropdown` example was `[{}]`, so the preview was a button
+  reading "Menu" with nothing to open — and the `Dropdown`/`Modal` examples were
+  reduced to one each, because a storybook page declares one descriptor per
+  component and renders every example against that same state, so a left/right
+  pair shared a single `is_open` and a three-size modal set would have opened
+  all three at once. `Modal` additionally had no trigger at all — a dialog's
+  trigger belongs to the page that opens it, so the storybook now supplies one.
+- **Fix the `CodeSnippet` copy button doing nothing.** It rendered as a
+  working control — class, `aria-label`, `type="button"` — wired to no handler.
+  It now uses the framework's own `dj-copy="#<id>"`, which copies the named
+  element's `textContent` client-side, and the code block carries the matching
+  id. Client-side deliberately: a clipboard write is a browser API, so a
+  round-trip would add latency and a failure mode to a purely local action.
+- **Fix the `Spinner` rendering as the words "Loading..." with no spinner.**
+  Two causes. `.dj-spinner` had no CSS anywhere in the repo — not in the
+  components stylesheet, not in theming — despite the component documenting six
+  `--dj-spinner-*` custom properties and three other call sites emitting the
+  class; the rules now exist, including a `prefers-reduced-motion` guard that
+  slows the animation rather than stopping it (a frozen spinner reads as a hung
+  page). And the screen-reader label used `dj-sr-only`, which matches no rule —
+  the utility is `.sr-only`, unprefixed, and every sibling component already
+  used that spelling, so the label was not hidden.
+- **Rating's `set_rating` no longer errors.** The component's stars dispatch
+  `set_rating` and the storybook had no handler, so clicking one produced a
+  server error instead of a rating. `StorybookDetailView` now keeps the value.
+  It is held as view state rather than as a new descriptor: `Rating` is a value
+  input, DEP-002 covers containers, and inventing public framework API to make
+  a demo page work is the wrong order of operations.
+- **Cache-bust the theming static assets.** `theme_head.html` linked
+  `components.js` / `components.css` / `theme.js` with no version, and Django's
+  static server sends no `Cache-Control` — so browsers applied heuristic
+  freshness (a fraction of the file's age) and kept the copy they already had.
+  An edit to any of them was invisible on the page it was made for, which reads
+  as "the fix didn't work"; it cost a full debugging cycle here, where a stale
+  `components.js` was still calling `stopPropagation()` on dropdown triggers and
+  silently eating every `dj-click` djust had bound. Each tag now carries
+  `?v=<newest asset mtime>`, so the token moves on an edit rather than on a
+  release. Production's hashed filenames already handled this; a dev server
+  serving the source did not.
+
+- **Six storybook previews that rendered something, and nothing like the
+  component.** Each was reported from a page whose job is to show a component
+  working, and each rendered plausibly enough that nothing looked broken —
+  which is why they survived an audit that checked for raises, empty output and
+  unhandled events.
+
+  - **`progress` printed `style="width: %"`.** The storybook handed each
+    template component's *template* the example's raw kwargs, bypassing the
+    `{% theme_* %}` tag that computes the derived context (`percentage`,
+    `is_indeterminate`, `css_prefix`, `attrs`, `slot_*`). An unfilled name is
+    an empty string rather than an error, so the hole was invisible; the same
+    tag rendered `width: 25.0%` for any real caller. Previews now render
+    through the component's own tag, so a preview cannot be wrong in a way the
+    component is not.
+  - **`dropdown`'s menu was an empty div.** `theme_dropdown` — and `alert`,
+    `badge`, `button`, `input`, `modal`, `pagination` and `table` — read
+    `slot_*` in their templates without ever calling `_extract_slots`, so a
+    caller-supplied slot stayed in `attrs`, which templates only read as
+    `attrs.class` / `attrs.id`. All eight now lift their slots into context.
+  - **`switch` could not toggle.** Its slider is drawn from the server-rendered
+    `.dj-switch-checked`, and the example named no `action`, so the input
+    carried no `dj-change` — the box flipped its own hidden checkbox and
+    nothing else moved. It also needed the demo handler to accept a `bool`: a
+    checkbox's `dj-change` is not a string, and `value: str` made the framework
+    reject the event with "expected str, got bool (True)".
+  - **`segmented_progress` had nothing to click.** Its steps are now `<button>`s
+    carrying their 1-based number to an `event` (default `set_segment`), the
+    way its sibling `stepper` already dispatched. With `event=""` it renders
+    plain `<div>`s, so an indicator wired to nothing is not focusable.
+  - **`loading_overlay` was an empty wrapper.** The example passed no `content`
+    and no `active`, so there was nothing to overlay.
+  - **`model_selector` could not open.** The option list carried
+    `display: none` and no rule anywhere turned it back on, and the trigger
+    dispatched nothing. It now takes `is_open` / `toggle_event`, emits
+    `data-open` and a `dj-click`, and `components-classes.css` reveals the list
+    on that marker.
+
+- **Every example rendered the first example's values.** `_render_examples`
+  merges the demo state into *every* example, so seeding that state from
+  `examples[0]` made a two-state switch show two switches both on and four
+  progress bars all read 25%. The state now starts empty and a transform reads
+  its starting value from the example on first use.
+
+- **`card`'s preview had an empty body, and `djust_theme` scaffolded a template
+  that raised.** `theme_card` funnels every keyword it does not declare into
+  `attrs`, so the example's `content` was accepted and dropped — and the tag
+  itself was a `simple_tag` whose documented usage was a
+  `{% theme_card %}…{% end_theme_card %}` block that no `end_theme_card`
+  registers, so `djust_theme`'s generated page failed on first render with
+  `TemplateSyntaxError: Invalid block tag: 'end_theme_card'`. The tag now takes
+  a `body` argument, and the scaffold, gallery and editor pass one.
+- Fix `djust_theming.W001` firing on every shipped theme preset (#2874). The check now skips pairs documented in `djust.theming.a11y_exemptions` — the same reason-carrying, anti-rot-gated list the #2060 pytest gate enforces — so `manage.py check` is warning-clean on all 66 shipped presets while user-authored presets still get full WCAG AA validation. The canonical 14-pair contrast matrix (previously drifted across three copies: W001's 13, the pytest gate's 6, the report script's 6) now lives once in `djust.theming.a11y_exemptions.CONTRAST_PAIRS`. The four core presets had their genuinely-failing status label colours fixed (badge surfaces untouched): `default`, `blue`, `shadcn` and `slate` status `*_foreground` labels flipped from near-white to dark — light-mode `warning` 2.04:1 → 8.16:1, `info` 2.74:1 → 6.08:1, `success` 3.19:1 → 5.22:1, `destructive` 3.62:1 → 4.60:1 (default/blue/shadcn; slate same pattern), plus dark-mode `warning` 3.15:1 → 5.29:1 and `info` 2.11:1 → 7.90:1, and `slate` light `muted_foreground` 4.42:1 → 4.62:1 — all now ≥ 4.5:1 WCAG AA. Their five stale exemption entries were removed. `djust new` no longer injects `SILENCED_SYSTEM_CHECKS = ["djust_theming.W001"]` into fresh projects. The 63 legacy brand palettes' remaining failures are documented as 316 new exemption entries (134 catastrophic <3.0 — branded-palette remediation follow-up).
+- Fix every component in the component gallery rendering as a red "Render error". The gallery compiled its example snippets with `django.template.base.Template`, which resolves through `Engine.get_default()` and therefore requires a `DjangoTemplates` entry in `TEMPLATES`. A project scaffolded by `djust new` — and djust's own demo — configures only `djust.template_backend.DjustTemplateBackend`, so every snippet raised `ImproperlyConfigured: No DjangoTemplates backend is configured`. Snippets are now compiled through the project's own configured backend, preferring `DjangoTemplates` when present. Restores 237 of the 245 affected render sites.
+- Fix the component gallery rendering entirely unstyled, with a single-option theme dropdown. Its theme integration imported `djust_theming.manager` / `djust_theming.presets` / `djust_theming.theme_packs`, none of which exist — `djust_theming` is only the *static* namespace; the package is `djust.theming`. Each import raised `ModuleNotFoundError` into a bare `except`, so the gallery injected no theme CSS at all (no design tokens, so no component styling) and reported one preset. Those fallbacks now log instead of failing silently.
+- Fix the theming gallery ignoring the project's configured preset. It opened on a hardcoded `preset="default"` regardless of `LIVEVIEW_CONFIG["theme"]["preset"]`, so a themed site saw its own component gallery in a palette that was not its own; a `?preset=` query parameter still wins.
+- Fix `default_mode` being ignored on every page. Both the anti-FOUC script in `theme_head.html` and `theme.js` hardcoded `'system'` as their mode fallback, so a project configuring `default_mode: "dark"` came up light on any machine whose OS preferred light — and because `theme.js` loads `defer` it then overwrote the inline script's correct value. The server-resolved mode is now published once (`window.__djust_theme_default_mode`) and read by both.
+- Fix the theme gallery's heading hierarchy, which was inverted: `.gallery__section h2` was pulled down to `1.25rem` while the theme's base rules left `h3` at `var(--text-2xl)` (~1.95rem), so "Variants" rendered half again larger than the "Button" section it belonged to.
+- Fix gallery modal and tooltip trigger buttons rendering as browser defaults; they are now styled via a `.gallery-trigger` class.
+- Fix the component gallery's routes raising `TemplateDoesNotExist` for anyone following its own documentation. The gallery needs `"djust.components"` in `INSTALLED_APPS` — Django only scans an app's `templates/` directory when the app is installed — and `components/gallery/urls.py` additionally told developers to include `djust_components.gallery.urls`, a module that has never existed. Both are now documented.
+- Fix the theming gallery's topbar linking to a hardcoded `/components/`, a path belonging to whichever project hosted the gallery, which 404s everywhere else. The theming app now routes the component gallery at `/theme/components/` when `djust.components` is installed, and the topbar links to it via `components_gallery_url` — omitted entirely rather than dead when the app is absent.
+- Fix the component gallery ignoring the project's theme: it hardcoded its
+  preset to `default`, its design system to `material` and its mode to
+  `light`, so a project configuring a preset or `default_mode: "dark"`
+  still got a light, default-palette gallery. A selection made in the
+  gallery's own toolbar still wins.
+- Fix the component gallery's chrome rendering unthemed. Its layout CSS uses
+  `--color-bg`, `--color-text`, `--color-border`, `--color-text-secondary`,
+  `--color-bg-subtle` and `--color-primary`; none of those names exist in
+  the theming system, which emits the semantic set plus `--color-brand-*`.
+  Every declaration was therefore dropped — which looks correct in light
+  mode by accident (the browser default is dark-on-light) and rendered the
+  header and section headings white on white in dark mode. The six are now
+  aliased to the theming tokens.
+- Fix `{% split_pane %}` raising `Invalid block tag on line 1: 'pane', expected
+  'endsplit_pane'` on the Rust engine, the last component in the gallery that
+  could not render. It is a two-segment tag (`{% split_pane %}`…`{% pane %}`…
+  `{% endsplit_pane %}`) and the native block path declares exactly one end
+  tag, so `{% pane %}` was rejected. The handler registered on that path,
+  `SplitPaneHandler`, also ignored the split — it wrapped the pre-rendered body
+  in a single `<div>` — so it diverged from Django even when it parsed. It now
+  registers on the raw path, where `LibraryRawBlockTagHandler` hands the
+  un-rendered body to Django's own `do_split_pane`: the two panes, the drag
+  handle and the inline script are Django's, byte for byte. The panes' contents
+  are rendered by Django rather than Rust, so `dj-*` bindings inside a pane do
+  not get Rust VDOM identity — the same trade every raw-path tag makes, and
+  preferable to raising on every use.
+- Fix every storybook page documenting an import that does not work. The USAGE
+  snippet was spelled out in the template as
+  `from djust_components.components.<name> import <Name>`, and both halves were
+  wrong: `djust_components` is the *static* namespace, not a Python package, so
+  it raised `ModuleNotFoundError` on all 150 pages; and the class name is not
+  always the snake→CamelCase of the module (`qr_code` defines `QRCode`,
+  `form_validation` defines two components, `server_event_toast` defines only a
+  mixin). The line is now derived from the module and emitted over the public
+  `djust.components` namespace, which resolves component classes lazily so
+  `from djust.components import Accordion` works for all of them; a module with
+  no component class documents no import instead of a wrong one. Also corrected
+  the same wrong path in `server_event_toast`'s own docstring example.
+- Make the storybook's component previews a real djust view. The detail page was a
+  plain Django view, which renders a component's markup but cannot make it *work*:
+  `dj-click` is a server event and a plain view ships no server to reach, so the
+  accordion showed a chevron and did nothing when clicked. It is now a `LiveView`
+  with the DEP-002 descriptor components attached — the same mechanism the component
+  gallery's `/lv/` pages use — and the descriptor's state is merged into each
+  example's kwargs, so a click updates it and the re-render carries the change.
+  `dj-view` is declared on the content element, without which the page renders but
+  nothing listens.
+- Fix the storybook's LiveView patching by re-rendering the whole region on every
+  click. `dj-view` sat on a `<main>`, and `_DJ_VIEW_RE` / `_DJ_ROOT_RE`
+  (`mixins/template.py:32`, `:48`) both require a `<div>` — so the mount attribute
+  matched nothing, the dj-root normalisation was skipped, and the initial-GET HTML
+  kept the comments and as-authored whitespace the WS frame had already stripped.
+  The two frames then described different trees, so one of three patches per click
+  failed with `node not found at path=7/1/3/1/0` and the client re-morphed from
+  recovery HTML (#1737). The mount is now a `<div>` inside the `<main>` landmark,
+  and a test pins that the HTTP render and the WS mount describe the same tree.
+- Fix the theme gallery's preset switcher applying only part of the preset. The
+  gallery's override block was emitted as `{{ gallery_preset_css }}` without
+  `|safe`, so autoescaping rewrote the quotes in its generated CSS: the selector
+  `html[data-theme="dark"]` was emitted as `html[data-theme=&quot;dark&quot;]`,
+  which no browser matches. The `:root` block has no quotes, so it survived — and
+  the page therefore applied the preset's root values while every dark-mode
+  override fell through to the configured theme. Choosing a preset changed the
+  background and left the components in the previous theme's colours. With the
+  selector fixed, `?preset=forest` renders green components rather than purple
+  ones on a green background.
+- Fix the theme gallery's preset choice not persisting, so it appeared to revert.
+  The preset `<select>` submitted a GET form (`?preset=`), which changes the
+  preset for that page load only — remove the parameter and the page fell back to
+  whatever preset the visitor had stored, which reads as "I picked midnight, took
+  the parameter off, and it reverted to candy". It now calls the framework's own
+  `window.djustTheme.setPreset` (`theme.js:217`), which writes the cookie and
+  localStorage and reloads, matching every other theme control on the site. The
+  form is kept behind `<noscript>` as the no-JS fallback.
+- Fix three components whose gallery preview rendered nothing at all. The preview
+  helper returned an empty string on *any* failure and logged at DEBUG, so a
+  component that could not render was indistinguishable from one that renders
+  nothing by design. `markdown` passed `content=` to a constructor that takes
+  `text=` (swallowed by `**kwargs`); `icon` and `qr_code` passed pixel `size`
+  values to components whose `size` is a name (`xs/sm/md/lg`), so `html.escape`
+  raised on the int; and `qr_code`'s class is `QRCode` while the lookup guessed
+  `QrCode`. Failures now render a visible message carrying the reason, the class
+  is resolved by reading the module rather than guessing, and a sweep test renders
+  every component and fails if any produces nothing.
+- Give 106 components a storybook preview. Only 50 of 151 Python components had an
+  example defined, so 101 storybook pages read "Preview not available" — the page
+  advertised 197 components and showed 96. The examples are derived from each
+  component's own `__init__` signature (required parameters get a typed
+  placeholder, optional ones keep their default) and every one is asserted to
+  render non-empty markup by `test_gallery_component_sweep.py`. Eight components
+  are deliberately left out because they render nothing until opened — a closed
+  `modal`, `bottom_sheet`, `tour`, `image_lightbox`, `export_dialog`,
+  `prompt_editor`, `table_of_contents` and `form_validation` — where a blank
+  preview would be misleading and the explicit message is the honest one.
+- Assert that every interactive component's event actually reaches a handler.
+  Rendering is not functionality: a component whose `dj-click` reaches nothing is
+  inert while looking perfectly correct. All eight the storybook attaches —
+  `accordion`, `tabs`, `collapsible`, `dropdown`, `modal`, `sheet`, `tooltip`,
+  `carousel` — are now mounted over a real `WebsocketCommunicator` and sent their
+  own event, asserting a non-error frame comes back. Gate-off (removing a
+  descriptor) fails the two tests for that component.
+- Fix the storybook's LIVE PREVIEW showing the component's invocation as text for
+  13 of the 24 template components. The preview was a hand-written chain of
+  `{% if name == "button" %}…{% elif %}` covering 11 names; every other component
+  fell through to an `{% else %}` that printed the call, so a section headed LIVE
+  PREVIEW read `tabs(id=…, active=0)` — `avatar`, `breadcrumb`, `nav`, `nav_group`,
+  `nav_item`, `pagination`, `progress`, `sidebar_nav`, `skeleton`, `table`, `tabs`,
+  `toast` and `tooltip`. Previews are now rendered from each component's own
+  template with the contract's example kwargs, in Python, so the page has one
+  preview mechanism rather than two and the list cannot fall behind the components.
+- **Fix URL-pattern kwargs arriving percent-encoded, which made a LiveView's
+  page visible but inert.** `django.urls.resolve()` expects a path that has
+  already been decoded — Django decodes `request.path` before the resolver ever
+  sees it — but the mount path resolves the browser's `location.pathname`,
+  which is encoded. A URL like `/storybook/category/Core%20UI/` therefore
+  handed `mount()` the literal string `"Core%20UI"`. Where the view validates
+  that kwarg against a lookup (the storybook category pages do) the mount died
+  with `Http404` while the HTTP GET rendered normally: the page displayed
+  correctly and every `dj-click` on it did nothing, with the only clue an error
+  in the browser console. Anything with a space, a slash or a non-ASCII
+  character is affected. All three `resolve()` call sites that take a
+  client-supplied URL now `unquote` first — `runtime.py:_resolve_url_kwargs`
+  and the two `live_redirect` sites in `websocket.py`. The second of those feeds
+  `request.resolver_match.kwargs`, which sticky views' `check_permissions` reads
+  for object-level checks, so an encoded kwarg there meant an authorization
+  decision taken against the wrong identifier. `unquote` is idempotent for
+  paths that were never encoded.
+
 ## [1.2.0rc8] - 2026-09-15
 
 ### Added

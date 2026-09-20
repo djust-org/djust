@@ -1,1 +1,0 @@
-- **Component catalogue**: the gauge and calendar heatmap previews now carry example data. Both registry entries passed no arguments, so the gauge previewed at zero with no label and every heatmap cell sat at the empty level.

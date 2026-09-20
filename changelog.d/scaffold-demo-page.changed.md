@@ -1,1 +1,0 @@
-- The `djust new` starter page is now a themed demo: a live list, a preset and light/dark switcher built on `djust.theming`, and links to the documentation, styled with plain CSS driven by theme tokens instead of the Tailwind CDN. `djust new --bare` generates a one-button placeholder page instead.
