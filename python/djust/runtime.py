@@ -4118,7 +4118,12 @@ class ViewRuntime:
         # Child side effects carry their own audio scope; drain the child's queue.
         self._flush_push_events(target_view)
         # Dispatch any background work the child handler scheduled (WS parity).
-        self._dispatch_async_work(event_name)
+        if explicit_child:
+            from ._child_async import dispatch_child_work
+
+            dispatch_child_work(self, target_view, event_name)
+        else:
+            self._dispatch_async_work(event_name)
         return True
 
     async def _dispatch_component_event(

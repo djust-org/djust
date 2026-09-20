@@ -654,6 +654,42 @@ Source/security review found no further issue in this slice. This does not
 enable explicit exposure, finish lazy/nonsticky or mixed-policy providers,
 prove browser/cross-worker behavior, or complete ADR034–037.
 
+### Scoped child background work: runtime boundary
+
+The staged shared-runtime child-event path now drains the selected explicit
+child's named/legacy task queue, not the root queue. Tasks are tracked on the
+child, and callbacks use the existing shared sync/async callback runner.
+Completion renders and persists the child before emitting an `embedded_update`
+frame tagged `source="async"`. This does not temporarily replace the runtime's
+root to make root-only methods operate on a child.
+
+Before execution and completion, the worker reloads the supported server session
+and Django authentication from the trusted mount identity. It does not reuse the
+original POST as current authority or consume SSE's next POST request slot.
+Root and ancestry authorization, object permissions, current registration and
+generation are checked under the runtime/transport locks. Authorization hooks
+can replace an owner themselves; a regression demonstrated stale result-handler
+delivery until the post-hook identity check was added. Disposal, generation
+change and root replacement suppress stale completion. Running synchronous
+application side effects remain non-preemptible.
+
+Callback failures may reach the owning application's `handle_async_result`, but
+the framework emits only a static failure if unhandled or if a provider fails.
+It does not log/export the callback exception. Focused tests cover sync, async
+and coroutine-returning callbacks, both queues, independent root work, scoped
+storage, cancellation, permission/session revocation, stale ownership and error
+recovery/redaction. The exposure/async regression group passed 551 tests;
+the full Python suite passed 30,037 tests with 952 skips. Mypy passed for
+1,019 files. Source/security review also checked callback error handling,
+post-hook ownership and the session-reload boundary.
+
+This is not yet end-to-end transport parity: the current SSE client has no
+`embedded_update` case, and WebSocket loading completion still uses its shared
+last-event state. Client handling/loading, browser verification, child work
+queued from mount or parent handlers, and descendant/repeated-instance routing
+remain required work. Legacy child dispatch and root background persistence
+also remain separate paths requiring audit. Explicit exposure remains disabled.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.

@@ -1,0 +1,256 @@
+"""Background work must remain owned by its registered explicit child."""
+
+import asyncio
+
+import pytest
+from asgiref.sync import sync_to_async
+from django.contrib.sessions.backends.db import SessionStore
+
+from djust import LiveView, event_handler
+from djust._exposure_children import child_state_key
+from djust.tests.test_exposure_child_events import EventChild, mount
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
+
+
+@pytest.fixture(autouse=True)
+def staged(monkeypatch, settings):
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_exposure_child_events"]
+
+
+async def drain_owned_tasks(child):
+    handles = tuple(getattr(child, "_async_task_handles", ()))
+    assert handles, "The routed child must own its dispatched background task"
+    await asyncio.wait_for(asyncio.gather(*handles), 3)
+
+
+@pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
+@pytest.mark.parametrize("queue", ["named", "legacy"])
+async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
+    monkeypatch, shape, queue
+):
+    calls = []
+    root_calls = []
+
+    @event_handler()
+    def begin(self):
+        def finish():
+            calls.append(self)
+            self.count = 4
+
+        async def async_finish():
+            finish()
+
+        callback = {
+            "sync": finish,
+            "async": async_finish,
+            "returned-coroutine": lambda: async_finish(),
+        }[shape]
+        if queue == "legacy":
+            self._async_pending = (callback, (), {})
+        else:
+            self.start_async(callback, name="child-job")
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    runtime, transport, request = await mount()
+    root = runtime.view_instance
+    child = root._get_child_view("menu")
+    root.start_async(lambda: root_calls.append(root))
+    try:
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+        await drain_owned_tasks(child)
+        assert calls == [child]
+        assert root._async_tasks
+        assert root_calls == []
+        frames = [frame for frame in transport.sent if frame.get("source") == "async"]
+        assert len(frames) == 1
+        assert frames[0]["type"] == "embedded_update"
+        assert frames[0]["view_id"] == "menu"
+        assert "Count=4" in frames[0]["html"]
+        assert "SERVER_SENTINEL" not in str(frames)
+        assert not transport.errors
+        stored = await sync_to_async(SessionStore(request.session.session_key).load)()
+        assert stored[child_state_key(request.path, ("menu",))]["state"]["values"]["count"] == 4
+    finally:
+        root.cancel_async_all()
+        child.cancel_async_all()
+
+
+async def test_unregister_cancels_real_child_event_work_before_completion(monkeypatch):
+    entered, stopped = asyncio.Event(), asyncio.Event()
+
+    @event_handler()
+    def begin(self):
+        async def finish():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        self.start_async(finish, name="child-job")
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    runtime, transport, _ = await mount()
+    root = runtime.view_instance
+    child = root._get_child_view("menu")
+    try:
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+        await asyncio.wait_for(entered.wait(), 1)
+        handles = tuple(child._async_task_handles)
+        root._unregister_child("menu")
+        await asyncio.wait_for(stopped.wait(), 1)
+        await asyncio.gather(*handles, return_exceptions=True)
+        assert not any(frame.get("source") == "async" for frame in transport.sent)
+        assert not transport.errors
+    finally:
+        root.cancel_async_all()
+        child.cancel_async_all()
+
+
+@pytest.mark.parametrize("revoke", ["permission", "session"])
+async def test_completion_reloads_authority_before_result_handler(monkeypatch, revoke):
+    completions = []
+
+    def allowed(self, request):
+        return not request.session.get("child_denied", False)
+
+    @event_handler()
+    def begin(self):
+        def finish():
+            self.count = 4
+            if revoke == "session":
+                self.request.session.delete()
+            else:
+                self.request.session["child_denied"] = True
+                self.request.session.save()
+            return "CALLBACK_SECRET_SENTINEL"
+
+        self.start_async(finish)
+
+    def on_result(self, name, result=None, error=None):
+        completions.append(result)
+
+    monkeypatch.setattr(EventChild, "check_permissions", allowed)
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    monkeypatch.setattr(EventChild, "handle_async_result", on_result, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+    await drain_owned_tasks(child)
+    assert completions == []
+    assert not any(frame.get("source") == "async" for frame in transport.sent)
+    assert transport.errors[-1]["code"] == "async_error"
+    assert "SECRET_SENTINEL" not in str(transport.sent)
+
+
+async def test_callback_error_is_not_logged_or_sent(monkeypatch, caplog):
+    @event_handler()
+    def begin(self):
+        def fail():
+            raise RuntimeError("CALLBACK_SECRET_SENTINEL")
+
+        self.start_async(fail)
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+    await drain_owned_tasks(child)
+    assert transport.errors[-1]["code"] == "async_error"
+    assert "CALLBACK_SECRET_SENTINEL" not in str(transport.sent) + caplog.text
+
+
+async def test_root_replacement_drops_late_child_completion(monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    completions = []
+
+    @event_handler()
+    def begin(self):
+        async def finish():
+            entered.set()
+            await release.wait()
+            return 4
+
+        self.start_async(finish)
+
+    def on_result(self, name, result=None, error=None):
+        completions.append(result)
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    monkeypatch.setattr(EventChild, "handle_async_result", on_result, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    try:
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+        await asyncio.wait_for(entered.wait(), 1)
+        handles = tuple(child._async_task_handles)
+        runtime.view_instance = None
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+        assert completions == []
+        assert not any(frame.get("source") == "async" for frame in transport.sent)
+        assert not transport.errors
+    finally:
+        child.cancel_async_all()
+
+
+async def test_authorization_hook_cannot_replace_owner_then_deliver_result(monkeypatch):
+    completions = []
+
+    @event_handler()
+    def begin(self):
+        def finish():
+            self._replace_on_auth = True
+            return 4
+
+        self.start_async(finish)
+
+    def allowed(self, request):
+        if getattr(self, "_replace_on_auth", False):
+            runtime.view_instance = None
+        return True
+
+    def on_result(self, name, result=None, error=None):
+        completions.append(result)
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    monkeypatch.setattr(EventChild, "check_permissions", allowed)
+    monkeypatch.setattr(EventChild, "handle_async_result", on_result, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+    handles = tuple(child._async_task_handles)
+    assert handles
+    await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+    assert completions == []
+    assert not any(frame.get("source") == "async" for frame in transport.sent)
+
+
+async def test_child_result_handler_can_recover_error_without_exporting_it(monkeypatch, caplog):
+    errors = []
+
+    @event_handler()
+    def begin(self):
+        def fail():
+            raise RuntimeError("CALLBACK_SECRET_SENTINEL")
+
+        self.start_async(fail, name="recover")
+
+    def on_result(self, name, result=None, error=None):
+        assert name == "recover" and result is None
+        errors.append(error)
+        self.count = 4
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    monkeypatch.setattr(EventChild, "handle_async_result", on_result, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
+    await drain_owned_tasks(child)
+    assert len(errors) == 1 and isinstance(errors[0], RuntimeError)
+    frames = [frame for frame in transport.sent if frame.get("source") == "async"]
+    assert len(frames) == 1 and "Count=4" in frames[0]["html"]
+    assert not transport.errors
+    assert "CALLBACK_SECRET_SENTINEL" not in str(transport.sent) + caplog.text
