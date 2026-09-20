@@ -2431,6 +2431,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this.primaryViewPath = null;
         this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
@@ -2446,6 +2447,7 @@ class LiveViewSSE {
      */
     connect(viewPath, params = {}) {
         if (!this.enabled) return;
+        this.primaryViewPath = viewPath;
         if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
 
         // Session ID is generated client-side; the server stores it as the
@@ -2466,7 +2468,9 @@ class LiveViewSSE {
         // (fixes #1237 bug 1).
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
+        urlParams.set('_djust_url', window.location.pathname);
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+        const pageUrl = window.location.pathname + window.location.search;
 
         // withCredentials: true ensures the Django session cookie is sent
         // with the EventSource GET. Without it, authenticated views fail
@@ -2490,6 +2494,7 @@ class LiveViewSSE {
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
+                this._replacingView = true;
             }
             this._hasConnectedBefore = true;
 
@@ -2519,6 +2524,14 @@ class LiveViewSSE {
         };
 
         this.eventSource.onerror = (_err) => {
+            // EventSource retries its original URL. After SPA navigation that
+            // URL names the previous page; open a fresh owner-bound stream for
+            // the current route instead of remounting the wrong view.
+            if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
+                this.disconnect();
+                this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                return;
+            }
             // EventSource auto-reconnects; we only disable on persistent failure.
             // onerror fires on every connection hiccup, so guard against noise.
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
@@ -2583,7 +2596,7 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-        storeSignedSnapshot(data, this._pendingViewPath);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
 
@@ -2595,6 +2608,7 @@ class LiveViewSSE {
 
             case 'mount':
                 this.viewMounted = true;
+                if (typeof data.view === 'string') this.primaryViewPath = data.view;
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -2614,8 +2628,9 @@ class LiveViewSSE {
                     let container = findPageViewContainer();
                     if (!container) container = document.querySelector('[dj-root]');
                     if (container) {
+                        if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs) {
+                        if (hasDataDjAttrs && !this._replacingView) {
                             _stampDjIds(data.html);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
@@ -2632,6 +2647,7 @@ class LiveViewSSE {
                         window.djust._mountReady = true;
                     }
                 }
+                this._replacingView = false;
                 // Trigger form recovery and dj-auto-recover after reconnect mount
                 if (window.djust._isReconnect) {
                     if (typeof window.djust._processFormRecovery === 'function') {
@@ -2665,6 +2681,7 @@ class LiveViewSSE {
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                this._recoverFailedNavigation();
                 break;
 
             case 'noop':
@@ -2746,6 +2763,27 @@ class LiveViewSSE {
         }
     }
 
+    /** Mount a replacement page over the existing owner-bound stream. */
+    liveRedirectMount(outgoing) {
+        if (!this.enabled || !this.viewMounted) return false;
+        cancelPendingRateLimits();
+        // has_ids describes the incoming markup, not whether the current DOM
+        // already represents it. Navigation must replace the previous page.
+        this._replacingView = true;
+        this.primaryViewPath = outgoing.view;
+        this.viewMounted = false;
+        return this.sendMessage(outgoing);
+    }
+
+    _recoverFailedNavigation() {
+        if (!this._replacingView || this.viewMounted) return;
+        this._replacingView = false;
+        this.disconnect();
+        // History already points at the destination. Let Django resolve and
+        // authorize it normally rather than strand the old DOM at a new URL.
+        window.location.reload();
+    }
+
     /**
      * Send an event to the server via HTTP POST.
      *
@@ -2822,6 +2860,7 @@ class LiveViewSSE {
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                if (data.type === 'live_redirect_mount') this._recoverFailedNavigation();
             });
 
         return true;
@@ -11577,6 +11616,11 @@ window.djust.getActiveStreams = getActiveStreams;
 
 (function () {
 
+    function isNavigationConnected() {
+        return isWSConnected() || (liveViewWS && liveViewWS.enabled && liveViewWS.viewMounted &&
+            liveViewWS.eventSource && liveViewWS.eventSource.readyState === EventSource.OPEN);
+    }
+
     /**
      * Handle navigation commands from the server.
      *
@@ -11740,7 +11784,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // The server's #1647 guard (_resolve_view_path_from_url) also returns
         // None for a non-LiveView URL and keeps the stale client-supplied view,
         // so the client must make the full-nav decision here.
-        const viewPath = isWSConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
+        const viewPath = isNavigationConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
 
         if (!viewPath) {
             // Non-LiveView target (or no WS connection) → full-page
@@ -11938,6 +11982,12 @@ window.djust.getActiveStreams = getActiveStreams;
         // Keep the active-nav highlight in sync on back/forward (the URL is
         // already current here), regardless of WS state. (#1756)
         updateAriaCurrent();
+        // Back can race an SSE replacement before its mount reply. The URL
+        // has already changed; do not leave the pending page under that URL.
+        if (liveViewWS && liveViewWS.eventSource && !liveViewWS.viewMounted) {
+            window.location.reload();
+            return;
+        }
         // These two returns leave `_renderedPathname` on the previous value,
         // which is deliberate and safe: nothing was re-rendered, so the
         // tracker still names what is on screen. It is also self-correcting —
@@ -11947,7 +11997,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // cannot happen, because every cross-path entry djust pushes also
         // carries `redirect: true` and that flag is OR'd in below.
         if (!liveViewWS || !liveViewWS.viewMounted) return;
-        if (!isWSConnected()) return;
+        if (!isNavigationConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
@@ -12175,8 +12225,6 @@ window.djust.getActiveStreams = getActiveStreams;
                 // directive now uses the same rule.
                 if (_isModifiedClick(e) || !el.getAttribute('dj-navigate')) return;
                 e.preventDefault();
-                if (!liveViewWS || !liveViewWS.ws) return;
-
                 const path = el.getAttribute('dj-navigate');
                 handleLiveRedirect({ path: path, replace: false });
             });
@@ -12274,7 +12322,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // routes. Unknown paths (admin, plain Django views, routes the user
         // can't access) fall through to a normal navigation the server gates.
         if (!resolveViewPath(url.pathname)) return;
-        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+        if (!isNavigationConnected()) return; // no transport → normal nav
 
         e.preventDefault();
         if (url.pathname === window.location.pathname) {

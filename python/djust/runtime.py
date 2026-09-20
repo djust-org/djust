@@ -399,8 +399,8 @@ class Transport(Protocol):
           ``_processing_user_event``, RELEASE the borrowed lock, stop the SQL
           capture + clear the tracker. Mirrors websocket.py:3393-3400 / 3150-3154
           (enter) and websocket.py:4311-4313 (exit).
-        - SSE: a no-op async CM — SSE events run single-threaded off the HTTP
-          request, with no concurrent tick/push loop to serialize against.
+        - SSE: holds the session render lock so event/background results cannot
+          race with another POST replacing the page.
 
         The actor-event branch (added later in Phase 2.3a) runs OUTSIDE this
         context, matching WS where the actor block holds no render lock.
@@ -1698,14 +1698,9 @@ class SSESessionTransport:
 
     @contextlib.asynccontextmanager
     async def event_context(self, view: Any) -> AsyncIterator[None]:
-        """No-op event context for SSE.
-
-        SSE events run single-threaded off the HTTP ``/event/`` request — there
-        is no concurrent tick / server-push / db-notify render loop to serialize
-        against (those are WS-only), so SSE needs neither the render lock nor the
-        WS-specific observability/origin scope. Yields immediately, mirroring the
-        legacy ``_sse_handle_event`` (which never acquired a lock)."""
-        yield
+        """Serialize event/results with SSE page replacement."""
+        async with self._session._render_lock:
+            yield
 
     def uses_actors(self, view: Any) -> bool:
         """SSE never uses actors (#1901).
@@ -2066,8 +2061,8 @@ class ViewRuntime:
         # with ``djust.renderers``; runtime use-site will cast.
         self.renderer_factory = renderer_factory
         self._explicit_mount_binding: Any = None
-        # SSE's legacy context is a no-op. Explicit request/auth/save state is
-        # per turn and must not be overwritten by a concurrent event POST.
+        # Explicit request/auth/save state is per turn, including the work
+        # before entering a transport's render lock.
         self._explicit_event_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
@@ -3004,7 +2999,7 @@ class ViewRuntime:
         ``_render_lock`` + sets ``_processing_user_event`` + the #1677 origin
         channel + observability scopes, so a WS event routed here in the Phase
         2.3b flip serializes against the WS-only tick / server-push / db-notify
-        render loops identically (the #560 guard). On SSE it is a no-op. The
+        render loops identically (the #560 guard). SSE holds its session lock. The
         view-mounted check runs OUTSIDE the context (we need a non-None view to
         borrow its lock — matching WS, which acquires only after the view exists).
 
@@ -5383,8 +5378,8 @@ class ViewRuntime:
         The handler + render half of each arm runs under the consumer's render
         lock, borrowed via ``transport.event_context`` (#2840/#1646: same
         serialization as the WS twin ``_run_async_work``, which holds
-        ``_render_lock`` across handler + render — a no-op CM on SSE, which has
-        no concurrent tick/push loop to serialize against).
+        ``_render_lock`` across handler + render). SSE uses its session render
+        lock to prevent late results from crossing a page-replacement boundary.
         """
         view = self.view_instance
         if not view:

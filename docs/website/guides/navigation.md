@@ -14,7 +14,7 @@ djust provides `live_patch()` and `live_redirect()` for managing URL state witho
 ## What You Get
 
 - **`live_patch()`** -- Update URL query params without remounting the view
-- **`live_redirect()`** -- Navigate to a different LiveView over the existing WebSocket
+- **`live_redirect()`** -- Navigate to a different LiveView over the existing WebSocket or SSE connection
 - **Template directives** -- `dj-patch` and `dj-navigate` for declarative navigation
 - **Browser history** -- Full back/forward support via `popstate` handling
 
@@ -80,7 +80,7 @@ self.live_patch(params={"sort": "price"}, replace=True)
 
 ### `live_redirect(path, params=None, replace=False)`
 
-Navigate to a different LiveView over the existing WebSocket. The current view is unmounted and the new view is mounted fresh.
+Navigate to a different LiveView over the existing WebSocket or SSE connection. The current view is unmounted and the new view is mounted fresh.
 
 ```python
 self.live_redirect("/items/42/")
@@ -116,12 +116,25 @@ Patching to the root path `/` is supported and correctly updates the browser URL
 
 ### `dj-navigate`
 
-Declarative `live_redirect`. SPA-navigates to a **different LiveView over the existing WebSocket** — no socket teardown, no full page reload. (A full reload happens only as a fallback when the target path isn't in the route map.)
+Declarative `live_redirect`. SPA-navigates to a **different LiveView over the existing WebSocket or SSE connection**. Unknown routes or unavailable transports fall back to an ordinary page load.
 
 ```html
 <a dj-navigate="/dashboard/">Go to Dashboard</a>
 <a dj-navigate="/items/{{ item.id }}/">View Item</a>
 ```
+
+Give `dj-navigate` the destination explicitly; an empty attribute is not a
+shorthand for `href`. Add a matching `href` for ordinary browser navigation:
+
+```html
+<a href="/dashboard/" dj-navigate="/dashboard/">Go to Dashboard</a>
+```
+
+Over SSE, the server resolves the destination through Django's URLconf and checks
+access using the current POST request. Back/Forward also mounts the destination;
+sticky child views are not preserved. A rejected or failed SSE replacement falls
+back to HTTP. A reconnect targets the current route, but does not guarantee
+restoration of all in-memory view state.
 
 #### Zero wiring required
 
@@ -432,7 +445,7 @@ class DashboardView(LiveView):  # navigation is built in — no NavigationMixin 
 |---|---|
 | `dj-click` | Actions that modify state (increment counter, delete item, toggle) |
 | `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
-| `dj-navigate` | SPA navigation to a different LiveView over the WebSocket (full reload only as a fallback when the route isn't in the map) |
+| `dj-navigate` | SPA navigation to a different LiveView over WebSocket or SSE, with an ordinary page-load fallback |
 
 ### URL Design Best Practices
 

@@ -30,12 +30,30 @@ envelope the WebSocket transport carries:
 { "type": "mount", "view": "myapp.views.DetailView", "url": "/items/42/", "params": {"sort": "date"}, "client_timezone": "America/New_York" }
 { "type": "event", "event": "increment", "params": {} }
 { "type": "url_change", "params": {"tab": "settings"}, "uri": "/dashboard/?tab=settings" }
+{ "type": "live_redirect_mount", "url": "/items/43/", "params": {} }
 ```
 
 The server routes these frames through a transport-agnostic `ViewRuntime`
 (see [ADR-016](adr/016-transport-runtime-interface.md)). The same dispatch
 code path serves both WebSocket and SSE — fixing a long-standing divergence
 where features available on WS would silently no-op or crash under SSE.
+
+Navigation resolves the destination LiveView from Django's URLconf, not the
+client-supplied class name. It mounts with the current owner-checked POST's
+authentication/session context and rechecks destination permissions. Event POSTs
+and page replacement are serialized; results from the discarded view's background
+tasks cannot render into its replacement. Sticky children are not preserved.
+
+The initial stream GET includes `_djust_url` with the page pathname so URL kwargs
+are available before the first mount. This protocol field and the `view` selector
+are excluded from application query parameters. The subsequent mount POST remains
+for compatibility with older servers.
+
+`dj-navigate="/items/43/"`, server `live_redirect()`, and Back/Forward can replace
+the page on the existing SSE stream. A failed replacement falls back to a normal
+HTTP load of the destination. If the stream drops after navigation, reconnect
+targets the current route rather than the original stream's page. This does not
+promise restoration of all in-memory state after a disconnected stream.
 
 ### Why not the Referer header?
 
@@ -123,7 +141,8 @@ advanced features are **not available** over SSE:
 | `LiveView.handle_params()` lifecycle hook | ✅ | ✅ (called after `mount` and on every `url_change` — fixed in #1237) |
 | `start_async()` background work | ✅      | ✅         |
 | `push_event()` server push    | ✅        | ✅         |
-| `live_patch` / `live_redirect` (`dj-patch`) | ✅ | ✅ (the `url_change` frame now works — fixed in #1237) |
+| `live_patch` / `dj-patch` | ✅ | ✅ (`url_change`) |
+| `live_redirect` / `dj-navigate` / Back/Forward | ✅ | ✅ (fresh authorized page mount; no sticky-child preservation) |
 | Accessibility announcements   | ✅        | ✅         |
 | `@cache` decorator            | ✅        | ✅         |
 | Binary file uploads           | ✅        | ❌ (text-only transport) |

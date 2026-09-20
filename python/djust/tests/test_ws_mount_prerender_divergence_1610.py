@@ -123,14 +123,17 @@ def test_skip_html_logic_present_in_source() -> None:
     shape that the truth-table tests above reproduce. Post-#1919 (THE MOUNT FLIP)
     the WS mount routes through ``ViewRuntime.dispatch_mount`` (the bespoke
     ``handle_mount`` body was deleted), where the runtime analogue is
-    ``skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)``
+    ``legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)``
     (``_mounted_from_restore`` is the runtime's ``mounted`` flag). Prevents the
     in-test reproduction from drifting away from the production code.
     """
     import djust.runtime as rt_mod
 
     source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
-    assert "skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)" in source
+    # Explicit restore combines fresh server state with client state and must
+    # send HTML. The legacy-only optimization still follows the truth table.
+    assert "skip_html_for_resume = (" in source
+    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in source
     assert "if html is not None and not skip_html_for_resume:" in source
     # has_ids must be emitted on the cold-prerender path so the
     # client's #1610 morph branch can gate on it.

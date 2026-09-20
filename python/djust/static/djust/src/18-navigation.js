@@ -5,6 +5,11 @@
 
 (function () {
 
+    function isNavigationConnected() {
+        return isWSConnected() || (liveViewWS && liveViewWS.enabled && liveViewWS.viewMounted &&
+            liveViewWS.eventSource && liveViewWS.eventSource.readyState === EventSource.OPEN);
+    }
+
     /**
      * Handle navigation commands from the server.
      *
@@ -168,7 +173,7 @@
         // The server's #1647 guard (_resolve_view_path_from_url) also returns
         // None for a non-LiveView URL and keeps the stale client-supplied view,
         // so the client must make the full-nav decision here.
-        const viewPath = isWSConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
+        const viewPath = isNavigationConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
 
         if (!viewPath) {
             // Non-LiveView target (or no WS connection) → full-page
@@ -366,6 +371,12 @@
         // Keep the active-nav highlight in sync on back/forward (the URL is
         // already current here), regardless of WS state. (#1756)
         updateAriaCurrent();
+        // Back can race an SSE replacement before its mount reply. The URL
+        // has already changed; do not leave the pending page under that URL.
+        if (liveViewWS && liveViewWS.eventSource && !liveViewWS.viewMounted) {
+            window.location.reload();
+            return;
+        }
         // These two returns leave `_renderedPathname` on the previous value,
         // which is deliberate and safe: nothing was re-rendered, so the
         // tracker still names what is on screen. It is also self-correcting —
@@ -375,7 +386,7 @@
         // cannot happen, because every cross-path entry djust pushes also
         // carries `redirect: true` and that flag is OR'd in below.
         if (!liveViewWS || !liveViewWS.viewMounted) return;
-        if (!isWSConnected()) return;
+        if (!isNavigationConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
@@ -603,8 +614,6 @@
                 // directive now uses the same rule.
                 if (_isModifiedClick(e) || !el.getAttribute('dj-navigate')) return;
                 e.preventDefault();
-                if (!liveViewWS || !liveViewWS.ws) return;
-
                 const path = el.getAttribute('dj-navigate');
                 handleLiveRedirect({ path: path, replace: false });
             });
@@ -702,7 +711,7 @@
         // routes. Unknown paths (admin, plain Django views, routes the user
         // can't access) fall through to a normal navigation the server gates.
         if (!resolveViewPath(url.pathname)) return;
-        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+        if (!isNavigationConnected()) return; // no transport → normal nav
 
         e.preventDefault();
         if (url.pathname === window.location.pathname) {

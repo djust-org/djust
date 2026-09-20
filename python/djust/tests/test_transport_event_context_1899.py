@@ -9,8 +9,8 @@ Why the runtime can't own the lock: render serialization is consumer-owned
 :622) and SHARED with the WS-only ``_run_tick`` / ``server_push`` / ``db_notify``
 render loops. A runtime-local lock would be a DIFFERENT object and could not
 serialize against ticks → the #560 version-interleave bug. So the WS transport
-BORROWS the consumer's EXISTING lock via the ``event_context`` async-CM; SSE (no
-concurrent tick/push loop) is a no-op.
+BORROWS the consumer's EXISTING lock via the ``event_context`` async-CM; SSE
+borrows its session lock to serialize against page replacement.
 
 These tests build a ``WSConsumerTransport`` over a FAKE consumer (no real
 Channels stack) and drive ``event_context`` directly, asserting:
@@ -21,7 +21,7 @@ Channels stack) and drive ``event_context`` directly, asserting:
 * the #1677 origin-channel contextvar is set to the consumer's ``channel_name``
   inside and reset (to its prior value) after;
 * a ``PerformanceTracker`` is current inside and cleared after;
-* the SSE context is a no-op (touches no lock, leaves no tracker);
+* the SSE context holds its session lock without setting WS-only trackers;
 * gate-off (#1468): if the WS context does NOT acquire the lock, the
   "held inside" assertion goes RED — proving it is non-tautological;
 * the ``ViewRuntime`` no longer owns a ``_render_lock`` (dead code deleted).
@@ -210,10 +210,11 @@ async def test_gate_off_non_acquiring_context_fails_held_inside_assertion():
 class _FakeSession:
     def __init__(self) -> None:
         self.session_id = "sse-1899"
+        self._render_lock = asyncio.Lock()
 
 
 @pytest.mark.asyncio
-async def test_sse_event_context_is_a_noop():
+async def test_sse_event_context_holds_session_lock_without_ws_observability():
     session = _FakeSession()
     transport = SSESessionTransport(session)
     view = _FakeView()
@@ -221,19 +222,37 @@ async def test_sse_event_context_is_a_noop():
     PerformanceTracker.set_current(None)
     before_origin = _djust_push.origin_channel.get()
 
-    # The SSE no-op context must yield cleanly and touch no shared state.
     async with transport.event_context(view):
-        # No lock to inspect (SSE owns none); the SSE context must not have set a
-        # tracker or mutated the origin channel.
+        assert session._render_lock.locked()
         assert PerformanceTracker.get_current() is None, (
-            "SSE event_context must NOT set a PerformanceTracker (no-op)."
+            "SSE event_context must NOT set a WebSocket PerformanceTracker."
         )
         assert _djust_push.origin_channel.get() == before_origin, (
             "SSE event_context must NOT touch the origin-channel contextvar."
         )
 
+    assert not session._render_lock.locked()
     assert PerformanceTracker.get_current() is None
     assert _djust_push.origin_channel.get() == before_origin
+
+
+@pytest.mark.asyncio
+async def test_sse_event_context_waits_for_page_replacement_lock():
+    session = _FakeSession()
+    transport = SSESessionTransport(session)
+    entered = asyncio.Event()
+
+    async def event():
+        async with transport.event_context(_FakeView()):
+            entered.set()
+
+    async with session._render_lock:
+        task = asyncio.create_task(event())
+        await asyncio.sleep(0)
+        assert not entered.is_set()
+    await asyncio.wait_for(task, 1)
+    assert entered.is_set()
+    assert not session._render_lock.locked()
 
 
 # --------------------------------------------------------------------------- #

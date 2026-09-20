@@ -260,9 +260,33 @@ A real-browser harness verifies the bundled WebSocket/SSE clients through actual
 service-worker messages and CacheStorage (eight checks); its transport frames are
 synthetic, not proof of Django authorization or complete page navigation.
 
-Complete Django-to-browser Back navigation, complete SSE endpoint round trips,
-background state changes, remaining direct state APIs and provider/child contracts
-remain activation gates. Explicit policy is still constructor-gated.
+SSE endpoint navigation now resolves the destination through URLconf, reconstructs
+a page request from the current authenticated POST, and mounts through the shared
+runtime. POST turns and render/result application are serialized. A discarded
+runtime is detached before replacement, preventing its background results from
+being applied to the next page. Lazy Django authentication is resolved off the
+event loop on stream creation and both POST endpoints.
+
+The client retains its snapshot-routing identity after EventSource open, accepts
+navigation links without requiring a WebSocket, and replaces old HTML on navigation
+even when incoming markup already has `dj-id` values. Failed replacements fall
+back to HTTP. After a stream disconnect, route-changing navigation reconnects to
+the current page, not the original EventSource URL.
+
+A real Django/ASGI browser fixture verified an event changing `initial` to
+`latest`, navigation to a second view, Back restoring `latest`, and Forward
+restoring the second page. Server frames and request logs prove these used the
+same SSE session without a destination-page HTTP load. A separate real stream
+shutdown verified reconnect creates a stream for the current second-page route.
+The fixture bypasses the explicit-policy constructor guard only in its own process.
+An earlier empty `dj-navigate` fixture performed a full load and was rejected as
+evidence; the corrected fixture uses explicit destination attributes.
+
+Complete snapshot restoration across reconnect, background state changes,
+remaining direct state APIs and provider/child contracts remain activation gates.
+SSE happy-path browser evidence does not establish WebSocket, cross-worker,
+sticky-child, or all failure-path browser parity. Explicit policy is still
+constructor-gated and ADRs 034–038 remain Proposed.
 
 ## Readiness audit
 
@@ -281,14 +305,16 @@ reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
 
-The complete Python run at `c29858ab5` finished with 26,821 passed, 937 skipped,
-and one structural-test failure: its blanket DB-session import ban included the
-explicit adapter's class-identity capability allowlist. The exception is now
-limited to that module and pinned by an AST test proving the imported DB class
-is referenced only in the allowlist, not instantiated. A cache-only explicit
-save/restore test forbids all database access. The affected session-engine and
-exposure-adapter suites pass after this test correction; the full suite has not
-been rerun after it. This is not complete ADR acceptance or browser verification.
+The SSE slice's full Python run across all three roots completed with 29,758
+passed, 952 skipped, and two failures: an obsolete SSE no-op-lock expectation
+and a source pin predating the explicit-policy mount-HTML rule. The lock test now
+asserts actual serialization, and the mount pin preserves the legacy-only rule;
+the affected 23-test set passes. The full suite must be rerun after these changes.
+All 1,952 JavaScript tests pass. These counts do not establish ADR acceptance.
+
+The earlier DB-session import-ban correction remains narrowly scoped: the imported
+class is used only in the explicit adapter's concrete implementation allowlist,
+not instantiated. A cache-only explicit save/restore test forbids database access.
 
 Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_state_descriptor_typing.py`, `test_form_hooks_adr035.py`,
@@ -296,5 +322,6 @@ Tests are in `python/djust/tests/test_state_descriptor_contract.py`,
 `test_exposure_sessions.py`, `test_exposure_debug.py`, and
 `test_exposure_context.py`, and `test_exposure_http.py`. Run these with
 the existing form, decorator, state and WebSocket regression suites. This slice
-does not change browser JavaScript and does not establish browser, cross-worker,
-or complete explicit-exposure parity.
+now also includes `test_exposure_sse_navigation.py` and bundled JavaScript SSE
+navigation tests. The browser evidence above covers only the stated sequences;
+it does not establish cross-worker or complete explicit-exposure parity.
