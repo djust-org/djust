@@ -93,9 +93,22 @@ deliberately bypass construction: **normal explicit mounts are still rejected**.
 This does not prove full transport or browser coverage. Handler metadata is
 withheld in explicit debug mode pending the typed metadata contract, and
 debug restore/replay requires a future separate authorized restoration contract.
-Observability reset/eval operations, error tooling and historical bug captures
-still need a complete audit before enabling the policy. Display redaction alone
-must not be mistaken for acceptance of all debugging surfaces.
+Observability reset/eval endpoints now reject explicit or unknown policies with
+a static 409 before clearing state, replaying mount, parsing eval parameters or
+invoking handlers. These direct mutation endpoints do not supply current runtime
+identity, object authorization and event locking; redacting their output would
+not authorize their side effects. Explicit mutations must use the live runtime.
+Legacy reset/eval behavior is unchanged.
+
+Bug capture rejects historical legacy records when the current view is explicit.
+Explicit observational records are projected again through current debug-field
+permissions before encoding, preserving historical permitted values rather than
+substituting current live state. Undeclared keys are dropped and non-client fields
+redacted. Tests assert the decoded shareable capture, not just a helper result.
+Caller-supplied patches and custom scrub callbacks remain deliberate application
+inputs; this is not protection against application code intentionally exporting
+data. Error tooling and other raw exporters still need a complete audit before
+activation. Display redaction alone is not acceptance of all debugging surfaces.
 
 ### Explicit rendering context boundary
 

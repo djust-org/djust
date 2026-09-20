@@ -59,6 +59,45 @@ def test_observability_endpoint_only_emits_the_debug_projection(view, rf, settin
     assert "_state_transient_value" not in view.__dict__
 
 
+def test_bug_capture_refuses_legacy_history_after_policy_change(view, settings):
+    from djust._exposure import ExposureError
+    from djust.bug_capture import encode_view_state
+    from djust.time_travel import EventSnapshot
+
+    settings.DEBUG = True
+    view._time_travel_buffer.append(
+        EventSnapshot(
+            event_name="old",
+            params={},
+            ref=None,
+            ts=0,
+            state_before={"old_secret": "HISTORICAL_SENTINEL"},
+            state_after={"old_secret": "HISTORICAL_SENTINEL"},
+        )
+    )
+    with pytest.raises(ExposureError, match="historical"):
+        encode_view_state(view, [])
+
+
+def test_bug_capture_reprojects_history_without_reading_current_state(view, settings):
+    from djust.bug_capture import BugCapture, encode_view_state
+
+    settings.DEBUG = True
+    snapshot = record_event_start(view, "change", {}, 1)
+    view.client_value = [2]
+    record_event_end(view, snapshot)
+    snapshot.state_before["extra"] = "HISTORICAL_SENTINEL"
+    snapshot.state_after["server_value"] = "SERVER_SENTINEL"
+    view.client_value = [77]
+    capture = BugCapture.decode(encode_view_state(view, []))
+    assert capture.state_before["client_value"] == [1]
+    assert capture.state_after["client_value"] == [2]
+    assert capture.state_after["server_value"] == "[redacted]"
+    assert "SENTINEL" not in json.dumps(capture.to_dict())
+    assert "_state_server_value" not in view.__dict__
+    assert "_state_transient_value" not in view.__dict__
+
+
 def test_debug_codec_failure_does_not_fall_back_to_repr_or_raw_attrs(view, caplog):
     class Secret:
         def __repr__(self):
@@ -205,3 +244,44 @@ def test_runtime_diagnostic_signal_uses_debug_projection_not_render_context(view
     snapshot = emit.call_args.kwargs["context_snapshot"]
     assert snapshot["server_value"] == "[redacted]"
     assert "SENTINEL" not in json.dumps(snapshot)
+
+
+@pytest.mark.parametrize("operation", ["reset", "eval"])
+@pytest.mark.parametrize("policy", ["explicit", "misspelled", None])
+def test_debug_mutations_refuse_nonlegacy_views_before_invocation(
+    view, rf, settings, monkeypatch, operation, policy
+):
+    from djust import event_handler
+    from djust.observability.views import eval_handler, reset_view_state
+
+    settings.DEBUG = True
+    monkeypatch.setattr(DebugView, "exposure_policy", policy)
+    calls = []
+
+    def mount(self, request, **kwargs):
+        calls.append("mount")
+
+    @event_handler()
+    def mutate(self, **kwargs):
+        calls.append("handler")
+        return "RETURN_SECRET_SENTINEL"
+
+    monkeypatch.setattr(DebugView, "mount", mount)
+    monkeypatch.setattr(DebugView, "mutate", mutate, raising=False)
+    view._djust_mount_request = object()
+    view._djust_mount_kwargs = {}
+    before = dict(view.__dict__)
+    register_view("explicit-mutation", view)
+    try:
+        request = rf.post(
+            "/debug/?session_id=explicit-mutation",
+            {"handler_name": "mutate", "params": {"secret": "PARAM_SENTINEL"}},
+            content_type="application/json",
+        )
+        response = (reset_view_state if operation == "reset" else eval_handler)(request)
+    finally:
+        unregister_view("explicit-mutation")
+    assert response.status_code == 409
+    assert calls == []
+    assert view.__dict__ == before
+    assert b"SENTINEL" not in response.content
