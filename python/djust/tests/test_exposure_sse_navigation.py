@@ -240,7 +240,9 @@ async def test_old_background_result_cannot_reach_replacement():
         )
         drain(session)
         release.set()
-        await task
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
         assert type(session.view_instance) is SecondPage
         assert session.view_instance.navigation == "second"
         assert drain(session) == []

@@ -1488,11 +1488,6 @@ def _match_sticky_child(
 
     # Remove every server-owned reference BEFORE mounting a replacement. In
     # particular, the post-render preserved-slot scan must not resurrect it.
-    owner = getattr(child, "_parent_view", None)
-    registry = getattr(owner, "_child_views", None)
-    old_slot = getattr(child, "_view_id", None)
-    if type(registry) is dict and registry.get(old_slot) is child:
-        registry.pop(old_slot)
     consumer = getattr(parent, "_ws_consumer", None)
     preserved_map = getattr(consumer, "_sticky_preserved", None)
     if type(preserved_map) is dict and preserved_map.get(slot) is child:
@@ -1500,20 +1495,9 @@ def _match_sticky_child(
     auto_set = getattr(consumer, "_sticky_auto_reattached", None)
     if type(auto_set) is set:
         auto_set.discard(slot)
-    child._parent_view = None
-    child._view_id = None
-    # Preserve the navigation-vs-unregister hook distinction. Both replacement
-    # paths cancel sticky background work; normal unregister also owns its hook.
-    hooks = (
-        ("_on_sticky_unmount",) if preserved else ("_cleanup_on_unregister", "_on_sticky_unmount")
-    )
-    for name in hooks:
-        try:
-            hook = getattr(child, name, None)
-            if callable(hook):
-                hook()
-        except Exception:  # noqa: BLE001 — detached child must stay detached
-            logger.error("Explicit child replacement cleanup failed")
+    from .._child_lifecycle import dispose_child_subtree
+
+    dispose_child_subtree(child, navigation=preserved)
     return False
 
 

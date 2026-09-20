@@ -439,6 +439,10 @@ class StickyChildRegistry:
         Raises ``ValueError`` if ``view_id`` is already registered —
         template authors must use distinct ids within one parent.
         """
+        if getattr(self, "_djust_child_disposed", False) or getattr(
+            child, "_djust_child_disposed", False
+        ):
+            raise RuntimeError("Cannot register a disposed child or parent")
         if not hasattr(self, "_child_views"):
             self._init_sticky()
         if view_id in self._child_views:
@@ -465,6 +469,13 @@ class StickyChildRegistry:
             return
         child = self._child_views.pop(view_id, None)
         if child is None:
+            return
+        from .._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(child):
+            from .._child_lifecycle import dispose_child_subtree
+
+            dispose_child_subtree(child)
             return
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
@@ -522,7 +533,12 @@ class StickyChildRegistry:
             try:
                 cancel_all()
             except Exception:  # noqa: BLE001 — cleanup hook must not raise
-                logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
+                from .._exposure import uses_legacy_exposure
+
+                if uses_legacy_exposure(self):
+                    logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
+                else:
+                    logger.error("Explicit sticky async cleanup failed")
         return None
 
     def _preserve_sticky_children(self, new_request: Any) -> Dict[str, Any]:
@@ -544,11 +560,18 @@ class StickyChildRegistry:
         from ..auth.core import check_view_auth_lightweight
 
         survivors: Dict[str, Any] = {}
-        for _view_id, child in self._get_all_child_views().items():
+        for _view_id, child in list(self._get_all_child_views().items()):
             if getattr(child, "sticky", False) is not True:
                 continue
             sticky_id = getattr(child, "sticky_id", None) or _view_id
             if not check_view_auth_lightweight(child, new_request):
+                from .._exposure import uses_legacy_exposure
+
+                if not uses_legacy_exposure(child):
+                    from .._child_lifecycle import dispose_child_subtree
+
+                    dispose_child_subtree(child, navigation=True)
+                    continue
                 logger.info(
                     "Sticky child %s auth denied for new request; discarding",
                     sticky_id,

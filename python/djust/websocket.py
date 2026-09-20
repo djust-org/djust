@@ -1128,13 +1128,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         # New format: multiple named tasks
+        from .mixins.async_work import track_async_task
+
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
             event_name = getattr(self, "_current_event_name", None)
             # Spawn all pending tasks
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                asyncio.ensure_future(
-                    self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
+                track_async_task(
+                    self.view_instance,
+                    asyncio.ensure_future(
+                        self._run_async_work(
+                            task_name, callback, args, kwargs, event_name=event_name
+                        )
+                    ),
                 )
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}
@@ -1146,8 +1153,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self.view_instance._async_pending = None
             callback, args, kwargs = pending
             event_name = getattr(self, "_current_event_name", None)
-            asyncio.ensure_future(
-                self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+            track_async_task(
+                self.view_instance,
+                asyncio.ensure_future(
+                    self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+                ),
             )
 
     async def _run_async_work(
@@ -1204,7 +1214,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (with the legacy coroutine-return unwrap for pre-v0.4.2 callbacks).
             from .mixins.async_work import run_async_callback
 
-            result = await run_async_callback(callback, args, kwargs)
+            result = await run_async_callback(callback, args, kwargs, owner=view)
 
             # Teardown identity-guard (#1940, #245/#1198 commit-or-rollback /
             # identity-guard class). The callback above is the FIRST await in
@@ -1970,6 +1980,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
+        from ._child_lifecycle import dispose_child_subtree
+        from ._exposure import uses_legacy_exposure
+
         # The socket is gone — any frame a handler still tries to send from
         # here on would be rejected by the ASGI server (_send_frame drops it).
         self._ws_close_sent = True
@@ -2040,8 +2053,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.warning("Error shutting down actor: %s", e)
 
+        # Explicit roots own the whole remaining subtree, including async work.
+        explicit_disposed = self.view_instance is not None and not uses_legacy_exposure(
+            self.view_instance
+        )
+        if explicit_disposed:
+            dispose_child_subtree(self.view_instance)
+
         # Clean up uploads
-        if self.view_instance and hasattr(self.view_instance, "_cleanup_uploads"):
+        if (
+            not explicit_disposed
+            and self.view_instance
+            and hasattr(self.view_instance, "_cleanup_uploads")
+        ):
             try:
                 self.view_instance._cleanup_uploads()
             except Exception as e:
@@ -2072,6 +2096,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # on a "zombie" consumer whose view is gone.
         if self._sticky_preserved:
             for sticky_id, child in list(self._sticky_preserved.items()):
+                if not uses_legacy_exposure(child):
+                    dispose_child_subtree(child, navigation=True)
+                    continue
                 hook = getattr(child, "_on_sticky_unmount", None)
                 if callable(hook):
                     try:
@@ -3268,6 +3295,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Reset auto-reattach tracker (ADR-014): a redirect mount starts
         # a fresh template render; any IDs the tag claims should be tracked
         # against this navigation only.
+        from ._child_lifecycle import dispose_child_subtree
+        from ._exposure import uses_legacy_exposure
+
         self._sticky_auto_reattached = set()
         # Reuse handle_mount — it already handles everything
         # But first, stage the old view's sticky children (Phase B).
@@ -3288,6 +3318,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         else []
                     ):
                         if getattr(child, "sticky", False) is True:
+                            if not uses_legacy_exposure(child):
+                                dispose_child_subtree(child, navigation=True)
+                                continue
                             hook = getattr(child, "_on_sticky_unmount", None)
                             if callable(hook):
                                 try:
@@ -3338,7 +3371,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             # children keep running.
                             old_view._child_views.pop(vid, None)
                             break
-            if hasattr(old_view, "_cleanup_uploads"):
+            if not uses_legacy_exposure(old_view):
+                dispose_child_subtree(old_view, navigation=True)
+            elif hasattr(old_view, "_cleanup_uploads"):
                 try:
                     old_view._cleanup_uploads()
                 except Exception:
@@ -3419,6 +3454,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # consumer with background work still running on a
             # "zombie" instance whose parent is gone.
             for child in list(self._sticky_preserved.values()):
+                if not uses_legacy_exposure(child):
+                    dispose_child_subtree(child, navigation=True)
+                    continue
                 hook = getattr(child, "_on_sticky_unmount", None)
                 if callable(hook):
                     try:

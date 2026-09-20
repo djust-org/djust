@@ -32,10 +32,38 @@ from asgiref.sync import sync_to_async
 logger = logging.getLogger(__name__)
 
 
+def cancel_on_owner_loop(future: asyncio.Future[Any]) -> None:
+    """Request cancellation safely from render threads or the owning loop."""
+    if future.done():
+        return
+    loop = future.get_loop()
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if loop.is_running() and loop is not current_loop:
+        loop.call_soon_threadsafe(future.cancel)
+    else:
+        future.cancel()
+
+
+def track_async_task(view: Any, task: asyncio.Future[Any]) -> None:
+    """Keep framework-dispatched work owned by its view until completion."""
+    handles = getattr(view, "_async_task_handles", None)
+    if handles is None:
+        handles = view._async_task_handles = set()
+    handles.add(task)
+    task.add_done_callback(handles.discard)
+    if getattr(view, "_djust_child_disposed", False):
+        cancel_on_owner_loop(task)
+
+
 async def run_async_callback(
     callback: Callable[..., Any],
     args: Any = (),
     kwargs: Optional[Dict[str, Any]] = None,
+    *,
+    owner: Any = None,
 ) -> Any:
     """Run one ``start_async`` / ``@background`` callback across the sync/async
     divide and return its result.
@@ -62,11 +90,31 @@ async def run_async_callback(
       returned ``some_async()`` without awaiting it), the coroutine is awaited
       too — preserving the pre-v0.4.2 ``@background`` contract.
     """
-    if asyncio.iscoroutinefunction(callback):
-        return await callback(*args, **(kwargs or {}))
-    result = await sync_to_async(callback)(*args, **(kwargs or {}))
-    if inspect.iscoroutine(result):
-        result = await result
+    generation = getattr(owner, "_async_work_generation", 0)
+
+    def cancelled() -> bool:
+        return owner is not None and (
+            getattr(owner, "_djust_child_disposed", False)
+            or getattr(owner, "_async_work_generation", 0) != generation
+        )
+
+    if cancelled():
+        raise asyncio.CancelledError
+    try:
+        if asyncio.iscoroutinefunction(callback):
+            result = await callback(*args, **(kwargs or {}))
+        else:
+            result = await sync_to_async(callback)(*args, **(kwargs or {}))
+            if inspect.iscoroutine(result):
+                result = await result
+    except Exception:
+        if cancelled():
+            raise asyncio.CancelledError from None
+        raise
+    # A coroutine may swallow cancellation. Its stale result/error must still
+    # not enter application completion handlers or produce a render.
+    if cancelled():
+        raise asyncio.CancelledError
     return result
 
 
@@ -126,6 +174,8 @@ class AsyncWorkMixin:
                     self.error_message = f"Export failed: {error}"
                     self.exporting = False
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise RuntimeError("Cannot schedule work on a disposed view")
         if not hasattr(self, "_async_tasks"):
             self._async_tasks = {}
             self._async_task_counter = 0
@@ -183,6 +233,24 @@ class AsyncWorkMixin:
             self._async_cancelled = set()
         self._async_cancelled.add(name)
 
+    def cancel_async_all(self) -> None:
+        """Drop queued work and request cancellation of dispatched callbacks.
+
+        Coroutine cancellation is cooperative. Already-running synchronous
+        callbacks cannot be interrupted; their awaiting task is cancelled so
+        their completion handler/render is suppressed. This does not roll back
+        application side effects or cancel independently created application tasks.
+        """
+        self._async_work_generation = getattr(self, "_async_work_generation", 0) + 1
+        self._async_tasks = {}
+        self._async_pending = None
+        handles = getattr(self, "_async_task_handles", None)
+        if handles:
+            pending = tuple(handles)
+            handles.clear()
+            for task in pending:
+                cancel_on_owner_loop(task)
+
     def defer(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """
         Schedule a callback to run **once, after the current render+patch
@@ -237,6 +305,8 @@ class AsyncWorkMixin:
                 # Fires after the patch reaches the client.
                 metrics.increment(f"liveview.{action}", count=self.count)
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise RuntimeError("Cannot defer work on a disposed view")
         if not hasattr(self, "_deferred_callbacks"):
             self._deferred_callbacks = []
         self._deferred_callbacks.append((callback, args, kwargs))

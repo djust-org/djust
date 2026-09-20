@@ -292,6 +292,17 @@ def cancel_report(self, **kwargs):
     self.cancel_async("generate_report")
 ```
 
+To cancel all work owned by the current view, use `self.cancel_async_all()`.
+It removes queued `start_async()` / `@background` callbacks and requests
+cancellation of callbacks dispatched by the shared runtime or WebSocket consumer.
+Their stale completion handlers and renders are suppressed, including when a
+coroutine catches cancellation and returns a value.
+
+Cancellation is cooperative: already-running synchronous code in a worker thread
+cannot be forcibly interrupted. Its side effects may still finish; cancellation
+does not roll them back. Independently created application tasks are not tracked
+by this API. Reset any application loading flags in your cancelling event handler.
+
 ### Handling Completion or Errors
 
 Implement `handle_async_result()` to receive notifications when async tasks complete or fail:

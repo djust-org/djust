@@ -503,7 +503,7 @@ preservation shortcut around the existing incompatibility rule. Tests exercise
 native Django rendering, real database session identifiers, matching and changed
 identities, scope compilation for nested ancestry, sessionless reuse, cleanup
 failures, authorization-induced identity changes and the real post-render
-preservation scan. They do not establish browser reattachment, recursive subtree
+preservation scan. That reuse slice did not establish browser reattachment, recursive subtree
 teardown, repeated-instance routing, provider pruning, or cross-worker parity.
 Those remain required before activation; the production constructor guard stays
 closed.
@@ -512,6 +512,45 @@ The post-render scan only accepts explicit survivors already validated and
 registered by the tag. Bare `dj-sticky-slot` markup cannot substitute for the
 declared class/inputs check; a regression reproduced that bypass before the scan
 was restricted. Legacy bare-slot preservation keeps its existing behavior.
+
+### Owned subtree disposal and async cancellation
+
+The gated explicit lifecycle now detaches registered descendants before running
+descendant-first cleanup. It removes forward/reverse ownership references, drops
+queued/deferred work, cancels waiters on their owning event loop, and runs upload,
+unregister and sticky-unmount hooks as appropriate. An idempotent disposal marker
+prevents reentrant hooks, repeated teardown and re-registration of disposed
+instances. A malformed alias to a child owned by another parent is unlinked, not
+followed into that other subtree. Cycles are traversed iteratively.
+
+This path is wired into identity replacement, unregister, denied preservation,
+post-render discard, WebSocket disconnect/redirect disposal and SSE
+replacement/shutdown for explicit roots. Legacy lifecycle routing remains in
+place; its sticky-unmount hook now calls the implemented cancellation method.
+Unregistering an explicit child under a legacy root still uses explicit disposal.
+Cleanup is best effort: a broken application hook cannot skip siblings or
+descendants, and the helper logs static errors rather than private exception
+values. This is not session-envelope pruning or an application rollback.
+
+Inspection corrected an earlier overstatement: the previous sticky-unmount
+hook looked for `cancel_async_all()`, but that method did not exist. Invoking the
+hook alone did not prove cancellation. The method now exists, and both shared
+runtime and WebSocket background dispatch track per-view task handles and release
+them on completion. Cancellation clears queued work, requests cancellation on the
+owning loop, and increments a generation checked by their shared callback runner.
+Even a coroutine that swallows cancellation cannot deliver a stale result/error.
+Running synchronous code cannot be preempted; its application side effects may
+continue even though its completion handler/render is suppressed. Independently
+created application tasks remain application-owned.
+
+Tests exercise actual task dispatch/cancellation in both runners, worker-thread
+teardown of loop-owned waiters, native tag replacement, WebSocket disconnect,
+post-render discard, and real SSE message navigation/shutdown. They do not prove
+browser or cross-worker behavior. Parent-driven persistence, removed-slot/session
+pruning and scoped child background dispatch remain open: the routed-child event
+path currently calls the root async dispatcher, not a child-specific dispatcher.
+The remaining providers and ADR034–037 work are still part of the objective.
+Explicit exposure remains unavailable to applications.
 
 ## Readiness audit
 
@@ -529,6 +568,16 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The subtree-lifecycle slice completed 29,986 Python tests with 952 skipped across
+all three roots (four workers), 29 focused lifecycle tests, and a 260-test async/
+dispatch regression set. Full-package mypy passed 1,013 source files.
+Unregister and deterministic cross-thread waiter tests failed before their fixes.
+The initial full run stopped on lifecycle-unaware mock fixtures and the old SSE
+expectation that abandoned work returned normally; corrected tests still assert
+successful recovery frames or cancellation with no stale delivery, respectively.
+The final full run verifies the frozen implementation. This is native server/
+transport evidence, not browser or cross-worker verification.
 
 The identity-aware reuse slice completed 29,957 Python tests with 952 skipped
 across all three roots (four workers). Focused child identity/event/mount/reuse

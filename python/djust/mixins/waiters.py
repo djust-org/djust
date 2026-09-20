@@ -150,12 +150,19 @@ class WaiterMixin:
             ... except asyncio.TimeoutError:
             ...     self.user_abandoned = True
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise asyncio.CancelledError
         waiter = _Waiter(event_name=name, predicate=predicate)
         if not hasattr(self, "_waiters") or self._waiters is None:
             self._waiters = {}
         self._waiters.setdefault(name, []).append(waiter)
 
         try:
+            # Teardown may run in a render thread between the entry check and
+            # registration. Do not leave a newly appended waiter behind.
+            if getattr(self, "_djust_child_disposed", False):
+                waiter.future.cancel()
+                raise asyncio.CancelledError
             payload: Dict[str, Any]
             if timeout is not None:
                 payload = await asyncio.wait_for(waiter.future, timeout=timeout)
@@ -254,8 +261,12 @@ class WaiterMixin:
         """
         if not getattr(self, "_waiters", None):
             return
-        for _, bucket in list(self._waiters.items()):
-            for waiter in bucket:
-                if not waiter.future.done():
-                    waiter.future.cancel()
+        from .async_work import cancel_on_owner_loop
+
+        pending = [waiter for bucket in list(self._waiters.values()) for waiter in list(bucket)]
+        # Detach before scheduling cancellation on another loop: resumed waiters
+        # remove themselves, which otherwise mutates the list we're traversing.
         self._waiters.clear()
+        for waiter in pending:
+            if not waiter.future.done():
+                cancel_on_owner_loop(waiter.future)

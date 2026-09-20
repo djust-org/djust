@@ -401,6 +401,8 @@ class TestAsyncWorkSourceAsync:
         consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
         consumer.view_instance._async_cancelled = set()
+        consumer.view_instance._djust_child_disposed = False
+        consumer.view_instance._async_work_generation = 0
         consumer.view_instance._sync_state_to_rust = MagicMock()
         consumer.view_instance.render_with_diff = MagicMock(
             return_value=("<div>hi</div>", '[{"op": "replace"}]', 5)

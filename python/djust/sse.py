@@ -222,9 +222,15 @@ class SSESession:
             self.view_instance = None
             if old_view is not None:
                 try:
-                    for child_id in list(old_view._get_all_child_views()):
-                        await sync_to_async(old_view._unregister_child)(child_id)
-                    await sync_to_async(old_view._cleanup_uploads)()
+                    from ._child_lifecycle import dispose_child_subtree
+                    from ._exposure import uses_legacy_exposure
+
+                    if not uses_legacy_exposure(old_view):
+                        await sync_to_async(dispose_child_subtree)(old_view, navigation=True)
+                    else:
+                        for child_id in list(old_view._get_all_child_views()):
+                            await sync_to_async(old_view._unregister_child)(child_id)
+                        await sync_to_async(old_view._cleanup_uploads)()
                 except Exception:
                     logger.warning("SSE old view cleanup failed during navigation")
             self._request = target_request
@@ -250,7 +256,15 @@ class SSESession:
 
     def shutdown(self) -> None:
         """Signal the SSE stream generator to close the connection."""
+        from ._child_lifecycle import dispose_child_subtree
+        from ._exposure import uses_legacy_exposure
+
         self.active = False
+        view = self.view_instance
+        if view is not None and not uses_legacy_exposure(view):
+            dispose_child_subtree(view)
+            self.view_instance = None
+            self.runtime.view_instance = None
         self.queue.put_nowait(None)  # None is the sentinel value
 
     # ------------------------------------------------------------------ #

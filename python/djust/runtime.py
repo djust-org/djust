@@ -1510,6 +1510,11 @@ class WSConsumerTransport:
                                 except Exception:  # noqa: BLE001
                                     logger.exception("sticky child _on_sticky_unmount raised")
                 else:
+                    if not uses_legacy_exposure(child):
+                        from ._child_lifecycle import dispose_child_subtree
+
+                        dispose_child_subtree(child, navigation=True)
+                        continue
                     hook = getattr(child, "_on_sticky_unmount", None)
                     if callable(hook):
                         try:
@@ -5414,11 +5419,16 @@ class ViewRuntime:
         if not view:
             return
 
+        from .mixins.async_work import track_async_task
+
         tasks = getattr(view, "_async_tasks", None)
         if tasks:
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                asyncio.ensure_future(
-                    self._execute_async_task(task_name, callback, args, kwargs, event_name)
+                track_async_task(
+                    view,
+                    asyncio.ensure_future(
+                        self._execute_async_task(task_name, callback, args, kwargs, event_name)
+                    ),
                 )
             view._async_tasks = {}
 
@@ -5426,8 +5436,11 @@ class ViewRuntime:
         if pending:
             view._async_pending = None
             callback, args, kwargs = pending
-            asyncio.ensure_future(
-                self._execute_async_task("_default", callback, args, kwargs, event_name)
+            track_async_task(
+                view,
+                asyncio.ensure_future(
+                    self._execute_async_task("_default", callback, args, kwargs, event_name)
+                ),
             )
 
     async def _execute_async_task(
@@ -5466,7 +5479,7 @@ class ViewRuntime:
             # (#2001, the parallel-path drift vs ``websocket.py:_run_async_work``).
             from .mixins.async_work import run_async_callback
 
-            result = await run_async_callback(callback, args, kwargs)
+            result = await run_async_callback(callback, args, kwargs, owner=view)
 
             # Teardown identity-guard (#1940 — mirror of the WS twin's
             # pre-mutation guard): the callback above is the FIRST await in
