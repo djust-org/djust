@@ -173,6 +173,7 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        storeSignedSnapshot(data, this._pendingViewPath);
 
         switch (data.type) {
 

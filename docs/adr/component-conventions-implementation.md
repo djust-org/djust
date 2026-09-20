@@ -232,15 +232,26 @@ leaves fresh mount defaults intact. Client fields and independently validated
 server fields overlay the reconstructed view before existing object authorization.
 The global snapshot switch and application restore veto apply. An explicit
 restore sends fresh HTML rather than assuming cached markup matches the combined
-state. Codec failures omit the snapshot without exception values or a legacy
-fallback. Signing does not conceal permitted client values.
+state. Codec failures invalidate the cached snapshot with an explicit null,
+without exception values or a legacy fallback. Signing does not conceal permitted
+client values.
 
 Tests cover codec rejection cases and runtime mount/restore frames, including
 master switch, veto, codec failure, and exclusion of server/render-only values.
-This is mount-time integration, not complete back-navigation support: event-time
-snapshot refresh, client storage/browser round trips, remaining direct state APIs
-and provider/child contracts remain required before activation. No JavaScript
-behavior has changed in this slice.
+Successful authorized top-level events refresh this token on patch, HTML and
+no-render acknowledgement frames. Identity is rechecked before capture; failures,
+missing client declarations or the disabled master switch emit null rather than
+leave an older token cached. Denied/failed events do not publish refreshed state.
+Explicit no-render acknowledgements precede queued navigation, so its capture
+sees the updated token; legacy side-effect ordering is unchanged.
+
+WebSocket and SSE clients share opaque-token storage, scoped to the primary view
+for event responses. Null clears the old entry; unrelated, background and error
+frames cannot replace it. Bundle tests cover byte-for-byte navigation capture;
+runtime tests cover event-to-remount restoration and acknowledgement ordering.
+Real browser/service-worker back-navigation, complete SSE endpoint round trips,
+background state changes, remaining direct state APIs and provider/child contracts
+remain activation gates. Explicit policy is still constructor-gated.
 
 ## Readiness audit
 

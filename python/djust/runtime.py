@@ -2839,6 +2839,9 @@ class ViewRuntime:
         # signature binds slug + session key (``_django_session_key``, stamped
         # above), so a valid snapshot cannot be replayed across views or sessions.
         # Wrapped so snapshot emission can NEVER break the mount (#1788 posture).
+        if not legacy_exposure:
+            # Clear stale browser state when capture is disabled or unavailable.
+            mount_msg["state_snapshot_signed"] = None
         try:
             from django.conf import settings
 
@@ -2879,7 +2882,9 @@ class ViewRuntime:
                 except Exception:
                     # No repr/traceback or legacy fallback: descriptor factories
                     # and codec failures can contain server-only values.
-                    logger.warning("Explicit client snapshot unavailable; omitted")
+                    logger.warning(
+                        "Explicit client snapshot unavailable; cached snapshot invalidated"
+                    )
         except Exception as snapshot_exc:  # noqa: BLE001 — snapshot emission must never break mount
             from .live_view import NonPersistableStateError
 
@@ -3391,6 +3396,8 @@ class ViewRuntime:
             if target_view is self.view_instance and not uses_legacy_exposure(target_view):
                 await self._persist_state_after_event(target_view, event_name)
 
+        snapshot_fields = await self._explicit_event_snapshot(view)
+
         # Auto-detect unchanged state. _resolve_skip_render owns the skip
         # decision (#2834) — it consumes an explicit ``_skip_render`` so a
         # stale True never leaks, and ``_force_full_html`` ALWAYS wins over
@@ -3428,7 +3435,7 @@ class ViewRuntime:
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render
             # above — it is the single owner of that reset, #2834.)
-            # Drain ALL queued side-effects BEFORE the noop, matching the WS
+            # Legacy: drain ALL queued side-effects BEFORE the noop, matching the WS
             # bespoke skip-render path (websocket.py:3941 — ``await
             # self._flush_all_pending()`` then ``_send_noop``). #1907 THE FLIP:
             # the runtime skip-render branch previously only flushed push_events,
@@ -3438,7 +3445,8 @@ class ViewRuntime:
             # ``test_live_redirect_from_state_unchanging_handler_emits_navigation_frame``).
             # ``_flush_all_pending`` is the single 8-queue drain (#1646) and
             # includes ``_flush_push_events``, so this also covers the push drain.
-            await self._flush_all_pending()
+            if not snapshot_fields:
+                await self._flush_all_pending()
             # ref echo (#560) + source/event_name (#560 sequencing) on the noop
             # frame so the client can match the ack to its pending event (clear
             # _pendingEventRefs / stop the right loading state) and distinguish it
@@ -3455,7 +3463,13 @@ class ViewRuntime:
                 noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
+            noop_msg.update(snapshot_fields)
             await self.transport.send(noop_msg)
+            if snapshot_fields:
+                # Explicit acknowledgements publish (or invalidate) navigation
+                # state before a queued redirect triggers before-navigate.
+                # Preserve the legacy side-effect ordering unchanged.
+                await self._flush_all_pending()
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
             # on has_async). ``has_async`` reflects only the legacy ``_async_pending``
@@ -3482,6 +3496,7 @@ class ViewRuntime:
             force_html=force_html,
             event_ref=event_ref,
             scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
+            snapshot_fields=snapshot_fields,
         )
 
         # Dispatch background work UNCONDITIONALLY after the render (WS parity,
@@ -4682,6 +4697,41 @@ class ViewRuntime:
                 rules[event] = rule
         return rules
 
+    async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
+        """Refresh only declared client persistence after an authorized event.
+
+        Null explicitly invalidates a previously cached token. Omission is for
+        legacy callers, not a fallback to the last successfully captured state.
+        This helper must not be called from background or child-view rendering.
+        """
+        from django.conf import settings
+
+        from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure_sessions import request_binding
+        from ._exposure_snapshots import snapshot_codec
+
+        if uses_legacy_exposure(view):
+            return {}
+        fields: Dict[str, Any] = {
+            "view": view._djust_mount_view_path,
+            "state_snapshot_signed": None,
+        }
+        try:
+            request = getattr(view, "_djust_event_request", None)
+            if request is None or (
+                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
+            ):
+                raise ExposureError("Explicit snapshot requires unchanged authorized identity")
+            if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+                codec = await sync_to_async(snapshot_codec)(view, request)
+                if codec is not None:
+                    fields["state_snapshot_signed"] = await sync_to_async(codec.capture)(view)
+        except Exception:
+            # Factories and codec errors may contain secrets. Never stringify
+            # them or fall back to reflective legacy state.
+            logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
+        return fields
+
     async def _render_and_send(
         self,
         *,
@@ -4691,6 +4741,7 @@ class ViewRuntime:
         force_html: bool = False,
         event_ref: Optional[int] = None,
         scoped_component: Optional[Any] = None,
+        snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Re-render after an event handler and emit the appropriate frame.
 
@@ -4764,6 +4815,8 @@ class ViewRuntime:
             internal ``_timing_render_ms`` marker is ALWAYS popped before the frame
             leaves this helper (the WS hook consumes it; SSE / partial test transports
             have a no-op or no hook), so it can never leak onto the wire."""
+            if snapshot_fields is not None:
+                frame.update(snapshot_fields)
             return self._stamp_event_frame(
                 view,
                 frame,

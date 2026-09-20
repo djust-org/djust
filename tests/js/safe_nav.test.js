@@ -206,6 +206,9 @@ describe('SSE navigate handler — scheme guard (finding #16)', () => {
             // must be provided here or the call throws ReferenceError — which
             // is exactly how this file caught the #2829 strip (#2836 review).
             stripClientOwnedFrameFlags: () => {},
+            // Snapshot storage is exercised against the complete bundle in
+            // state_snapshot_signed.test.js, not this isolated navigation sink.
+            storeSignedSnapshot: () => {},
             globalLoadingManager: { stopLoading: () => {} },
             dispatchPushEventToHooks: () => {},
         };

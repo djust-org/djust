@@ -196,6 +196,27 @@ function _warnDeadScripts(root) {
     }
 }
 
+function storeSignedSnapshot(data, primaryViewPath) {
+    // Only mounts and successful primary-view event acknowledgements carry
+    // navigation state. Child/background/error frames cannot replace it.
+    const eligible = data.type === 'mount' || (
+        data.source === 'event' && data.view === primaryViewPath &&
+        ['patch', 'html_update', 'noop'].includes(data.type)
+    );
+    if (!eligible || typeof data.view !== 'string' || !data.view ||
+        ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    const token = data.state_snapshot_signed;
+    // Cache invalidation sentinel, not a comparison of authentication secrets.
+    // eslint-disable-next-line security/detect-possible-timing-attacks
+    if (token === null) {
+        if (window.djust._clientState) delete window.djust._clientState[data.view];
+    } else if (typeof token === 'string' && token) {
+        if (!window.djust._clientState) window.djust._clientState = Object.create(null);
+        // Opaque signed plaintext: echo verbatim, never parse/re-serialize.
+        window.djust._clientState[data.view] = token;
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -508,6 +529,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
             case 'connect':
@@ -523,21 +545,6 @@ class LiveViewWebSocket {
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
-
-                // Fix #1 / Finding #4 — stash the server-emitted SIGNED
-                // state-snapshot blob so the state-snapshot capture on the
-                // next before-navigate can echo it back verbatim. The server
-                // includes ``state_snapshot_signed`` (an opaque
-                // TimestampSigner blob) only when ``enable_state_snapshot``
-                // is True on the view class; non-opt-in views never have
-                // state cached. The blob is OPAQUE — we store it as-is and
-                // never re-serialize it, so the server signature stays valid
-                // on the round-trip. Re-serializing would strip the signature
-                // and the server would (correctly) reject the snapshot.
-                if (typeof data.state_snapshot_signed === 'string' && data.state_snapshot_signed && data.view) {
-                    if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.state_snapshot_signed; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
-                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));

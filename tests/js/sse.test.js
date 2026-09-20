@@ -26,6 +26,7 @@ global.handleServerResponse = vi.fn();
 // Sibling from 02-response-handler.js; modules 00-20 share one scope in the
 // built bundle, so provide it here the same way as handleServerResponse.
 global.stripClientOwnedFrameFlags = vi.fn();
+global.storeSignedSnapshot = vi.fn();
 global.globalLoadingManager = { stopLoading: vi.fn() };
 global.dispatchPushEventToHooks = vi.fn();
 

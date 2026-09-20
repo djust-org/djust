@@ -59,6 +59,28 @@ class SnapshotRuntimeView(RuntimeView):
     hidden = state("SERVER_SENTINEL", persist="server")
     navigation = state("initial", persist="client", client=True)
 
+    @event_handler()
+    def change_navigation(self, mode: str = "noop"):
+        self.navigation = "latest"
+        if mode in {"render", "patch"}:
+            self.count += 1
+            self._force_full_html = mode == "render"
+        elif mode == "render-noop":
+            pass
+        elif mode == "error":
+            raise ValueError("handler failed")
+        elif mode == "invalid":
+            self.navigation = object()
+            self._skip_render = True
+        elif mode == "navigate":
+            self.live_redirect("/next/")
+            self._skip_render = True
+        elif mode == "identity":
+            self.request.session.cycle_key()
+            self._skip_render = True
+        else:
+            self._skip_render = True
+
 
 def make_request(session_key=None):
     request = RequestFactory().get("/runtime-explicit/")
@@ -143,7 +165,7 @@ async def test_explicit_mount_never_consumes_or_emits_legacy_signed_snapshots(st
     )
     assert runtime.view_instance.count == 5
     assert "SENTINEL" not in json.dumps(transport.sent)
-    assert not any("state_snapshot_signed" in frame for frame in transport.sent)
+    assert not any(frame.get("state_snapshot_signed") for frame in transport.sent)
 
 
 @pytest.mark.parametrize("mutation", ["schema", "extra", "legacy"])
@@ -542,7 +564,13 @@ async def test_client_snapshot_master_switch_and_restore_veto(staged, monkeypatc
             fresh, view_class=SnapshotRuntimeView, state_snapshot=incoming
         )
         assert runtime.view_instance.navigation == "fresh"
-        assert not any("state_snapshot_signed" in frame for frame in frames.sent)
+        assert not any(frame.get("state_snapshot_signed") for frame in frames.sent)
+        assert (
+            next(frame for frame in frames.sent if frame.get("type") == "mount")[
+                "state_snapshot_signed"
+            ]
+            is None
+        )
     monkeypatch.setattr(
         SnapshotRuntimeView, "_should_restore_snapshot", lambda self, request: False
     )
@@ -551,7 +579,7 @@ async def test_client_snapshot_master_switch_and_restore_veto(staged, monkeypatc
     assert runtime.view_instance.navigation == "fresh"
 
 
-async def test_client_snapshot_codec_failure_is_omitted_without_secret_logging(
+async def test_client_snapshot_codec_failure_invalidates_without_secret_logging(
     staged, monkeypatch, caplog
 ):
     class Secret:
@@ -565,6 +593,95 @@ async def test_client_snapshot_codec_failure_is_omitted_without_secret_logging(
     monkeypatch.setattr(SnapshotRuntimeView, "mount", broken_mount)
     request = await sync_to_async(make_request)()
     _, transport = await mount(request, view_class=SnapshotRuntimeView)
-    assert not any("state_snapshot_signed" in frame for frame in transport.sent)
+    assert not any(frame.get("state_snapshot_signed") for frame in transport.sent)
+    assert (
+        next(frame for frame in transport.sent if frame.get("type") == "mount")[
+            "state_snapshot_signed"
+        ]
+        is None
+    )
     assert "SENTINEL" not in caplog.text
     assert "SENTINEL" not in json.dumps(transport.sent)
+
+
+@pytest.mark.parametrize(
+    "mode,frame_type",
+    [("noop", "noop"), ("render", "html_update"), ("patch", "patch"), ("render-noop", "patch")],
+)
+async def test_successful_event_refreshes_client_snapshot(staged, mode, frame_type):
+    from djust._exposure_snapshots import snapshot_codec
+
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=SnapshotRuntimeView)
+    transport.sent.clear()
+    await runtime.dispatch_event(
+        {"type": "event", "event": "change_navigation", "params": {"mode": mode}, "ref": 42}
+    )
+    frame = next(frame for frame in transport.sent if frame.get("type") == frame_type)
+    assert frame["ref"] == 42
+    assert frame["view"] == __name__ + ".SnapshotRuntimeView"
+    token = frame["state_snapshot_signed"]
+    codec = await sync_to_async(snapshot_codec)(runtime.view_instance, request)
+    assert codec.restore(token) == {"navigation": "latest"}
+    assert "SENTINEL" not in token
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    restored, _ = await mount(
+        fresh,
+        view_class=SnapshotRuntimeView,
+        state_snapshot={"view_slug": frame["view"], "state_json": token},
+    )
+    assert restored.view_instance.navigation == "latest"
+
+
+@pytest.mark.parametrize("mode", ["invalid", "disabled", "identity"])
+async def test_event_snapshot_unavailable_explicitly_invalidates_old_token(staged, mode, caplog):
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=SnapshotRuntimeView)
+    transport.sent.clear()
+    with override_settings(DJUST_STATE_SNAPSHOT_ENABLED=mode != "disabled"):
+        await runtime.dispatch_event(
+            {"type": "event", "event": "change_navigation", "params": {"mode": mode}}
+        )
+    frame = next(frame for frame in transport.sent if frame.get("type") == "noop")
+    assert frame["state_snapshot_signed"] is None
+    assert frame["view"] == __name__ + ".SnapshotRuntimeView"
+    assert "SENTINEL" not in caplog.text
+
+
+async def test_failed_event_does_not_publish_snapshot(staged):
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=SnapshotRuntimeView)
+    transport.sent.clear()
+    with override_settings(DEBUG=False):
+        await runtime.dispatch_event(
+            {"type": "event", "event": "change_navigation", "params": {"mode": "error"}}
+        )
+    assert any(frame.get("type") == "error" for frame in transport.sent)
+    assert not any("state_snapshot_signed" in frame for frame in transport.sent)
+
+
+async def test_denied_event_does_not_publish_snapshot(staged, monkeypatch):
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=SnapshotRuntimeView)
+    transport.sent.clear()
+    monkeypatch.setattr(
+        SnapshotRuntimeView, "check_permissions", lambda self, request: False, raising=False
+    )
+    await runtime.dispatch_event({"type": "event", "event": "change_navigation", "params": {}})
+    assert any(frame.get("type") == "error" for frame in transport.sent)
+    assert not any("state_snapshot_signed" in frame for frame in transport.sent)
+    assert runtime.view_instance is None
+
+
+async def test_snapshot_ack_precedes_noop_handler_navigation(staged):
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=SnapshotRuntimeView)
+    transport.sent.clear()
+    await runtime.dispatch_event(
+        {"type": "event", "event": "change_navigation", "params": {"mode": "navigate"}}
+    )
+    frames = transport.sent
+    ack = next(i for i, frame in enumerate(frames) if frame.get("type") == "noop")
+    navigation = next(i for i, frame in enumerate(frames) if frame.get("type") == "navigation")
+    assert ack < navigation
+    assert frames[ack]["state_snapshot_signed"]
