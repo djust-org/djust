@@ -328,6 +328,46 @@ application in its lexical scope instead of pinning source line numbers.
 Canaries permit blank-line shifts but reject a client-payload substitution,
 an extra adjacent assignment and the same block in a different scope.
 
+## Bound child storage foundation
+
+`python/djust/_exposure_children.py` now supplies an internal child-slot adapter
+over the existing server-session envelope. It binds the current session, user,
+tenant and route, every parent contract/schema in the slot ancestry, and bounded
+JSON mount inputs. The child contract supplies its own class/schema binding and
+selects only `persist="server"` fields. Same-type siblings and nested slots have
+distinct storage keys. Parent/class/schema/input changes encounter and reject
+the previous envelope in the same logical slot, avoiding one orphan per version
+or object. Only the mount-input digest is retained; arbitrary objects and encoder
+fallbacks are rejected.
+
+This adapter returns validated values, not hydrated views, and does not grant
+authorization. Its inputs must come from current server rendering/registration,
+not client event parameters. It reuses session rotation, expiry, exact backend
+allowlists, bounded envelopes and synchronous/asynchronous persistence from the
+parent adapter. It neither reads rendering context nor creates client snapshots.
+
+**Integration is still pending.** The legacy sticky guards remain in place.
+The next lifecycle work must:
+
+1. Derive ancestry, stable slots and mount inputs from the trusted render/child
+   registry, including repeat instances and nested ownership.
+2. Run fresh request authorization and `mount()` to reconstruct dependencies,
+   overlay the validated server projection, then enforce current object
+   permission before rendering or dispatch. Legacy skip-mount behavior must not
+   be reused for explicit children.
+3. Recheck preserved/live-instance authorization and identity before reuse.
+4. Connect HTTP and shared-runtime save/restore, with fresh binding and event
+   serialization; explicit server grants must not depend on the legacy
+   browser-snapshot opt-in.
+5. Prune removed provider slots, define mixed-policy subtree behavior and prove
+   failure/remount behavior without partially applying state.
+
+`test_exposure_children.py` exercises real server sessions, copied-envelope
+attacks (not only missing keys), independent sibling/nested state, ancestor and
+mount-input changes, schema changes, parent-envelope substitution, rotation,
+expiry, invalid payloads, readable-backend refusal and storage failures.
+These adapter tests do not prove actual sticky lifecycle or browser support.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.
@@ -344,6 +384,11 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The bound-child adapter slice completed 29,842 Python tests with 952 skipped
+across all three roots (four workers), 81 focused child/session checks and
+full-package mypy across 1,006 source files. No lifecycle or browser activation
+is inferred from those adapter-level results.
 
 The direct-state API slice completed the full Python run across all three roots:
 29,809 passed and 952 skipped (four workers; benchmarks disabled under xdist).
