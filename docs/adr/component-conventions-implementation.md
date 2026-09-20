@@ -683,12 +683,42 @@ the full Python suite passed 30,037 tests with 952 skips. Mypy passed for
 1,019 files. Source/security review also checked callback error handling,
 post-hook ownership and the session-reload boundary.
 
-This is not yet end-to-end transport parity: the current SSE client has no
-`embedded_update` case, and WebSocket loading completion still uses its shared
-last-event state. Client handling/loading, browser verification, child work
+The runtime review exposed a client gap addressed in the next section: SSE had
+no `embedded_update` case, and WebSocket child completion consumed unrelated
+last-event state. Full backend/browser verification, scoped loading, child work
 queued from mount or parent handlers, and descendant/repeated-instance routing
 remain required work. Legacy child dispatch and root background persistence
 also remain separate paths requiring audit. Explicit exposure remains disabled.
+
+### Scoped child client responses
+
+WebSocket and SSE now use the same child-response handler and DOM morph core.
+The existing WebSocket `handleEmbeddedUpdate` method delegates to that core.
+The child wrapper stays in place, only its contents morph, and inserted-script
+warnings and event rebinding still run. Missing targets or non-string HTML do
+not consume another event's acknowledgement.
+
+Background frames (`source="async"`) do not clear current event/loading state.
+Normal referenced replies resolve the matching WebSocket event promise and
+drain buffered patches when its pending-reference set becomes empty. They do
+not clear a different newer event/trigger's pointer. A no-ref reply must match
+the pending trigger's child scope and, when supplied, its event name. That scope
+is captured before the morph, so a successful reply can remove its trigger
+without losing the acknowledgement association.
+
+The real built-client regression tests reproduced both missing SSE updates and
+unrelated WebSocket loading teardown. A real-browser smoke fixture replayed
+scoped frames through both transport handlers: the selected child showed its
+completion while the other child's button remained disabled/pending. This is
+client-frame replay, not a live backend-session/browser or cross-worker test.
+All 1,965 JavaScript tests across 186 files passed, including the 13 focused
+client regressions; ESLint and source/security review passed. Generated bundles
+were rebuilt from source, not hand-edited.
+
+The loading manager is still globally keyed by event name; full same-name
+multi-child loading isolation, concurrent no-ref SSE acknowledgements and
+multi-task background pending indicators require further work. This change
+does not claim those contracts or activate explicit exposure.
 
 ## Readiness audit
 

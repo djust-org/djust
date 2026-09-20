@@ -1147,13 +1147,7 @@ class LiveViewWebSocket {
 
             case 'embedded_update':
                 // Scoped HTML update for an embedded child LiveView
-                this.handleEmbeddedUpdate(data);
-                // Stop loading state
-                if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'child_update':
@@ -1528,33 +1522,7 @@ class LiveViewWebSocket {
      * Replaces only the innerHTML of the embedded view's container div.
      */
     handleEmbeddedUpdate(data) {
-        const viewId = data.view_id;
-        const html = data.html;
-        if (!viewId || html === undefined) {
-            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
-            console.warn('[LiveView] Invalid embedded_update message:', data);
-            return;
-        }
-
-        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
-        if (!container) {
-            console.warn('[LiveView] Embedded view container not found: %s', String(viewId));
-            return;
-        }
-
-        const _morphTemp = document.createElement('div');
-        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-        _morphTemp.innerHTML = html;
-        morphChildren(container, _morphTemp);
-        // #2058: embedded-view (LiveComponent) updates morph the same way
-        // the #1610 mount path does, but never call _runInsertedScripts() —
-        // a classic <script> re-created by this morph is silently dead
-        // exactly like #1848. Loud DEBUG-mode warning.
-        _warnDeadScripts(container);
-        if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
-
-        // Re-bind events within the updated container
-        reinitAfterDOMUpdate();
+        return applyEmbeddedUpdate(data);
     }
 
     _showReconnectBanner(attempt, maxAttempts) {

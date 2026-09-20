@@ -48,6 +48,59 @@ function clearOptimisticPending() {
     });
 }
 
+/** Morph a server-rendered child subtree without replacing its owner wrapper. */
+function applyEmbeddedUpdate(data) {
+    if (typeof data.view_id !== 'string' || !data.view_id || typeof data.html !== 'string') {
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
+        return false;
+    }
+    const container = document.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
+    if (!container) return false;
+    const incoming = document.createElement('div');
+    // codeql[js/xss] -- html is rendered by the trusted Django/Rust server template engine
+    incoming.innerHTML = data.html;
+    morphChildren(container, incoming);
+    _warnDeadScripts(container);
+    reinitAfterDOMUpdate();
+    return true;
+}
+
+/** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
+async function handleEmbeddedResponse(data, transport) {
+    // Capture ownership before morphing: the response may remove its trigger.
+    const tracked = data.ref != null && _pendingEventRefs.has(data.ref);
+    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
+    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
+    const owner = trigger && trigger.closest('[data-djust-embedded]');
+    const ownerId = owner && owner.getAttribute('data-djust-embedded');
+    if (!applyEmbeddedUpdate(data)) return false;
+    if (data.source === 'async') return true;
+    // No-ref SSE replies must match the pending element's scope. A reply for
+    // another child must not consume the most recently sent event's state.
+    if (!tracked && (ownerId !== data.view_id ||
+        (data.event_name && data.event_name !== eventName))) {
+        return true;
+    }
+    if (tracked) {
+        _pendingEventRefs.delete(data.ref);
+        _pendingEventNames.delete(data.ref);
+        _pendingTriggerEls.delete(data.ref);
+        const resolve = _pendingEventResolvers.get(data.ref);
+        _pendingEventResolvers.delete(data.ref);
+        if (resolve) resolve(data);
+    }
+    if (eventName && !data.async_pending) globalLoadingManager.stopLoading(eventName, trigger);
+    if (transport.lastEventName === eventName && transport.lastTriggerElement === trigger) {
+        transport.lastEventName = null;
+        transport.lastTriggerElement = null;
+    }
+    if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+        const buffered = _tickBuffer.splice(0);
+        for (const frame of buffered) await handleServerResponse(frame, null, null);
+    }
+    return true;
+}
+
 /**
  * Centralized server response handler for both WebSocket and HTTP fallback.
  * Eliminates code duplication and ensures consistent behavior.

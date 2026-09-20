@@ -1,0 +1,1 @@
+- Share embedded child updates between WebSocket and SSE clients. Apply scoped background updates without acknowledging an unrelated event, and resolve referenced child-event promises without clearing a newer event's trigger. The existing WebSocket morph entry point remains available.

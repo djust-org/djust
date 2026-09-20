@@ -261,6 +261,10 @@ class LiveViewSSE {
                 this.lastTriggerElement = null;
                 break;
 
+            case 'embedded_update':
+                await handleEmbeddedResponse(data, this);
+                break;
+
             case 'error':
                 console.error('[SSE] Server error:', data.error);
                 window.dispatchEvent(new CustomEvent('djust:error', {
