@@ -116,6 +116,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "sync_safe",
         "use_actors",
         "exposure_policy",
+        "_explicit_child_mount_inputs",
         "view_is_async",
         "tick_interval",
         "login_required",

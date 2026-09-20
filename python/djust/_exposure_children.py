@@ -1,6 +1,7 @@
 """Internal ADR-038 server-state adapter for a declared child slot.
 
-This is not lifecycle integration and does not enable explicit child mounts.
+The eager child mount path uses this behind the production construction gate.
+It does not enable explicit child mounts for applications.
 Callers must derive the parent contracts, slot ancestry, mount inputs and request
 binding from current authorized server rendering/registration, never an event
 payload. Load returns validated values; the caller reconstructs transient
@@ -15,7 +16,88 @@ from typing import Any
 from django.contrib.sessions.backends.base import SessionBase
 
 from ._exposure import ExposureContract, ExposureError, clone_json_state
-from ._exposure_sessions import ServerStateSession, StateBinding
+from ._exposure_sessions import ServerStateSession, StateBinding, server_state_adapter
+
+
+def child_state_adapter(
+    child: Any,
+    parent: Any,
+    request: Any,
+    slot: str,
+    mount_inputs: dict[str, Any],
+    *,
+    create: bool = False,
+) -> "ChildStateSession | None":
+    """Derive a child scope from the current server-owned parent registry.
+
+    The child need not be registered yet (fresh mount). Ancestors must already
+    belong to their claimed parent, with inputs recorded by the render lifecycle.
+    Mixed-policy ancestry is not implicitly upgraded to an exposure contract.
+    """
+    try:
+        policy = getattr(child, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Explicit child policy required")
+        contract = ExposureContract.from_view_class(type(child))
+        if type(slot) is not str or not 1 <= len(slot) <= 128 or type(mount_inputs) is not dict:
+            raise ExposureError("Invalid child slot or mount inputs")
+        current_inputs = clone_json_state(mount_inputs, limits=contract.limits)
+        if not any(field.persist == "server" for field in contract.fields.values()):
+            return None
+        parents = []
+        slots = [slot]
+        inputs = [current_inputs]
+        current = parent
+        seen: set[int] = set()
+        while current is not None:
+            if id(current) in seen or len(seen) >= 16:
+                raise ExposureError("Invalid child ancestry")
+            seen.add(id(current))
+            policy = getattr(current, "exposure_policy", None)
+            if type(policy) is not str or policy != "explicit":
+                raise ExposureError("Explicit children require explicit ancestry")
+            parents.append(ExposureContract.from_view_class(type(current)))
+            ancestor = getattr(current, "_parent_view", None)
+            if ancestor is None:
+                break
+            current_slot = getattr(current, "_view_id", None)
+            registry = getattr(ancestor, "_child_views", None)
+            if (
+                type(current_slot) is not str
+                or type(registry) is not dict
+                or registry.get(current_slot) is not current
+            ):
+                raise ExposureError("Child ancestry is no longer registered")
+            encoded_inputs = getattr(current, "_explicit_child_mount_inputs", None)
+            if type(encoded_inputs) is not str:
+                raise ExposureError("Missing child mount identity")
+            inputs.append(clone_json_state(json.loads(encoded_inputs)))
+            slots.append(current_slot)
+            current = ancestor
+        base = server_state_adapter(child, request, create=create)
+        if base is None:
+            return None
+        return ChildStateSession(
+            base.session,
+            tuple(reversed(parents)),
+            base.contract,
+            base.binding,
+            tuple(reversed(slots)),
+            {"ancestry": list(reversed(inputs))},
+        )
+    except ExposureError:
+        raise
+    except Exception:  # noqa: BLE001 — do not expose provider/default exception values
+        raise ExposureError("Child state provider unavailable") from None
+
+
+def record_child_mount_inputs(child: Any, mount_inputs: dict[str, Any]) -> None:
+    """Record detached, bounded server-render inputs for nested ownership."""
+    if type(mount_inputs) is not dict:
+        raise ExposureError("Invalid child mount inputs")
+    child._explicit_child_mount_inputs = json.dumps(
+        clone_json_state(mount_inputs), sort_keys=True, separators=(",", ":")
+    )
 
 
 def _digest(value: Any) -> str:

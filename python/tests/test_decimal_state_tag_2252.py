@@ -876,6 +876,30 @@ def _decode_call_sites():
     return found
 
 
+def _explicit_child_json_assignments(tree):
+    """Only the exact gated child JSON-primitives restore is not a Decimal sink."""
+    expected = ast.parse(
+        "if explicit_values is not None:\n"
+        "    for name, value in explicit_values.items():\n"
+        "        safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)\n"
+    ).body[0]
+    matches = [
+        node
+        for function in tree.body
+        if isinstance(function, ast.FunctionDef) and function.name == "live_render"
+        for node in ast.walk(function)
+        if ast.dump(node) == ast.dump(expected)
+    ]
+    assert len(matches) == 1, "Review the explicit child restore codec boundary"
+    return {
+        node
+        for node in ast.walk(matches[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "safe_setattr"
+    }
+
+
 class TestTheDecodeSiteInventory:
     def test_the_decode_sites_are_exactly_the_expected_set(self) -> None:
         """A SET, not a floor (#1125). A new restore path that forgets the
@@ -898,6 +922,20 @@ class TestTheDecodeSiteInventory:
             rel = path.relative_to(_PKG).as_posix()
             if rel in ("security/attribute_guard.py", "security/__init__.py", "websocket.py"):
                 continue
+            if rel == "templatetags/live_tags.py":
+                # ADR-038's explicit codec accepts JSON primitives only. Running
+                # the legacy decoder here would corrupt ordinary tag-shaped
+                # dictionaries. Exempt the exact assignment block, not the module.
+                tree = ast.parse(src)
+                calls = {
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "safe_setattr"
+                }
+                if calls == _explicit_child_json_assignments(tree):
+                    continue
             restoring.add(rel)
         decoding = {module for module, _ in _decode_call_sites()}
         assert restoring <= decoding, (
@@ -910,6 +948,19 @@ class TestTheDecodeSiteInventory:
         restoring = {"live_view.py", "runtime.py", "a_new_restore_path.py"}
         decoding = {module for module, _ in _decode_call_sites()}
         assert not restoring <= decoding
+
+    def test_child_codec_exception_does_not_hide_an_added_assignment(self) -> None:
+        source = (_PKG / "templatetags/live_tags.py").read_text()
+        tree = ast.parse(source + "\nsafe_setattr(child, key, restored_value)\n")
+        exempt = _explicit_child_json_assignments(tree)
+        calls = {
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "safe_setattr"
+        }
+        assert len(calls - exempt) == 1
 
     def test_one_function_decides_each_direction(self, monkeypatch) -> None:
         """Load-bearing single-source pin, not a decorative one (#1859).

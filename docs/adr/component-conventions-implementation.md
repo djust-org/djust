@@ -346,15 +346,18 @@ not client event parameters. It reuses session rotation, expiry, exact backend
 allowlists, bounded envelopes and synchronous/asynchronous persistence from the
 parent adapter. It neither reads rendering context nor creates client snapshots.
 
-**Integration is still pending.** The legacy sticky guards remain in place.
-The next lifecycle work must:
+**Integration is partial and still gated.** The legacy sticky guards remain in
+place; fresh eager explicit mounts use the separate adapter described below.
+The lifecycle work includes:
 
 1. Derive ancestry, stable slots and mount inputs from the trusted render/child
-   registry, including repeat instances and nested ownership.
+   registry. Fresh eager nested ownership is implemented; repeat-instance and
+   changed-identity reuse remain to be completed.
 2. Run fresh request authorization and `mount()` to reconstruct dependencies,
    overlay the validated server projection, then enforce current object
    permission before rendering or dispatch. Legacy skip-mount behavior must not
-   be reused for explicit children.
+   be reused for explicit children. This sequence is implemented for fresh eager
+   sticky children; event and preserved-instance integration remains pending.
 3. Recheck preserved/live-instance identity before reuse. Current-request view
    and object authorization on both render reuse paths is now implemented as
    described below; this is not yet complete identity/lifecycle integration.
@@ -390,6 +393,47 @@ This prerequisite is a correction to existing legacy behavior as well as staged
 explicit behavior. It does not wire `ChildStateSession` into the child mount/save
 paths, resolve changed slot/class/mount identity, or remove the explicit gate.
 
+### Fresh eager child lifecycle
+
+The staged explicit `live_render sticky=True` fresh-child path now compiles its
+scope from actual registered ancestry and detached server-render mount inputs.
+An invalid/cyclic/unregistered ancestry cannot claim another child's scope.
+Server-persisted children currently require all-explicit ancestry; transient
+children do not require a server session or upgrade their legacy ancestors.
+
+After current view authorization, the path prepares the adapter, calls `mount()`
+to reconstruct transient dependencies, and rechecks schema and ownership against
+the pre-mount binding before applying any saved values. Rejected envelope schema,
+identity or expiry leaves fresh defaults intact. Object authorization runs on the
+restored state before registration or initial persistence. The initial save uses
+only declared server fields, independently of legacy browser-snapshot opt-in.
+The legacy skip-mount restore path is unchanged.
+
+Explicit sticky rendering no longer inserts a raw `view` object into context.
+Nested rendering obtains its parent through the framework's scoped active-parent
+context. Explicit context errors fail with a static error rather than logging
+private exception values and rendering an empty fallback context.
+
+`test_exposure_child_mount.py` covers actual Django template rendering, a real
+HTTP GET through the normal parent view path, real database sessions, nested
+registry ownership, initial saves, mount-before-restore, declaration replacement
+during mount, view denial before mount and object denial after restore. The raw
+view sentinel, declaration-replacement and context-failure regressions each
+failed before their fix; disabling the load changes the actual rendered count.
+The first test setup initially lacked configured tenant middleware state; that
+fixture error is not evidence of a product failure.
+
+The Decimal restore-site inventory recognizes only the exact explicit child
+assignment block as a JSON-primitives codec boundary; it does not exempt the
+whole module. A canary detects extra assignments, and an actual child restore
+proves legacy Decimal-tag-shaped dictionaries stay ordinary JSON. Applying the
+legacy decoder on this path would silently change those values.
+
+This does **not** complete child-event saving, changed-identity reuse, lazy child
+mounts, non-sticky provider scopes, pruning, mixed-policy persistence, cross-worker
+restoration or browser reconnect coverage. Those remain activation gates, and
+the explicit constructor guard is still unchanged.
+
 ## Readiness audit
 
 The milestone-audit checklist was applied to the two foundation boundaries.
@@ -406,6 +450,14 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The fresh eager-child slice completed 29,884 Python tests with 952 skipped
+across all three roots (four workers). Focused mount/Decimal-inventory coverage
+passed 119 tests, the earlier mount/reuse/adapter/legacy-restore set passed 81,
+and full-package mypy passed 1,008 source files. An initial full run's single
+failure identified the codec inventory assumption corrected above. The actual
+HTTP GET and native template tests do not establish browser or cross-worker
+coverage, and the production explicit gate remains closed.
 
 The child-reuse authorization slice completed 29,866 Python tests with 952
 skipped across all three roots (four workers), 24 focused reuse tests and

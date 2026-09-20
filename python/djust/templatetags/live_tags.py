@@ -1473,23 +1473,32 @@ def _render_sticky_child_html(
     """
     from django.template.loader import get_template
 
+    from .._exposure import ExposureError, uses_legacy_exposure
+
+    legacy_child = uses_legacy_exposure(child)
     child_context: Dict[str, Any] = {}
     get_ctx = getattr(child, "get_context_data", None)
     if callable(get_ctx):
         try:
             child_context = dict(get_ctx())
         except Exception:  # noqa: BLE001 — fall back to empty context on error
+            if not legacy_child:
+                raise ExposureError("Explicit child rendering context unavailable") from None
             logger.exception(
                 "live_render: child %s.get_context_data raised; rendering with empty context",
                 type(child).__name__,
             )
             child_context = {}
     child_context.setdefault("request", request)
-    child_context.setdefault("view", child)
+    if legacy_child:
+        child_context.setdefault("view", child)
+    elif "view" in child_context:
+        raise ExposureError("Explicit child context contains a reserved framework name")
 
     inline = getattr(child, "template", None)
     if inline:
-        rendered_inner = Template(inline).render(Context(child_context))
+        with active_parent_view(child):
+            rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
         if not template_name:
@@ -1497,7 +1506,8 @@ def _render_sticky_child_html(
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        rendered_inner = get_template(template_name).render(child_context, request)
+        with active_parent_view(child):
+            rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)
@@ -2172,8 +2182,26 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     #     for the unsaved / non-opted-in case. Wrapped in try/except: a
     #     malformed session entry must fall through to a fresh mount(),
     #     never break the parent's render.
+    from .._exposure import ExposureError, uses_legacy_exposure
+
+    explicit_child = not uses_legacy_exposure(child)
+    explicit_adapter = None
+    if sticky_kwarg and explicit_child:
+        from .._exposure import clone_json_state
+        from .._exposure_children import child_state_adapter, record_child_mount_inputs
+
+        assert sticky_id_value is not None
+        # Compile the trusted ownership scope before mount can mutate inputs.
+        # Legacy mixed-policy children remain on their existing path; an
+        # explicit child cannot infer an explicit contract from legacy ancestry.
+        explicit_mount_inputs = clone_json_state(kwargs)
+        record_child_mount_inputs(child, explicit_mount_inputs)
+        explicit_adapter = child_state_adapter(
+            child, parent, request, sticky_id_value, explicit_mount_inputs, create=True
+        )
+
     restored = False
-    if sticky_kwarg:
+    if sticky_kwarg and not explicit_child:
         from ..mixins.sticky import restore_sticky_child_state
 
         try:
@@ -2207,6 +2235,29 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         if callable(mount):
             mount(request, **kwargs)
 
+    if explicit_adapter is not None:
+        from ..security import safe_setattr
+
+        assert sticky_id_value is not None
+        current_adapter = child_state_adapter(
+            child, parent, request, sticky_id_value, explicit_mount_inputs
+        )
+        if (
+            current_adapter is None
+            or current_adapter.contract.schema != explicit_adapter.contract.schema
+            or current_adapter.binding != explicit_adapter.binding
+        ):
+            raise ExposureError("Child state ownership or declarations changed during mount")
+        try:
+            explicit_values = explicit_adapter.load()
+        except ExposureError:
+            # Bad schema/identity/expiry is a cache miss, not a partial restore.
+            # Configuration/storage failures propagate, with no legacy fallback.
+            explicit_values = None
+        if explicit_values is not None:
+            for name, value in explicit_values.items():
+                safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)
+
     # 4c. Object-permission check (ADR-017) for the embedded child. The child's
     #     view-level auth ran above (check_view_auth); the object-level step
     #     must run too, or an embedded object-scoped child renders a denied
@@ -2226,6 +2277,11 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     #    wires parent/view_id back-references on the child.
     view_id = parent._assign_view_id(preferred_view_id)
     parent._register_child(view_id, child)
+
+    if explicit_adapter is not None:
+        # Initial child state is server-only even when legacy browser snapshot
+        # persistence is disabled. Current object authorization has passed.
+        explicit_adapter.save(explicit_adapter.contract.project_view(child, "server"))
 
     # 6-9. Sticky branch: render via the shared helper so the fresh-mount path
     #      and the #1813 (b1) live-instance-reuse hatch emit byte-identical
