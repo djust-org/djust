@@ -42,13 +42,13 @@ def _identity(value: Any) -> str:
     raise ExposureError("Unsupported request identity type")
 
 
-def request_binding(request: Any) -> "StateBinding":
-    """Derive identity from middleware/routing state, never event/restore data.
+def _request_principal(request: Any) -> tuple[str, str]:
+    """Derive principal from middleware state, never event/restore data.
 
     AuthenticationMiddleware is required even for anonymous views. TenantInfo
     is djust's resolver result; model-based tenant middleware is also supported
     via its primary key. Configured tenant resolution may not silently disappear.
-    A missing session handle must be established by the transport before saving.
+    Session identity is checked separately by the consuming boundary.
     """
     from django.conf import settings
     from django.db.models import Model
@@ -74,6 +74,12 @@ def request_binding(request: Any) -> "StateBinding":
         tenant_id = "model:" + tenant._meta.label_lower + ":" + _identity(tenant.pk)
     else:
         raise ExposureError("Unsupported request tenant identity")
+    return user_id, tenant_id
+
+
+def request_binding(request: Any) -> "StateBinding":
+    """Bind an established server session to the current principal and route."""
+    user_id, tenant_id = _request_principal(request)
     return StateBinding(request.session.session_key, user_id, tenant_id, request.path)
 
 

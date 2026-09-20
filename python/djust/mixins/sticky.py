@@ -512,8 +512,9 @@ class StickyChildRegistry:
         (audio streams, open files, etc.) should call
         ``super()._on_sticky_unmount()`` to preserve task cleanup.
 
-        This hook is ONLY called during a live_redirect transition that
-        discards the sticky — a full WS disconnect takes the normal
+        This hook is called during a live_redirect transition that discards
+        the sticky, or when an explicit child's mount identity changes.
+        A full WS disconnect takes the normal
         :meth:`_unregister_child` -> ``_cleanup_on_unregister`` path.
         """
         cancel_all = getattr(self, "cancel_async_all", None)

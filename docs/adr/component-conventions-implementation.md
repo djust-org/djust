@@ -468,9 +468,50 @@ substring count. The explicit child storage cancellation test exercises a
 stalled backend; legacy best-effort timeout behavior remains separately tested.
 
 This is not complete child persistence: parent-driven mutations/HTTP sweeps,
-identity-aware reuse, lazy/non-sticky children, pruning, mixed-policy scopes,
+lazy/non-sticky children, pruning, mixed-policy scopes,
 real-browser reconnect and cross-worker evidence remain required. The production
 construction gate remains closed.
+
+### Explicit child reuse identity
+
+Both eager registered reuse and navigation-preserved reattachment now compare
+a private mount-time identity before retaining an explicit child. It includes
+the exact Python child/ancestor classes, declaration schemas, registered ancestor
+slots and their recorded inputs, the child's detached mount kwargs, and current
+user, tenant, route path and session identity (including backend type). A digest is only an equality token,
+not authorization: fresh view/object permission checks still run, followed by a
+second identity check before reuse. Fresh mounts also recheck after mount and
+object authorization. Routed child events use this identity even when no fields
+have server-persistence grants.
+
+Transient reuse does not create, read or save session data. Without an established
+session key, state can be reused within its current root instance, not transferred
+to another root. Mixed-policy transient ancestry is likewise root-instance-bound
+because legacy mount inputs do not carry an explicit provider contract. Cookie
+session identifiers can identify transient reuse; they do not grant server
+persistence. Only the identifier's hash enters the private identity metadata.
+
+A valid but changed identity remounts in the same slot. The replaced instance is
+removed from its old registry and the navigation preservation map before its
+sticky unmount hook runs. The ordinary registered replacement also invokes its
+unregister cleanup hook. Hook failure cannot resurrect the child and is logged
+without private exception text. Invalid identity inputs fail closed instead of
+falling back to legacy reflection. Existing legacy reuse is unchanged.
+
+The eager tag now rejects combined sticky/lazy options before reuse, closing a
+preservation shortcut around the existing incompatibility rule. Tests exercise
+native Django rendering, real database session identifiers, matching and changed
+identities, scope compilation for nested ancestry, sessionless reuse, cleanup
+failures, authorization-induced identity changes and the real post-render
+preservation scan. They do not establish browser reattachment, recursive subtree
+teardown, repeated-instance routing, provider pruning, or cross-worker parity.
+Those remain required before activation; the production constructor guard stays
+closed.
+
+The post-render scan only accepts explicit survivors already validated and
+registered by the tag. Bare `dj-sticky-slot` markup cannot substitute for the
+declared class/inputs check; a regression reproduced that bypass before the scan
+was restricted. Legacy bare-slot preservation keeps its existing behavior.
 
 ## Readiness audit
 
@@ -488,6 +529,15 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The identity-aware reuse slice completed 29,957 Python tests with 952 skipped
+across all three roots (four workers). Focused child identity/event/mount/reuse
+coverage passed 114 tests, and full-package mypy passed 1,011 source files.
+The changed-input tests and bare-slot reattachment test failed before their fixes.
+An initial full run had two new fixture errors (monkeypatching an absent optional
+method); after correction, the final run above verified the frozen implementation.
+Native templates, shared-runtime events and the post-render transport hook were
+exercised, not a live browser or cross-worker deployment.
 
 The shared-runtime child-event slice completed 29,896 Python tests with 952
 skipped across all three roots (four workers), 12 focused event tests and 21

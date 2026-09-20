@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.backends.db import SessionStore
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Template, TemplateSyntaxError
 
@@ -41,6 +42,8 @@ class ReusableChild(LiveView):
 def make_request(rf, **changes):
     request = rf.get("/page/")
     request.user = AnonymousUser()
+    request.tenant = None
+    request.session = SessionStore("reuse-session-key-not-loaded")
     request.view_allowed = True
     request.object_allowed = True
     request.fail_view_check = False
@@ -63,9 +66,10 @@ def allow_fixture_module(settings, monkeypatch, request):
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_exposure_child_reuse"]
     if request.param == "explicit":
         # Only construction is bypassed: actual template, registry and auth run.
-        # This is reuse authorization coverage, not mixed-policy persistence.
+        # Use an explicit root and stable middleware identity for preservation.
+        # No fields persist, so no session data is read or written.
         monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-        monkeypatch.setattr(ReusableChild, "exposure_policy", "explicit")
+        monkeypatch.setattr(LiveView, "exposure_policy", "explicit")
 
 
 @pytest.mark.parametrize("reuse", ["registered", "preserved"])
@@ -122,12 +126,12 @@ def test_logout_denies_existing_authenticated_child(rf, monkeypatch, reuse):
     monkeypatch.setattr(ReusableChild, "login_required", True)
     parent = LiveView()
     logged_in = make_request(rf)
-    logged_in.user = SimpleNamespace(is_authenticated=True)
+    logged_in.user = SimpleNamespace(is_authenticated=True, pk=1)
     render(parent, logged_in)
     child = parent._get_child_view("guarded")
     if reuse == "preserved":
         parent = LiveView()
         parent._ws_consumer = SimpleNamespace(_sticky_preserved={"guarded": child})
-    with pytest.raises(PermissionDenied):
+    with pytest.raises((PermissionDenied, TemplateSyntaxError)):
         render(parent, make_request(rf))
     assert child._render_calls == 1

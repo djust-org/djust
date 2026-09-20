@@ -1472,6 +1472,7 @@ class WSConsumerTransport:
         registration + emits a frame, it does not rewrite the mount HTML. No-op
         (returns ``html``) when no stickys were staged.
         """
+        from ._exposure import uses_legacy_exposure
         from .websocket import _find_sticky_slot_ids
 
         consumer = self._consumer
@@ -1489,7 +1490,10 @@ class WSConsumerTransport:
                     # don't call _register_child again (it would ValueError), but
                     # keep it in survivors_final for an authoritative hold list.
                     survivors_final[sticky_id] = child
-                elif sticky_id in matched_ids:
+                elif sticky_id in matched_ids and uses_legacy_exposure(child):
+                    # Explicit children must pass the tag's expected-class,
+                    # inputs and request-identity checks. Bare slot markup
+                    # cannot authorize their reattachment.
                     if hasattr(view, "_register_child"):
                         try:
                             view._register_child(sticky_id, child)
@@ -1511,7 +1515,10 @@ class WSConsumerTransport:
                         try:
                             hook()
                         except Exception:  # noqa: BLE001
-                            logger.exception("sticky child _on_sticky_unmount raised")
+                            if uses_legacy_exposure(child):
+                                logger.exception("sticky child _on_sticky_unmount raised")
+                            else:
+                                logger.error("Explicit child unmount cleanup failed")
             consumer._sticky_preserved = survivors_final
             await consumer.send_json(
                 {

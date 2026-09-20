@@ -122,6 +122,12 @@ def child_event_adapter(child: Any, root: Any, request: Any) -> "ChildStateSessi
         if contract.schema != getattr(child, "_explicit_child_schema", None):
             raise ExposureError("Child declarations changed")
         inputs = json.loads(child._explicit_child_mount_inputs)
+        from ._exposure_child_identity import child_can_reuse
+
+        if not child_can_reuse(
+            child, type(child), child._parent_view, request, child._view_id, inputs
+        ):
+            raise ExposureError("Child event reuse identity changed")
         adapter = child_state_adapter(child, child._parent_view, request, child._view_id, inputs)
         expected = getattr(child, "_explicit_child_mount_binding", None)
         if (adapter.binding if adapter is not None else None) != expected:

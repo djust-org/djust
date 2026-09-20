@@ -119,6 +119,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_explicit_child_mount_inputs",
         "_explicit_child_mount_binding",
         "_explicit_child_schema",
+        "_explicit_child_reuse_identity",
         "view_is_async",
         "tick_interval",
         "login_required",

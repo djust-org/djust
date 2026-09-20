@@ -64,6 +64,11 @@ class EventParent(LiveView):
     )
 
 
+class TransientEventChild(EventChild):
+    count = state(1)
+    secret = state("TRANSIENT_SENTINEL")
+
+
 @pytest.fixture(autouse=True)
 def staged(monkeypatch, settings):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -111,6 +116,22 @@ async def test_child_event_persists_with_fresh_request_without_snapshot_optin():
     assert "SERVER_SENTINEL" not in json.dumps(transport.sent)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 2
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_transient_child_event_checks_identity_without_server_grants(monkeypatch, changed):
+    monkeypatch.setattr(
+        EventParent, "template", EventParent.template.replace("EventChild", "TransientEventChild")
+    )
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    assert not hasattr(child, "_explicit_child_mount_binding")
+    if changed:
+        child._explicit_child_mount_inputs = '{"object_id": 99}'
+    await increment(runtime)
+    assert child._handler_calls == (0 if changed else 1)
+    assert child.count == (1 if changed else 2)
+    assert any(frame.get("type") == "embedded_update" for frame in transport.sent) is not changed
 
 
 @pytest.mark.parametrize("mutation", ["permission", "inputs", "schema", "registration"])
