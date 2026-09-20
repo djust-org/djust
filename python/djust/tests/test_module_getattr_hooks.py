@@ -23,10 +23,9 @@ Two shapes keep a hook safe and both are worth copying:
   through ``sys.modules`` rather than through an attribute lookup on self.
 """
 
-import importlib
+import ast
 import os
 import pathlib
-import pkgutil
 import subprocess
 import sys
 import textwrap
@@ -38,21 +37,43 @@ import djust
 _MISSING = "_no_such_attribute_anywhere_in_djust_"
 
 
-def _modules_with_a_getattr_hook():
-    """Every importable djust module that defines a module-level hook."""
+def _modules_with_a_getattr_hook(root=None):
+    """Discover declarations without executing package initialization.
+
+    Importing every module in the pytest process can reconfigure logging and
+    close pytest's capture streams. Only the isolated probes below execute a
+    discovered module; discovery must not alter the process under test.
+    """
+    root = pathlib.Path(djust.__file__).parent if root is None else root
     found = []
-    for info in pkgutil.walk_packages(djust.__path__, prefix="djust."):
-        if ".tests" in info.name or ".migrations" in info.name:
+    for source in root.rglob("*.py"):
+        relative = source.relative_to(root)
+        if {"tests", "migrations"}.intersection(relative.parts):
             continue
-        try:
-            module = importlib.import_module(info.name)
-        except Exception:  # noqa: BLE001 — optional extras need not import
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        if not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__getattr__"
+            for node in tree.body
+        ):
             continue
-        if callable(module.__dict__.get("__getattr__")):
-            found.append(info.name)
-    if callable(djust.__dict__.get("__getattr__")):
-        found.append("djust")
+        parts = relative.with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        found.append(".".join(("djust", *parts)))
     return sorted(set(found))
+
+
+def test_discovery_is_static_and_excludes_class_hooks(tmp_path):
+    (tmp_path / "__init__.py").write_text(
+        "raise RuntimeError('must not import')\ndef __getattr__(name): raise AttributeError(name)\n"
+    )
+    (tmp_path / "ordinary.py").write_text(
+        "class Example:\n    def __getattr__(self, name): return None\n"
+    )
+    package = tmp_path / "nested"
+    package.mkdir()
+    (package / "__init__.py").write_text("def __getattr__(name): raise AttributeError(name)\n")
+    assert _modules_with_a_getattr_hook(tmp_path) == ["djust", "djust.nested"]
 
 
 def _tree_under_test() -> str:
@@ -101,6 +122,7 @@ def _probe_in_a_fresh_interpreter(module_name: str, attribute: str) -> str:
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
+        check=False,
         text=True,
         timeout=120,
         env={**os.environ, "PYTHONPATH": tree + os.pathsep + os.environ.get("PYTHONPATH", "")},
