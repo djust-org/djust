@@ -363,6 +363,11 @@
         });
     }
 
+    function forgetState(url) {
+        const ctrl = _swController();
+        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: url });
+    }
+
     function lookupState(url) {
         return new Promise(function (resolve) {
             const ctrl = _swController();
@@ -467,6 +472,7 @@
         cacheVdom: cacheVdom,
         lookupVdom: lookupVdom,
         captureState: captureState,
+        forgetState: forgetState,
         lookupState: lookupState,
     };
 })();

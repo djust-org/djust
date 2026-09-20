@@ -35,6 +35,15 @@ const STATE_CACHE = 'djust-state-cache-v1';
 // LRU order tracking — Map preserves insertion order; we rotate on access.
 const VDOM_LRU = new Map();
 const STATE_LRU = new Map();
+let stateOperations = Promise.resolve();
+
+// CacheStorage operations are asynchronous; message receipt order alone does
+// not order a capture, subsequent eviction and back-navigation lookup.
+function queueStateOperation(event, operation) {
+    stateOperations = stateOperations.then(operation).catch(() => {});
+    // Keep the worker alive until the queued work completes.
+    if (typeof event.waitUntil === 'function') event.waitUntil(stateOperations);
+}
 // Defaults; client can override via VDOM_CONFIG message.
 let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
 let VDOM_MAX_ENTRIES = 50;
@@ -279,17 +288,27 @@ self.addEventListener('message', (event) => {
         if (msg.state_json.length > STATE_JSON_MAX_BYTES) {
             return;
         }
-        putWithLRU(STATE_CACHE, STATE_LRU, msg.url, {
+        queueStateOperation(event, () => putWithLRU(STATE_CACHE, STATE_LRU, msg.url, {
             url: msg.url,
             view_slug: typeof msg.view_slug === 'string' ? msg.view_slug : '',
             state_json: msg.state_json,
             ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
-        }, STATE_MAX_ENTRIES).catch(() => {});
+        }, STATE_MAX_ENTRIES));
+        return;
+    }
+
+    if (msg.type === 'STATE_SNAPSHOT_FORGET') {
+        if (typeof msg.url !== 'string' || !msg.url) return;
+        queueStateOperation(event, async () => {
+            const cache = await caches.open(STATE_CACHE);
+            await cache.delete(msg.url);
+            STATE_LRU.delete(msg.url);
+        });
         return;
     }
 
     if (msg.type === 'STATE_SNAPSHOT_LOOKUP') {
-        lookupCached(STATE_CACHE, msg.url).then((entry) => {
+        queueStateOperation(event, () => lookupCached(STATE_CACHE, msg.url).then((entry) => {
             const reply = {
                 type: 'STATE_SNAPSHOT_REPLY',
                 requestId: msg.requestId,
@@ -308,7 +327,7 @@ self.addEventListener('message', (event) => {
                 state_json: null,
                 ts: 0,
             });
-        });
+        }));
         return;
     }
 
@@ -319,8 +338,10 @@ self.addEventListener('message', (event) => {
     }
 
     if (msg.type === 'DJUST_CLEAR_STATE_CACHE') {
-        caches.delete(STATE_CACHE).catch(() => {});
-        STATE_LRU.clear();
+        queueStateOperation(event, async () => {
+            await caches.delete(STATE_CACHE);
+            STATE_LRU.clear();
+        });
         return;
     }
 });

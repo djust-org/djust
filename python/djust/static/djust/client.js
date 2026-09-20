@@ -11777,6 +11777,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
+        const fromUrl = window.location.pathname;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -11821,7 +11822,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // public state to the SW cache BEFORE this URL leaves.
         try {
             window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                detail: { fromUrl: fromUrl, toUrl: newUrl.pathname },
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
@@ -11969,6 +11970,11 @@ window.djust.getActiveStreams = getActiveStreams;
             // (now-current) non-LiveView URL correctly.
             const viewPath = resolveLiveViewPath(url.pathname);
             if (viewPath) {
+                // Popstate has already changed location. Capture/invalidate
+                // the page we are leaving before looking up the destination.
+                window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                    detail: { fromUrl: cameFrom, toUrl: url.pathname },
+                }));
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
                 // live_redirect_mount message.
@@ -15937,6 +15943,11 @@ window.djust.bindModelElements = bindModelElements;
         });
     }
 
+    function forgetState(url) {
+        const ctrl = _swController();
+        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: url });
+    }
+
     function lookupState(url) {
         return new Promise(function (resolve) {
             const ctrl = _swController();
@@ -16041,6 +16052,7 @@ window.djust.bindModelElements = bindModelElements;
         cacheVdom: cacheVdom,
         lookupVdom: lookupVdom,
         captureState: captureState,
+        forgetState: forgetState,
         lookupState: lookupState,
     };
 })();
@@ -18369,9 +18381,8 @@ globalThis.djust.djTransitionGroup = {
 // cached state and stashes it on window.djust._pendingStateSnapshot so the
 // next outbound live_redirect_mount can include it.
 //
-// Per-view opt-in: the server-side LiveView must declare
-// `enable_state_snapshot = True`. The client sends the snapshot regardless
-// (belt-and-braces); the server ignores snapshots for non-opt-in views.
+// The server grants persistence: legacy enable_state_snapshot or staged explicit
+// persist="client" fields. The client echoes signed tokens, never infers grants.
 //
 // Non-invasive: this module only wires listeners and reads/writes one
 // globalThis slot. It never mutates the DOM or WebSocket directly.
@@ -18413,8 +18424,7 @@ globalThis.djust.djTransitionGroup = {
         // Finding #4 (CWE-345 → CWE-915): the canonical record on
         // `window.djust._clientState[slug]` is now the OPAQUE
         // server-signed snapshot blob (`state_snapshot_signed`), populated
-        // by the mount handler in 03-websocket.js when the server emits it
-        // (only for views with ``enable_state_snapshot = True``). We echo
+        // by WebSocket/SSE mount and authorized event responses. We echo
         // that blob back VERBATIM — never JSON.stringify it. Re-serializing
         // would discard the server's HMAC signature, and the restore path
         // would (correctly) reject the unsigned payload. The blob is a
@@ -18440,9 +18450,13 @@ globalThis.djust.djTransitionGroup = {
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
         const json = _serializeCurrentState(slug);
-        if (!json) return;
         try {
-            bridge.captureState(fromUrl, slug, json);
+            if (json) {
+                bridge.captureState(fromUrl, slug, json);
+            } else if (typeof bridge.forgetState === 'function') {
+                // Skipping capture would leave a previously cached token alive.
+                bridge.forgetState(fromUrl);
+            }
         } catch (e) {
             if (globalThis.djustDebug) {
                 console.warn('[state-snapshot] captureState threw', e);

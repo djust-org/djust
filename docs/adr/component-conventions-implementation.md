@@ -249,7 +249,18 @@ WebSocket and SSE clients share opaque-token storage, scoped to the primary view
 for event responses. Null clears the old entry; unrelated, background and error
 frames cannot replace it. Bundle tests cover byte-for-byte navigation capture;
 runtime tests cover event-to-remount restoration and acknowledgement ordering.
-Real browser/service-worker back-navigation, complete SSE endpoint round trips,
+
+The navigation cache now evicts the source URL when no current token exists,
+rather than retaining an older service-worker entry. State writes, per-URL
+eviction, lookup and whole-state-cache clearing run in receipt order, with
+service-worker lifetime extension. Redirect capture records the source before
+history changes; Back navigation captures/invalidates the page being left before
+destination lookup. Regression tests include a deliberately delayed cache write.
+A real-browser harness verifies the bundled WebSocket/SSE clients through actual
+service-worker messages and CacheStorage (eight checks); its transport frames are
+synthetic, not proof of Django authorization or complete page navigation.
+
+Complete Django-to-browser Back navigation, complete SSE endpoint round trips,
 background state changes, remaining direct state APIs and provider/child contracts
 remain activation gates. Explicit policy is still constructor-gated.
 

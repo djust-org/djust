@@ -205,6 +205,7 @@
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
+        const fromUrl = window.location.pathname;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -249,7 +250,7 @@
         // public state to the SW cache BEFORE this URL leaves.
         try {
             window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                detail: { fromUrl: fromUrl, toUrl: newUrl.pathname },
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
@@ -397,6 +398,11 @@
             // (now-current) non-LiveView URL correctly.
             const viewPath = resolveLiveViewPath(url.pathname);
             if (viewPath) {
+                // Popstate has already changed location. Capture/invalidate
+                // the page we are leaving before looking up the destination.
+                window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                    detail: { fromUrl: cameFrom, toUrl: url.pathname },
+                }));
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
                 // live_redirect_mount message.

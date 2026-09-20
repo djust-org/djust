@@ -1,0 +1,1 @@
+- Prevent stale navigation snapshots by evicting unavailable state per URL and ordering service-worker state-cache operations. Capture the source route before redirect history changes and before Back-navigation lookup.

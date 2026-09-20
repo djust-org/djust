@@ -116,11 +116,14 @@ function fireMessage(listeners, data, source) {
     };
     if (src && !src.type) src.type = 'window';
     if (src && !src.url) src.url = 'http://localhost:8000/page';
+    const pending = [];
     const event = {
         data: data,
         source: src,
+        waitUntil: (promise) => pending.push(promise),
     };
-    return listeners.message(event);
+    listeners.message(event);
+    return Promise.all(pending);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +214,48 @@ describe('service-worker: VDOM cache', () => {
 // ---------------------------------------------------------------------------
 
 describe('service-worker: state snapshot', () => {
+    it('orders delayed capture, per-URL eviction and lookup without reviving old state', async () => {
+        const { listeners, sandbox, exports } = loadSw();
+        const src = { postMessage: vi.fn() };
+        const open = sandbox.caches.open.bind(sandbox.caches);
+        let release;
+        const blocked = new Promise(resolve => { release = resolve; });
+        sandbox.caches.open = async (name) => {
+            const cache = await open(name);
+            return { ...cache, put: async (...args) => { await blocked; return cache.put(...args); } };
+        };
+        const capture = fireMessage(listeners, {
+            type: 'STATE_SNAPSHOT', url: '/orders', view_slug: 'app.Orders',
+            state_json: 'old-signed-token',
+        }, src);
+        const forget = fireMessage(listeners, { type: 'STATE_SNAPSHOT_FORGET', url: '/orders' }, src);
+        const lookup = fireMessage(listeners, {
+            type: 'STATE_SNAPSHOT_LOOKUP', requestId: 'after-forget', url: '/orders',
+        }, src);
+        expect(src.postMessage).not.toHaveBeenCalled();
+        release();
+        await Promise.all([capture, forget, lookup]);
+        expect(src.postMessage).toHaveBeenCalledWith(expect.objectContaining({ hit: false }));
+        expect(exports._internal.STATE_LRU.has('/orders')).toBe(false);
+    });
+
+    it('forgets one URL without deleting another route snapshot', async () => {
+        const { listeners } = loadSw();
+        const src = { postMessage: vi.fn() };
+        for (const url of ['/orders', '/inbox']) {
+            await fireMessage(listeners, {
+                type: 'STATE_SNAPSHOT', url, view_slug: 'app.View', state_json: url,
+            }, src);
+        }
+        await fireMessage(listeners, { type: 'STATE_SNAPSHOT_FORGET', url: '/orders' }, src);
+        await fireMessage(listeners, {
+            type: 'STATE_SNAPSHOT_LOOKUP', requestId: 'kept', url: '/inbox',
+        }, src);
+        expect(src.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+            hit: true, state_json: '/inbox',
+        }));
+    });
+
     it('STATE_SNAPSHOT stores payload; STATE_SNAPSHOT_LOOKUP returns hit', async () => {
         const { listeners } = loadSw();
         const src = { postMessage: vi.fn(), type: 'window', url: 'http://localhost:8000/' };
@@ -408,6 +453,7 @@ describe('client: registerServiceWorker v0.6.0 options', () => {
         expect(typeof sw.cacheVdom).toBe('function');
         expect(typeof sw.lookupVdom).toBe('function');
         expect(typeof sw.captureState).toBe('function');
+        expect(typeof sw.forgetState).toBe('function');
         expect(typeof sw.lookupState).toBe('function');
         expect(typeof sw.initVdomCache).toBe('function');
         expect(typeof sw.initStateSnapshot).toBe('function');

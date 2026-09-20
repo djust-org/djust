@@ -65,6 +65,16 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
             state_snapshot_signed: null, patches: [], version: 1,
         });
         expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBeNull();
+        const forgotten = [];
+        window.djust._sw = {
+            captureState: () => { throw new Error('Must not capture stale state'); },
+            forgetState: (url) => forgotten.push(url),
+        };
+        window.djust._routeMap = { '/orders': 'app.views.Orders' };
+        window.dispatchEvent(new window.CustomEvent('djust:before-navigate', {
+            detail: { fromUrl: '/orders', toUrl: '/inbox' },
+        }));
+        expect(forgotten).toEqual(['/orders']);
     });
 
     for (const override of [
