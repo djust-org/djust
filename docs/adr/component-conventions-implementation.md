@@ -355,7 +355,9 @@ The next lifecycle work must:
    overlay the validated server projection, then enforce current object
    permission before rendering or dispatch. Legacy skip-mount behavior must not
    be reused for explicit children.
-3. Recheck preserved/live-instance authorization and identity before reuse.
+3. Recheck preserved/live-instance identity before reuse. Current-request view
+   and object authorization on both render reuse paths is now implemented as
+   described below; this is not yet complete identity/lifecycle integration.
 4. Connect HTTP and shared-runtime save/restore, with fresh binding and event
    serialization; explicit server grants must not depend on the legacy
    browser-snapshot opt-in.
@@ -367,6 +369,26 @@ attacks (not only missing keys), independent sibling/nested state, ancestor and
 mount-input changes, schema changes, parent-envelope substitution, rotation,
 expiry, invalid payloads, readable-backend refusal and storage failures.
 These adapter tests do not prove actual sticky lifecycle or browser support.
+
+### Existing-child authorization prerequisite
+
+The real `live_render` registered-instance and preserved-child branches used to
+return before the fresh-child authorization checks. Both now update the child's
+request, check current view authorization and enforce current object permission
+before rendering or registering a preserved child for client reattachment.
+Unexpected predicate failures deny reuse with a static error. Allowed reuse keeps
+the same mounted instance and re-fetches its authorized object.
+
+`test_exposure_child_reuse.py` exercises actual template rendering, registry
+lookup/registration and authorization. Its ten initial legacy tests failed before
+the fix. The expanded suite covers legacy and construction-gate-bypassed explicit
+fixtures, logout, revoked view/object permissions, broken predicates, current
+request use and allowed preservation without re-mounting. These are server-render
+tests, not browser reattachment or per-event transport proof.
+
+This prerequisite is a correction to existing legacy behavior as well as staged
+explicit behavior. It does not wire `ChildStateSession` into the child mount/save
+paths, resolve changed slot/class/mount identity, or remove the explicit gate.
 
 ## Readiness audit
 
@@ -384,6 +406,11 @@ restore must fail closed without turning an unavailable provider into a legacy
 reflection fallback. These are implementation gates, not completed guarantees.
 
 ## Verification boundaries
+
+The child-reuse authorization slice completed 29,866 Python tests with 952
+skipped across all three roots (four workers), 24 focused reuse tests and
+full-package mypy across 1,007 source files. This verifies the stated native
+server-render paths, not browser reattachment or completed explicit persistence.
 
 The bound-child adapter slice completed 29,842 Python tests with 952 skipped
 across all three roots (four workers), 81 focused child/session checks and

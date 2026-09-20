@@ -1437,6 +1437,23 @@ def _stamp_view_id(html: str, view_id: str) -> str:
     return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
 
 
+def _authorize_reused_child(child: Any, request: Any) -> None:
+    """Authorize before an existing child renders or is registered for reattach."""
+    from django.core.exceptions import PermissionDenied
+
+    from ..auth.core import check_view_auth, enforce_object_permission
+
+    # get_object() and application predicates may consult self.request.
+    # Never authorize against the request left over from the previous render.
+    child.request = request
+    try:
+        if request is None or check_view_auth(child, request) is not None:
+            raise PermissionDenied("Access denied for embedded view.")
+        enforce_object_permission(child, request)
+    except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
+        raise PermissionDenied("Access denied for embedded view.") from None
+
+
 def _render_sticky_child_html(
     child: Any,
     view_id: str,
@@ -1755,6 +1772,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         preserved_map = getattr(consumer, "_sticky_preserved", None) if consumer else None
         survivor = preserved_map.get(sticky_id_value) if preserved_map else None
         if survivor is not None:
+            _authorize_reused_child(survivor, request)
             try:
                 parent._register_child(sticky_id_value, survivor)
             except ValueError:
@@ -2110,6 +2128,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             isinstance(existing_child, child_cls)
             and getattr(existing_child, "sticky_id", None) == sticky_id_value
         ):
+            _authorize_reused_child(existing_child, request)
             # Refresh the live request so handlers/middleware-populated attrs
             # (auth, session) read from the CURRENT parent render's request —
             # mirrors the ``_sticky_preserved`` auto-reattach path above.
