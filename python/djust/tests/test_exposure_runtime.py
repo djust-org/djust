@@ -54,6 +54,12 @@ class TenantRuntimeView(TenantMixin, RuntimeView):
         return current is not None and current.id == request.tenant.id == self.tenant.id
 
 
+class SnapshotRuntimeView(RuntimeView):
+    count = state(0, persist="server")
+    hidden = state("SERVER_SENTINEL", persist="server")
+    navigation = state("initial", persist="client", client=True)
+
+
 def make_request(session_key=None):
     request = RequestFactory().get("/runtime-explicit/")
     request.user = AnonymousUser()
@@ -469,6 +475,7 @@ async def test_required_tenant_failure_restores_callers_context(staged):
         with pytest.raises(Http404):
             await sync_to_async(TenantRuntimeView.as_view())(request)
         assert get_current_tenant() is outer
+
         transport = MockTransport()
         transport.build_request = lambda: request
         runtime = ViewRuntime(transport)
@@ -478,3 +485,86 @@ async def test_required_tenant_failure_restores_callers_context(staged):
         assert any(frame.get("type") == "error" for frame in transport.sent)
         assert not any(frame.get("type") == "mount" for frame in transport.sent)
         assert get_current_tenant() is outer
+
+
+async def test_explicit_client_snapshot_mount_round_trip(staged, monkeypatch):
+    request = await sync_to_async(make_request)()
+    _, transport = await mount(request, view_class=SnapshotRuntimeView)
+    frame = next(frame for frame in transport.sent if frame.get("type") == "mount")
+    token = frame["state_snapshot_signed"]
+    assert "SENTINEL" not in token
+    assert '"count"' not in token
+
+    def changed_mount(self, request, **kwargs):
+        RuntimeView.mount(self, request, **kwargs)
+        self.navigation = "new-default"
+
+    monkeypatch.setattr(SnapshotRuntimeView, "mount", changed_mount)
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    restored, restored_transport = await mount(
+        fresh,
+        view_class=SnapshotRuntimeView,
+        has_prerendered=True,
+        state_snapshot={"view_slug": __name__ + ".SnapshotRuntimeView", "state_json": token},
+    )
+    assert restored.view_instance.navigation == "initial"
+    assert restored.view_instance.count == 5
+    restored_frame = next(
+        frame for frame in restored_transport.sent if frame.get("type") == "mount"
+    )
+    assert "html" in restored_frame  # old client HTML cannot be assumed to match
+
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    rejected, _ = await mount(
+        fresh,
+        view_class=SnapshotRuntimeView,
+        state_snapshot={"view_slug": __name__ + ".SnapshotRuntimeView", "state_json": token + "x"},
+    )
+    assert rejected.view_instance.navigation == "new-default"
+
+
+async def test_client_snapshot_master_switch_and_restore_veto(staged, monkeypatch):
+    request = await sync_to_async(make_request)()
+    _, transport = await mount(request, view_class=SnapshotRuntimeView)
+    token = next(frame for frame in transport.sent if frame.get("type") == "mount")[
+        "state_snapshot_signed"
+    ]
+
+    def changed_mount(self, request, **kwargs):
+        RuntimeView.mount(self, request, **kwargs)
+        self.navigation = "fresh"
+
+    monkeypatch.setattr(SnapshotRuntimeView, "mount", changed_mount)
+    incoming = {"view_slug": __name__ + ".SnapshotRuntimeView", "state_json": token}
+    with override_settings(DJUST_STATE_SNAPSHOT_ENABLED=False):
+        fresh = await sync_to_async(make_request)(request.session.session_key)
+        runtime, frames = await mount(
+            fresh, view_class=SnapshotRuntimeView, state_snapshot=incoming
+        )
+        assert runtime.view_instance.navigation == "fresh"
+        assert not any("state_snapshot_signed" in frame for frame in frames.sent)
+    monkeypatch.setattr(
+        SnapshotRuntimeView, "_should_restore_snapshot", lambda self, request: False
+    )
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    runtime, _ = await mount(fresh, view_class=SnapshotRuntimeView, state_snapshot=incoming)
+    assert runtime.view_instance.navigation == "fresh"
+
+
+async def test_client_snapshot_codec_failure_is_omitted_without_secret_logging(
+    staged, monkeypatch, caplog
+):
+    class Secret:
+        def __repr__(self):
+            raise AssertionError("SECRET_REPR_SENTINEL")
+
+    def broken_mount(self, request, **kwargs):
+        RuntimeView.mount(self, request, **kwargs)
+        self.navigation = Secret()
+
+    monkeypatch.setattr(SnapshotRuntimeView, "mount", broken_mount)
+    request = await sync_to_async(make_request)()
+    _, transport = await mount(request, view_class=SnapshotRuntimeView)
+    assert not any("state_snapshot_signed" in frame for frame in transport.sent)
+    assert "SENTINEL" not in caplog.text
+    assert "SENTINEL" not in json.dumps(transport.sent)

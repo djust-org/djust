@@ -2555,6 +2555,23 @@ class ViewRuntime:
                     if callable(getattr(view_instance, "resolve_tenant", None)):
                         request.tenant = getattr(view_instance, "_tenant", None)
                     restored = await sync_to_async(load_server_state)(view_instance, request)
+                    from django.conf import settings
+
+                    incoming = data.get("state_snapshot")
+                    if (
+                        getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                        and type(incoming) is dict
+                        and incoming.get("view_slug") == view_path
+                        and await sync_to_async(view_instance._should_restore_snapshot)(request)
+                    ):
+                        from ._exposure_snapshots import snapshot_codec
+
+                        codec = await sync_to_async(snapshot_codec)(view_instance, request)
+                        client_values = codec.restore(incoming.get("state_json")) if codec else None
+                        if client_values is not None:
+                            # Server/client fields are disjoint by declaration;
+                            # both dictionaries are completely validated first.
+                            restored = {**(restored or {}), **client_values}
                     if restored is not None:
                         for key, value in restored.items():
                             safe_setattr(
@@ -2787,7 +2804,11 @@ class ViewRuntime:
         # signed-snapshot resume, so the resume optimization is LIVE for the
         # runtime/SSE mount path.
         mounted_from_restore = getattr(view_instance, "_mounted_from_restore", False)
-        skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)
+        # Explicit restoration can combine fresh server state and a client
+        # snapshot. Cached HTML is not proof that it matches that combination.
+        skip_html_for_resume = (
+            legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)
+        )
         if html is not None and not skip_html_for_resume:
             mount_msg["html"] = html
             mount_msg["has_ids"] = "dj-id=" in html
@@ -2846,6 +2867,19 @@ class ViewRuntime:
                         mount_msg["state_snapshot_signed"] = sign_snapshot(
                             state_json, view_path, session_key
                         )
+            elif state_master_on and not legacy_exposure:
+                from ._exposure_snapshots import snapshot_codec
+
+                try:
+                    codec = await sync_to_async(snapshot_codec)(view_instance, request)
+                    if codec is not None:
+                        mount_msg["state_snapshot_signed"] = await sync_to_async(codec.capture)(
+                            view_instance
+                        )
+                except Exception:
+                    # No repr/traceback or legacy fallback: descriptor factories
+                    # and codec failures can contain server-only values.
+                    logger.warning("Explicit client snapshot unavailable; omitted")
         except Exception as snapshot_exc:  # noqa: BLE001 — snapshot emission must never break mount
             from .live_view import NonPersistableStateError
 

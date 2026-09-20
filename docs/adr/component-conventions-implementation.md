@@ -161,7 +161,7 @@ The staged explicit runtime path reconstructs transient dependencies with mount,
 then overlays validated server fields before existing object authorization and
 rendering. Event saves use the server projection independently of the legacy
 client-snapshot opt-in. Explicit views neither consume nor emit legacy signed
-snapshots; the separate explicit client codec remains unimplemented.
+snapshots; the separate explicit client codec is described below.
 
 `test_exposure_runtime.py` exercises real runtime dispatch with a recording
 transport and database sessions: three fresh runtimes restore successive values,
@@ -215,6 +215,32 @@ instead of cross-tenant state hydration. Session-resolver coverage does not prov
 all tenant middleware/custom/header/path resolver combinations. Live browser,
 complete SSE endpoint, actor/sticky-child/component persistence, explicit client
 snapshot and remaining provider tests are still activation gates.
+
+### Explicit signed client snapshots
+
+The staged runtime mount path now emits a separately salted TimestampSigner
+envelope containing only fields with `persist="client"` (which also requires
+`client=True`). Raw client permission alone does not grant snapshot permission.
+The envelope binds session/user/tenant/route identity, schema, destination and
+creation time. Its total signed UTF-8 length, including signature overhead, is
+bounded; nested values use the shared exact-JSON byte/node/depth constraints.
+There is no compression, arbitrary encoder or repr fallback.
+
+Restore verifies the signature, lifetime (including future timestamps), complete
+field set, schema and identity before returning detached values. Invalid input
+leaves fresh mount defaults intact. Client fields and independently validated
+server fields overlay the reconstructed view before existing object authorization.
+The global snapshot switch and application restore veto apply. An explicit
+restore sends fresh HTML rather than assuming cached markup matches the combined
+state. Codec failures omit the snapshot without exception values or a legacy
+fallback. Signing does not conceal permitted client values.
+
+Tests cover codec rejection cases and runtime mount/restore frames, including
+master switch, veto, codec failure, and exclusion of server/render-only values.
+This is mount-time integration, not complete back-navigation support: event-time
+snapshot refresh, client storage/browser round trips, remaining direct state APIs
+and provider/child contracts remain required before activation. No JavaScript
+behavior has changed in this slice.
 
 ## Readiness audit
 
