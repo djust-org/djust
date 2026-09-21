@@ -1,9 +1,11 @@
 # ADR-036 strict parameter core: staged implementation
 
-This is implementation evidence for P1, not a public strict-policy guide.
+This is implementation evidence for P1, not a completed strict-policy guide.
 [`ParameterContract`](../../python/djust/_parameter_contract.py) is internal.
-Neither a decorator switch nor project-wide strict dispatch is enabled by this
-slice. Existing `validate_handler_params` callers retain legacy behavior.
+The initial core was disconnected from dispatch; the subsequent
+[server integration](036-strict-server-integration.md) adds opt-in server policy
+resolution and invocation. Legacy remains the default. Browser collection and
+the full P1–P3 acceptance matrix are not complete.
 
 ## One compiled contract
 
@@ -13,6 +15,10 @@ Binding returns `inspect.BoundArguments`: callers must invoke with both `.args`
 and `.kwargs`, preserving positional-only, keyword-only and variadic semantics.
 Compilation and binding never invoke the handler. Defaults stay server-owned;
 metadata reports whether an argument is required without serializing its default.
+The cached binding signature replaces actual defaults with presence sentinels
+and removes annotations after compilation, avoiding retention of live owners
+through default objects. Do not call `apply_defaults()` on this internal call
+plan: omitted arguments must stay omitted so Python applies the real defaults.
 
 Named inputs require a supported annotation or explicit `Any`. An unannotated
 catch-all is intentionally open. `Any`, including nested occurrences, is marked
@@ -74,10 +80,10 @@ in 273.00 seconds with four workers. An earlier full run passed 30,503 tests but
 predated the final annotation-metadata regression; only the final run is evidence
 for the committed code.
 
-P1 remains open for resolved policy registration and trusted argument separation.
-P2 must integrate every invoker, preserve authentication and trusted source
-injection, test open form/upload payloads and actual DOM/wire parsing, and reject
-wire-type/collision conflicts. P3 must execute public examples and the complete
-transport matrix. No browser, website, cross-worker or exposure-activation claim
-is made by these core tests. See the
+P1 remains open for complete registration/check coverage and trusted argument
+separation. The server integration advances invoker parity; P2 still requires
+the complete type/coercion matrix, trusted source injection, open form/upload
+payloads and actual DOM/wire parsing, including wire-type/collision conflicts.
+P3 must execute public examples and the complete transport matrix. No browser,
+website, cross-worker or exposure-activation claim is made by these core tests. See the
 [implementation ledger](component-conventions-implementation.md).

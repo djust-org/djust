@@ -429,10 +429,20 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   framework-versus-application arguments.
   The staged [strict core](036-strict-contract-core.md) now provides shared
   binding/conversion/metadata with 144 core regression cases. The focused strict
-  and legacy/security set passes 377 tests. Policy registration, trusted argument
-  separation and dispatch integration remain open; no strict switch is enabled.
+  and legacy/security set passes 377 tests. The subsequent
+  [server integration](036-strict-server-integration.md) adds opt-in policy
+  resolution, canonical metadata and bound-call invocation through Python and
+  Rust actor paths. Complete registration/check coverage, trusted argument
+  separation and client/transport acceptance remain open; legacy is the default.
   Independent review ran the 144 core cases; final full Python validation passed
   30,504 tests with 952 skipped, and mypy passed 1,031 source files.
+  Server integration re-review passed the then-current 188 core/integration cases;
+  the final owner-default cache regression brings the focused suite to 190 passed.
+  Independent source review found no further cache issues. The Rust target,
+  mypy (1,032 files), security and repository hooks passed. Three consecutive
+  full runs on the final unchanged implementation each passed 30,550 tests with
+  952 skipped (249.29, 246.81 and 239.29 seconds, four workers). Earlier runs
+  predate the cache fix and are not final evidence. Browser acceptance remains open.
 - [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and

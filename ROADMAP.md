@@ -15,6 +15,16 @@
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
 
+## Active plan: component conventions (ADRs 034–038; release unassigned)
+
+Typed instance-scoped component outputs, Django-native form/object lifecycle,
+strict event parameters, executable documentation/checks, and explicit exposure
+are tracked in the [component-conventions implementation ledger](docs/adr/component-conventions-implementation.md).
+That ledger is the authoritative task and acceptance list; these ADRs are not yet
+accepted. Strict server parameter handling is opt-in and legacy remains the
+default. Client collection and transport acceptance are incomplete, and the
+explicit-exposure construction guard remains closed pending its safety gates.
+
 ## Milestone naming convention (adopted 2026-04-30)
 
 Two name shapes appear in this roadmap, with distinct meanings:

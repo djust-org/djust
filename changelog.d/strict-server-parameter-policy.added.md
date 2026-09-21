@@ -1,0 +1,1 @@
+- Add staged opt-in server parameter policies with shared Python argument binding across runtime, HTTP/API, test-client and Rust actor invocation. Strict rejection cannot enter actor state fallback, and strict handler metadata omits server defaults. Legacy remains the default; browser collection and full ADR-036 acceptance remain pending.

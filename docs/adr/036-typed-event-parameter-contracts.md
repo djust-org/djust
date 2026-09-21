@@ -25,7 +25,9 @@ and invalid values. Preserve legacy behavior during migration.
 This is partly consolidation, not a new coercion system: djust already resolves
 type hints and converts several parameter types. The proposal closes concrete
 gaps and makes the same rules govern browser, HTTP, component, tooling, and docs.
-The strict-policy configuration and decorator argument below do not exist yet.
+The server-side configuration and decorator argument are now staged on this
+implementation branch; strict browser collection and full acceptance remain
+incomplete. See [server integration evidence](036-strict-server-integration.md).
 
 ## Evidence and current behavior
 
@@ -52,7 +54,7 @@ define its public inputs. Required parameters stay required; do not recommend
 `id=0` or `**kwargs` merely to make malformed events run.
 
 ```python
-# Proposed strict-policy argument; not available in the current release.
+# Staged server API; ADR-036 acceptance is not complete.
 from djust import LiveView, event_handler
 
 
@@ -176,10 +178,10 @@ secrets or unbounded client values into logs or user-facing output.
 
 ### D6. Resolve policy once and use it everywhere
 
-Proposed opt-in configuration:
+Opt-in server configuration (staged):
 
 ```python
-# Proposed settings key; not available in the current release.
+# Staged server setting; keep legacy during migration until acceptance passes.
 LIVEVIEW_CONFIG = {
     "event_parameter_policy": "strict",
 }
