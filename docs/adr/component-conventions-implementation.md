@@ -153,6 +153,21 @@ final evidence audit; the full ADR acceptance checklist remains authoritative.
 The final rebuilt-client suite passed 2,029 tests in 189 files, including the
 existing deferred-version/recovery tests; bundle ESLint passed without warnings.
 
+## Same-connection error ordering — E4 slice
+
+A valid event error now settles only its request and retains earlier buffered
+server updates while another owned request is pending. When the final request
+settles, including via an error, those updates drain through the existing
+response/version checks. Disconnect still discards the disconnected owner's
+buffer. This avoids losing state whose contiguous version was already consumed.
+
+Two bundled-client regressions failed before the fix and now cover error then
+noop and error then error, asserting both retained buffer state and eventual
+visible metadata application. These are controlled frame tests, not live
+transport/browser evidence. The E4 final evidence audit remains open.
+The full rebuilt-client suite passed 2,031 tests in 189 files; bundle ESLint
+passed without warnings. No Python implementation changed in this slice.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

@@ -1744,7 +1744,13 @@ class LiveViewWebSocket {
                 if (data.source !== 'async' &&
                     (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
                     cancelEventRequests(this, data.ref ?? null);
-                    takeServerUpdates(this);
+                    // A failed event does not invalidate earlier server pushes.
+                    // Retain them until the other owned requests settle, then
+                    // apply with the same version checks as a successful reply.
+                    if (!hasPendingEventRequests(this)) {
+                        const buffered = takeServerUpdates(this);
+                        for (const frame of buffered) await handleServerResponse(frame, null, null);
+                    }
                 }
 
                 // Phase 5: Stop loading state on error

@@ -5,6 +5,24 @@ import { readFileSync } from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
+it.each(['noop', 'error'])('retains buffered state through an error until the remaining %s response', async lastType => {
+    const {dom, transport, sent, send} = setup('LiveViewWebSocket');
+    try {
+        dom.window.document.title = 'Before';
+        dom.window.djust.pageMetadata = {handlePageMetadata: cmd => { dom.window.document.title = cmd.title; }};
+        send();
+        send();
+        await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
+            _page_metadata: [{title: 'Updated'}]});
+        await transport.handleMessage({type: 'error', ref: sent[0].ref, error: 'Rejected'});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        expect(dom.window.document.title).toBe('Before');
+        await transport.handleMessage({type: lastType, ref: sent[1].ref, error: 'Rejected'});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+        expect(dom.window.document.title).toBe('Updated');
+    } finally { dom.window.close(); }
+});
+
 it('an unknown error reference cannot discard buffered updates', async () => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {
