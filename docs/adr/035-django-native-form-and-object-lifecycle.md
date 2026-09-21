@@ -246,6 +246,32 @@ Implementation acceptance requires:
 - Django and Rust template rendering, type-checking of the public object/hooks,
   legacy override compatibility, and browser-visible validation/save feedback.
 
+## Retirement (Step R — delete)
+
+The stated problem is that authors populate `_model_instance` before an
+order-sensitive `super().mount()`. If the Django-shaped hooks land and the
+private attribute survives, the order-sensitivity survives with it, so the
+deletion is a named gate following ADR-027's terminal-delete playbook
+(its Step 5 delete landed as #2628).
+
+Step R fires only after **F2**, and only for views adopting `ModelFormMixin`.
+
+| Target | Cited at | Retired because |
+| --- | --- | --- |
+| `_model_instance` attribute and its declaration | `forms.py:51`; reads at `:93-95`, `:215` | Replaced by `self.object`, resolved through `get_object()` under the authorized lifecycle |
+| `_ensure_model_instance()` | `forms.py:223-225` | Exists only to "re-hydrate `_model_instance` from stored PK if lost after WS serialization" — a repair for state the new lifecycle does not create |
+| The `_model_instance` docstring example | `forms.py:39-42` | Teaches the pattern this ADR replaces |
+
+`_create_form` (`forms.py:281`, called at `:104`, `:119`, `:216`, `:370`) is a
+**compatibility bridge, not a Step R target** — it stays until the public
+construction hooks are the only caller, at which point its removal is a separate,
+later decision with its own evidence. Naming it here prevents it being counted
+as a saving this ADR delivers.
+
+**Exit conditions.** A deletion PR removing the attribute, the re-hydration
+method and their tests together; a grep showing no `_model_instance` reference
+outside history; and a recorded account of anything retained.
+
 ## Consequences and non-goals
 
 The public API becomes easier to discover and generate correctly, but the work

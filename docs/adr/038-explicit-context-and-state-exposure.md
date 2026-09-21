@@ -265,6 +265,43 @@ Required evidence:
 - Measure serialization/rendering cost and migration effort; no unsupported
   latency, CPU-saving, or "zero leakage" claims.
 
+## Retirement (Step R — delete)
+
+The case for explicit exposure is that it *replaces* heuristic machinery rather
+than sitting beside it. That claim is only true if the implicit machinery is
+deleted, so the deletion is a named gate here and not a hoped-for consequence.
+This follows ADR-027's `dormant-define -> wire -> flip -> delete` playbook
+(ADR-022), whose terminal delete landed as #2628 — the precedent that a terminal delete
+is scheduled work with its own PR.
+
+Nothing here approves the flip. `legacy` remains the default and ADR-012 remains
+the legacy policy, exactly as *Compatibility and rollout* states. Step R fires
+only after **E6**, and only for views under `exposure_policy="explicit"`.
+
+**Named targets.** Each is cited at the evidence baseline; the count is the
+reference inventory already recorded above (94 source files, 160 test files).
+
+| Target | Cited at | Retired because |
+| --- | --- | --- |
+| `_FRAMEWORK_INTERNAL_ATTRS` (65 entries) | `live_view.py:105`; consumers `live_view.py:1063`, `:1341`, `_exposure.py:261-263`, `runtime.py:2709`, `time_travel.py:273`, `:310` | D1 makes inclusion explicit, so a denylist of framework names is no longer a policy boundary |
+| `ContextMixin.get_context_data` instance/class attribute walk | `mixins/context.py:215` (`self.__dict__.items()`), `:242` (class-level collection) | D1: template context comes from explicit additions and registered providers |
+| `_user_private_keys`, `_snapshot_user_private_attrs`, `_get_private_state` | `live_view.py:644`, `:853`, `:871` | D1: an underscore prefix stops being a persistence selector |
+| `_ALWAYS_EXCLUDED_FIELDS`, `_SENSITIVE_MODEL_METHODS`, `_SENSITIVE_MODEL_METHOD_PREFIXES`, `_sensitive_field_types()` | `serialization.py:60`, `:69`, `:78`, `:81` | Name-matching is a floor under an implicit walk; with no implicit walk it has nothing to floor |
+| The `"legacy"` policy arm | `_exposure.py:90`, `:97`, `:113` | Deleted last, with the flag, once no supported path reaches it |
+
+**What Step R does not delete.** ADR-012's naming decision stands: Django-style
+public configuration keeps its familiar names and is not renamed. The
+`serialization.py` sensitive-name floor also governs *deliberate* ORM rendering
+(D1's "Template context" row), so it is retired as an implicit-walk backstop
+only — if deliberate rendering still needs a floor, Step R records that and keeps
+it, naming the reduced surface.
+
+**Exit conditions.** A deletion PR per target, each removing the code and its
+tests together; the reference inventory re-run and the delta recorded; and, as
+ADR-027 did, a written account of any target that was **not** deleted and why.
+A target that survives contradicts the simplification premise and is reported,
+not quietly dropped.
+
 ## Consequences and acceptance questions
 
 New attributes no longer acquire audiences by accident. Explicit declarations and

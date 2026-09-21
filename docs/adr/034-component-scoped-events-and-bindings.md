@@ -586,6 +586,30 @@ the real browser client, and Django and Rust template backends. Specifically tes
 This document-only change can validate links and snippet syntax. It cannot claim
 that these future runtime or type-checking acceptance gates have passed.
 
+## Retirement (Step R — delete)
+
+**This ADR retires no existing code, and that is recorded deliberately.**
+
+The sibling ADRs in this arc each name a Step R delete gate on ADR-027's
+`dormant-define -> wire -> flip -> delete` playbook. This one cannot honestly
+claim the same, and an unnamed or invented target would make the arc's
+simplification case look broader than it is.
+
+- `event=` is **kept**. ADR-033 D5 settled it as "a rename of the verb,
+  documented as such"; typed subscriptions are an addition beside it, not a
+  replacement for it.
+- The string-routed alternative `@event_handler(component="...", event="...")`
+  is a *rejected option* in *Alternatives considered*, never implemented, so
+  there is nothing to delete.
+- The existing plain-component imports, `name=`, `toggle_event=` and item
+  `event` arguments named in *Compatibility and migration* all continue.
+
+This ADR is therefore a **net addition** to the framework's surface: new
+`.on.`-style subscription API, per-instance binding, and the static-analysis
+requirement that goes with them. It must be justified on developer-facing value,
+not on code removed. If C1-C4 reveal a genuine retirement target, it is recorded
+here and gated like the others.
+
 ## Consequences and non-goals
 
 Application authors learn one ownership rule and one source-scoped subscription

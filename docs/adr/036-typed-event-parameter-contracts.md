@@ -240,6 +240,35 @@ Before strict mode is considered supported:
 - Prove invalid input never invokes application code and diagnostics do not expose
   sensitive payloads. Execute the published examples under the intended policy.
 
+## Retirement (Step R — delete)
+
+This ADR is described above as partly consolidation. Consolidation that leaves
+both implementations in place is duplication, so the superseded coercion path is
+a named delete gate, on ADR-027's `dormant-define -> wire -> flip -> delete`
+playbook (its Step 5 delete landed as #2628).
+
+Step R fires only after **P3**, and only once strict is the default rather than
+opt-in — which this ADR does not yet approve.
+
+| Target | Cited at | Retired because |
+| --- | --- | --- |
+| `coerce_parameter_types` | `validation.py:137` | Superseded by the signature-derived metadata in `_parameter_contract.py` |
+| `_coerce_value` | `validation.py:219` | Same conversion, second implementation |
+| `_coerce_single_value` | `validation.py:249` | Same conversion, second implementation |
+
+`validate_handler_params` (`validation.py:440`) is **not** a Step R target: it
+keeps its role as the dispatch-path guard and is rewired onto the shared
+contract, not removed.
+
+Already retired, and recorded here so it is not double-counted: the untyped
+`data-value` emission this ADR's *Evidence* section describes was removed by
+ADR-033 S3's `event_attrs` sweep. No `data-value` attribute remains in
+`static/djust/src/`. Step R therefore claims no client-side deletion.
+
+**Exit conditions.** One deletion PR removing the three functions and their
+tests; a grep-verified absence of a second coercion implementation; and a
+recorded account of anything retained.
+
 ## Consequences and non-goals
 
 New examples become simpler while the server contract becomes stricter. This needs

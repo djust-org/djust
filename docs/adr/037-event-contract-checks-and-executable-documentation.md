@@ -242,6 +242,31 @@ application mounts/handlers or evaluate querysets. A canonical fixture deliberat
 broken in each test layer must fail its corresponding gate; skipped fixtures and
 website navigation omissions must be visible.
 
+## Retirement (Step R — delete)
+
+This ADR is framed above as "an extension and consolidation of existing tools,
+not a proposal to create another `djust_check` command". Consolidation earns a
+delete gate on ADR-027's playbook; an extension does not. Which of the two this
+is cannot be settled from the proposal alone, so **D1 must decide it and record
+the answer here** rather than leaving it implied.
+
+**Required at D1**, before any check ships:
+
+1. Enumerate the contract logic the shared checks would replace — any place that
+   re-derives handler parameters, ownership or event names independently of the
+   runtime contract, cited `file:line`.
+2. For each, state `RETIRE` with a deletion PR, or `KEEP` with the reason it is
+   genuinely distinct from the shared contract.
+3. If the enumeration is empty, record that plainly: this ADR is then an
+   addition, justified on the checks' value, and claims no saving.
+
+Documentation fixtures are a separate question. Examples that become executable
+fixtures may retire hand-maintained duplicates in the catalogue and website; D2
+names those files or records that there were none.
+
+**Exit conditions.** The D1 table above, filled in, with every `RETIRE` row
+carrying a merged deletion PR before D3 acceptance.
+
 ## Consequences and non-goals
 
 The framework becomes easier for developers and AI agents to learn because one

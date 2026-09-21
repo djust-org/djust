@@ -418,6 +418,17 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
   effort; publish supported backend/provider/codec boundaries and migration
   guidance. Review E1–E5 evidence and dependent API integration before removing
   the constructor guard. No zero-leakage or performance claim without evidence.
+- [ ] **ER — retirement.** Delete the implicit-exposure machinery the explicit
+  policy replaces, per [ADR-038 Step R](038-explicit-context-and-state-exposure.md):
+  `_FRAMEWORK_INTERNAL_ATTRS` (`live_view.py:105`) and its six consumers, the
+  `get_context_data` attribute walk (`mixins/context.py:215`, `:242`), private
+  persistence selection (`live_view.py:644`, `:853`, `:871`), the
+  `serialization.py` sensitive-name floor as an implicit-walk backstop
+  (`:60`, `:69`, `:78`, `:81`), and last the `"legacy"` arm (`_exposure.py:90`,
+  `:97`, `:113`). One deletion PR per target, code and tests together; re-run the
+  94-source/160-test reference inventory and record the delta. Any target NOT
+  deleted is reported with its reason, as ADR-027 Step 5 did — a survivor
+  contradicts the simplification premise and is not quietly dropped.
 
 ### ADR-036 — typed event parameters
 
@@ -562,6 +573,12 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   checks, delivery, native-binding and browser-acceptance gates.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
+- [ ] **PR — retirement.** Delete the superseded coercion path per
+  [ADR-036 Step R](036-typed-event-parameter-contracts.md): `coerce_parameter_types`
+  (`validation.py:137`), `_coerce_value` (`:219`), `_coerce_single_value` (`:249`),
+  with their tests. `validate_handler_params` (`:440`) is rewired, not removed.
+  Fires only once strict is the default, which this ADR does not yet approve.
+  Grep-verify that no second coercion implementation remains.
 
 ### ADR-035 — Django-native form and object lifecycle
 
@@ -578,6 +595,12 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   empty submission, validation and exactly-once save. Cover missing/tampered/
   revoked targets, callback failures, HTTP/WS reconnect/back navigation,
   Django/Rust rendering, typing and browser-visible input/errors/save feedback.
+- [ ] **FR — retirement.** Delete the pre-hook object plumbing per
+  [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
+  the `_model_instance` attribute (`forms.py:51`, reads `:93-95`, `:215`),
+  `_ensure_model_instance()` (`:223-225`) and the docstring example (`:39-42`),
+  with their tests. `_create_form` (`:281`) is a bridge that stays; its removal is
+  a separate later decision and is not counted as a saving here.
 
 ### ADR-034 — component-scoped events and bindings
 
@@ -635,6 +658,13 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   async/error behavior, duplicate/reordered observations and stale identities.
   Publish runnable examples, generated reference, website navigation and AI
   guidance together through D2 below; preserve legacy plain handlers.
+- [ ] **CR — retirement (expected empty).** [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
+  records that this ADR retires **no** existing code: `event=` is kept per ADR-033 D5,
+  the string-routed alternative was rejected rather than shipped, and the existing
+  `name=` / `toggle_event=` / item `event` arguments continue. This gate closes by
+  confirming that still holds after C1-C4, or by naming a target C1-C4 revealed.
+  It must not be closed by inventing one — this ADR is justified on developer-facing
+  value, not on code removed.
 
 ### ADR-037 — checks and executable documentation
 
@@ -670,6 +700,13 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
   static-analysis limits; only then change the relevant ADR status.
+- [ ] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
+  requires D1 to settle whether this ADR is consolidation or addition: enumerate every
+  place that re-derives handler parameters, ownership or event names independently of
+  the runtime contract, cited `file:line`, and mark each `RETIRE` (with a deletion PR)
+  or `KEEP` (with the reason it is distinct). An empty enumeration is recorded plainly
+  and the ADR claims no saving. Every `RETIRE` row carries a merged deletion PR before
+  D3 acceptance.
 
 ### Completed milestone: E4 — request correlation
 
@@ -748,6 +785,15 @@ the dependency order does not require a premature exposure release.
    client observations; verify two same-type components and stale identities.
 5. ADR-037: shared checks and executable documentation throughout these stages;
    finish with catalogue/browser regression coverage and migration guidance.
+
+Each ADR ends in a **retirement gate** (`ER`, `PR`, `FR`, `CR`, `DR`) on
+ADR-027's `dormant-define -> wire -> flip -> delete` playbook, whose Step 5
+shipped as #2628. The arc's case rests on replacing heuristic machinery, not
+sitting beside it, so the deletions are scheduled work with their own PRs rather
+than an assumed consequence. Two of the five are expected to retire nothing
+(`CR`, and `DR` pending its D1 enumeration); they say so explicitly, because an
+invented target would overstate the saving. A retirement gate is closed by a
+merged deletion PR or by a written account of why a named target survived.
 
 ## Implemented foundation
 
