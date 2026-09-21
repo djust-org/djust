@@ -621,8 +621,12 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   subscription, lifetime and sequence; unchanged HTTP/WS observers return no-op
   while reactive observers render. Cursor state is separate from authoritative
   visibility. Browser listeners/selection dismissal and reconnect coalescing are
-  not wired yet. HTTP exception/retry cursor persistence has a strict expected
-  failure and concurrent HTTP ordering remains open. This is not C2 acceptance.
+  not wired yet. Independent state-backend claims now pass the former HTTP
+  exception/retry failure and prevent stale session copies from replaying reports.
+  Concurrent memory and actual Redis claims are tested; memory remains
+  process-local. Missing/expired cursors fail closed until a fresh binding is
+  rendered. Browser recovery for this boundary remains open. This is not C2
+  acceptance or an exactly-once application callback guarantee.
 - [ ] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
   keys, removal/re-addition, nesting, reconnect and restore. Include a separate
   authorized delegated-row example; do not present it as stateful repetition.

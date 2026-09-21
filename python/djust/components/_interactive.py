@@ -125,6 +125,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._visibility = visibility
         self._observation_lifetime = "obs_" + uuid4().hex
         self._observation_sequence = 0
+        self._observation_registered = False
         self._declaration: DropdownMenu | None = None
         self.on = Outputs(self)
 
@@ -209,6 +210,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._bound_owner()
         self._observation_lifetime = "obs_" + uuid4().hex
         self._observation_sequence = 0
+        self._observation_registered = False
 
     @event_handler(parameter_policy="strict", coerce_types=False)
     async def observe_toggle(self, open: bool, sequence: int, lifetime: str) -> None:
@@ -225,6 +227,11 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         ):
             raise ValueError("Invalid visibility observation")
         if lifetime != self._observation_lifetime or sequence <= self._observation_sequence:
+            return
+        from asgiref.sync import sync_to_async
+        from djust.state_backends import get_backend
+
+        if not await sync_to_async(get_backend()._claim_observation)(lifetime, sequence):
             return
         self._observation_sequence = sequence
         await self._emit(_TOGGLED, {"open": open})
@@ -335,6 +342,9 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         if type(observation) is dict and self.visibility == "client":
             self._observation_lifetime = observation["lifetime"]
             self._observation_sequence = observation["sequence"]
+            # A restored session cannot resurrect an expired/evicted ledger
+            # entry. Only a fresh rendered binding lifetime may register one.
+            self._observation_registered = True
 
     def _restore_state(self, state: object) -> None:
         """Restore state within this lifetime, without callbacks or identity changes."""
@@ -398,6 +408,11 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
             if client_owned:
                 observation_attrs = format_html("{}", "")
                 if self._observes_toggle():
+                    if not self._observation_registered:
+                        from djust.state_backends import get_backend
+
+                        get_backend()._register_observation(self._observation_lifetime)
+                        self._observation_registered = True
                     observation_attrs = format_html(
                         ' data-dj-observe-toggle="observe_toggle" data-dj-observe-lifetime="{}" data-dj-observe-sequence="{}"',
                         self._observation_lifetime,

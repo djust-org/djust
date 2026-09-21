@@ -46,6 +46,23 @@ class StateBackend(ABC):
     - Statistics and monitoring
     """
 
+    def _register_observation(self, lifetime: str) -> None:
+        """Register a newly rendered private observation lifetime, without resetting it.
+
+        Custom backends must implement atomic registration/claim before opting
+        into the staged client observation contract. Never fall back to a
+        non-atomic get/set or application session save.
+        """
+        raise NotImplementedError("State backend does not support observation cursors")
+
+    def _claim_observation(self, lifetime: str, sequence: int) -> bool:
+        """Atomically advance an existing lifetime before invoking its observer.
+
+        Missing/expired lifetimes fail closed. Callback failure cannot roll the
+        claim back. This is deduplication, not a durable business-action log.
+        """
+        raise NotImplementedError("State backend does not support observation cursors")
+
     @abstractmethod
     def get(self, key: str) -> Optional[Tuple[RustLiveView, float]]:
         """

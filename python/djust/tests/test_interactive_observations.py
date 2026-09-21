@@ -37,6 +37,7 @@ class FailingObserverPage(ObserverPage):
     def on_visibility(self, component: DropdownMenu, open: bool) -> None:
         observations.append((component, open))
         self.last = "must-not-be-persisted"
+        self.request.session["failed_application_write"] = "must-not-be-persisted"
         raise RuntimeError("observer failed")
 
 
@@ -52,6 +53,7 @@ def page():
 
 
 def report(menu, sequence=1, open=True, **kwargs):
+    menu.render()  # A browser report must follow a rendered observation binding.
     return async_to_sync(menu.observe_toggle)(
         open=open, sequence=sequence, lifetime=kwargs.get("lifetime", menu._observation_lifetime)
     )
@@ -219,10 +221,6 @@ def test_http_observation_noop_does_not_render_but_reactive_observer_does(
 
 
 @pytest.mark.django_db
-@pytest.mark.xfail(
-    strict=True,
-    reason="ADR-034 C2: failed HTTP observation cursor needs isolated persistence without saving failed application session changes",
-)
 def test_http_observer_error_persists_only_cursor_and_does_not_replay_same_report():
     from django.test import RequestFactory
     from djust.tests.test_exposure_runtime import make_request
@@ -247,10 +245,78 @@ def test_http_observer_error_persists_only_cursor_and_does_not_replay_same_repor
     assert failed.status_code == 500
     assert request.session[f"liveview_{request.path}"]["last"] == "initial"
     post.session = type(request.session)(session_key=request.session.session_key)
+    assert "failed_application_write" not in post.session
     repeated = FailingObserverPage().post(post)
     assert repeated.status_code == 200, repeated.content
     assert json.loads(repeated.content)["type"] == "noop"
     assert len(observations) == 1
+
+
+@pytest.mark.django_db
+def test_stale_http_session_cannot_replay_a_higher_claimed_sequence():
+    from django.test import RequestFactory
+    from djust.tests.test_exposure_runtime import make_request
+
+    request = make_request()
+    first = ObserverPage()
+    first.get(request)
+    request.session.save()
+    session_key = request.session.session_key
+    # Each request starts from the same original durable session cursor (zero).
+    # No response middleware save is needed for the independent ledger claim.
+    for sequence in (5, 5, 2, 6):
+        post = RequestFactory().post(
+            request.path,
+            data=json.dumps(
+                {
+                    "event": "observe_toggle",
+                    "params": {
+                        "component_id": first.menu.component_id,
+                        "open": True,
+                        "sequence": sequence,
+                        "lifetime": first.menu._observation_lifetime,
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+        post.user, post.tenant = request.user, None
+        post.session = type(request.session)(session_key=session_key)
+        response = ObserverPage().post(post)
+        assert response.status_code == 200, response.content
+        assert json.loads(response.content)["type"] == "noop"
+    assert len(observations) == 2
+
+
+def test_missing_ledger_cannot_be_resurrected_by_session_restore_or_rerender():
+    from djust.state_backends import get_backend
+
+    view = page()
+    report(view.menu)
+    record = view.menu._dump_session_binding()
+    get_backend().delete_all()
+    report(view.menu, 2)
+    restored = page()
+    restored.menu._restore_session_binding(record)
+    report(restored.menu, 2)
+    assert len(observations) == 1
+    restored.menu._renew_observation_lifetime()
+    report(restored.menu)
+    assert len(observations) == 2
+
+
+def test_storage_failure_does_not_invoke_observer(monkeypatch):
+    from djust.state_backends import get_backend
+
+    view = page()
+
+    def fail(*args):
+        raise ConnectionError("cursor unavailable")
+
+    monkeypatch.setattr(get_backend(), "_claim_observation", fail)
+    with pytest.raises(ConnectionError, match="cursor unavailable"):
+        report(view.menu)
+    assert observations == []
 
 
 @pytest.mark.asyncio

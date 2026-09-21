@@ -209,6 +209,11 @@ duplicate, reordered and obsolete-lifetime reports do not invoke the observer.
 Callbacks still receive the actual bound source and may change reactive state.
 
 Successful sequential HTTP requests persist an explicit server-session cursor.
+An independent atomic claim in the configured state backend now prevents stale
+session copies and failed callbacks from replaying accepted reports. Claims are
+made before callbacks, without saving application session changes. Memory claims
+are process-local; shared Redis claims use an atomic comparison/write. Custom
+backends must implement the private cursor capability or fail closed.
 Fresh socket mounts restored from sessions, and signed restores, rotate the
 observation lifetime. The
 cursor is excluded from reactive fingerprints and signed/debug state. Both the
@@ -221,14 +226,29 @@ This is the **server half**, not completed D8/C2. No browser listener has been
 installed yet: native observation wiring, selection dismissal, focus/positioning,
 patch preservation, disconnected coalescing and reconnect reporting remain open.
 Do not publish or recommend the private client mode as a finished component.
-The HTTP exception/retry cursor case is an explicit strict expected failure;
-isolated failure-cursor persistence and concurrent HTTP delivery still need an
-acceptance solution. Do not force-save the entire application session on a 500
-just to pass that case. These limits must be resolved before C2 acceptance.
+The previous strict HTTP exception/retry failure now passes without force-saving
+the application session on a 500. Tests also cover stale session copies and
+concurrent backend claims against actual Redis. Claims do not serialize or roll
+back application callbacks: already admitted reports may finish out of order.
+This remains a best-effort current-state observation, not exactly-once execution.
 
-Verification of this server stage: the full Python suite completed with 30,895
+Cursor retention is bounded by the state backend's configured session TTL (zero
+or negative disables expiry). Rendering registers each new lifetime once;
+re-rendering or session restoration cannot resurrect a missing ledger entry.
+Expiry, eviction or process-local storage loss suppresses reports until a fresh
+binding lifetime is rendered. Storage exceptions propagate through the ordinary
+diagnostic path. Browser recovery/rebinding for this boundary is still a C2 gate.
+
+Verification of the preceding server stage: the full Python suite completed with 30,895
 passed, 952 skipped and that one strict expected failure. The focused binding,
 observation, snapshot and type-proof suite passed 107 cases with the same expected
 failure. Full-package mypy passed 1,051 source files; both type checkers rejected
 all 21 negative examples and accepted the positive examples. These results are
 server and static-check evidence, not browser validation.
+
+The independent-cursor follow-up completed the full Python suite with 30,909
+passed and 952 skipped, with no expected failures. Its focused matrix passed
+121 tests, including actual temporary Redis with concurrent claims and separate
+clients. Mypy passed 1,052 source files and both type checkers still rejected all
+21 negative fixtures. This does not establish live multi-worker HTTP deployment,
+browser recovery, or completion of C2.
