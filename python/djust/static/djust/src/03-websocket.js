@@ -300,7 +300,7 @@ class LiveViewWebSocket {
 
         // Event sequencing (#560): clear pending event state
         cancelEventRequests(this);
-        _tickBuffer.length = 0;
+        takeServerUpdates(this);
     }
 
     connect(url = null) {
@@ -387,7 +387,7 @@ class LiveViewWebSocket {
 
             // Event sequencing (#560): clear pending event state
             cancelEventRequests(this);
-            _tickBuffer.length = 0;
+            takeServerUpdates(this);
 
             // Remove loading indicators from DOM
             clearOptimisticPending();
@@ -873,7 +873,7 @@ class LiveViewWebSocket {
                     !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
                 );
 
-                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
                     // Buffer server-initiated patch — will be applied after
                     // all pending event responses arrive. Marked so the version
                     // check treats the resulting gap as our own deferral rather
@@ -884,7 +884,7 @@ class LiveViewWebSocket {
                         typeof data.version === 'number' &&
                         data.version === clientVdomVersion + 1
                     );
-                    _tickBuffer.push({
+                    bufferServerUpdate(this, {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
@@ -929,11 +929,11 @@ class LiveViewWebSocket {
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
-                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
-                    const buffered = _tickBuffer.splice(0);
+                    const buffered = takeServerUpdates(this);
                     for (const tickData of buffered) {
                         await handleServerResponse(tickData, null, null);
                     }
@@ -1007,9 +1007,10 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                if (data.source !== 'async') {
+                if (data.source !== 'async' &&
+                    (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
                     cancelEventRequests(this, data.ref ?? null);
-                    _tickBuffer.length = 0;
+                    takeServerUpdates(this);
                 }
 
                 // Phase 5: Stop loading state on error
@@ -1073,8 +1074,8 @@ class LiveViewWebSocket {
                 }
 
                 // Flush buffered patches only when all pending events resolved
-                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
-                    const buffered = _tickBuffer.splice(0);
+                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
+                    const buffered = takeServerUpdates(this);
                     for (const tickData of buffered) {
                         await handleServerResponse(tickData, null, null);
                     }

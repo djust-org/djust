@@ -370,8 +370,8 @@ async function handleEmbeddedResponse(data, transport) {
     }
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-    if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
-        const buffered = _tickBuffer.splice(0);
+    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
+        const buffered = takeServerUpdates(transport);
         for (const frame of buffered) await handleServerResponse(frame, null, null);
     }
     return true;
@@ -1034,7 +1034,7 @@ class LiveViewWebSocket {
 
         // Event sequencing (#560): clear pending event state
         cancelEventRequests(this);
-        _tickBuffer.length = 0;
+        takeServerUpdates(this);
     }
 
     connect(url = null) {
@@ -1121,7 +1121,7 @@ class LiveViewWebSocket {
 
             // Event sequencing (#560): clear pending event state
             cancelEventRequests(this);
-            _tickBuffer.length = 0;
+            takeServerUpdates(this);
 
             // Remove loading indicators from DOM
             clearOptimisticPending();
@@ -1607,7 +1607,7 @@ class LiveViewWebSocket {
                     !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
                 );
 
-                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
                     // Buffer server-initiated patch — will be applied after
                     // all pending event responses arrive. Marked so the version
                     // check treats the resulting gap as our own deferral rather
@@ -1618,7 +1618,7 @@ class LiveViewWebSocket {
                         typeof data.version === 'number' &&
                         data.version === clientVdomVersion + 1
                     );
-                    _tickBuffer.push({
+                    bufferServerUpdate(this, {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
@@ -1663,11 +1663,11 @@ class LiveViewWebSocket {
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
-                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
-                    const buffered = _tickBuffer.splice(0);
+                    const buffered = takeServerUpdates(this);
                     for (const tickData of buffered) {
                         await handleServerResponse(tickData, null, null);
                     }
@@ -1741,9 +1741,10 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                if (data.source !== 'async') {
+                if (data.source !== 'async' &&
+                    (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
                     cancelEventRequests(this, data.ref ?? null);
-                    _tickBuffer.length = 0;
+                    takeServerUpdates(this);
                 }
 
                 // Phase 5: Stop loading state on error
@@ -1807,8 +1808,8 @@ class LiveViewWebSocket {
                 }
 
                 // Flush buffered patches only when all pending events resolved
-                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
-                    const buffered = _tickBuffer.splice(0);
+                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
+                    const buffered = takeServerUpdates(this);
                     for (const tickData of buffered) {
                         await handleServerResponse(tickData, null, null);
                     }
@@ -2910,6 +2911,31 @@ const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based 
 const _pendingEventOwners = new Map();   // ref -> transport instance
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _tickBufferOwners = new WeakMap();
+
+function hasPendingEventRequests(transport) {
+    return [..._pendingEventOwners.values()].some(owner => owner === transport);
+}
+
+function bufferServerUpdate(transport, data) {
+    _tickBufferOwners.set(data, transport);
+    _tickBuffer.push(data);
+}
+
+function takeServerUpdates(transport) {
+    const owned = [];
+    for (let index = 0; index < _tickBuffer.length;) {
+        // index is a bounded local array cursor, never a wire-provided key.
+        // eslint-disable-next-line security/detect-object-injection
+        const frame = _tickBuffer[index];
+        if (_tickBufferOwners.get(frame) === transport) {
+            owned.push(frame);
+            _tickBuffer.splice(index, 1);
+            _tickBufferOwners.delete(frame);
+        } else index += 1;
+    }
+    return owned;
+}
 
 /** Register before sending: even an immediate reply must find its request. */
 function registerEventRequest(transport, eventName, triggerElement) {
@@ -3183,8 +3209,8 @@ window.djust._getEventSeqState = function() {
         eventRefCounter: _eventRefCounter,
     };
 };
-window.djust._pushTickBuffer = function(data) {
-    _tickBuffer.push(data);
+window.djust._pushTickBuffer = function(data, transport) {
+    bufferServerUpdate(transport || _pendingEventOwners.values().next().value || liveViewWS, data);
 };
 
 // === Handler-level rate limiting: the client half of @debounce / @throttle ===

@@ -5,6 +5,42 @@ import { readFileSync } from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
+it('an unknown error reference cannot discard buffered updates', async () => {
+    const {dom, transport, sent, send} = setup('LiveViewWebSocket');
+    try {
+        send();
+        await transport.handleMessage({type: 'patch', source: 'tick', patches: []});
+        await transport.handleMessage({type: 'error', ref: sent[0].ref + 100, error: 'Unknown'});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+    } finally { dom.window.close(); }
+});
+
+it.each(['disconnect', 'error', 'reply', 'embedded'])('buffered updates retain their transport owner across %s', async action => {
+    const {dom, transport: old, button, send} = setup('LiveViewWebSocket');
+    try {
+        old.ws.close = vi.fn();
+        const current = new dom.window.djust.LiveViewWebSocket();
+        current.viewMounted = true;
+        const sent = [];
+        current.ws = {readyState: dom.window.WebSocket.OPEN, send: text => sent.push(JSON.parse(text)), close: vi.fn()};
+        send();
+        current.sendEvent('save', {}, button);
+        await current.handleMessage({type: 'patch', source: 'tick', patches: []});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        if (action === 'disconnect') old.disconnect();
+        if (action === 'error') await old.handleMessage({type: 'error', error: 'Old connection'});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        await current.handleMessage(action === 'embedded'
+            ? {type: 'embedded_update', ref: sent[0].ref, view_id: 'child', html: '<p>Updated</p>'}
+            : {type: 'noop', ref: sent[0].ref});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+        old.disconnect();
+        current.disconnect();
+    } finally { dom.window.close(); }
+});
+
 function setup(name) {
     const dom = new JSDOM('<!doctype html><html><body></body></html>', {
         url: 'http://localhost/', runScripts: 'dangerously',

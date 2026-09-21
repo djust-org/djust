@@ -20,6 +20,31 @@ const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based 
 const _pendingEventOwners = new Map();   // ref -> transport instance
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _tickBufferOwners = new WeakMap();
+
+function hasPendingEventRequests(transport) {
+    return [..._pendingEventOwners.values()].some(owner => owner === transport);
+}
+
+function bufferServerUpdate(transport, data) {
+    _tickBufferOwners.set(data, transport);
+    _tickBuffer.push(data);
+}
+
+function takeServerUpdates(transport) {
+    const owned = [];
+    for (let index = 0; index < _tickBuffer.length;) {
+        // index is a bounded local array cursor, never a wire-provided key.
+        // eslint-disable-next-line security/detect-object-injection
+        const frame = _tickBuffer[index];
+        if (_tickBufferOwners.get(frame) === transport) {
+            owned.push(frame);
+            _tickBuffer.splice(index, 1);
+            _tickBufferOwners.delete(frame);
+        } else index += 1;
+    }
+    return owned;
+}
 
 /** Register before sending: even an immediate reply must find its request. */
 function registerEventRequest(transport, eventName, triggerElement) {
@@ -293,6 +318,6 @@ window.djust._getEventSeqState = function() {
         eventRefCounter: _eventRefCounter,
     };
 };
-window.djust._pushTickBuffer = function(data) {
-    _tickBuffer.push(data);
+window.djust._pushTickBuffer = function(data, transport) {
+    bufferServerUpdate(transport || _pendingEventOwners.values().next().value || liveViewWS, data);
 };

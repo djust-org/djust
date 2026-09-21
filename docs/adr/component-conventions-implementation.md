@@ -135,6 +135,24 @@ The full rebuilt-client suite passed 2,024 tests in 189 files, including the
 existing keepalive teardown regressions; bundle ESLint passed with no warnings.
 Buffered socket-update ownership remains open; no ADR is accepted by this slice.
 
+## Buffered socket-update ownership — E4 slice
+
+Buffered server updates now carry client-only transport ownership in a WeakMap,
+not a forgeable frame property. Disconnect/error cleanup and root/noop/embedded
+reply drains consume only that transport's entries. Buffering/draining consults
+its pending requests rather than blocking on requests from another connection
+or HTTP operation. Existing contiguous-version consumption and deferred-frame
+recovery markers are unchanged. Unknown error references cannot discard work.
+
+Three new tests failed before the change: old disconnect/error erased the new
+connection's buffer, and old pending requests prevented its drain. Additional
+tests cover embedded acknowledgements and unknown error references. Tests drive
+the actual bundle with controlled transports; this is not live reconnect or
+cross-worker evidence. E4 still needs error/recovery ordering review and its
+final evidence audit; the full ADR acceptance checklist remains authoritative.
+The final rebuilt-client suite passed 2,029 tests in 189 files, including the
+existing deferred-version/recovery tests; bundle ESLint passed without warnings.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
