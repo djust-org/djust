@@ -119,10 +119,12 @@ def _check_event_security(
     Returns None if allowed, or an error message string if blocked.
     Only @event_handler-decorated methods are allowed.
     """
-    from ._component_subscriptions import is_component_subscription
+    from ._component_subscriptions import ComponentDeclaration, is_component_subscription
 
     if is_component_subscription(handler):
         return "Component output subscription callbacks cannot be invoked as client events"
+    if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
+        return "Interactive components accept only declared event actions"
 
     mode = djust_config.get("event_security", "strict")
     if mode not in ("warn", "strict"):

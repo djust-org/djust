@@ -4496,7 +4496,13 @@ class ViewRuntime:
         from .components.base import BoundComponent
         from .websocket import _compute_changed_keys, _snapshot_assigns
 
-        pre_assigns = _snapshot_assigns(view) if isinstance(component, BoundComponent) else None
+        from ._component_subscriptions import ComponentDeclaration
+
+        pre_assigns = (
+            _snapshot_assigns(view)
+            if isinstance(component, (BoundComponent, ComponentDeclaration))
+            else None
+        )
 
         try:
             try:
@@ -4519,6 +4525,16 @@ class ViewRuntime:
         finally:
             record_event_end(view, _tt_snapshot, error=_tt_error)
             await self._push_tt_event(view, _tt_snapshot)
+
+        # New concrete bindings keep their opaque lifetime IDs and state in the
+        # native component-session record. They return before the ordinary view
+        # event save below, so use the same bounded, opt-in persistence here.
+        if (
+            isinstance(component, ComponentDeclaration)
+            and view is self.view_instance
+            and getattr(view, "enable_state_snapshot", False)
+        ):
+            await self._persist_state_after_event(view, event_name)
 
         # Propagate the component event to the PARENT view's waiters with the
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).

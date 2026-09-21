@@ -3,6 +3,7 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -838,7 +839,12 @@ class RequestMixin:
 
                 call_args, call_kwargs = validated_call_arguments(validation)
                 t0_handler = time.perf_counter()
-                handler(*call_args, **call_kwargs)
+                if inspect.iscoroutinefunction(handler):
+                    from asgiref.sync import async_to_sync
+
+                    async_to_sync(handler)(*call_args, **call_kwargs)
+                else:
+                    handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
 
             # Persist user-defined _private attributes BEFORE get_context_data()

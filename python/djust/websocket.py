@@ -355,7 +355,16 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     _fw_attrs: frozenset[str] = getattr(view_instance, "_framework_attrs", frozenset())
     snapshot: Dict[str, Any] = {}
-    for k, v in view_instance.__dict__.items():
+    items = list(view_instance.__dict__.items())
+    # Interactive descriptors cache concrete instances in framework-owned
+    # storage, but their state still participates under the public context key.
+    # Snapshot only materialized bindings: discovery must not mount components.
+    from ._component_subscriptions import ComponentDeclaration
+
+    for name, bound in getattr(view_instance, "_component_bindings", {}).items():
+        if isinstance(bound, ComponentDeclaration):
+            items.append((name, bound))
+    for k, v in items:
         if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
         # Identity + STRUCTURAL fingerprint for mutable containers (#2664):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -20,7 +21,8 @@ FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "typing_component_bin
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=FIXTURES, text=True, capture_output=True, timeout=90)
+    environment = {**os.environ, "PYTHONPATH": str(FIXTURES.parents[1] / "python")}
+    return subprocess.run(command, cwd=FIXTURES, env=environment, text=True, capture_output=True, timeout=90)
 
 
 def check_diagnostics(name: str, actual: set[tuple[str, int]], expected: set[tuple[str, int]]) -> None:
@@ -64,7 +66,7 @@ def main() -> int:
         if item["severity"] in {"error", "warning"}
     }
     check_diagnostics(f"Pyright {report['version']}", actual, expected)
-    runtime = run([sys.executable, "positive.py"])
+    runtime = run([sys.executable, "runtime_check.py"])
     if runtime.returncode:
         raise RuntimeError(f"Runtime identity assertions failed:\n{runtime.stdout}\n{runtime.stderr}")
     print("Runtime: bound identity, isolated state/configuration, inheritance and async callbacks passed")

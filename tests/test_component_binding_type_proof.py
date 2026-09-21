@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import runpy
-import subprocess
 import sys
 
 import pytest
@@ -13,12 +12,7 @@ RUNNER = runpy.run_path(str(ROOT / "scripts/check-component-binding-types.py"))
 
 
 def test_runtime_type_proof():
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "tests/typing_component_bindings/positive.py")],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
+    result = RUNNER["run"]([sys.executable, "runtime_check.py"])
     assert result.returncode == 0, result.stdout + result.stderr
 
 

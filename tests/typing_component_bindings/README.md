@@ -1,9 +1,17 @@
-# ADR-034 type proof (not a framework API)
+# ADR-034 concrete binding type proof (staged API)
 
 Run `make test-component-binding-types` with mypy in the selected Python
 environment and Pyright on PATH. Override `PYTHON` and `PYRIGHT_COMMAND` if needed.
 No checker is installed by this target. Missing tools fail, never silently skip.
-Verified with Python 3.12, mypy 1.16.1 and Pyright 1.1.408.
+Checked with Python 3.12, mypy 1.16.1 and Pyright 1.1.408. The original isolated
+prototype passed both; `prototype.py` now re-exports the **actual** private
+framework dropdown and LiveView, with no alternate implementation or casts.
+
+**Current open gate:** without Django type stubs, mypy treats the inherited
+Django View base as `Any` and misses `page.projet_menu`. It catches the other
+nineteen negative locations; Pyright catches all twenty. Do not remove the
+missing diagnostic or substitute the old stand-alone owner to make this pass.
+Adding a development-only Django-stubs dependency has been proposed for approval.
 
 The isolated configurations are essential: the framework's broad mypy config
 suppresses errors in tests. This runner requires a diagnostic at **every**
@@ -17,10 +25,11 @@ negative test. Re-run after formatting because source lines are discovered fresh
   checker plugin, stub facade, or ignored type errors.
 - Callable protocols enforce named component/payload arguments and sync/async
   `None` results. A bounded type variable preserves the original method type.
-- The protocol's positional-only `Never` receiver permits methods belonging to
+- The protocol's positional-only bottom-type receiver (`NoReturn`, available on
+  Python 3.10, equivalent here to `Never`) permits methods belonging to
   any owner class. It is a **decorator compatibility constraint**, not an
-  invocation type. Production dispatch must separately validate/rebind the
-  receiver; it must never cast a real owner to `Never` to call this protocol.
+  invocation type. Production dispatch separately validates/rebinds the receiver;
+  it never casts a real owner to `Never` to call this protocol.
 - Descriptor access actually returns a concrete `DropdownMenu`, with isolated
   state and copied configuration. Both class and instance access are typed.
 - Inherited declarations, ordinary method override/rename, typed configuration,
@@ -30,14 +39,11 @@ negative test. Re-run after formatting because source lines are discovered fresh
 
 ## What is NOT proven
 
-`PrototypeOwner` is not `LiveView`. Decorators are identity functions; they do not
-register or invoke subscribers. Runtime assertions call callbacks explicitly,
-not through an event dispatcher. This proves the type shape and object identity,
-not the subscription lifecycle or framework integration. Untyped callbacks,
-duplicate/foreign declarations, conflicting decorators, subclass declaration
-replacement, restored state and collection membership still need runtime checks.
-
-Do not import this experiment into application or production framework code.
-Its owner storage is intentionally a small test double, not template exposure or
-session serialization. It has no rendering, authorization, routing or transport.
-There is no change to the legacy `LiveComponent` descriptor or plain dropdown.
+The small runtime assertions here call callbacks directly. Separate framework
+tests in `python/djust/tests/test_interactive_bindings.py` exercise real HTTP,
+WebSocket, reconnect, native registry lookup, output injection and callback errors.
+The new component remains private: browser keyboard/focus acceptance, observations,
+collections, signed snapshots/debug restore and publication are not complete.
+`runtime_check.py` supplies minimal Django settings for the standalone identity
+assertions. Fixed pilot configuration is constructor-owned; `open` is mutable
+state, while labels/items are not a dynamic configuration API yet.

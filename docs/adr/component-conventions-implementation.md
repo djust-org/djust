@@ -590,16 +590,21 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   renames, misspellings, wrong sources and async callbacks. Route only through
   registered identities; reject direct client invocation of subscriptions and
   unknown targets without a view-handler fallback.
-  The [isolated typing proof](034-typing-proof.md) now passes strict mypy and
-  Pyright with twenty negative diagnostic locations plus concrete runtime
-  identity/isolation/async assertions. Production binding, subscription validation
-  and dispatch are still open; the proof is not an exported API.
+  The [initial isolated proof](034-typing-proof.md) passed both type checkers;
+  current fixtures exercise the real staged framework classes instead.
   Production now compiles private subscription declarations at LiveView class
   construction, revalidates inheritance/replacements, rejects duplicate/foreign
   bindings and conflicting transport decorators, and blocks direct callback
   invocation in all shared event-security modes. Actual HTTP fallback rejection
-  is tested. Concrete binding, trusted output emission and lifecycle restoration
-  remain open; see the staged compiler section of the proof document.
+  is tested; see the staged compiler section of the proof document.
+  The private concrete dropdown now binds real per-owner instances, emits typed
+  outputs with trusted source injection, and passes real HTTP/WS/session reconnect
+  tests. Snapshot change detection sees public binding state; unchanged closes
+  produce no-op responses. The type fixtures now use these real classes: Pyright
+  rejects all twenty negative locations, but mypy misses the component-attribute
+  typo because Django's unstubbed base contributes Any. Django-stubs approval is
+  pending; do not waive that failing gate. Signed snapshots/debug/actor lifecycle,
+  public export and browser acceptance remain open.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.

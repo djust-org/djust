@@ -17,6 +17,8 @@ from .mixins.push_events import PushEventMixin
 from .mixins.streams import StreamsMixin
 from .streaming import StreamingMixin
 from .session_utils import Stream
+from ._component_subscriptions import SubscriptionBinding
+from .components.base import LiveComponent
 
 # Module-level framework-internal attribute denylist used by change-detection
 # (consumed by djust.websocket._snapshot_assigns). Declared here so strict
@@ -49,6 +51,10 @@ class LiveView(
     template_name: Optional[str] = None
     template: Optional[str] = None
     exposure_policy: str = "legacy"
+    _component_bindings: dict[str, LiveComponent]
+    _components: dict[str, LiveComponent]
+    _component_subscriptions: tuple[SubscriptionBinding, ...]
+    def _register_component(self, component: Any, attr_name: Optional[str] = None) -> None: ...
 
     # LiveView lifecycle methods
     def mount(self, request: Any, **kwargs: Any) -> None: ...

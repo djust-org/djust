@@ -31,7 +31,7 @@ class AsyncPage(PrototypeOwner):
 
     @menu.on.selected
     async def selected(self, component: DropdownMenu, value: str) -> None:
-        component.label = value
+        component.open = value == "Saved"
 
     @menu.on.toggled
     def toggled(self, component: DropdownMenu, open: bool) -> None:
@@ -57,7 +57,7 @@ def verify() -> None:
     assert not page.menu.open
     async_page = AsyncPage()
     asyncio.run(async_page.selected(async_page.menu, "Saved"))
-    assert async_page.menu.label == "Saved"
+    assert async_page.menu.open
     async_page.toggled(async_page.menu, True)
     assert async_page.menu.open
 

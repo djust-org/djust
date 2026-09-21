@@ -615,6 +615,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             None  # Cache for decorator metadata
         )
         self._components: Dict[str, Any] = {}  # Registry of child components by ID
+        self._component_bindings: Dict[str, Any] = {}  # Per-owner interactive descriptor cache
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render

@@ -245,6 +245,7 @@ module = [
     "djust._exposure",
     "djust._exposure_sessions",
     "djust._component_subscriptions",
+    "djust.components._interactive",
     "djust._rust",
 ]
 ignore_errors = false

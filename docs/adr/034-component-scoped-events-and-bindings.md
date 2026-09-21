@@ -213,9 +213,10 @@ gets class-construction and Django system-check diagnostics.
 The exact decorator typing must be proven with a small prototype before accepting
 this ADR. A pleasing syntax without working negative type tests is not sufficient.
 
-The [C1 typing proof](034-typing-proof.md) now verifies an isolated concrete
-descriptor and signature-preserving output decorators with both checkers. It is
-not the production subscription implementation; C1 and this ADR remain open.
+The [C1 typing proof](034-typing-proof.md) first passed with an isolated descriptor
+and now targets the real staged bindings. That transition exposed a Django-stubs
+dependency gap in mypy's component-name checks. C1 and this ADR remain open;
+the private implementation is not yet the released interactive API.
 
 ### D3. Components own mechanics; views handle semantic outputs
 
