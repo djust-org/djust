@@ -220,6 +220,22 @@ not production explicit construction or root-background authorization evidence.
 E1 remains open. Root async authorization/persistence remains E3; actor/backend
 and browser-storage caller inventories are the next E1 closure tasks.
 
+### Render-cache boundary
+
+The backend trace reproduced transient render context retained in the memory
+backend and legacy context restored into an explicit view with the same key,
+for both HTTP and WebSocket initialization. Explicit renderers now remain
+instance-owned and do not resolve/read/write the legacy backend. A policy
+transition also replaces an existing legacy renderer rather than continuing
+to mutate its cached object. Declared server persistence remains separate.
+
+The three-root Python run passed 30,073 tests with 952 skipped before the
+additional policy-transition regression. The final focused cache/context/HTTP
+set passed 35 tests, including the transition's failing-before/passing-after
+case. This is not actor, cross-worker, or browser acceptance. Actor mount remains
+an uncovered route distinct from the already-refused actor event path; E1 stays
+open. The loss of shared render-baseline reuse must be measured under E6.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
