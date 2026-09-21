@@ -202,6 +202,24 @@ for both WS and SSE: ref 1's patch retained loading and ref 2's noop released it
 That browser fixture bypasses the explicit construction guard only in its
 temporary process; it is not evidence for production exposure activation.
 
+## Exposure sink inventory and root diagnostics — E1 slice
+
+[The sink inventory](038-exposure-sink-inventory.md) maps current context,
+rendering, persistence, snapshot/storage, actor and diagnostic destinations to
+their producers, existing tests and remaining closure work. It is deliberately
+not marked exhaustive; backend callers and full destination sentinels are open.
+
+Its first reproduced defect was root background logging: nine cases leaked
+callback/result-handler/task-name sentinels under explicit or invalid policies.
+The fix emits value-free diagnostics for nonlegacy work and checks policy again
+at the logging boundary. Added transition cases verify legacy-to-explicit
+changes cannot reveal late failures. The exposure/async regression set passed
+569 tests, and mypy passed 1,022 source files. These are staged sink tests,
+not production explicit construction or root-background authorization evidence.
+
+E1 remains open. Root async authorization/persistence remains E3; actor/backend
+and browser-storage caller inventories are the next E1 closure tasks.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

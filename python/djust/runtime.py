@@ -5575,6 +5575,9 @@ class ViewRuntime:
         view = self.view_instance
         if not view:
             return
+        from ._exposure import uses_legacy_exposure
+
+        legacy_diagnostics = uses_legacy_exposure(view)
 
         try:
             # Dispatch through the ONE shared helper so the sync/async handling
@@ -5595,11 +5598,14 @@ class ViewRuntime:
             # Writing the stale view — handler state OR render — contaminates
             # a torn-down / replaced view.
             if self.view_instance is not view:
-                logger.debug(
-                    "Runtime: async task %s completed after view teardown/re-mount; "
-                    "dropping stale re-render",
-                    task_name,
-                )
+                if legacy_diagnostics and uses_legacy_exposure(view):
+                    logger.debug(
+                        "Runtime: async task %s completed after view teardown/re-mount; "
+                        "dropping stale re-render",
+                        task_name,
+                    )
+                else:
+                    logger.debug("Explicit background result discarded after owner replacement")
                 return
 
             # Serialise handler + render on the consumer's render lock via
@@ -5628,11 +5634,14 @@ class ViewRuntime:
                 await self._render_async_result(event_name)
 
         except Exception as exc:
-            logger.exception(
-                "Runtime: error in start_async callback '%s' on %s",
-                task_name,
-                view.__class__.__name__ if view else "?",
-            )
+            if legacy_diagnostics and uses_legacy_exposure(view):
+                logger.exception(
+                    "Runtime: error in start_async callback '%s' on %s",
+                    task_name,
+                    view.__class__.__name__ if view else "?",
+                )
+            else:
+                logger.warning("Explicit background callback failed")
             if hasattr(view, "handle_async_result"):
                 try:
                     # Same locked shape as the success arm (#2840 twin): the
@@ -5647,9 +5656,12 @@ class ViewRuntime:
                             return
                         await self._render_async_result(event_name)
                 except Exception:
-                    logger.exception(
-                        "Runtime: error in handle_async_result for task '%s'", task_name
-                    )
+                    if legacy_diagnostics and uses_legacy_exposure(view):
+                        logger.exception(
+                            "Runtime: error in handle_async_result for task '%s'", task_name
+                        )
+                    else:
+                        logger.warning("Explicit background result handling failed")
 
     async def _render_async_result(self, event_name: Optional[str]) -> None:
         """Re-sync + re-render after background work and emit the result frame.
