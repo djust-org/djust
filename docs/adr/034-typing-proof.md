@@ -64,3 +64,32 @@ subscription metadata on the existing registry/dispatch lifecycle, including
 duplicate/foreign ownership, inherited replacements, trusted source injection,
 direct callback rejection, async/error behavior and safe restoration. Reuse these
 type fixtures against the real implementation before C1 can be marked complete.
+
+## Production subscription compiler (staged)
+
+The private `djust._component_subscriptions` module now supplies immutable output
+contracts and a class-time subscription compiler, called by
+`LiveView.__init_subclass__`. It records declaration/output/callback names rather
+than bound view methods. It rejects aliased/reused declarations, foreign sources,
+duplicate subscriptions, removed/incompatible replacement declarations, invalid
+callback signatures and conflicting event/API/RPC decorators. Inherited method
+overrides are revalidated and retain their output subscription and template
+mutation guard. Signature failures identify owner, source, output and callback
+without echoing annotation-evaluation errors.
+
+`event_handler` and `server_function` reject subscription stacking in either
+order. The shared event-security check rejects marked subscription callbacks
+even under the legacy `open`/`warn` policy. Tests exercise that actual shared
+validator and an actual HTTP fallback POST, not only declaration inspection.
+
+This closes a prerequisite, **not C1**: there is still no exported interactive
+dropdown, per-owner concrete production binding, output emission/source injection,
+registry lifetime restoration or end-to-end component dispatch. The private
+compiler is not a second application subscription spelling. The typed prototype
+must be rerun against the eventual concrete implementation; do not advertise it
+as the released `djust.components.interactive` API.
+
+Verification for this staged compiler: 41 focused contract/dispatch-guard tests;
+full Python suite 30,788 passed / 952 skipped; mypy 1,046 files clean; the separate
+strict mypy/Pyright prototype retains all twenty expected negative locations.
+No new browser, Rust or client-JavaScript acceptance is claimed for this slice.

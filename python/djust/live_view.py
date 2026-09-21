@@ -597,6 +597,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                         "which is not yet available. Legacy views cannot honor these grants."
                     )
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        from ._component_subscriptions import compile_subscriptions
+
+        cls._component_subscriptions = compile_subscriptions(cls)
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._validate_exposure_configuration()

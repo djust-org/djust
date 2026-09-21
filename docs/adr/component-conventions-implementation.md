@@ -594,6 +594,12 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   Pyright with twenty negative diagnostic locations plus concrete runtime
   identity/isolation/async assertions. Production binding, subscription validation
   and dispatch are still open; the proof is not an exported API.
+  Production now compiles private subscription declarations at LiveView class
+  construction, revalidates inheritance/replacements, rejects duplicate/foreign
+  bindings and conflicting transport decorators, and blocks direct callback
+  invocation in all shared event-security modes. Actual HTTP fallback rejection
+  is tested. Concrete binding, trusted output emission and lifecycle restoration
+  remain open; see the staged compiler section of the proof document.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.

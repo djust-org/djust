@@ -176,6 +176,11 @@ def event_handler(
                 "without exposing the handler over HTTP is almost certainly a bug."
             )
 
+        from ._component_subscriptions import is_component_subscription
+
+        if is_component_subscription(func):
+            raise TypeError("A component subscription cannot also be an event handler")
+
         # Mutual-exclusion guard with @server_function — a single handler
         # cannot be both a WebSocket/re-render event and an RPC/no-re-render
         # call. Catching the misuse at decoration time beats a silent 404
@@ -513,6 +518,11 @@ def server_function(
 
     def decorator(func: F) -> F:
         from djust.validation import get_handler_signature_info
+
+        from ._component_subscriptions import is_component_subscription
+
+        if is_component_subscription(func):
+            raise TypeError("A component subscription cannot also be a server function")
 
         if getattr(func, "_djust_decorators", {}).get("event_handler"):
             raise TypeError(
