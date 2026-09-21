@@ -470,8 +470,15 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   explicit clears after strict-owner removal and redacted discovery failures.
   Normal WS and SSE endpoint tests assert these snapshots; actors, bespoke WS
   producers, child background frames and HTTP delivery remain open. Receivers
-  do not yet install render snapshots; applied-DOM ordering and owner-generation
-  matching are still activation gates, not covered by these server tests.
+  now install snapshots after successful DOM application and before binding
+  reinitialization. Transport-local receipt ordering survives buffered clones
+  and prevents older replay from replacing newer root/child snapshots. Invalid
+  snapshots fail closed without leaking pending child requests. Owner-generation
+  matching, cached DOM updates, complete delivery and native binder activation
+  remain open; this is not complete browser/transport acceptance.
+  Applied-refresh verification: 27 bundle regressions; three full JavaScript
+  runs each passed 2,131 tests (192 files), full Python passed 30,583 (952 skipped),
+  and 91 asset checks plus zero-warning bundle ESLint passed.
   URL changes now use the transport render lock and reject owner replacement
   while waiting. Three final full Python runs each passed 30,576 tests with 952
   skipped; independent bounded review and normal pre-commit checks passed.

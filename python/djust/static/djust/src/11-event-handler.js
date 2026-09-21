@@ -280,7 +280,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
-        await handleServerResponse(data, eventName, triggerElement);
+        _recordParameterContractFrame(_localEventTransport, data);
+        await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
 
     } catch (error) {
         if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);

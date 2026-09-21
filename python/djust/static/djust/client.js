@@ -332,7 +332,7 @@ function clearOptimisticPending() {
 }
 
 /** Morph a server-rendered child subtree without replacing its owner wrapper. */
-function applyEmbeddedUpdate(data) {
+function applyEmbeddedUpdate(data, transport) {
     if (typeof data.view_id !== 'string' || !data.view_id || typeof data.html !== 'string') {
         if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
         return false;
@@ -344,6 +344,7 @@ function applyEmbeddedUpdate(data) {
     incoming.innerHTML = data.html;
     morphChildren(container, incoming);
     _warnDeadScripts(container);
+    _refreshRenderParameterContracts(transport, data);
     reinitAfterDOMUpdate();
     return true;
 }
@@ -356,7 +357,7 @@ async function handleEmbeddedResponse(data, transport) {
     const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
     const owner = trigger && trigger.closest('[data-djust-embedded]');
     const ownerId = owner && owner.getAttribute('data-djust-embedded');
-    const applied = applyEmbeddedUpdate(data);
+    const applied = applyEmbeddedUpdate(data, transport);
     // A legitimate reply may arrive after its owner was removed. Settle its
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
@@ -386,9 +387,10 @@ async function handleEmbeddedResponse(data, transport) {
  * @param {Object} data - Server response data
  * @param {string} eventName - Name of the event that triggered this response
  * @param {HTMLElement} triggerElement - Element that triggered the event
+ * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-async function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -461,6 +463,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         // Apply patches (efficient incremental updates)
         // Empty patches array = server confirmed no DOM changes needed (no-op success)
         if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            _refreshRenderParameterContracts(transport, data);
             if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
         }
         else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
@@ -496,6 +499,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             }
 
             if (success === false) {
+                _invalidateRenderParameterContracts(transport, data);
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
@@ -529,6 +533,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             // Ensure dj-mounted is active for elements added by VDOM patches
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
@@ -557,6 +562,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             _isBroadcastUpdate = false;
             // Ensure dj-mounted is active for elements added by HTML update
             if (!window.djust._mountReady) window.djust._mountReady = true;
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
@@ -618,6 +624,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
+        _invalidateRenderParameterContracts(transport, data);
         if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;
@@ -989,6 +996,9 @@ class LiveViewWebSocket {
      */
     disconnect() {
         this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -1246,6 +1256,7 @@ class LiveViewWebSocket {
         // fallback call it too, so this is not the only choke point and must
         // not be described as one.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -1268,7 +1279,8 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
-                _installParameterContracts(this, data.parameter_contracts, data.view);
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
@@ -1626,7 +1638,7 @@ class LiveViewWebSocket {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
-                    });
+                    }, data);
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -1663,7 +1675,7 @@ class LiveViewWebSocket {
 
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
                 completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
@@ -1696,6 +1708,7 @@ class LiveViewWebSocket {
                 // dead exactly like #1848. Loud DEBUG-mode warning.
                 _warnDeadScripts(liveviewRoot);
                 clientVdomVersion = data.version;
+                _refreshRenderParameterContracts(this, data);
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
@@ -2504,6 +2517,9 @@ class LiveViewSSE {
      */
     disconnect() {
         this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
@@ -2535,6 +2551,7 @@ class LiveViewSSE {
         // wire-supplied ``_deferred`` — the flag is client-owned and only the
         // WebSocket buffering path may set it.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -2566,7 +2583,8 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
-                _installParameterContracts(this, data.parameter_contracts, data.view);
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -2620,7 +2638,7 @@ class LiveViewSSE {
             case 'patch':
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
                 completeLegacyAsyncBatches(this, data);
                 break;
             }
@@ -2924,7 +2942,9 @@ function hasPendingEventRequests(transport) {
     return [..._pendingEventOwners.values()].some(owner => owner === transport);
 }
 
-function bufferServerUpdate(transport, data) {
+function bufferServerUpdate(transport, data, received = data) {
+    const order = transport?._parameterContractFrames?.get(received);
+    if (order !== undefined) transport._parameterContractFrames.set(data, order);
     _tickBufferOwners.set(data, transport);
     _tickBuffer.push(data);
 }
@@ -2950,7 +2970,7 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        await handleServerResponse(frame, null, null);
+        await handleServerResponse(frame, null, null, transport);
         completeLegacyAsyncBatches(transport, frame);
     }
 }
@@ -4301,8 +4321,12 @@ function collectDjValues(element) {
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
 // a previous mount's contracts when a legacy server omits this field.
-function _installParameterContracts(transport, manifest, viewPath) {
-    if (!transport._parameterContracts || viewPath === transport.primaryViewPath) transport._parameterContracts = new Map();
+function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
+    if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
+        transport._parameterContracts = new Map();
+        transport._parameterContractApplied = new Map();
+    }
+    if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
@@ -4339,6 +4363,67 @@ function _installParameterContracts(transport, manifest, viewPath) {
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
+}
+
+// Receipt order is client-owned, not a wire field or the VDOM version (child
+// replies have no parent VDOM version). Weak keys cannot retain consumed frames.
+function _recordParameterContractFrame(transport, data) {
+    if (!data || typeof data !== 'object') return;
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
+    transport._parameterContractFrames.set(data, transport._parameterContractSequence);
+}
+
+// A failed/partial DOM application cannot keep advertising the last successful
+// strict snapshot. Invalidate only this transport's primary scope, never peers.
+function _invalidateRenderParameterContracts(transport, data) {
+    const path = transport?.primaryViewPath;
+    const mounts = transport?._parameterContracts;
+    if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
+        mounts.set(path, false);
+        const order = transport._parameterContractFrames?.get(data);
+        if (order !== undefined) transport._parameterContractApplied.set(path,
+            Math.max(order, transport._parameterContractApplied.get(path) || 0));
+    }
+}
+
+// Called after DOM application (including empty patches), before dj-mounted
+// or other bindings can run. Omission is safe only for a known legacy scope.
+function _refreshRenderParameterContracts(transport, data) {
+    const supplied = Object.hasOwn(data, 'parameter_contracts');
+    if (!transport) {
+        if (supplied && globalThis.djustDebug) console.warn('[LiveView] Missing parameter contract transport');
+        return;
+    }
+    const order = transport._parameterContractFrames?.get(data);
+    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    // A newer applied response already supplied a whole-tree snapshot. Replaying
+    // an older buffered delta must not replace it, even with a missing snapshot.
+    if (order !== undefined && applied !== undefined && order <= applied) return;
+    if (!supplied) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (order !== undefined && applied !== undefined) {
+            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+        }
+        return;
+    }
+    const path = data.parameter_contract_view;
+    const root = getLiveViewRoot();
+    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+        root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');
+        return;
+    }
+    transport._parameterContractApplied.set(path, order);
+    try {
+        _installParameterContracts(transport, data.parameter_contracts, path, false);
+    } catch {
+        // Metadata cannot prevent the originating response from acknowledging
+        // its request. Strict lookups fail closed on the invalid scope instead.
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid render parameter contracts');
+    }
 }
 
 function _lookupParameterContract(transport, viewPath, viewId, componentId, eventName) {
@@ -7440,7 +7525,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
-        await handleServerResponse(data, eventName, triggerElement);
+        _recordParameterContractFrame(_localEventTransport, data);
+        await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
 
     } catch (error) {
         if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);

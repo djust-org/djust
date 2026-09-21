@@ -26,7 +26,9 @@ function hasPendingEventRequests(transport) {
     return [..._pendingEventOwners.values()].some(owner => owner === transport);
 }
 
-function bufferServerUpdate(transport, data) {
+function bufferServerUpdate(transport, data, received = data) {
+    const order = transport?._parameterContractFrames?.get(received);
+    if (order !== undefined) transport._parameterContractFrames.set(data, order);
     _tickBufferOwners.set(data, transport);
     _tickBuffer.push(data);
 }
@@ -52,7 +54,7 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        await handleServerResponse(frame, null, null);
+        await handleServerResponse(frame, null, null, transport);
         completeLegacyAsyncBatches(transport, frame);
     }
 }

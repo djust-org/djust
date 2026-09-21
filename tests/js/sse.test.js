@@ -21,6 +21,12 @@ global.clientVdomVersion = 0;
 global.installMountEventConfig = vi.fn();
 // Owner contracts are exercised with the full bundle in parameter_contract_mounts.test.js.
 global._installParameterContracts = vi.fn();
+global._recordParameterContractFrame = vi.fn((transport, data) => {
+    // The isolated transport test only needs a receipt token. Actual ordering
+    // and replay use the unmodified helper in parameter_contract_renders.test.js.
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractFrames.set(data, 0);
+});
 global.cancelPendingRateLimits = vi.fn();
 global._stampDjIds = vi.fn();
 global.bindLiveViewEvents = vi.fn();
@@ -208,7 +214,8 @@ describe('LiveViewSSE', () => {
             expect(global.handleServerResponse).toHaveBeenCalledWith(
                 expect.objectContaining({ type: 'patch' }),
                 'increment',
-                null
+                null,
+                sse
             );
             expect(sse.lastEventName).toBeNull();
         });

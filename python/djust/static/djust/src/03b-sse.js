@@ -140,6 +140,9 @@ class LiveViewSSE {
      */
     disconnect() {
         this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
@@ -171,6 +174,7 @@ class LiveViewSSE {
         // wire-supplied ``_deferred`` — the flag is client-owned and only the
         // WebSocket buffering path may set it.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -202,7 +206,8 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
-                _installParameterContracts(this, data.parameter_contracts, data.view);
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -256,7 +261,7 @@ class LiveViewSSE {
             case 'patch':
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
                 completeLegacyAsyncBatches(this, data);
                 break;
             }

@@ -77,10 +77,37 @@ review found no actionable issues in the bounded server-delivery/URL-lock change
 JavaScript and Rust were unchanged in this slice; the earlier mount-manifest
 JavaScript results below are not new browser activation evidence.
 
-This is delivery, not client installation. A receiver must not update its
-contracts merely because a frame arrived: version rejection, buffering and
-failed patches must be resolved first, and successful installation must precede
-`reinitAfterDOMUpdate()` (which can fire `dj-mounted`).
+### Applied render refresh (staged)
+
+WS/SSE response handlers now retain their originating transport through immediate
+and buffered delivery. Accepted patches (including empty patches), full HTML,
+embedded updates and WS recovery HTML refresh that transport's primary-mount
+snapshot before `reinitAfterDOMUpdate()` can fire `dj-mounted`. Additional mount
+maps are preserved. Rejected versions and absent child DOM owners do not install
+incoming snapshots. Failed patches invalidate strict rules rather than advertising
+a snapshot for partially applied DOM.
+
+Each transport records receipt order in a WeakMap, including the original order
+of cloned buffered frames. A mount uses its own receipt, not the newest queued
+message's receipt. Older deferred frames cannot overwrite a newer applied
+whole-tree snapshot; this also covers child replies without a parent VDOM version.
+Explicit disconnect clears these records. This ordering is not a server-issued
+owner generation and does not solve late messages from a replaced owner lifetime.
+
+Malformed or missing metadata for an established strict scope invalidates it.
+Malformed metadata does not prevent request acknowledgement, including child
+replies. Known legacy scopes retain their legacy behavior. Supplied snapshots
+must name the known primary mount matching the current page root; unsupported
+ownership does not silently select another mount. Native binders still do not
+consume these records: DOM generations, complete producer coverage, cached DOM
+updates, initial HTTP delivery and transport transitions remain activation gates.
+
+The applied-refresh regression file exercises 27 cases against the actual
+client bundle. Three final unchanged-code JavaScript runs each passed 2,131 tests
+in 192 files; the full Python suite passed 30,583 tests with 952 skipped.
+Minified-asset checks passed 91 tests and bundle ESLint reported zero warnings.
+The shipped gzip grew by 484 bytes. These are automated receiver/transport
+results, not real-browser strict-binding acceptance.
 
 Actual normal WebSocket and SSE event tests now assert render snapshots as well
 as mount snapshots. The same regression on actor WebSocket responses still
@@ -109,8 +136,9 @@ These are automated suite results, not live-browser acceptance evidence.
 
 This does not complete P2. Before activating strict native binding:
 
-1. Deliver initial HTTP-only contracts and refresh contracts with applied render
-   responses, including child/component creation, removal and replacement.
+1. Deliver initial HTTP-only contracts and complete render-producer coverage,
+   including child/component creation, removal and replacement. Verify cached
+   DOM updates and recovery producers against the applied-snapshot rules above.
 2. Match the current DOM owner and its generation, not just reusable string IDs.
    Cover buffered/stale frames, reconnect and repeated same-path root instances.
 3. Connect every binder to the strict collector before loading/optimistic effects,

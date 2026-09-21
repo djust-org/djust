@@ -491,8 +491,12 @@ function collectDjValues(element) {
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
 // a previous mount's contracts when a legacy server omits this field.
-function _installParameterContracts(transport, manifest, viewPath) {
-    if (!transport._parameterContracts || viewPath === transport.primaryViewPath) transport._parameterContracts = new Map();
+function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
+    if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
+        transport._parameterContracts = new Map();
+        transport._parameterContractApplied = new Map();
+    }
+    if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
@@ -529,6 +533,67 @@ function _installParameterContracts(transport, manifest, viewPath) {
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
+}
+
+// Receipt order is client-owned, not a wire field or the VDOM version (child
+// replies have no parent VDOM version). Weak keys cannot retain consumed frames.
+function _recordParameterContractFrame(transport, data) {
+    if (!data || typeof data !== 'object') return;
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
+    transport._parameterContractFrames.set(data, transport._parameterContractSequence);
+}
+
+// A failed/partial DOM application cannot keep advertising the last successful
+// strict snapshot. Invalidate only this transport's primary scope, never peers.
+function _invalidateRenderParameterContracts(transport, data) {
+    const path = transport?.primaryViewPath;
+    const mounts = transport?._parameterContracts;
+    if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
+        mounts.set(path, false);
+        const order = transport._parameterContractFrames?.get(data);
+        if (order !== undefined) transport._parameterContractApplied.set(path,
+            Math.max(order, transport._parameterContractApplied.get(path) || 0));
+    }
+}
+
+// Called after DOM application (including empty patches), before dj-mounted
+// or other bindings can run. Omission is safe only for a known legacy scope.
+function _refreshRenderParameterContracts(transport, data) {
+    const supplied = Object.hasOwn(data, 'parameter_contracts');
+    if (!transport) {
+        if (supplied && globalThis.djustDebug) console.warn('[LiveView] Missing parameter contract transport');
+        return;
+    }
+    const order = transport._parameterContractFrames?.get(data);
+    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    // A newer applied response already supplied a whole-tree snapshot. Replaying
+    // an older buffered delta must not replace it, even with a missing snapshot.
+    if (order !== undefined && applied !== undefined && order <= applied) return;
+    if (!supplied) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (order !== undefined && applied !== undefined) {
+            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+        }
+        return;
+    }
+    const path = data.parameter_contract_view;
+    const root = getLiveViewRoot();
+    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+        root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');
+        return;
+    }
+    transport._parameterContractApplied.set(path, order);
+    try {
+        _installParameterContracts(transport, data.parameter_contracts, path, false);
+    } catch {
+        // Metadata cannot prevent the originating response from acknowledging
+        // its request. Strict lookups fail closed on the invalid scope instead.
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid render parameter contracts');
+    }
 }
 
 function _lookupParameterContract(transport, viewPath, viewId, componentId, eventName) {

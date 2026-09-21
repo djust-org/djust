@@ -253,6 +253,9 @@ class LiveViewWebSocket {
      */
     disconnect() {
         this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -510,6 +513,7 @@ class LiveViewWebSocket {
         // fallback call it too, so this is not the only choke point and must
         // not be described as one.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -532,7 +536,8 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
-                _installParameterContracts(this, data.parameter_contracts, data.view);
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
@@ -890,7 +895,7 @@ class LiveViewWebSocket {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
-                    });
+                    }, data);
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -927,7 +932,7 @@ class LiveViewWebSocket {
 
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
                 completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
@@ -960,6 +965,7 @@ class LiveViewWebSocket {
                 // dead exactly like #1848. Loud DEBUG-mode warning.
                 _warnDeadScripts(liveviewRoot);
                 clientVdomVersion = data.version;
+                _refreshRenderParameterContracts(this, data);
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
