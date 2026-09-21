@@ -3,6 +3,185 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Current acceptance checklist
+
+Updated 2026-09-20. This section is the current work queue; the implementation
+sections below are chronological evidence, not independent open-task lists.
+An earlier "pending" statement may be superseded by a later implementation
+section. The ADR decisions and acceptance sections remain authoritative: this
+checklist groups their requirements, it does not reduce them.
+
+The original four ADRs are 034–037. ADR-038 is their additional exposure-policy
+prerequisite. **No complete ADR is accepted, and explicit exposure is disabled.**
+No completion percentage or delivery date is inferred from commit/test counts.
+
+### Completion rules
+
+- A checked foundation means only the named boundary has evidence, not that its
+  enclosing ADR is complete. An unchecked gate may already have partial code.
+- Close a gate with implementation commit, named asserting tests, completed run
+  results, and any required browser/deployment evidence. Record skipped coverage
+  and limitations. Frame replay is not live backend/browser verification.
+- Each implementation slice names one gate and its exit tests before editing.
+  Record new findings against an existing gate; if none fits, explicitly amend
+  this queue and explain the scope change. Do not silently broaden a slice.
+- Security or correctness failures on the slice's actual path must be resolved
+  before closing it. Independent findings stay visible in their own gate.
+- Do not activate explicit exposure or publish proposed APIs as supported while
+  their gates are open. Changing scope requires an explicit ADR decision, not
+  checking off an unsupported case as if it passed.
+
+### ADR-038 — explicit context and state exposure
+
+Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
+
+- [x] Foundation: typed per-instance state and separate immutable exposure
+  projections, bounded primitive validation, and guarded construction.
+- [x] Foundation: server-session and signed-snapshot adapters, staged context,
+  debug/direct-state boundaries, and staged HTTP/shared-runtime integration.
+- [x] Foundation: eager sticky-child identity, authorization, restoration,
+  persistence, disposal/pruning, and selected-child background dispatch.
+  Evidence and limitations are in the corresponding sections below.
+- [ ] **E1 — exporter inventory and closure.** Enumerate actual rendering,
+  persistence, snapshot, browser-storage and diagnostic sinks, including actor
+  and root-background paths. For each, map policy enforcement and a sentinel
+  test at the destination; identify unsupported paths explicitly. No implicit
+  context/attribute fallback or unclassified sink may remain at activation.
+- [ ] **E2 — provider contract closure.** Complete bounded manifests and
+  lifecycle tests for components, forms, actions, streams and uploads, including
+  inheritance, dynamic context and invalidation. Resolve schema/codec needs and
+  migration/expiry handling. Exercise deliberate ORM rendering without granting
+  automatic persistence or client disclosure.
+- [ ] **E3 — ownership/lifecycle closure.** Cover mount/parent-queued child work,
+  descendant and repeated-instance routing, lazy/nonsticky and mixed policies,
+  shell reconstruction, removal/re-addition, and root-background authorization
+  and persistence. Test revocation and failed storage without stale delivery.
+- [ ] **E4 — correlated transport lifecycle.** Finish the bounded next milestone
+  below; prove acknowledgements and loading belong to individual requests, not
+  only handler names or DOM triggers. Keep background work distinct.
+- [ ] **E5 — end-to-end safety matrix.** Run actual HTTP, WebSocket and SSE
+  flows with Django/Rust rendering, browser reconnect/back navigation and
+  cross-worker restoration. Assert sentinels at every destination under DEBUG,
+  failures and forged/expired/cross-identity/old-schema restores. Include legacy
+  coexistence and provider/no-op parity as those dependent APIs land.
+- [ ] **E6 — activation review.** Measure serialization/render cost and migration
+  effort; publish supported backend/provider/codec boundaries and migration
+  guidance. Review E1–E5 evidence and dependent API integration before removing
+  the constructor guard. No zero-leakage or performance claim without evidence.
+
+### ADR-036 — typed event parameters
+
+Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
+
+- [ ] **P1 — canonical contract.** Implement signature-derived metadata and
+  freeze the valid/invalid conversion matrix, including optional/collection and
+  unsupported types, resource limits, duplicate/extra/missing values and
+  framework-versus-application arguments.
+- [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
+  dispatch path through that contract. Verify forms' open payloads,
+  keyword-only arguments, forged component injection, `coerce_types=False` and
+  unchanged legacy behavior. Invalid input must never invoke application code.
+- [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
+  verify redacted diagnostics and the ADR's complete conversion/parity matrix.
+
+### ADR-035 — Django-native form and object lifecycle
+
+Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.md).
+
+- [x] Foundation: public form-construction hooks, empty binding, initial values,
+  prefixes and legacy `_create_form` bridge; see `test_form_hooks_adr035.py`.
+- [ ] **F1 — managed object.** Implement resolve → authorize → bind, managed
+  `self.object`, opt-in ModelForm integration and explicit application policy.
+  Prove authorization precedes construction/validation and within-dispatch reuse
+  avoids duplicate queries without persisting ORM objects or permission caches.
+- [ ] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
+  non-model examples; independent/inherited hooks; choices, relations, uploads,
+  empty submission, validation and exactly-once save. Cover missing/tampered/
+  revoked targets, callback failures, HTTP/WS reconnect/back navigation,
+  Django/Rust rendering, typing and browser-visible input/errors/save feedback.
+
+### ADR-034 — component-scoped events and bindings
+
+Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
+
+- [x] Foundation: native child lifecycle isolation and component-owned loading.
+  This is not the proposed typed subscription API or repeated-request support.
+- [ ] **C1 — typed binding API.** Implement per-instance binding, declared outputs
+  and subscriptions with positive/negative typing fixtures for inheritance,
+  renames, misspellings, wrong sources and async callbacks. Route only through
+  registered identities; reject direct client invocation of subscriptions and
+  unknown targets without a view-handler fallback.
+- [ ] **C2 — dropdown pilot and observations.** Implement the documented state
+  owner, local mechanics and semantic outputs. Verify two same-type menus,
+  source injection, valid/forged/disabled selections and callback rendering.
+  Optional native-toggle observations must report actual visibility without
+  blocking/rolling back UI; unchanged observers do no render/diff/patch.
+- [ ] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
+  keys, removal/re-addition, nesting, reconnect and restore. Include a separate
+  authorized delegated-row example; do not present it as stateful repetition.
+- [ ] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
+  with both template backends: focus/dismissal/default actions, user isolation,
+  async/error behavior, duplicate/reordered observations and stale identities.
+  Publish runnable examples, generated reference, website navigation and AI
+  guidance together through D2 below; preserve legacy plain handlers.
+
+### ADR-037 — checks and executable documentation
+
+Source: [decisions and acceptance](037-event-contract-checks-and-executable-documentation.md).
+
+- [ ] **D1 — shared checks.** Use the same contract as runtime for ownership,
+  arguments, injection and exposure checks. Test positive/negative fixtures,
+  inherited/decorated handlers, native controls, intentional catch-alls,
+  authorized ORM rendering, includes/shared/dynamic templates, locations,
+  reasoned suppressions and machine-readable output. No mounts, handlers or
+  querysets may execute during checking.
+- [ ] **D2 — executable documentation and catalogue.** Make examples canonical
+  fixtures and deliberately break each test layer to prove its gate fails.
+  Verify website navigation and report skipped fixtures. Include the originally
+  reported code-snippet whitespace, checkbox appearance, dropdown items and
+  missing menu handler, plus multi-menu interactions and visible server errors.
+- [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
+  revision, complete migration/AI guidance, and verify actual website delivery
+  rather than equating repository Markdown with publication. Record remaining
+  static-analysis limits; only then change the relevant ADR status.
+
+### Next milestone: E4 — request correlation
+
+Owner: current task implementer. Status: reproducer available; implementation
+open. This is a transport correctness slice, not permission to enable ADR-038.
+
+The working-tree `tests/js/request-correlation.test.js` reproducer last reported
+four failures and two passes: overlapping same-trigger replies clear loading
+early in WS/SSE; SSE supplies neither request refs nor an awaitable server
+completion. Duplicate-reply assertions were not reached after the earlier
+failure, so duplicate handling is a required test, not an established finding.
+
+Deliverable: one shared request register/acknowledge/cancel contract used by WS
+and SSE. Inventory existing callers first: embedded responses, patch/HTML/no-op
+responses, errors, disconnects, event dispatch, cache/HTTP fallbacks and loading.
+Implementation must preserve their invariants rather than add parallel counters.
+
+Exit checklist:
+
+- [ ] Distinct request identities and awaitable completion on the actual server
+  reply; SSE POST acceptance alone does not complete the event.
+- [ ] Two requests from the same trigger remain pending after the first reply;
+  out-of-order, duplicate and unknown refs cannot clear unrelated work.
+- [ ] Embedded, patch, HTML and no-op responses resolve only their own request;
+  background frames do not acknowledge a foreground request.
+- [ ] Failure, disconnect, replacement transport and removed/morphed controls
+  drain only owned work and settle promises without stranding loading state.
+  Preserve documented `async_pending` and legacy no-ref/fallback behavior.
+- [ ] Focused failing-before/passing-after tests, rebuilt-client regressions,
+  full JS suite, affected server wire tests and live backend/browser WS/SSE
+  overlapping-request evidence pass; record exact revision and limitations.
+
+Stop this slice when its exit checklist passes. Next is E1's sink inventory,
+then E2/E3 closure and the E5 integration matrix. Implement P1–P3, F1–F2 and
+C1–C4 against the guarded exposure foundation; complete D1/D2 alongside their
+contracts. E5/E6 final activation and D3 follow the dependent integrations, so
+the dependency order does not require a premature exposure release.
+
 ## Dependency order
 
 1. ADR-038: typed per-instance state primitives, then separate rendering,
