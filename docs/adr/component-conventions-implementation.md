@@ -255,9 +255,10 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
   descendant and repeated-instance routing, lazy/nonsticky and mixed policies,
   shell reconstruction, removal/re-addition, and root-background authorization
   and persistence. Test revocation and failed storage without stale delivery.
-- [ ] **E4 — correlated transport lifecycle.** Finish the bounded next milestone
-  below; prove acknowledgements and loading belong to individual requests, not
-  only handler names or DOM triggers. Keep background work distinct.
+- [x] **E4 — correlated transport lifecycle.** The bounded request-correlation
+  milestone below passed its exit audit at cf73aeaf8. Acknowledgements/loading
+  are request-owned and background work is distinct. E3 lifecycle authorization
+  and E5 deployment/renderer acceptance remain separate open gates.
 - [ ] **E5 — end-to-end safety matrix.** Run actual HTTP, WebSocket and SSE
   flows with Django/Rust rendering, browser reconnect/back navigation and
   cross-worker restoration. Assert sentinels at every destination under DEBUG,
@@ -344,12 +345,10 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   rather than equating repository Markdown with publication. Record remaining
   static-analysis limits; only then change the relevant ADR status.
 
-### Next milestone: E4 — request correlation
+### Completed milestone: E4 — request correlation
 
-Owner: current task implementer. Status: foreground correlation and staged
-explicit/legacy-child, root, deferred and component-route task batches implemented;
-mount ownership and remaining lifecycle verification open. This is a
-transport correctness slice, not permission to enable ADR-038.
+Owner: current task implementer. Status: exit checklist verified at cf73aeaf8.
+This is a transport correctness slice, not permission to enable ADR-038.
 
 The original `tests/js/request-correlation.test.js` reproducer reported four
 failures and two passes: overlapping same-trigger replies cleared loading early
@@ -370,12 +369,39 @@ Exit checklist:
   out-of-order, duplicate and unknown refs cannot clear unrelated work.
 - [x] Embedded, patch, HTML and no-op responses resolve only their own request;
   background frames do not acknowledge a foreground request.
-- [ ] Failure, disconnect, replacement transport and removed/morphed controls
+- [x] Failure, disconnect, replacement transport and removed/morphed controls
   drain only owned work and settle promises without stranding loading state.
   Preserve documented `async_pending` and legacy no-ref/fallback behavior.
-- [ ] Focused failing-before/passing-after tests, rebuilt-client regressions,
+- [x] Focused failing-before/passing-after tests, rebuilt-client regressions,
   full JS suite, affected server wire tests and live backend/browser WS/SSE
   overlapping-request evidence pass; record exact revision and limitations.
+
+Exit evidence:
+
+- Request IDs, out-of-order/duplicate/unknown refs, WS/SSE promise completion,
+  all response shapes, removed/morphed controls, modern/legacy async completion,
+  transport replacement and buffered-update/error/disconnect ordering:
+  tests/js/request-correlation.test.js and tests/js/event_sequencing.test.js.
+- HTTP overlap, errors, cache hits, stale page effects and navigation abort:
+  tests/js/http-request-correlation.test.js. Existing teardown and SSE suites
+  preserve keepalive and tokenless compatibility. Mount-time async frames cannot
+  acknowledge an unrelated foreground event.
+- Runtime/root/deferred/component/child batches: test_sse_runtime_convergence_1887,
+  test_component_scoped_render_2917, test_runtime_child_routing_1892,
+  test_async_batch and test_exposure_child_async. Refreshed affected server set:
+  455 passed at 8515822e2; no server code changed afterward.
+- Final bundled-client run: 2,036 passed across 189 files at cf73aeaf8; lint and
+  commit hooks passed. Native browser overlap at 8515822e2 passed over both
+  actual WS and SSE connections (distinct refs, loading retained after first
+  reply and released after second). Earlier root/component/child batch browser
+  evidence is recorded in the corresponding sections. The later legacy fix
+  is covered by bundled-client tests, not a claim of an old-server deployment.
+
+Limits: legacy tokenless async work retains its pre-existing event-name
+completion semantics, not modern per-task guarantees. Controlled frame/fetch
+tests are not live network tests. Cross-worker restore, production explicit
+authorization, complete renderer/provider combinations and publication remain
+E3/E5/E6 and the dependent ADR gates; none is inferred from E4 completion.
 
 Stop this slice when its exit checklist passes. Next is E1's sink inventory,
 then E2/E3 closure and the E5 integration matrix. Implement P1–P3, F1–F2 and
