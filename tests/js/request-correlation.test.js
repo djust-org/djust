@@ -148,6 +148,37 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
+    it('mount-time background results cannot acknowledge a later foreground event', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            let done = false;
+            send().then(() => { done = true; });
+            await transport.handleMessage({type: 'patch', source: 'async', event_name: null, patches: []});
+            expect(done).toBe(false);
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            expect(done).toBe(true);
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
+    it('accepts a legacy unreferenced reply only when ownership is unambiguous', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            let completed = 0;
+            send().then(() => { completed += 1; });
+            send().then(() => { completed += 1; });
+            await transport.handleMessage({type: 'noop', event_name: 'save'});
+            expect(completed).toBe(0);
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            expect(completed).toBe(1);
+            await transport.handleMessage({type: 'noop', event_name: 'save'});
+            expect(completed).toBe(2);
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
     it('disconnect settles owned requests and restores loading', async () => {
         const {dom, transport, button, send, loading} = setup(name);
         try {

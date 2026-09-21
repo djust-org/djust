@@ -73,6 +73,12 @@ Mount-time work has no originating event request: do not attach its completion
 to a later foreground request. Its ownership/failure matrix still needs review
 before E4 closes, along with the remaining client fallbacks.
 
+Additional bundled-client tests verify that mount-time async patches with no
+event name cannot acknowledge a later foreground request, and that legacy
+no-ref replies are accepted only when one request is outstanding. Both rules
+pass for WS and SSE. The full JavaScript suite passed 2,015 tests in 188 files.
+These are client frame tests, not live mount/reconnect deployment evidence.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
