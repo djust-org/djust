@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import msgpack
+import weakref
 from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -1475,6 +1476,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # request_html path), so the attribute is str | None across its lifetime.
         self._recovery_html: Optional[str] = html
         self._recovery_version = getattr(self, "_last_sent_version", 0)
+        self._recovery_contracts: Optional[str] = None
+        view = getattr(self, "view_instance", None)
+        try:
+            self._recovery_owner = weakref.ref(view) if view is not None else None
+        except TypeError:
+            # Partial consumer test doubles can use non-weakrefable owners.
+            self._recovery_owner = None
+
+    def _capture_recovery_contracts(self, frame: Dict[str, Any]) -> None:
+        """Detach metadata from the exact parent render frame armed for recovery."""
+        if (
+            frame.get("type") in ("patch", "html_update")
+            and frame.get("version") == getattr(self, "_recovery_version", None)
+            and "parameter_contracts" in frame
+        ):
+            self._recovery_contracts = json.dumps(
+                {
+                    "parameter_contracts": frame["parameter_contracts"],
+                    "parameter_contract_view": frame["parameter_contract_view"],
+                }
+            )
 
     def _next_version_armed(self, html: str) -> int:
         """Advance the wire version AND refresh the recovery baseline in one step.
@@ -3618,6 +3640,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         return any(getattr(child, "sticky_id", None) for child in children.values())
 
     async def handle_request_html(self, data: Dict[str, Any]) -> None:
+        """Serialize recovery with other renders and reject a replaced owner."""
+        view = self.view_instance
+        async with self._render_lock:
+            owner = getattr(self, "_recovery_owner", None)
+            if self.view_instance is not view or (owner is not None and owner() is not view):
+                await self.send_error("Recovery owner changed. Reload the page.", recoverable=False)
+                return
+            with _tenant_context(getattr(view, "_tenant", None)):
+                await self._handle_request_html_locked(data)
+
+    async def _handle_request_html_locked(self, data: Dict[str, Any]) -> None:
         """
         Handle client request for full HTML when VDOM patches fail.
 
@@ -3652,6 +3685,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # version which is DISCARDED for the wire — sending it would desync the
         # client against the consumer counter.
         version = getattr(self, "_recovery_version", 0)
+        contracts = getattr(self, "_recovery_contracts", None)
+        runtime = getattr(self, "_runtime", None)
+
+        def contract_snapshot() -> Optional[str]:
+            from ._parameter_metadata import parameter_contract_manifest
+
+            manifest = parameter_contract_manifest(view)
+            if manifest is not None or getattr(runtime, "_parameter_contracts_active", False):
+                path = getattr(runtime, "_parameter_contract_view", None)
+                if not isinstance(path, str) or not path:
+                    raise ValueError("Recovery contract owner unavailable")
+                return json.dumps(
+                    {"parameter_contracts": manifest, "parameter_contract_view": path}
+                )
+            return None
 
         if self._has_live_sticky_children():
             # Re-render the parent fresh so the recovery HTML reflects the live
@@ -3664,12 +3712,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if hasattr(view, "_sync_state_to_rust"):
                     view._sync_state_to_rust()
                 fresh_html, _patches, _fresh_version = view.render_with_diff()
-                return fresh_html
+                return fresh_html, contract_snapshot()
 
             try:
-                html = await sync_to_async(_sync_and_render)()
+                render_task = asyncio.create_task(sync_to_async(_sync_and_render)())
+                try:
+                    html, contracts = await asyncio.shield(render_task)
+                except asyncio.CancelledError:
+                    # Cancelling sync_to_async cannot stop its worker thread.
+                    # Keep the render lock until that worker has settled, but
+                    # never send its result after cancellation.
+                    while not render_task.done():
+                        try:
+                            await asyncio.shield(render_task)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if not render_task.cancelled():
+                        render_task.exception()
+                    raise
             except Exception:  # noqa: BLE001 — fall back to cached snapshot
-                logger.exception(
+                logger.warning(
                     "[djust] request_html fresh re-render failed; falling back "
                     "to cached recovery HTML"
                 )
@@ -3685,17 +3749,39 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return
 
+        if contracts is None:
+            # Discovery here only decides whether recovery is safe. A current
+            # declaration must NEVER be attached to older cached HTML.
+            try:
+                missing_contracts = await sync_to_async(contract_snapshot)() is not None
+            except Exception:
+                missing_contracts = True
+            if missing_contracts:
+                await self.send_error(
+                    "Recovery parameter contracts unavailable. Reload the page.",
+                    recoverable=False,
+                )
+                return
+
         html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
         html_content = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
+        if contracts is not None and runtime is not None:
+            # Recovery can be the first frame advertising a newly strict owner.
+            # Subsequent legacy renders must explicitly clear that snapshot.
+            runtime._parameter_contracts_active = True
+
         # Clear recovery state (one-time use)
         self._recovery_html = None
+        self._recovery_contracts = None
+        self._recovery_owner = None
 
         await self.send_json(
             {
                 "type": "html_recovery",
                 "html": html_content,
                 "version": version,
+                **(json.loads(contracts) if contracts is not None else {}),
             }
         )
 

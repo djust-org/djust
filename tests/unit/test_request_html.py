@@ -14,7 +14,7 @@ from djust.websocket import LiveViewConsumer
 
 def _make_consumer():
     """Create a LiveViewConsumer with mocked internals."""
-    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+    consumer = LiveViewConsumer()
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     consumer.view_instance = None

@@ -114,9 +114,36 @@ as mount snapshots. The same regression on actor WebSocket responses still
 fails: actor results are emitted through a separate Rust render path, outside
 the Python runtime's render lock. Capturing contracts from the Python owner
 after awaiting that result is not sufficient evidence that they describe the
-same render. Actor capture, bespoke WebSocket tick/push/recovery paths, explicit
+same render. Actor capture, bespoke WebSocket tick/push paths, explicit
 child background frames, initial HTTP and HTTP fallback remain delivery gates.
 No claim of complete transport parity is made.
+
+### Recovery snapshots
+
+Normal runtime WebSocket parent render frames now leave a detached JSON copy of
+their public contract metadata beside the matching recovery HTML and consumer
+version. Every new recovery baseline clears the previous metadata. Embedded
+frames cannot overwrite it. Cached recovery never rebuilds a manifest from a
+later owner state; a missing snapshot for a strict scope fails closed.
+
+Recovery runs under the consumer render lock and checks owner identity after
+acquiring it. Cached ownership is a weak reference, not a retained old view.
+Sticky-child recovery captures fresh HTML and metadata together in its render
+worker; if that fails, fallback uses the old HTML and its old snapshot together.
+Errors omit exception text. Cancellation keeps the lock until an in-flight
+render worker settles, then propagates without delivering a result.
+
+This does not make actor or bespoke producers contract-aware. Their uncaptured
+strict recovery is rejected rather than fabricated from current declarations.
+Legacy-only recovery retains its existing wire shape. The real normal-WebSocket
+endpoint test checks recovery HTML, version, manifest and mount-path identity.
+This is server recovery evidence, not native strict-binding acceptance.
+
+Final recovery verification: 18 recovery-specific regressions; 76 tests in the
+expanded recovery/transport group; full Python suite 30,601 passed and 952
+skipped. Mypy passed for 1,037 files. A recovery that first advertises strict
+contracts also marks that scope active so subsequent legacy renders emit an
+explicit clear.
 
 ## Evidence and remaining gates
 

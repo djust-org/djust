@@ -482,6 +482,14 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   URL changes now use the transport render lock and reject owner replacement
   while waiting. Three final full Python runs each passed 30,576 tests with 952
   skipped; independent bounded review and normal pre-commit checks passed.
+  Recovery now caches detached public contracts from the matching normal-runtime
+  parent frame, serializes recovery under the render lock, rejects replaced
+  owners and missing strict snapshots, and pairs fresh sticky-child HTML with
+  fresh contracts. Cancellation waits for the render worker without delivering
+  its result. Legacy-only recovery keeps its wire shape. Actor/bespoke producers
+  remain incomplete; no strict native binder is activated by this change.
+  Final recovery verification: 18 dedicated regressions, 76 expanded focused
+  cases, full Python 30,601 passed (952 skipped), and mypy 1,037 files clean.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

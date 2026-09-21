@@ -728,6 +728,9 @@ class WSConsumerTransport:
         return self.client_ip
 
     async def send(self, data: Dict[str, Any]) -> None:
+        capture = getattr(self._consumer, "_capture_recovery_contracts", None)
+        if callable(capture):
+            capture(data)
         await self._consumer.send_json(data)
 
     async def send_error(self, error: str, **kwargs: Any) -> None:

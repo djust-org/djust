@@ -532,6 +532,10 @@ def test_every_client_checked_send_path_uses_next_version():
     # Rust version (the client sets clientVdomVersion = data.version directly on
     # html_recovery — 03-websocket.js:727).
     req_html_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html))
+    assert "_handle_request_html_locked" in req_html_src
+    req_html_src = without_prose(
+        inspect.getsource(ws_mod.LiveViewConsumer._handle_request_html_locked)
+    )
     assert "_recovery_version" in req_html_src, (
         "handle_request_html must send self._recovery_version (the consumer version of "
         "the frame being replaced), not a fresh Rust version (#1788)."
