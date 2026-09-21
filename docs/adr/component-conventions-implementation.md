@@ -427,6 +427,12 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   freeze the valid/invalid conversion matrix, including optional/collection and
   unsupported types, resource limits, duplicate/extra/missing values and
   framework-versus-application arguments.
+  The staged [strict core](036-strict-contract-core.md) now provides shared
+  binding/conversion/metadata with 144 core regression cases. The focused strict
+  and legacy/security set passes 377 tests. Policy registration, trusted argument
+  separation and dispatch integration remain open; no strict switch is enabled.
+  Independent review ran the 144 core cases; final full Python validation passed
+  30,504 tests with 952 skipped, and mypy passed 1,031 source files.
 - [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
