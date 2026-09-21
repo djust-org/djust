@@ -99,6 +99,38 @@ source files, and repository security, formatting and documentation hooks passed
 No browser/JavaScript, website delivery, cross-worker
 restoration or complete ADR acceptance is inferred from server tests.
 
+## Time-travel replay integration
+
+`replay_event()` now resolves the same server-owned policy and canonical
+strict binder before restoring any snapshot state. Invalid arguments, invalid
+declarations or unavailable contracts refuse replay without restoration,
+application invocation, history growth or a new branch. The ephemeral bound
+call preserves positional-only and keyword-only arguments, conversion settings
+and declaration defaults. History retains the original supplied parameters;
+it does not serialize a bound-call object or add declaration defaults.
+
+Legacy replay keeps its raw keyword values. Both policies await declared async
+handlers through Django's `async_to_sync` bridge, including nested
+`sync_to_async` operations in those handlers. The consumer calls this synchronous
+API in its existing worker. Async Python callers should likewise use
+`await sync_to_async(replay_event)(...)`; a direct call for an async handler
+from a running loop is refused before restoration. Failed restoration refuses
+invocation under either policy, but is not a rollback of partially restored
+legacy state. Cancellation waits for in-flight replay through the consumer's
+existing worker/lock boundary; it does not undo application side effects.
+
+The initial integration tests reproduced skipped numeric conversion, boolean
+acceptance for integer parameters, lost positional binding and invocation after
+failed restoration. The regression matrix exercises original/override arguments,
+recorded/dry replay, invalid/missing/extra/duplicate/forged parameters,
+`coerce_types=False`, global policy, explicit legacy override, async execution
+and cancellation, declaration failure and default-value nondisclosure.
+
+Verification: 26 replay-specific cases and 329 expanded contract/replay cases
+pass. The final full Python suite passed 30,741 tests with 952 skipped; mypy
+passed 1,044 source files. No client or Rust production code changed in this
+replay-binding slice, and no live-browser or complete ADR acceptance is claimed.
+
 ## Remaining P1–P3 work
 
 - Registration/system-check coverage, including class-local annotation resolution

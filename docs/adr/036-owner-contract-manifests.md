@@ -265,8 +265,10 @@ not establish complete replay argument-validation or explicit-exposure support.
 Final frozen-source verification: 30,715 Python tests passed (952 skipped);
 2,135 JavaScript tests passed across 192 files; mypy passed 1,043 files, and
 Ruff/JavaScript lint passed. A separate probe reproduced the outstanding replay
-argument-binding gap: numeric strings bypass conversion and booleans reach an
-integer handler. That remains P1/P2 work, not a completed validation guarantee.
+argument-binding gap: numeric strings bypassed conversion and booleans reached an
+integer handler. The subsequent
+[replay integration](036-strict-server-integration.md#time-travel-replay-integration)
+routes strict arguments through the canonical binder before restoration.
 
 ## Evidence and remaining gates
 

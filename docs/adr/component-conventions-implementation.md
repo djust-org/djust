@@ -549,6 +549,17 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   argument-binding probes still fail: strict numeric conversion is skipped and
   boolean-as-integer input reaches the handler. This is a concrete remaining
   P1/P2 dispatch gap, not acceptance of the complete replay route.
+  The subsequent replay adapter resolves server-owned policy and validates strict
+  calls before restoring state, using the canonical positional/keyword call plan.
+  It preserves raw legacy values and original history parameters, awaits async
+  handlers through Django's sync bridge, and refuses invocation after failed
+  restoration. Invalid strict calls do not restore state, grow history or fork a
+  branch. The synchronous API requires `sync_to_async` when called from async
+  Python code for an async handler; the consumer already supplies that boundary.
+  Replay-binding verification: 26 dedicated cases, 329 expanded focused cases,
+  30,741 full-suite Python tests passed (952 skipped), and mypy 1,044 files clean.
+  These close the reproduced replay-binding defect, not the remaining P1–P3
+  checks, delivery, native-binding and browser-acceptance gates.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

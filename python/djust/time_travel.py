@@ -33,6 +33,8 @@ next event snapshot for the final state.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import threading
 import time
@@ -513,6 +515,13 @@ def replay_event(
     Restoration uses :func:`restore_snapshot` (with ``which="before"``)
     so component state from #1041 captures replays correctly.
 
+    Strict parameters are validated before restoration; invalid arguments or
+    unavailable contracts return ``None`` without changing state. A failed
+    restoration also refuses handler invocation. Async handlers are awaited
+    through Django's synchronous bridge. This API is synchronous: async callers
+    should use ``await sync_to_async(replay_event)(...)``. A direct call for an
+    async handler from a running event loop is refused before restoration.
+
     :param view: The LiveView instance to replay against.
     :param snapshot: The original :class:`EventSnapshot` providing the
         ``state_before`` baseline AND the ``event_name`` / ``params``
@@ -577,6 +586,45 @@ def replay_event(
         )
         return None
 
+    # Bind strict arguments BEFORE restoration can mutate any live state.
+    # Keep the bound call ephemeral; the history records the original parameters,
+    # not inspect.BoundArguments or declaration defaults. Legacy calls continue
+    # receiving the original keyword values without implicit coercion.
+    params = override_params if override_params is not None else dict(snapshot.params)
+    call_args: tuple[Any, ...] = ()
+    call_kwargs = params
+    try:
+        from .validation import (
+            get_handler_parameter_policy,
+            validate_handler_params,
+            validated_call_arguments,
+        )
+
+        if get_handler_parameter_policy(handler) == "strict":
+            validation = validate_handler_params(handler, params, snapshot.event_name)
+            if not validation["valid"]:
+                logger.warning("time_travel: replay parameters rejected")
+                return None
+            call_args, call_kwargs = validated_call_arguments(validation)
+    except Exception:  # unavailable/invalid contracts must not restore or invoke
+        logger.warning("time_travel: replay parameter contract unavailable")
+        return None
+
+    invoke = handler
+    if inspect.iscoroutinefunction(handler):
+        # replay_event is a synchronous API. The consumer already calls it via
+        # sync_to_async; async Python callers must do the same. Refuse an invalid
+        # calling context BEFORE restoration, rather than leaving partial state.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            from asgiref.sync import async_to_sync
+
+            invoke = async_to_sync(handler)
+        else:
+            logger.warning("time_travel: call replay_event via sync_to_async for async handlers")
+            return None
+
     # Capture the handler reference and the live ``time_travel_enabled``
     # flag BEFORE ``restore_snapshot`` because the restore's
     # ghost-attr cleanup phase (Phase 1) deletes any public attrs
@@ -590,18 +638,15 @@ def replay_event(
 
     # Restore the view to state_before so the handler runs from the
     # captured baseline. Component state restores via the #1041 path.
-    restore_snapshot(view, snapshot, which="before")
-
-    # Build the params to invoke the handler with — original by
-    # default, override for branched timelines.
-    params = override_params if override_params is not None else dict(snapshot.params)
+    if not restore_snapshot(view, snapshot, which="before"):
+        return None
 
     if record_replay and live_tt_enabled:
         # Capture a fresh snapshot pair around the replay so the
         # branched timeline is scrubbable itself.
         replay_snap = record_event_start(view, snapshot.event_name, params, ref=None)
         try:
-            handler(**params) if params else handler()
+            invoke(*call_args, **call_kwargs)
         except Exception as exc:  # noqa: BLE001 — replay shouldn't break caller
             logger.exception("time_travel: replay handler %s raised", snapshot.event_name)
             record_event_end(view, replay_snap, error=str(exc))
@@ -612,7 +657,7 @@ def replay_event(
     # Dry-replay path — mutate view but don't record. Caller wants
     # to preview a branch without polluting the buffer.
     try:
-        handler(**params) if params else handler()
+        invoke(*call_args, **call_kwargs)
     except Exception:  # noqa: BLE001 — dry replay swallows for preview
         logger.exception("time_travel: dry replay handler %s raised", snapshot.event_name)
     return None
