@@ -302,6 +302,31 @@ no further issues in this bounded slice. The earlier full run failed only the
 new changelog fragment's required bullet format; that was corrected before these
 three clean runs. No browser or Rust-suite acceptance is inferred.
 
+### Callback diagnostic slice
+
+The runtime's four waiter notification paths share a protected helper, and
+time-travel/deferred-drain catches preserve entry and current owner restrictions.
+Native waiter predicates and activity queue dispatch also protect their internal
+catches without dropping pending waiters or preventing later queued work.
+The regression suite first reproduced 24 outer callback leaks, one owner-replacement
+leak and 12 native-mixin leaks. Independent review found three further nested-root
+transition leaks; diagnostic scopes now watch the runtime-owned view slot so
+nested catches see current policy and replacement. Restrictions observed after
+successful callbacks persist through the rest of the notification/drain pass.
+
+All 86 callback regressions pass; the focused runtime/mixin/exposure set passed
+331 tests, and mypy passed 1,028 source files. Independent re-review ran 26 native
+and scope tests successfully. Disabling owner-slot registration in-process made
+all three nested-root predicate regressions fail with sentinel disclosure,
+confirming the guard is exercised. Constructor, outer transport, layout,
+persistence and other callback diagnostics remain E1 work; no ADR is accepted
+or activated by this slice.
+
+Final unchanged code passed three consecutive full Python runs across all three
+roots: 30,295 passed and 952 skipped per run (four workers; 235.25s, 235.72s,
+236.48s). Repository-pinned Ruff checks and formatting passed. No browser,
+Rust-suite or website-delivery acceptance is inferred from these results.
+
 Updated 2026-09-20. This section is the current work queue; the implementation
 sections below are chronological evidence, not independent open-task lists.
 An earlier "pending" statement may be superseded by a later implementation

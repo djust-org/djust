@@ -120,6 +120,27 @@ render-time policy transitions and reproduced six more failures before the fix.
 All 68 cases pass. This evidence covers the named runtime catches, not all
 component/child callbacks, outer transport catches or constructor failures.
 
+### Callback diagnostic evidence
+
+The callback diagnostic slice extends the runtime evidence to all four waiter
+notification callers (root, deferred, component-parent and sticky child), plus
+time-travel notifications and deferred draining. The shared waiter helper keeps
+source arguments and legacy warning formats intact, without introducing an error
+frame or traceback-ring entry. Both root and target policies are checked, including
+owner replacement during failure. Native waiter predicates and activity queue
+dispatch have their own protected catches: their internally swallowed failures
+cannot be covered by an outer runtime catch alone. Owned scopes retain observed
+restrictions across each full notification/drain pass and reset afterward.
+Runtime-owned slots are watched inside the scope so a nested predicate can see
+root policy changes or replacement even though it swallows its own exception.
+Unreadable owner slots fail closed; concurrent tasks and worker propagation have
+dedicated regression coverage.
+
+The destination regressions in `test_exposure_callback_diagnostics.py` also check
+that failed predicates remain pending, later waiters resolve and later queued
+events execute. This does not close constructor, outer transport, layout,
+persistence or other callback diagnostics; E1 remains open.
+
 ### Open work
 
 1. Trace every legacy/Rust backend writer from actor, render cache, mount,
