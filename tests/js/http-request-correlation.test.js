@@ -4,6 +4,35 @@ import {readFileSync} from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
+it.each(['djust:before-navigate', 'turbo:before-visit', 'pagehide'])('aborts pending HTTP work on %s', async event => {
+    const dom = new JSDOM('<!doctype html><body><button id="save" dj-click="save" dj-loading.disable>Save</button></body>', {
+        url: 'http://localhost/', runScripts: 'dangerously',
+    });
+    try {
+        dom.window.eval(client);
+        const signals = [];
+        dom.window.fetch = (_url, options) => new Promise((_resolve, reject) => {
+            signals.push(options.signal);
+            options.signal?.addEventListener('abort', () => reject(new dom.window.DOMException('Aborted', 'AbortError')));
+        });
+        const button = dom.window.document.getElementById('save');
+        dom.window.djust.globalLoadingManager.scanAndRegister();
+        const pending = dom.window.djust.handleEvent('save', {_targetElement: button});
+        expect(signals[0]).toBeDefined();
+        dom.window.dispatchEvent(new dom.window.CustomEvent(event));
+        expect(signals[0].aborted).toBe(true);
+        await pending;
+        expect(button.disabled).toBe(false);
+        expect(dom.window.djust._getEventSeqState().pendingEventRefs).toEqual([]);
+        // A subsequent page's request is owned independently.
+        dom.window.fetch = async (_url, options) => {
+            expect(options.signal.aborted).toBe(false);
+            return {ok: true, json: async () => ({})};
+        };
+        await dom.window.djust.handleEvent('save', {_targetElement: button});
+    } finally { dom.window.close(); }
+});
+
 it.each(['headers', 'body', 'navigation'])('drops an outgoing-page HTTP response after replacement during %s', async boundary => {
     const dom = new JSDOM('<!doctype html><body><div dj-root><button id="save" dj-click="save" dj-loading.disable>Save</button></div></body>', {
         url: 'http://localhost/', runScripts: 'dangerously',

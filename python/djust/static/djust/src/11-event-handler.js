@@ -8,8 +8,13 @@ let _djustHttpFallbackWarned = false;
 // completion is owned by the awaited operation, never by a server-supplied ref.
 const _localEventTransport = {};
 let _httpPageGeneration = 0;
-for (const event of ['djust:before-navigate', 'turbo:before-visit']) {
-    window.addEventListener(event, () => { _httpPageGeneration += 1; });
+const _pendingHttpControllers = new Set();
+for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
+    window.addEventListener(event, () => {
+        _httpPageGeneration += 1;
+        for (const controller of _pendingHttpControllers) controller.abort();
+        _pendingHttpControllers.clear();
+    });
 }
 
 // Main Event Handler
@@ -234,6 +239,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     const httpRequest = teardown ? null
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // Keepalive teardown sends deliberately outlive the outgoing page.
+    const httpController = teardown ? null : new AbortController();
+    if (httpController) _pendingHttpControllers.add(httpController);
     const httpOwner = document.querySelector('[dj-root]') || document.body;
     const httpUrl = window.location.href;
     const httpGeneration = _httpPageGeneration;
@@ -248,6 +256,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             || '';
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
+            ...(httpController ? {signal: httpController.signal} : {}),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -274,8 +283,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
-        console.error('[LiveView] HTTP fallback failed:', error);
+        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
     } finally {
+        if (httpController) _pendingHttpControllers.delete(httpController);
         if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
     }
 }

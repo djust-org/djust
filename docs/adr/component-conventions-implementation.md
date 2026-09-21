@@ -119,6 +119,22 @@ The final rebuilt-client suite passed 2,021 tests in 189 files and bundle
 ESLint passed without warnings. The earlier six fragment-test failures were a
 window stub missing addEventListener, corrected without changing their asserts.
 
+## Navigation cancellation of ordinary HTTP requests — E4 slice
+
+Ordinary HTTP fallback now passes an AbortController signal to fetch and
+tracks it until the operation exits. Native djust/Turbo navigation signals
+and pagehide abort the outstanding ordinary requests. Their finally blocks
+release request/loading ownership, and intentional aborts are not reported as
+HTTP failures. Teardown keepalive sends are never registered for cancellation.
+
+Three new tests failed before the signal was added. They exercise navigation,
+Turbo navigation and page exit, asserting that the pending handler settles,
+loading/ref state clears and a subsequent request has an un-aborted signal.
+The tests use abort-aware fetch doubles, not a real browser network transfer.
+The full rebuilt-client suite passed 2,024 tests in 189 files, including the
+existing keepalive teardown regressions; bundle ESLint passed with no warnings.
+Buffered socket-update ownership remains open; no ADR is accepted by this slice.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
