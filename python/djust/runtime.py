@@ -107,6 +107,22 @@ def _mount_tenant_scope(method: Callable[..., Awaitable[None]]) -> Callable[...,
     return scoped
 
 
+def _runtime_diagnostic_scope(
+    method: Callable[..., Awaitable[None]],
+) -> Callable[..., Awaitable[None]]:
+    """Keep a mounted owner's diagnostic restriction across one runtime turn."""
+
+    @wraps(method)
+    async def scoped(runtime: Any, *args: Any, **kwargs: Any) -> None:
+        from ._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+
+        with diagnostic_scope():
+            restrict_diagnostics(runtime.view_instance)
+            await method(runtime, *args, **kwargs)
+
+    return scoped
+
+
 def _tenant_context(tenant: Any) -> ContextManager[Any]:
     """Bind *tenant* as the current tenant for a runtime dispatch (Finding #6).
 
@@ -2999,6 +3015,7 @@ class ViewRuntime:
     # Event dispatch (used by SSE in this PR; WS still uses handle_event)
     # ------------------------------------------------------------------ #
 
+    @_runtime_diagnostic_scope
     async def dispatch_event(self, data: Dict[str, Any]) -> None:
         """Dispatch a client event to the mounted view.
 
@@ -3173,12 +3190,15 @@ class ViewRuntime:
             return False
         return bool(view_id != getattr(self.view_instance, "_view_id", None))
 
+    @_runtime_diagnostic_scope
     async def _dispatch_event_render(self, data: Dict[str, Any]) -> None:
         """Parse, validate, run the handler, and render one event turn.
 
         Always invoked inside ``transport.event_context`` (see
         :meth:`_dispatch_event_inner`) so the render serialization + observability
         scope is established for the whole handler+render turn."""
+        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
         event_name = data.get("event")
         params: Dict[str, Any] = dict(data.get("params") or {})
 
@@ -3364,8 +3384,10 @@ class ViewRuntime:
         try:
             try:
                 await _call_handler(handler, coerced_params if coerced_params else None)
+                restrict_diagnostics(view)
             except Exception as exc:
-                _tt_error = str(exc)[:200]
+                restrict_diagnostics(view)
+                _tt_error = str(exc)[:200] if diagnostics_allowed() else "[redacted]"
                 response = handle_exception(
                     exc,
                     error_type="event",
@@ -3600,6 +3622,7 @@ class ViewRuntime:
         except Exception:  # noqa: BLE001 — never fail the event for a drain bug
             logger.exception("dj_activity: runtime deferred-event flush raised")
 
+    @_runtime_diagnostic_scope
     async def _dispatch_single_event(
         self,
         target_view: Any,
@@ -3626,6 +3649,10 @@ class ViewRuntime:
           the rest of the drain (the flush also catches, defense-in-depth).
         """
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
+
+        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
+        restrict_diagnostics(target_view)
 
         # --- security / validation (shared with the live path) -------------
         handler = await _validate_event_security(
@@ -3656,12 +3683,17 @@ class ViewRuntime:
         pre_assigns = _snapshot_assigns(self.view_instance)
         try:
             await _call_handler(handler, coerced_params if coerced_params else None)
+            restrict_diagnostics(target_view)
         except Exception:  # noqa: BLE001 — never break the flush
-            logger.exception(
-                "Runtime deferred-activity event %r on %s raised during dispatch",
-                sanitize_for_log(event_name or ""),
-                type(target_view).__name__,
-            )
+            restrict_diagnostics(target_view)
+            if diagnostics_allowed():
+                logger.exception(
+                    "Runtime deferred-activity event %r on %s raised during dispatch",
+                    sanitize_for_log(event_name or ""),
+                    type(target_view).__name__,
+                )
+            else:
+                logger.error("Protected deferred event failed")
             return
 
         # Waiter notification (ADR-002) — same posture as the live path.
@@ -4907,6 +4939,7 @@ class ViewRuntime:
             return False
         return True
 
+    @_runtime_diagnostic_scope
     async def _render_and_send(
         self,
         *,
@@ -4976,6 +5009,9 @@ class ViewRuntime:
 
                 html, patches, version = await sync_to_async(render_view_with_diff)(view)
             except Exception as exc:
+                from ._exposure_diagnostics import restrict_diagnostics
+
+                restrict_diagnostics(view)
                 response = handle_exception(
                     exc,
                     error_type="render",
@@ -4985,6 +5021,9 @@ class ViewRuntime:
                 )
                 await self.transport.send(response)
                 return
+        from ._exposure_diagnostics import restrict_diagnostics
+
+        restrict_diagnostics(view)
         _render_ms = (time.perf_counter() - _render_start) * 1000
 
         if not await self._persist_explicit_children_after_event(view):
