@@ -133,7 +133,9 @@ def test_skip_html_logic_present_in_source() -> None:
     # Explicit restore combines fresh server state with client state and must
     # send HTML. The legacy-only optimization still follows the truth table.
     assert "skip_html_for_resume = (" in source
-    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in source
+    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in " ".join(
+        source.split()
+    )
     assert "if html is not None and not skip_html_for_resume:" in source
     # has_ids must be emitted on the cold-prerender path so the
     # client's #1610 morph branch can gate on it.

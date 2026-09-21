@@ -1,6 +1,6 @@
 # ADR-034 C1 typing proof and integration inventory
 
-Status: concrete binding staged; real-view typing gate open. C1 and ADR-034
+Status: concrete binding staged; real-view typing proof passes. C1 and ADR-034
 remain incomplete. Release unassigned.
 This supplements [ADR-034](034-component-scoped-events-and-bindings.md), not a
 new public API or acceptance decision.
@@ -11,10 +11,13 @@ The roadmap's active component-conventions block delegates to the implementation
 ledger. D1/D2 require a typing proof before production binding is chosen. The
 [executable proof](../../tests/typing_component_bindings/README.md) now targets
 the real private dropdown and LiveView, replacing the isolated prototype.
-That transition exposed an inherited `Any` from Django's unstubbed View in
-mypy: nineteen of twenty negative cases are rejected, but a misspelled component
-attribute is not. Pyright rejects all twenty. Development-only Django stubs have
-been proposed for approval; the missing case remains a failing gate, not waived.
+That transition initially exposed inherited `Any` from Django's unstubbed View
+in mypy. The supported proof configuration now follows Django source declarations,
+and the LiveView stub includes the actual runtime constructor signature. Both
+checkers reject all twenty negative locations with clean positive fixtures and
+passing runtime assertions. No new dependency, plugin, substitute owner or
+negative-test waiver was needed; the earlier Django-stubs proposal is unnecessary
+for this gate. A regression checks the constructor stub against the source AST.
 
 The milestone-audit categories concerning ORM migrations, auditlog and Celery
 are not applicable to this experiment: no models, persisted schema or jobs are
@@ -65,8 +68,8 @@ both strict configurations, clean positive/prototype files, and executable
 identity/isolation/async assertions. General pytest tests protect the runner's
 missing/unexpected diagnostic detection and execute the runtime proof.
 
-Next C1 deliverable: close the real-view typing dependency gap, then complete
-lifecycle and transport acceptance (including signed snapshots/debug transport,
+Next C1 deliverable: complete
+lifecycle and transport acceptance (including browser signed-navigation/debug transport,
 dynamic registration/checks and real-browser verification). Neither a standalone
 type proof nor session reconnect alone is sufficient to close C1.
 
@@ -122,15 +125,15 @@ part of the full parent render. These tests exercise Rust-backed HTTP/WS renderi
 a separate Django Engine test verifies bound markup/state rendering and escaping.
 
 Still open: public export, browser accessibility, native client observations,
-keyed collections, signed snapshots/debug transport, actor integration and
+keyed collections, browser signed-navigation/debug transport, actor integration and
 website/AI-reference publication. Actor binding is explicitly refused rather
 than pretending the actor's separate dispatch path supports the new registry.
 
 Verification of this staged binding: the full Python suite passed 30,838 tests
 with 952 skipped; the focused binding/catalogue/compiler/dispatch matrix passed
-232 tests; package mypy passed 1,048 source files. The separate real-view typing
-gate remains failing at one expected negative mypy location (a component-name
-typo inherited through untyped Django); Pyright rejects all twenty locations.
+232 tests; package mypy passed 1,048 source files. At that revision, the separate
+real-view typing gate missed one expected mypy location; the source-following
+configuration and truthful constructor stub described above subsequently closed it.
 These are not browser or complete lifecycle acceptance results.
 
 ## Same-lifetime debug restoration
@@ -154,3 +157,42 @@ The full Python run passed 30,850 tests with 952 skipped and one failure in the
 new changelog fragment's formatting. The fragment was corrected and its complete
 test module rerun; no Python source changed after that full run. Package mypy
 passed all 1,048 source files.
+
+## Fixed-binding signed navigation restoration
+
+Strict capture for the existing signed navigation path now adds a versioned
+`__interactive_bindings__` manifest. Records contain the current declaration
+name, opaque binding ID, and `open`/`selected` state, not callbacks or constructor
+configuration. Capture uses the same exact record validation as restore, rejecting
+extra exported fields, invalid primitive types and aliased cache entries before
+anything is signed. Ordinary debug capture retains its separate same-lifetime schema.
+
+The existing transport must first verify the signature, age, view and session
+binding. The fixed-binding adapter then validates the whole manifest, resolves
+declarations statically, recompiles their subscriptions, and rejects unknown
+declarations, malformed values, duplicate IDs and registry collisions before
+changing component or view state. It rebinds current server code, normalizes
+selection against current items, and emits no output while restoring. A later
+constructor/registration failure rolls back this adapter's registry and binding
+changes before the native fresh-mount fallback. This is not a general transaction
+for arbitrary application-constructor side effects or legacy public view fields.
+
+Interactive resumes send current rendered HTML even when the client reports a
+prerendered page, so current configuration is not hidden behind stale controls.
+Removing that condition makes the native resume test fail on the missing HTML.
+The twenty-three new tests include a real WebSocket mount-produced signed blob, fresh
+consumer restore with the same IDs, subsequent correctly scoped selection,
+unsigned/cross-session/schema-invalid rejection, and registration rollback.
+The initial focused binding, signing and exposure matrix passed 153 tests; package mypy
+passes 1,050 source files. This does not prove browser focus/patch behavior,
+collections, actor support, or explicit-exposure activation. The existing
+construction guard remains closed. The separate real-view typing proof now passes
+both supported checkers as described above; that is not full C1 acceptance.
+
+Final verification for signed bindings and the real-view typing correction:
+30,875 Python tests passed with 952 skipped, the expanded focused matrix passed
+221 tests, and package mypy passed 1,050 source files. The standalone mypy/Pyright
+proof and its runtime assertions also passed. The preceding full run's only two
+failures were whitespace-sensitive source pins for the wrapped resume condition;
+those retain the same legacy gate assertion with whitespace normalization, while
+the native regression and removal canary verify the interactive behavior.

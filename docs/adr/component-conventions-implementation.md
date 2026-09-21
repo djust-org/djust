@@ -600,14 +600,18 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   The private concrete dropdown now binds real per-owner instances, emits typed
   outputs with trusted source injection, and passes real HTTP/WS/session reconnect
   tests. Snapshot change detection sees public binding state; unchanged closes
-  produce no-op responses. The type fixtures now use these real classes: Pyright
-  rejects all twenty negative locations, but mypy misses the component-attribute
-  typo because Django's unstubbed base contributes Any. Django-stubs approval is
-  pending; do not waive that failing gate. Both debug scrubbers now restore the
+  produce no-op responses. The type fixtures now use these real classes: both
+  mypy and Pyright reject all twenty negative locations. Mypy follows Django's
+  installed source declarations, and the LiveView stub matches its runtime
+  constructor, removing the inherited-Any gap without a new dependency or test
+  waiver. Both debug scrubbers now restore the
   concrete state schema within the existing lifetime, without callbacks or ID
   changes; malformed component state is rejected before component mutation.
-  Signed snapshots/debug transport/actor lifecycle,
-  public export and browser acceptance remain open.
+  Fixed bindings now also have a validated manifest in signed navigation
+  snapshots, with real WS restore/dispatch and rejection coverage. Interactive
+  resumes send current HTML rather than retaining historical controls. Browser
+  signed-navigation/debug transport, actor lifecycle, public export and full
+  browser acceptance remain open; see the proof document for evidence boundaries.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.

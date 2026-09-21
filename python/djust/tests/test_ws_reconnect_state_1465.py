@@ -189,7 +189,9 @@ def test_skip_html_logic_present_in_source():
     import djust.runtime as rt_mod
 
     source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
-    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in source
+    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in " ".join(
+        source.split()
+    )
     assert "if html is not None and not skip_html_for_resume:" in source
 
 

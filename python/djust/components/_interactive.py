@@ -55,6 +55,21 @@ _SELECTED = OutputContract("selected", (("value", str),))
 _TOGGLED = OutputContract("toggled", (("open", bool),))
 
 
+def _binding_values(state: object) -> tuple[str, bool, str]:
+    """Validate a persisted record without materializing or mutating a binding."""
+    if type(state) is not dict or set(state) != {"binding_id", "open", "selected"}:
+        raise ValueError("Invalid interactive component snapshot")
+    identity, opened, selected = state["binding_id"], state["open"], state["selected"]
+    if (
+        type(identity) is not str
+        or re.fullmatch(r"cmp_[0-9a-f]{32}", identity) is None
+        or type(opened) is not bool
+        or type(selected) is not str
+    ):
+        raise ValueError("Invalid interactive component snapshot")
+    return identity, opened, selected
+
+
 class Outputs:
     def __init__(self, source: ComponentDeclaration) -> None:
         self._source = source
@@ -254,16 +269,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     def _restore_binding(self, state: dict[str, object]) -> None:
         owner = self._bound_owner()
-        identity = state.get("binding_id")
-        opened, selected = state.get("open"), state.get("selected")
-        if (
-            set(state) != {"binding_id", "open", "selected"}
-            or type(identity) is not str
-            or re.fullmatch(r"cmp_[0-9a-f]{32}", identity) is None
-            or type(opened) is not bool
-            or type(selected) is not str
-        ):
-            raise ValueError("Invalid interactive component snapshot")
+        identity, opened, selected = _binding_values(state)
         collision = owner._components.get(identity)
         if collision is not None and collision is not self:
             raise ValueError("Interactive component identity collision")

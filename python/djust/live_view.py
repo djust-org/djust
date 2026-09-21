@@ -1102,6 +1102,16 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # contributes its own public-state dict under
         # ``__components__`` keyed by ``component_id``.
         components_state = self._capture_components_snapshot()
+        if strict:
+            from ._interactive_snapshots import SNAPSHOT_KEY, capture_bindings
+            from .components._interactive import DropdownMenu
+
+            bindings = capture_bindings(self)
+            if bindings is not None:
+                result[SNAPSHOT_KEY] = bindings
+                for component_id, component in self._components.items():
+                    if isinstance(component, DropdownMenu):
+                        components_state.pop(component_id, None)
         if components_state:
             result["__components__"] = components_state
         return result
@@ -1195,7 +1205,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         from .security import safe_setattr
 
         require_legacy_state_api(self)
+        from ._interactive_snapshots import SNAPSHOT_KEY, restore_bindings
+
+        if SNAPSHOT_KEY in state:
+            restore_bindings(self, state[SNAPSHOT_KEY])
         for key, value in state.items():
+            if key == SNAPSHOT_KEY:
+                continue
             safe_setattr(self, key, value, allow_private=False)
 
     def _should_restore_snapshot(self, request: Any) -> bool:

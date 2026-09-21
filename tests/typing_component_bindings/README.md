@@ -7,11 +7,13 @@ Checked with Python 3.12, mypy 1.16.1 and Pyright 1.1.408. The original isolated
 prototype passed both; `prototype.py` now re-exports the **actual** private
 framework dropdown and LiveView, with no alternate implementation or casts.
 
-**Current open gate:** without Django type stubs, mypy treats the inherited
-Django View base as `Any` and misses `page.projet_menu`. It catches the other
-nineteen negative locations; Pyright catches all twenty. Do not remove the
-missing diagnostic or substitute the old stand-alone owner to make this pass.
-Adding a development-only Django-stubs dependency has been proposed for approval.
+Both checkers now reject all twenty negative locations on the real framework
+classes. The mypy configuration follows Django's installed source declarations
+(`follow_untyped_imports` for `django.*`) instead of treating its View base as
+`Any`. The LiveView stub declares the actual runtime constructor signature; an
+AST regression checks that they agree. No Django-stubs dependency or checker
+plugin was added, and no negative location or strict fixture check was removed.
+This proves the listed component contracts, not complete typing of Django APIs.
 
 The isolated configurations are essential: the framework's broad mypy config
 suppresses errors in tests. This runner requires a diagnostic at **every**
@@ -43,7 +45,7 @@ The small runtime assertions here call callbacks directly. Separate framework
 tests in `python/djust/tests/test_interactive_bindings.py` exercise real HTTP,
 WebSocket, reconnect, native registry lookup, output injection and callback errors.
 The new component remains private: browser keyboard/focus acceptance, observations,
-collections, signed snapshots/debug transport and publication are not complete.
+collections, browser signed-navigation/debug transport and publication are not complete.
 `runtime_check.py` supplies minimal Django settings for the standalone identity
 assertions. Fixed pilot configuration is constructor-owned; `open` is mutable
 state, while labels/items are not a dynamic configuration API yet.

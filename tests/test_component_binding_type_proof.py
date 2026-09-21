@@ -1,5 +1,6 @@
 """Protect the ADR-034 proof runner against false-positive acceptance."""
 
+import ast
 from pathlib import Path
 import runpy
 import sys
@@ -14,6 +15,24 @@ RUNNER = runpy.run_path(str(ROOT / "scripts/check-component-binding-types.py"))
 def test_runtime_type_proof():
     result = RUNNER["run"]([sys.executable, "runtime_check.py"])
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_liveview_constructor_stub_matches_the_real_signature():
+    signatures = []
+    for suffix in ("py", "pyi"):
+        module = ast.parse((ROOT / "python/djust" / f"live_view.{suffix}").read_text())
+        view = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "LiveView"
+        )
+        constructor = next(
+            node
+            for node in view.body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        signatures.append((ast.dump(constructor.args), ast.dump(constructor.returns)))
+    assert signatures[0] == signatures[1]
 
 
 def test_exact_expected_locations_pass():

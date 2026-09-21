@@ -2988,8 +2988,14 @@ class ViewRuntime:
         # Explicit restoration can combine fresh server state and a client
         # snapshot. Cached HTML is not proof that it matches that combination.
         skip_html_for_resume = (
-            legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)
+            legacy_exposure
+            and bool(mounted_from_restore)
+            and bool(has_prerendered)
+            and not bool(getattr(view_instance, "_component_bindings", {}))
         )
+        # Interactive bindings must reconcile the browser with current server
+        # declarations/configuration, including newly added or removed items.
+        # A signed historical snapshot is not authority to keep stale controls.
         if html is not None and not skip_html_for_resume:
             mount_msg["html"] = html
             mount_msg["has_ids"] = "dj-id=" in html
