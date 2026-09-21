@@ -590,6 +590,10 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   renames, misspellings, wrong sources and async callbacks. Route only through
   registered identities; reject direct client invocation of subscriptions and
   unknown targets without a view-handler fallback.
+  The [isolated typing proof](034-typing-proof.md) now passes strict mypy and
+  Pyright with twenty negative diagnostic locations plus concrete runtime
+  identity/isolation/async assertions. Production binding, subscription validation
+  and dispatch are still open; the proof is not an exported API.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.

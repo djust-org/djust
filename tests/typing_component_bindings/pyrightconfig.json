@@ -1,0 +1,5 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "strict",
+  "include": ["prototype.py", "positive.py", "negative.py"]
+}
