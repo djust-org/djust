@@ -141,7 +141,26 @@ that failed predicates remain pending, later waiters resolve and later queued
 events execute. This does not close constructor, outer transport, layout,
 persistence or other callback diagnostics; E1 remains open.
 
-### Open work
+### Shared inbound-message diagnostic boundary
+
+`ViewRuntime.dispatch_message` now owns an outer diagnostic scope and handles
+protected failures before they escape to transport/framework handlers. Actual
+WebSocket receive and SSE HTTP `/message/` and `/event/` tests cover logs,
+traceback-ring records, DEBUG error frames and Django technical error pages.
+Protected event errors carry the request reference and leave a healthy connection
+usable; failure to deliver the generic error attempts a close, with static logs
+even if closing fails. Legacy exceptions still follow their original handlers.
+
+An observed restriction survives exceptional unwinding through nested scopes,
+including legacy → explicit in a handler followed by explicit → legacy in a
+later failing hook. The outermost scope resets on all exits; cancellation is
+not swallowed. Successful nested scopes retain their existing local cleanup.
+
+This evidence concerns runtime-owned inbound messages. Direct initial HTTP/SSE
+mounts, constructors, navigation replacement, WebSocket-only handlers and
+exceptions already swallowed/logged by inner hooks remain distinct open routes.
+
+### Remaining routes
 
 1. Trace every legacy/Rust backend writer from actor, render cache, mount,
    navigation, teardown and reconnect; inspect the actual stored payload.

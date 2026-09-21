@@ -327,6 +327,33 @@ roots: 30,295 passed and 952 skipped per run (four workers; 235.25s, 235.72s,
 236.48s). Repository-pinned Ruff checks and formatting passed. No browser,
 Rust-suite or website-delivery acceptance is inferred from these results.
 
+### Shared inbound diagnostic boundary
+
+Real WebSocket and SSE HTTP probes reproduced twelve protected disclosure cases
+at outer error handlers while four legacy cases retained expected diagnostics.
+`dispatch_message` now contains protected failures within its diagnostic scope,
+sending generic correlated event errors rather than exposing details through
+outer transport or Django error handling. Delivery and close failures remain
+value-free, and cancellation still propagates.
+
+Independent review found a nested-unwind gap: a handler observed as explicit
+could later become legacy in a failing hook, and scope cleanup restored the outer
+permission before the catch. Four real-transport regressions reproduced this;
+protected exceptional unwinding now carries its restriction to the enclosing
+scope without retaining it after the outermost exit. The transport regression
+file has 65 cases, including both SSE endpoints, malformed direct calls,
+correlation, delivery failure, cancellation and scope reset. The focused exposure
+set passed 279 tests. Independent re-review passed 19 focused boundary/scope
+cases with no further bounded findings. Direct mount/constructor, replacement,
+WebSocket-only and already-swallowed hook errors remain E1 work; this is not
+activation or completion of the four dependent ADRs.
+
+The final unchanged inbound-boundary code passed three consecutive full Python
+runs across all three roots: 30,360 passed and 952 skipped per run (four workers;
+233.88s, 232.50s, 231.85s). Mypy passed 1,029 source files; repository-pinned lint
+and formatting passed. These are Python/ASGI results, not browser, Rust-suite or
+website-delivery acceptance.
+
 Updated 2026-09-20. This section is the current work queue; the implementation
 sections below are chronological evidence, not independent open-task lists.
 An earlier "pending" statement may be superseded by a later implementation
