@@ -3,6 +3,31 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Root and deferred background acknowledgements — E4 slice
+
+Root event dispatch and deferred redispatch now capture named and legacy
+background work before acknowledging the event. Noop and rendered responses
+advertise an opaque batch token; completion is sent only after every captured
+task settles. Dispatch verifies the captured root is still the runtime owner.
+This reuses the child batch contract without treating intermediate task renders
+as completion of the originating request.
+
+The real SSE endpoint regression failed before the fix because named tasks had
+no async acknowledgement metadata. Coverage now includes rendered and noop
+responses plus direct deferred redispatch through the real session runtime.
+The focused suite passed 30 tests. The full Python suite passed 30,044 tests
+with 952 skipped before the final two deferred test cases were added; mypy
+passed all 1,021 source files. Native browser clicks against a temporary local
+server passed over both WebSocket and SSE: loading stayed active through two
+task updates and cleared on batch completion. That browser fixture exercises
+legacy root dispatch, not explicit-root authorization or cross-worker restore.
+
+E4 remains open: separate component-dispatch and mount callers still use the
+legacy queue drain. Root async authorization/persistence remains in E1/E3.
+Queues created after batch capture, failure ordering and the remaining lifecycle
+matrix require further coverage. No ADR is accepted by this slice and the
+explicit-exposure construction guard remains in place.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

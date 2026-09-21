@@ -63,6 +63,7 @@ from typing import (
 from asgiref.sync import sync_to_async
 
 if TYPE_CHECKING:
+    from ._async_batch import AsyncBatch
     from ._exposure_children import ChildStateSession
 
 from .rate_limit import ConnectionRateLimiter
@@ -3453,7 +3454,10 @@ class ViewRuntime:
                 if pre_identity == post_identity and not has_explicit_children:
                     skip_render = True
 
-        has_async = getattr(view, "_async_pending", None) is not None
+        from ._async_batch import AsyncBatch
+
+        async_batch = AsyncBatch(view)
+        has_async = bool(async_batch.token)
 
         if skip_render:
             if not await self._persist_explicit_children_after_event(view):
@@ -3488,6 +3492,7 @@ class ViewRuntime:
                 noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
+            noop_msg.update(async_batch.fields())
             noop_msg.update(snapshot_fields)
             await self.transport.send(noop_msg)
             if snapshot_fields:
@@ -3497,13 +3502,10 @@ class ViewRuntime:
                 await self._flush_all_pending()
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
-            # on has_async). ``has_async`` reflects only the legacy ``_async_pending``
-            # single-task format (never set in current code) and drives the loading
-            # UX flag — the actual dispatch must also cover the ``_async_tasks``
-            # named-task format that ``start_async`` populates, so converging onto
-            # the correct WS behavior here FIXES the legacy SSE drop of
-            # ``start_async`` work (#1887 / #1646). No-op when no tasks are queued.
-            self._dispatch_async_work(event_name)
+            # on has_async). The captured batch includes named and legacy work,
+            # and its token was advertised in the acknowledgement. An empty
+            # batch is a no-op; it must not capture later unrelated queued work.
+            self._dispatch_async_work(event_name, async_batch)
             # dj_activity flush (Phase 2.3a, #1903): a skip-render handler can
             # still flip an activity visible via set_activity_visible(); drain its
             # queue so deferred events for that panel arrive in the same
@@ -3518,6 +3520,7 @@ class ViewRuntime:
             event_name=event_name,
             cache_request_id=cache_request_id,
             has_async=has_async,
+            async_batch=async_batch,
             force_html=force_html,
             event_ref=event_ref,
             scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
@@ -3527,7 +3530,7 @@ class ViewRuntime:
         # Dispatch background work UNCONDITIONALLY after the render (WS parity,
         # websocket.py:4235): start_async / @background callbacks run off-thread
         # and stream their re-rendered result via the transport when ready.
-        self._dispatch_async_work(event_name)
+        self._dispatch_async_work(event_name, async_batch)
 
         # dj_activity flush (Phase 2.3a, #1903): if this handler flipped any
         # activity visible, drain its deferred-event queue now so in-flight events
@@ -3675,7 +3678,10 @@ class ViewRuntime:
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
-        has_async = getattr(view, "_async_pending", None) is not None
+        from ._async_batch import AsyncBatch
+
+        async_batch = AsyncBatch(view)
+        has_async = bool(async_batch.token)
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -3690,18 +3696,20 @@ class ViewRuntime:
                 noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
+            noop_msg.update(async_batch.fields())
             await self.transport.send(noop_msg)
-            self._dispatch_async_work(event_name)
+            self._dispatch_async_work(event_name, async_batch)
             return
 
         await self._render_and_send(
             event_name=event_name,
             has_async=has_async,
+            async_batch=async_batch,
             force_html=force_html,
             event_ref=event_ref,
             scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
         )
-        self._dispatch_async_work(event_name)
+        self._dispatch_async_work(event_name, async_batch)
 
     # ------------------------------------------------------------------ #
     # Time-travel push hook (ADR-022 Iter 2 Phase 2.2)
@@ -4877,6 +4885,7 @@ class ViewRuntime:
         event_ref: Optional[int] = None,
         scoped_component: Optional[Any] = None,
         snapshot_fields: Optional[Dict[str, Any]] = None,
+        async_batch: Optional["AsyncBatch"] = None,
     ) -> None:
         """Re-render after an event handler and emit the appropriate frame.
 
@@ -4957,6 +4966,8 @@ class ViewRuntime:
             have a no-op or no hook), so it can never leak onto the wire."""
             if snapshot_fields is not None:
                 frame.update(snapshot_fields)
+            if async_batch is not None:
+                frame.update(async_batch.fields())
             return self._stamp_event_frame(
                 view,
                 frame,
@@ -5475,7 +5486,9 @@ class ViewRuntime:
     # the event turn (both flush start_async + @background callbacks off-thread).
     # ------------------------------------------------------------------ #
 
-    def _dispatch_async_work(self, event_name: Optional[str]) -> None:
+    def _dispatch_async_work(
+        self, event_name: Optional[str], batch: Optional["AsyncBatch"] = None
+    ) -> None:
         """Schedule any ``start_async`` callbacks queued during the handler.
 
         Supports both the named-task dict (``_async_tasks``) and the legacy
@@ -5483,8 +5496,23 @@ class ViewRuntime:
         ``LiveViewConsumer._dispatch_async_work``. Fire-and-forget: each task
         runs in its own ``ensure_future`` so the event POST returns promptly
         and results stream in via the transport when ready.
+
+        Event callers pass the batch already advertised by their acknowledgement.
+        Unmigrated lifecycle callers retain their existing queue-drain behavior.
         """
         view = self.view_instance
+        if batch is not None:
+            if view is not batch.owner:
+                batch.discard(self.transport)
+                return
+
+            async def run_captured(name: str, callback: Any, args: Any, kwargs: Any) -> None:
+                if self.view_instance is not batch.owner:
+                    return
+                await self._execute_async_task(name, callback, args, kwargs, event_name)
+
+            batch.dispatch(self.transport, run_captured)
+            return
         if not view:
             return
 
