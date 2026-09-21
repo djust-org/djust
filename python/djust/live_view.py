@@ -188,6 +188,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_jit_serialized_keys",
         "_context_processor_keys",
         "_cached_csrf_token",
+        "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",
         "_force_full_html",
     }

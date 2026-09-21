@@ -14,7 +14,7 @@ the real private dropdown and LiveView, replacing the isolated prototype.
 That transition initially exposed inherited `Any` from Django's unstubbed View
 in mypy. The supported proof configuration now follows Django source declarations,
 and the LiveView stub includes the actual runtime constructor signature. Both
-checkers reject all twenty negative locations with clean positive fixtures and
+checkers reject all twenty-one negative locations with clean positive fixtures and
 passing runtime assertions. No new dependency, plugin, substitute owner or
 negative-test waiver was needed; the earlier Django-stubs proposal is unnecessary
 for this gate. A regression checks the constructor stub against the source AST.
@@ -63,7 +63,7 @@ become compatibility commitments, so they need shared runtime/check/docs coverag
 
 ## Verification and next deliverable
 
-`make test-component-binding-types` checks twenty negative source locations in
+`make test-component-binding-types` checks twenty-one negative source locations in
 both strict configurations, clean positive/prototype files, and executable
 identity/isolation/async assertions. General pytest tests protect the runner's
 missing/unexpected diagnostic detection and execute the runtime proof.
@@ -196,3 +196,39 @@ proof and its runtime assertions also passed. The preceding full run's only two
 failures were whitespace-sensitive source pins for the wrapped resume condition;
 those retain the same legacy gate assertion with whitespace normalization, while
 the native regression and removal canary verify the interactive behavior.
+
+## Client-visibility server contract (staged, not activated in the browser)
+
+The private dropdown accepts typed `visibility="server" | "client"` configuration.
+Server remains the default. Client mode renders native popover controls, rejects
+Python reads/writes of `open`, and keeps observed visibility out of authoritative
+component state and signed snapshots. Only a declared `.on.toggled` subscription
+emits observation metadata. The server route validates its registered source,
+mode, subscription, boolean payload, lifetime token and safe-integer sequence;
+duplicate, reordered and obsolete-lifetime reports do not invoke the observer.
+Callbacks still receive the actual bound source and may change reactive state.
+
+Successful sequential HTTP requests persist an explicit server-session cursor.
+Fresh socket mounts restored from sessions, and signed restores, rotate the
+observation lifetime. The
+cursor is excluded from reactive fingerprints and signed/debug state. Both the
+HTTP fallback and socket path return a no-op without template rendering when
+the observer changes nothing; actual reactive changes still render. Render-cycle
+ID allocation is now excluded from change detection. Fresh interactive mount
+HTML establishes the baseline rather than forcing the first observation to render.
+
+This is the **server half**, not completed D8/C2. No browser listener has been
+installed yet: native observation wiring, selection dismissal, focus/positioning,
+patch preservation, disconnected coalescing and reconnect reporting remain open.
+Do not publish or recommend the private client mode as a finished component.
+The HTTP exception/retry cursor case is an explicit strict expected failure;
+isolated failure-cursor persistence and concurrent HTTP delivery still need an
+acceptance solution. Do not force-save the entire application session on a 500
+just to pass that case. These limits must be resolved before C2 acceptance.
+
+Verification of this server stage: the full Python suite completed with 30,895
+passed, 952 skipped and that one strict expected failure. The focused binding,
+observation, snapshot and type-proof suite passed 107 cases with the same expected
+failure. Full-package mypy passed 1,051 source files; both type checkers rejected
+all 21 negative examples and accepted the positive examples. These results are
+server and static-check evidence, not browser validation.

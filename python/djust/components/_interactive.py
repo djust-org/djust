@@ -1,8 +1,8 @@
-"""Staged ADR-034 server-owned dropdown; not yet a public component import.
+"""Staged ADR-034 dropdown; not yet a public component import.
 
 Real concrete per-owner instances use the existing LiveComponent registry and
-transport actions. Client-owned observations, collections and public rollout
-remain separate acceptance gates.
+transport actions. The client-owned mode has a server observation contract;
+native client wiring, collections and public rollout remain acceptance gates.
 """
 
 from __future__ import annotations
@@ -87,7 +87,15 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
     _djust_fingerprint_state = True
     component_id: str
 
-    def __init__(self, *, label: str, items: list[ActionItem | SeparatorItem]) -> None:
+    def __init__(
+        self,
+        *,
+        label: str,
+        items: list[ActionItem | SeparatorItem],
+        visibility: Literal["server", "client"] = "server",
+    ) -> None:
+        if visibility not in ("server", "client"):
+            raise ValueError("Dropdown visibility must be server or client")
         if type(label) is not str:
             raise TypeError("Dropdown label must be a string")
         values: set[str] = set()
@@ -114,6 +122,9 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._items = deepcopy(items)
         self._open = False
         self._selected = ""
+        self._visibility = visibility
+        self._observation_lifetime = "obs_" + uuid4().hex
+        self._observation_sequence = 0
         self._declaration: DropdownMenu | None = None
         self.on = Outputs(self)
 
@@ -129,7 +140,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
             if not isinstance(existing, type(self)) or existing._declaration is not self:
                 raise RuntimeError("Interactive binding no longer matches its declaration")
             return existing
-        bound = type(self)(label=self.label, items=self.items)
+        bound = type(self)(label=self.label, items=self.items, visibility=self.visibility)
         bound._declaration = self
         bound.set_parent(obj)
         obj._component_bindings[self._name] = bound
@@ -156,12 +167,20 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         return deepcopy(self._items)
 
     @property
+    def visibility(self) -> Literal["server", "client"]:
+        return self._visibility
+
+    @property
     def open(self) -> bool:
+        if self.visibility == "client":
+            raise ValueError("Visibility is client-owned; use the toggled observation payload")
         return self._open
 
     @open.setter
     def open(self, value: bool) -> None:
         self._bound_owner()
+        if self.visibility == "client":
+            raise ValueError("Visibility is client-owned; Python cannot assign open")
         if type(value) is not bool:
             raise TypeError("Dropdown open must be a boolean")
         self._open = value
@@ -172,7 +191,43 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @property
     def state(self) -> dict[str, object]:
-        return {"open": self.open, "selected": self.selected}
+        return {
+            "open": self._open if self.visibility == "server" else False,
+            "selected": self.selected,
+        }
+
+    def _observes_toggle(self) -> bool:
+        from djust._component_subscriptions import compile_subscriptions
+
+        owner = self._bound_owner()
+        return any(
+            binding.component == self.key and binding.output == "toggled"
+            for binding in compile_subscriptions(type(owner))
+        )
+
+    def _renew_observation_lifetime(self) -> None:
+        self._bound_owner()
+        self._observation_lifetime = "obs_" + uuid4().hex
+        self._observation_sequence = 0
+
+    @event_handler(parameter_policy="strict", coerce_types=False)
+    async def observe_toggle(self, open: bool, sequence: int, lifetime: str) -> None:
+        self._bound_owner()
+        if self.visibility != "client":
+            raise ValueError("Visibility observations require client-owned mode")
+        if not self._observes_toggle():
+            raise ValueError("Visibility observation has no declared subscription")
+        if (
+            type(open) is not bool
+            or type(sequence) is not int
+            or not 1 <= sequence <= 2**53 - 1
+            or type(lifetime) is not str
+        ):
+            raise ValueError("Invalid visibility observation")
+        if lifetime != self._observation_lifetime or sequence <= self._observation_sequence:
+            return
+        self._observation_sequence = sequence
+        await self._emit(_TOGGLED, {"open": open})
 
     def _bound_owner(self) -> LiveView:
         owner = self._parent
@@ -253,6 +308,34 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._bound_owner()
         return {"binding_id": self.component_id, **self.state}
 
+    def _dump_session_binding(self) -> dict[str, object]:
+        state = self._dump_binding()
+        if self.visibility == "client":
+            state["observation"] = {
+                "lifetime": self._observation_lifetime,
+                "sequence": self._observation_sequence,
+            }
+        return state
+
+    def _restore_session_binding(self, state: dict[str, object]) -> None:
+        if type(state) is not dict:
+            raise ValueError("Invalid interactive component snapshot")
+        record = dict(state)
+        observation = record.pop("observation", None)
+        if "observation" in state and (
+            type(observation) is not dict
+            or set(observation) != {"lifetime", "sequence"}
+            or type(observation["lifetime"]) is not str
+            or re.fullmatch(r"obs_[0-9a-f]{32}", observation["lifetime"]) is None
+            or type(observation["sequence"]) is not int
+            or not 0 <= observation["sequence"] <= 2**53 - 1
+        ):
+            raise ValueError("Invalid visibility observation snapshot")
+        self._restore_binding(record)
+        if type(observation) is dict and self.visibility == "client":
+            self._observation_lifetime = observation["lifetime"]
+            self._observation_sequence = observation["sequence"]
+
     def _restore_state(self, state: object) -> None:
         """Restore state within this lifetime, without callbacks or identity changes."""
         self._bound_owner()
@@ -264,7 +347,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         ):
             raise ValueError("Invalid interactive component state")
         opened, selected = state["open"], state["selected"]
-        self._open = opened
+        self._open = opened if self.visibility == "server" else False
         self._selected = selected if self._allowed(selected) else ""
 
     def _restore_binding(self, state: dict[str, object]) -> None:
@@ -276,18 +359,28 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         owner._components.pop(self.component_id)
         self.component_id = identity
         owner._components[identity] = self
-        self._open = opened
+        self._open = opened if self.visibility == "server" else False
         self._selected = selected if self._allowed(selected) else ""
 
     def render(self) -> str:
         self._bound_owner()
-        trigger = format_html(
-            '<button type="button" class="dj-dropdown-menu__trigger" dj-click="toggle" aria-expanded="{}">{}</button>',
-            "true" if self.open else "false",
-            self.label,
+        client_owned = self.visibility == "client"
+        popover_id = "popover-" + self.component_id
+        trigger = (
+            format_html(
+                '<button type="button" class="dj-dropdown-menu__trigger" popovertarget="{}">{}</button>',
+                popover_id,
+                self.label,
+            )
+            if client_owned
+            else format_html(
+                '<button type="button" class="dj-dropdown-menu__trigger" dj-click="toggle" aria-expanded="{}">{}</button>',
+                "true" if self.open else "false",
+                self.label,
+            )
         )
         content = format_html("{}", "")
-        if self.open:
+        if client_owned or self.open:
             buttons = []
             for item in self._items:
                 if "separator" in item:
@@ -301,13 +394,26 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
                             item["label"],
                         )
                     )
-            content = format_html(
-                '<div class="dj-dropdown-menu__content">{}</div>',
-                format_html_join("", "{}", ((button,) for button in buttons)),
-            )
+            contents = format_html_join("", "{}", ((button,) for button in buttons))
+            if client_owned:
+                observation_attrs = format_html("{}", "")
+                if self._observes_toggle():
+                    observation_attrs = format_html(
+                        ' data-dj-observe-toggle="observe_toggle" data-dj-observe-lifetime="{}" data-dj-observe-sequence="{}"',
+                        self._observation_lifetime,
+                        self._observation_sequence,
+                    )
+                content = format_html(
+                    '<div id="{}" popover="auto" class="dj-dropdown-menu__content" data-dj-native-dropdown="" style="position:fixed;inset:0;margin:auto;width:max-content;height:max-content"{}>{}</div>',
+                    popover_id,
+                    observation_attrs,
+                    contents,
+                )
+            else:
+                content = format_html('<div class="dj-dropdown-menu__content">{}</div>', contents)
         rendered: str = format_html(
             '<div class="dj-dropdown-menu{}" data-component-id="{}">{}{}</div>',
-            " dj-dropdown-menu--open" if self.open else "",
+            " dj-dropdown-menu--open" if not client_owned and self.open else "",
             self.component_id,
             trigger,
             content,

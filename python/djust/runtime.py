@@ -2589,6 +2589,10 @@ class ViewRuntime:
                         await sync_to_async(view_instance._restore_component_state)(
                             component, state
                         )
+                        from .components._interactive import DropdownMenu
+
+                        if isinstance(component, DropdownMenu):
+                            component._renew_observation_lifetime()
 
                 mounted_from_restore = True
 
@@ -2999,6 +3003,10 @@ class ViewRuntime:
         if html is not None and not skip_html_for_resume:
             mount_msg["html"] = html
             mount_msg["has_ids"] = "dj-id=" in html
+            if getattr(view_instance, "_component_bindings", {}):
+                # This fresh HTML establishes the current diff baseline; an
+                # unchanged native observation must not force another render.
+                view_instance._force_full_html = False
         elif skip_html_for_resume:
             logger.info(
                 "Runtime: skipping mount HTML for resume of %s — client already has DOM",

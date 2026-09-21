@@ -216,7 +216,7 @@ this ADR. A pleasing syntax without working negative type tests is not sufficien
 The [C1 typing proof](034-typing-proof.md) first passed with an isolated descriptor
 and now passes against the real staged bindings. Mypy follows Django's installed
 source declarations, and the LiveView stub includes its real constructor; both
-checkers reject all twenty negative locations without a new dependency. C1 and
+checkers reject all twenty-one negative locations without a new dependency. C1 and
 this ADR remain open pending the lifecycle, browser and publication requirements;
 the private implementation is not yet the released interactive API.
 

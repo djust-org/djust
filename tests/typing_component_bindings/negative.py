@@ -61,3 +61,4 @@ DropdownMenu(label="Bad", items=[{"label": "Edit"}])  # error: missing value
 DropdownMenu(label="Bad", items=[{"separator": False}])  # error: invalid separator
 DropdownMenu(label="Bad", items=[{"label": "Edit", "value": 1}])  # error: item value type
 projet_menu  # error: undefined declaration  # noqa: F821
+DropdownMenu(label="Bad", items=[], visibility="automatic")  # error: invalid visibility mode

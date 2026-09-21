@@ -630,6 +630,16 @@ class RequestMixin:
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
 
+            def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        resp_data["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        resp_data["_page_metadata"] = meta_commands
+
             # --- Authorization layer 1 of 3: view-level ---------------------
             # login_required / permission_required / check_permissions().
             # ``get()`` enforces this, and every WS/SSE event path enforces it
@@ -761,6 +771,7 @@ class RequestMixin:
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
+            observation_before = None
             # ADR-031: an event carrying ``component_id`` targets the
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
@@ -838,6 +849,12 @@ class RequestMixin:
                     )
 
                 call_args, call_kwargs = validated_call_arguments(validation)
+                from ..components._interactive import DropdownMenu
+
+                if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
+                    from ..websocket import _snapshot_assigns, _compute_changed_keys
+
+                    observation_before = _snapshot_assigns(self)
                 t0_handler = time.perf_counter()
                 if inspect.iscoroutinefunction(handler):
                     from asgiref.sync import async_to_sync
@@ -869,6 +886,17 @@ class RequestMixin:
                 from .._exposure_sessions import save_server_state
 
                 save_server_state(self, request)
+
+            if (
+                observation_before is not None
+                and not _compute_changed_keys(observation_before, _snapshot_assigns(self))
+                and not getattr(self, "_force_full_html", False)
+                and not getattr(self, "_async_tasks", None)
+                and not getattr(self, "_async_pending", None)
+            ):
+                noop_response = {"type": "noop", "event_name": event_name}
+                _inject_side_channels(noop_response)
+                return JsonResponse(noop_response)
 
             # Apply context processors so the render includes auth context
             # (user, perms, messages, etc.). Without this, template conditionals
@@ -952,18 +980,6 @@ class RequestMixin:
                         resp_data["_debug"] = debug_info
                     except Exception:
                         logger.debug("Failed to inject debug info", exc_info=True)
-
-            # Drain side-channel commands (flash, page metadata) so they
-            # are delivered in the HTTP response, not only via WebSocket.
-            def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        resp_data["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        resp_data["_page_metadata"] = meta_commands
 
             if patches_json:
                 patches = json_module.loads(patches_json)

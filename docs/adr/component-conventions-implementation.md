@@ -601,7 +601,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   outputs with trusted source injection, and passes real HTTP/WS/session reconnect
   tests. Snapshot change detection sees public binding state; unchanged closes
   produce no-op responses. The type fixtures now use these real classes: both
-  mypy and Pyright reject all twenty negative locations. Mypy follows Django's
+  mypy and Pyright reject all twenty-one negative locations. Mypy follows Django's
   installed source declarations, and the LiveView stub matches its runtime
   constructor, removing the inherited-Any gap without a new dependency or test
   waiver. Both debug scrubbers now restore the
@@ -617,6 +617,12 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   source injection, valid/forged/disabled selections and callback rendering.
   Optional native-toggle observations must report actual visibility without
   blocking/rolling back UI; unchanged observers do no render/diff/patch.
+  The private server contract now validates client-mode observations, source,
+  subscription, lifetime and sequence; unchanged HTTP/WS observers return no-op
+  while reactive observers render. Cursor state is separate from authoritative
+  visibility. Browser listeners/selection dismissal and reconnect coalescing are
+  not wired yet. HTTP exception/retry cursor persistence has a strict expected
+  failure and concurrent HTTP ordering remains open. This is not C2 acceptance.
 - [ ] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
   keys, removal/re-addition, nesting, reconnect and restore. Include a separate
   authorized delegated-row example; do not present it as stateful repetition.

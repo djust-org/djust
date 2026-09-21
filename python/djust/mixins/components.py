@@ -100,7 +100,7 @@ class ComponentMixin:
         from ..components._interactive import DropdownMenu
 
         if isinstance(component, DropdownMenu):
-            return component._dump_binding()
+            return component._dump_session_binding()
 
         if isinstance(component, BoundComponent):
             # ADR-031 D7: a bound component is saved as its State, nothing else.
@@ -140,7 +140,7 @@ class ComponentMixin:
 
         state = decode_state_roundtrip(state)
         if isinstance(component, DropdownMenu):
-            component._restore_binding(state)
+            component._restore_session_binding(state)
             return
         for key, value in state.items():
             if not key.startswith("_"):

@@ -7,7 +7,7 @@ Checked with Python 3.12, mypy 1.16.1 and Pyright 1.1.408. The original isolated
 prototype passed both; `prototype.py` now re-exports the **actual** private
 framework dropdown and LiveView, with no alternate implementation or casts.
 
-Both checkers now reject all twenty negative locations on the real framework
+Both checkers now reject all twenty-one negative locations on the real framework
 classes. The mypy configuration follows Django's installed source declarations
 (`follow_untyped_imports` for `django.*`) instead of treating its View base as
 `Any`. The LiveView stub declares the actual runtime constructor signature; an
@@ -36,8 +36,9 @@ negative test. Re-run after formatting because source lines are discovered fresh
   state and copied configuration. Both class and instance access are typed.
 - Inherited declarations, ordinary method override/rename, typed configuration,
   keyword-only callbacks and async execution work in the positive fixture.
-- Twenty invalid locations cover callback types/names/arity/returns, inherited
-  override, misspelled/undefined symbols, read-only key and typed configuration.
+- Twenty-one invalid locations cover callback types/names/arity/returns, inherited
+  override, misspelled/undefined symbols, read-only key and typed configuration,
+  including the visibility ownership mode.
 
 ## What is NOT proven
 
