@@ -490,6 +490,13 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   remain incomplete; no strict native binder is activated by this change.
   Final recovery verification: 18 dedicated regressions, 76 expanded focused
   cases, full Python 30,601 passed (952 skipped), and mypy 1,037 files clean.
+  Both legacy and explicit child background paths now use the shared contract
+  helper under their existing event context. Runtime regressions cover callback
+  and queue shapes, removed owners, unchanged legacy fields, and redacted
+  discovery failures without losing background-batch completion. Actor/bespoke
+  producers and HTTP delivery remain open.
+  Child-background verification: 46 focused tests, final full Python 30,611
+  passed (952 skipped), and mypy 1,037 files clean.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

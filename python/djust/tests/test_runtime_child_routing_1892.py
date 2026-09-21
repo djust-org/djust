@@ -219,17 +219,19 @@ def _make_sticky_parent() -> tuple[_ParentView, _StickyChildView]:
 class TestRuntimeStickyChildRouting:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("removed", [False, True])
-    async def test_background_work_belongs_to_selected_child(self, monkeypatch, removed):
+    @pytest.mark.parametrize("strict", [False, True])
+    async def test_background_work_belongs_to_selected_child(self, monkeypatch, removed, strict):
         import asyncio
 
         parent, child = _make_sticky_parent()
         runtime, transport = _make_runtime_with_view(parent)
+        runtime._parameter_contract_view = "tests.Parent"
         release = asyncio.Event()
         started = asyncio.Event()
         results = []
         parent.start_async(lambda: results.append("parent"), name="parent")
 
-        @event_handler()
+        @event_handler(parameter_policy="strict" if strict else "legacy")
         def begin(self):
             async def work():
                 started.set()
@@ -272,6 +274,16 @@ class TestRuntimeStickyChildRouting:
                 assert updates[0]["type"] == "embedded_update"
                 assert updates[0]["view_id"] == "child-1"
                 assert "count=9" in updates[0]["html"]
+                if strict:
+                    owner = next(
+                        owner
+                        for owner in updates[0]["parameter_contracts"]["owners"]
+                        if owner["view_id"] == "child-1"
+                    )
+                    assert owner["handlers"]["begin"]["policy"] == "strict"
+                    assert updates[0]["parameter_contract_view"] == "tests.Parent"
+                else:
+                    assert "parameter_contracts" not in updates[0]
         finally:
             release.set()
             handles = tuple(getattr(child, "_async_task_handles", ()))

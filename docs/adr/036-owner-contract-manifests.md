@@ -114,8 +114,8 @@ as mount snapshots. The same regression on actor WebSocket responses still
 fails: actor results are emitted through a separate Rust render path, outside
 the Python runtime's render lock. Capturing contracts from the Python owner
 after awaiting that result is not sufficient evidence that they describe the
-same render. Actor capture, bespoke WebSocket tick/push paths, explicit
-child background frames, initial HTTP and HTTP fallback remain delivery gates.
+same render. Actor capture, bespoke WebSocket tick/push paths, initial HTTP and
+HTTP fallback remain delivery gates.
 No claim of complete transport parity is made.
 
 ### Recovery snapshots
@@ -144,6 +144,25 @@ expanded recovery/transport group; full Python suite 30,601 passed and 952
 skipped. Mypy passed for 1,037 files. A recovery that first advertises strict
 contracts also marks that scope active so subsequent legacy renders emit an
 explicit clear.
+
+### Child background frames
+
+Both legacy and explicit embedded-child background completion paths now use the
+shared render-frame helper while holding the existing transport event context.
+Their scoped HTML includes the current root/child owner manifest and mount-path
+identity. No separate metadata serializer or client message is introduced.
+Legacy-only responses still omit the optional fields.
+
+Runtime regressions cover both child policies, sync/async/returned-coroutine
+callbacks, named/legacy task queues, and suppressed delivery after removal.
+Contract-discovery failure withholds HTML and redacts exception data while the
+original background batch still completes. These are runtime and persistence
+tests, not live-browser strict-binding acceptance.
+
+Verification: seven missing-metadata regressions failed before routing these
+frames through the shared helper. The expanded runtime/metadata/batch group
+passed 46 tests; final full Python passed 30,611 with 952 skipped, and mypy
+passed for 1,037 files.
 
 ## Evidence and remaining gates
 

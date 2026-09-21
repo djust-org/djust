@@ -87,7 +87,7 @@ async def _execute(
             ):
                 return
             _check_owner(runtime, root, child, generation)
-            await runtime.transport.send(
+            await runtime._send_render_frame(
                 {
                     "type": "embedded_update",
                     "view_id": child._view_id,
@@ -165,7 +165,7 @@ def dispatch_legacy_child_work(
                 if sticky_child_should_persist(child, root):
                     await runtime._persist_sticky_child_after_event(child, event_name)
                 check_owner()
-                await runtime.transport.send(
+                await runtime._send_render_frame(
                     {
                         "type": "embedded_update",
                         "view_id": view_id,
