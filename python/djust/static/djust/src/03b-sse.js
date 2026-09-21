@@ -267,17 +267,15 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: { error: data.error, traceback: data.traceback || null }
                 }));
-                if (data.ref != null) {
-                    cancelEventRequests(this, data.ref);
-                } else {
-                    cancelEventRequests(this);
+                if (data.source !== 'async') {
+                    cancelEventRequests(this, data.ref ?? null);
                 }
-                if (data.ref == null && this.lastEventName) {
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
-                this._recoverFailedNavigation();
+                if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
             case 'noop': {
@@ -289,6 +287,10 @@ class LiveViewSSE {
                 }
                 break;
             }
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
+                break;
 
             case 'push_event':
                 window.dispatchEvent(new CustomEvent('djust:push_event', {

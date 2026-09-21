@@ -11,7 +11,12 @@ const globalLoadingManager = {
     pendingScopes: new Map(),
 
     scopeFor(element) {
-        return element ? element.closest('[data-djust-embedded], [data-component-id]') : null;
+        if (!element) return null;
+        // live_render also stamps data-djust-embedded on individual controls
+        // as routing hints. Those hints disappear on a child morph; they are
+        // not ownership boundaries. Prefer the actual view/component wrapper.
+        return element.closest('[dj-view][data-djust-embedded], [data-component-id]') ||
+            element.closest('[data-djust-embedded]');
     },
 
     syncPending() {
@@ -172,6 +177,11 @@ const globalLoadingManager = {
     },
 
     stopLoading(eventName, triggerElement) {
+        for (const batch of _pendingAsyncBatches.values()) {
+            if (batch.eventName === eventName && (triggerElement
+                ? batch.trigger === triggerElement
+                : this.scopeFor(batch.trigger) === null)) return;
+        }
         // Loading scopes coalesce DOM triggers; the request registry is the
         // authority for overlapping sends from the same trigger.
         for (const ref of _pendingEventRefs) {

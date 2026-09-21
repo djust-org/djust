@@ -4112,6 +4112,12 @@ class ViewRuntime:
         }
         if event_ref is not None:
             msg["ref"] = event_ref
+        child_batch = None
+        if explicit_child:
+            from ._async_batch import AsyncBatch
+
+            child_batch = AsyncBatch(target_view)
+            msg.update(child_batch.fields())
         await self.transport.send(msg)
         await self._flush_all_pending()
 
@@ -4121,7 +4127,8 @@ class ViewRuntime:
         if explicit_child:
             from ._child_async import dispatch_child_work
 
-            dispatch_child_work(self, target_view, event_name)
+            assert child_batch is not None
+            dispatch_child_work(self, target_view, event_name, child_batch)
         else:
             self._dispatch_async_work(event_name)
         return True
@@ -4820,7 +4827,7 @@ class ViewRuntime:
         return fields
 
     async def _persist_explicit_children_after_event(
-        self, view: Any, *, request: Any = None
+        self, view: Any, *, request: Any = None, async_batch: Optional[str] = None
     ) -> bool:
         """Save the authorized child tree before acknowledging a parent event."""
         from ._exposure import ExposureError, uses_legacy_exposure
@@ -4853,7 +4860,9 @@ class ViewRuntime:
             # received no matching update, so the next success must send HTML.
             view._force_full_html = True
             await self.transport.send_error(
-                "Child state unavailable. Please reload the page.", code="state_error"
+                "Child state unavailable. Please reload the page.",
+                code="state_error",
+                **({"source": "async", "async_batch": async_batch} if async_batch else {}),
             )
             return False
         return True

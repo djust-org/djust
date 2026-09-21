@@ -147,8 +147,9 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
 
 ### Next milestone: E4 — request correlation
 
-Owner: current task implementer. Status: foreground correlation implemented;
-background completion and remaining lifecycle verification open. This is a
+Owner: current task implementer. Status: foreground correlation and staged
+explicit-child task batches implemented; root/background integration and
+remaining lifecycle verification open. This is a
 transport correctness slice, not permission to enable ADR-038.
 
 The original `tests/js/request-correlation.test.js` reproducer reported four
@@ -961,6 +962,50 @@ foreground acknowledgements. In particular, acknowledging `async_pending`
 still separates the foreground promise from loading retained for later work;
 it does not establish per-task completion tracking. E1–E3 and ADR034–037 remain
 open, and explicit exposure is still unavailable to applications.
+
+### Owned child background batches
+
+The staged explicit-child path captures its queued work before sending the
+foreground acknowledgement, then dispatches that captured batch after the send.
+`AsyncBatch` in `python/djust/_async_batch.py` assigns an opaque token, advertises
+`async_pending: true` plus `async_batch` on the acknowledgement, and emits
+`{"type": "async_complete", "async_batch": token}` once every task settles.
+Task done callbacks cover cancellation before coroutine entry; an owner removed
+before dispatch discards its captured callbacks and releases its token. The
+completion contains no results, callback names, rendered state or authority.
+
+The client associates the token with the acknowledged request's transport and
+trigger. Foreground promises resolve normally, while batch records keep loading
+active independently. Duplicate/unknown completions and another transport's
+completion cannot release owned work. Background errors carry `source="async"`
+and the token; they do not cancel newer foreground events. The final completion
+still waits for all tasks, including handled failures. Disconnect clears owned
+batch records as well as foreground requests.
+
+The real browser fixture uncovered a separate load-bearing ownership bug:
+`live_render` stamps routing hints on individual controls, not just wrappers.
+Treating the nearest `data-djust-embedded` hint as an owner selected the button
+itself; morphing removed that hint and stopped loading reapplication. The manager
+now prefers the actual `[dj-view][data-djust-embedded]` or component wrapper,
+retaining its legacy marker-only fallback. New WS/SSE regressions fail before
+this fix. Both live backend/browser fixtures now stay disabled through the
+acknowledgement and two background updates, and enable only on batch completion.
+
+Verification: full Python suite 30,042 passed, 952 skipped; full JavaScript suite
+2,011 passed across 188 files; mypy passed 1,021 source files; Ruff and generated
+bundle ESLint passed. The initial batch test failed on the missing pending flag;
+the initial six client batch tests failed before implementation. Tests also
+cover pre-start cancellation, distinct tokens, repeated discard, empty batches,
+multiple tasks, cross-transport completion, and errors with a newer request.
+Browser fixtures use real WS/SSE transports but a test-only explicit constructor
+bypass. Temporary tabs and servers were closed.
+
+This is **not complete E4 or ADR-038 acceptance**. Root runtime background work,
+deferred/component paths, mount/parent-queued child work, and the full legacy
+no-ref/replacement matrix still require integration. Older clients do not know
+the batch-completion message: activation requires a compatible client rollout,
+not only a server update. The explicit constructor guard remains closed and
+no proposed API is advertised as supported.
 
 ## Readiness audit
 

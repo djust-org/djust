@@ -162,6 +162,84 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
+    it('retains each background batch independently of foreground acknowledgements', async () => {
+        const {dom, transport, button, sent, send, loading} = setup(name);
+        try {
+            const first = send();
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'batch-a'});
+            await first;
+            const second = send();
+            await transport.handleMessage({type: 'noop', ref: sent[1].ref, async_pending: true, async_batch: 'batch-b'});
+            await second;
+            await transport.handleMessage({type: 'async_complete', async_batch: 'batch-b'});
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'async_complete', async_batch: 'batch-b'});
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'async_complete', async_batch: 'batch-a'});
+            expect(button.disabled).toBe(false);
+            expect(loading.pendingEvents.size).toBe(0);
+        } finally { dom.window.close(); }
+    });
+
+    it('uses the child wrapper, not a removable event routing marker, as loading owner', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            button.parentElement.setAttribute('dj-view', '');
+            // live_render stamps routing hints onto event-bearing descendants.
+            button.setAttribute('data-djust-embedded', 'child');
+            send();
+            await transport.handleMessage({type: 'embedded_update', ref: sent[0].ref,
+                view_id: 'child', async_pending: true, async_batch: 'owned-wrapper',
+                html: '<button id="save" dj-click="save" dj-loading.disable>Running</button>'});
+            expect(button.hasAttribute('data-djust-embedded')).toBe(false);
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'async_complete', async_batch: 'owned-wrapper'});
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
+    it('a background batch cannot be completed by a different transport', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            send();
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'owned'});
+            const other = new dom.window.djust[name]();
+            await other.handleMessage({type: 'async_complete', async_batch: 'owned'});
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'async_complete', async_batch: 'owned'});
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
+    it('disconnect clears acknowledged background batches too', async () => {
+        const {dom, transport, button, sent, send, loading} = setup(name);
+        try {
+            if (transport.ws) transport.ws.close = vi.fn();
+            send();
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'pending'});
+            transport.disconnect();
+            expect(button.disabled).toBe(false);
+            expect(loading.pendingEvents.size).toBe(0);
+        } finally { dom.window.close(); }
+    });
+
+    it('background errors do not cancel a newer foreground request', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            send();
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'failed'});
+            let completed = false;
+            send().then(() => { completed = true; });
+            await transport.handleMessage({type: 'error', source: 'async', async_batch: 'failed', error: 'Task unavailable'});
+            await transport.handleMessage({type: 'async_complete', async_batch: 'failed'});
+            expect(completed).toBe(false);
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'noop', ref: sent[1].ref});
+            expect(completed).toBe(true);
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
     it('settles a valid scoped reply after the owner has been removed', async () => {
         const {dom, button, send, reply, loading} = setup(name);
         try {

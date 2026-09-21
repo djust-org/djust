@@ -1007,15 +1007,21 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                cancelEventRequests(this, data.ref ?? null);
-                _tickBuffer.length = 0;
+                if (data.source !== 'async') {
+                    cancelEventRequests(this, data.ref ?? null);
+                    _tickBuffer.length = 0;
+                }
 
                 // Phase 5: Stop loading state on error
-                if (data.ref == null && this.lastEventName) {
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                break;
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
                 break;
 
             case 'pong':

@@ -25,6 +25,55 @@ async def drain_owned_tasks(child):
     await asyncio.wait_for(asyncio.gather(*handles), 3)
 
 
+async def test_background_batch_acknowledges_only_after_all_child_tasks(monkeypatch):
+    releases = [asyncio.Event(), asyncio.Event()]
+    entered = [asyncio.Event(), asyncio.Event()]
+
+    @event_handler()
+    def begin(self):
+        for index in range(2):
+
+            async def work(index=index):
+                entered[index].set()
+                await releases[index].wait()
+
+            self.start_async(work, name=f"job-{index}")
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    runtime, transport, _ = await mount()
+    child = runtime.view_instance._get_child_view("menu")
+    completed = asyncio.Event()
+    original_send = transport.send
+
+    async def observe(frame):
+        await original_send(frame)
+        if frame.get("type") == "async_complete":
+            completed.set()
+
+    monkeypatch.setattr(transport, "send", observe)
+    try:
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}, "ref": 42})
+        ack = next(frame for frame in transport.sent if frame.get("ref") == 42)
+        assert ack.get("async_pending") is True
+        batch = ack.get("async_batch")
+        assert isinstance(batch, str) and batch
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered)), 1)
+        handles = tuple(child._async_task_handles)
+        releases[0].set()
+        await asyncio.wait_for(asyncio.wait(handles, return_when=asyncio.FIRST_COMPLETED), 2)
+        assert not any(frame.get("type") == "async_complete" for frame in transport.sent)
+        releases[1].set()
+        await asyncio.wait_for(asyncio.gather(*handles), 3)
+        await asyncio.wait_for(completed.wait(), 1)
+        completions = [frame for frame in transport.sent if frame.get("type") == "async_complete"]
+        assert completions == [{"type": "async_complete", "async_batch": batch}]
+    finally:
+        for release in releases:
+            release.set()
+        child.cancel_async_all()
+        runtime.view_instance.cancel_async_all()
+
+
 @pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
 @pytest.mark.parametrize("queue", ["named", "legacy"])
 async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
@@ -140,8 +189,12 @@ async def test_completion_reloads_authority_before_result_handler(monkeypatch, r
     await runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}})
     await drain_owned_tasks(child)
     assert completions == []
-    assert not any(frame.get("source") == "async" for frame in transport.sent)
+    assert not any(
+        frame.get("source") == "async" and frame.get("type") != "error" for frame in transport.sent
+    )
     assert transport.errors[-1]["code"] == "async_error"
+    assert transport.errors[-1]["source"] == "async"
+    assert transport.errors[-1]["async_batch"]
     assert "SECRET_SENTINEL" not in str(transport.sent)
 
 

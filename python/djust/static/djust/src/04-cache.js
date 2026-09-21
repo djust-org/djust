@@ -18,6 +18,7 @@ const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
+const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 /** Register before sending: even an immediate reply must find its request. */
@@ -33,6 +34,22 @@ function registerEventRequest(transport, eventName, triggerElement) {
     return { ref, promise };
 }
 
+function rememberAsyncBatch(transport, data, eventName, trigger) {
+    if (data.async_pending && typeof data.async_batch === 'string' &&
+        data.async_batch.length > 0 && data.async_batch.length <= 128 &&
+        !_pendingAsyncBatches.has(data.async_batch)) {
+        _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+    }
+}
+
+/** Completion is a separate control message, not a foreground acknowledgement. */
+function completeAsyncBatch(transport, token) {
+    const batch = _pendingAsyncBatches.get(token);
+    if (!batch || batch.transport !== transport) return;
+    _pendingAsyncBatches.delete(token);
+    if (batch.eventName) globalLoadingManager.stopLoading(batch.eventName, batch.trigger);
+}
+
 /** Consume only an owned acknowledgement; unknown refs never use last-event state. */
 function acknowledgeEventRequest(transport, data) {
     if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
@@ -45,6 +62,7 @@ function acknowledgeEventRequest(transport, data) {
         if (owned.length === 1) ref = owned[0][0];
         else {
             const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
+            rememberAsyncBatch(transport, data, legacy.eventName, legacy.trigger);
             transport.lastEventName = null;
             transport.lastTriggerElement = null;
             return legacy;
@@ -53,6 +71,7 @@ function acknowledgeEventRequest(transport, data) {
     if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
     const eventName = _pendingEventNames.get(ref);
     const trigger = _pendingTriggerEls.get(ref);
+    rememberAsyncBatch(transport, data, eventName, trigger);
     const resolve = _pendingEventResolvers.get(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);
@@ -75,6 +94,11 @@ function cancelEventRequests(transport, ref = null) {
     for (const key of refs) {
         const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
         if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+    if (ref == null) {
+        for (const [token, batch] of _pendingAsyncBatches) {
+            if (batch.transport === transport) completeAsyncBatch(transport, token);
+        }
     }
 }
 

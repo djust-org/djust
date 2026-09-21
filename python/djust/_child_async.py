@@ -5,11 +5,12 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 
+from ._async_batch import AsyncBatch
 from ._exposure import ExposureError
 from ._exposure_auth import authorize_event, fresh_socket_request
 from ._exposure_children import child_event_adapter
 from .auth.core import check_view_auth, enforce_object_permission
-from .mixins.async_work import run_async_callback, track_async_task
+from .mixins.async_work import run_async_callback
 
 
 def _check_owner(runtime: Any, root: Any, child: Any, generation: int) -> None:
@@ -58,6 +59,7 @@ async def _execute(
     args: Any,
     kwargs: Any,
     event_name: str | None,
+    batch_token: str | None,
 ) -> None:
     try:
         async with runtime._explicit_event_lock, runtime.transport.event_context(root):
@@ -80,7 +82,9 @@ async def _execute(
 
             html = await sync_to_async(render_embedded_child_html)(child)
             request = await sync_to_async(_authorize)(runtime, root, child, generation)
-            if not await runtime._persist_explicit_children_after_event(root, request=request):
+            if not await runtime._persist_explicit_children_after_event(
+                root, request=request, async_batch=batch_token
+            ):
                 return
             _check_owner(runtime, root, child, generation)
             await runtime.transport.send(
@@ -96,24 +100,25 @@ async def _execute(
             runtime._flush_push_events(child)
     except Exception:  # noqa: BLE001 — no provider/callback exception values on the wire/log
         await runtime.transport.send_error(
-            "Child background work unavailable. Please reload the page.", code="async_error"
+            "Child background work unavailable. Please reload the page.",
+            code="async_error",
+            source="async",
+            async_batch=batch_token,
         )
 
 
-def dispatch_child_work(runtime: Any, child: Any, event_name: str | None) -> None:
+def dispatch_child_work(
+    runtime: Any, child: Any, event_name: str | None, batch: AsyncBatch
+) -> None:
     """Drain only the selected child queue and track tasks on that same owner."""
     root = runtime.view_instance
     if root is None or getattr(child, "_djust_child_disposed", False):
+        batch.discard(runtime.transport)
         return
-    queued = list(getattr(child, "_async_tasks", {}).items())
-    child._async_tasks = {}
-    pending = getattr(child, "_async_pending", None)
-    if pending:
-        queued.append(("_default", pending))
-        child._async_pending = None
     generation = getattr(child, "_async_work_generation", 0)
-    for name, (callback, args, kwargs) in queued:
-        task = asyncio.ensure_future(
-            _execute(runtime, root, child, generation, name, callback, args, kwargs, event_name)
-        )
-        track_async_task(child, task)
+    batch.dispatch(
+        runtime.transport,
+        lambda name, callback, args, kwargs: _execute(
+            runtime, root, child, generation, name, callback, args, kwargs, event_name, batch.token
+        ),
+    )
