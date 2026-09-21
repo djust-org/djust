@@ -507,6 +507,18 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   passed (952 skipped); Rust workspace and all 75 live-library tests passed;
   warnings-denied Rust lint and mypy (1,038 files) passed. Native browser
   acceptance is still open.
+  The bespoke-producer audit also reproduced dropped full-HTML updates after
+  actual Rust baseline loss in ticks, server pushes and database notifications.
+  Those paths now deliver a root-content HTML fallback, arm recovery with the
+  original raw HTML and advance the consumer-owned wire version. Three native
+  Rust regression cases fail before the fix and pass afterward, including
+  recovery replay; the expanded focused suite passes 43 tests.
+  This fixes delivery, not contract capture: bespoke-producer metadata,
+  cancellation and owner-generation acceptance remain open.
+  The full Python run passed 30,627 tests (952 skipped) and failed only the new
+  changelog entry's formatting check. After correcting that entry and a helper
+  return annotation, all 81 final targeted tests passed; mypy passed 1,039 files.
+  The full suite was not repeated after those corrections.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

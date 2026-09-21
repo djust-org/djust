@@ -4362,8 +4362,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         source="broadcast",
                     )
                 else:
-                    # Even if no patches, flush any push_events and flash messages
-                    await self._flush_all_pending()
+                    content = await self._background_html_content(html)
+                    await self._send_update(
+                        html=content,
+                        version=self._next_version_armed(html),
+                        broadcast=True,
+                        source="broadcast",
+                    )
             finally:
                 self._render_lock.release()
 
@@ -4485,7 +4490,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         source="broadcast",
                     )
                 else:
-                    await self._flush_all_pending()
+                    content = await self._background_html_content(html)
+                    await self._send_update(
+                        html=content,
+                        version=self._next_version_armed(html),
+                        broadcast=True,
+                        source="broadcast",
+                    )
 
                 # v0.7.0 — If handle_info flipped an activity to visible,
                 # drain its queue in the same round-trip. The flush is
@@ -4502,6 +4513,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._render_lock.release()
         except Exception as e:  # noqa: BLE001
             logger.exception("Error in db_notify: %s", e)
+
+    async def _background_html_content(self, html: str) -> str:
+        """Prepare full-HTML fallback without altering the raw recovery baseline."""
+        view = self.view_instance
+        if view is None:
+            raise RuntimeError("View not mounted")
+
+        def prepare() -> str:
+            content: str = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
+            return content
+
+        return await sync_to_async(prepare)()
 
     async def _run_tick(self, interval_ms: int) -> None:
         """
@@ -4530,7 +4553,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def _tick_once(self) -> bool:
         """One tick iteration: run ``handle_tick``, render, send. Returns
-        whether a patch frame was actually sent.
+        whether a patch or full-HTML frame was actually sent.
 
         Event sequencing (#560):
         - Skips render when handle_tick() doesn't change any public assigns
@@ -4643,8 +4666,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     source="tick",
                 )
                 return True
-            await self._flush_all_pending()
-            return False
+            content = await self._background_html_content(html)
+            await self._send_update(
+                html=content,
+                version=self._next_version_armed(html),
+                event_name="tick",
+                source="tick",
+            )
+            return True
         finally:
             self._render_lock.release()
 

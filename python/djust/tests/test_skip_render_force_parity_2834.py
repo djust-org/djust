@@ -73,8 +73,8 @@ def _consumer_with_view(view_class):
     view = view_class()
     view.mount(None)
     # Establish the diff baseline the real mount render establishes. Without
-    # it the first render_with_diff() returns full HTML with patches=None and
-    # a forced render would legitimately send nothing.
+    # it the first render_with_diff() returns full HTML with patches=None,
+    # exercising the fallback rather than the patch branch tested here.
     view.render_with_diff()
     consumer.view_instance = view
     return consumer
