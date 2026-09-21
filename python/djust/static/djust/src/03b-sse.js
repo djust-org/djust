@@ -127,6 +127,7 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                cancelEventRequests(this);
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -138,6 +139,7 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -250,16 +252,11 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'html_update': {
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger);
                 break;
-
-            case 'html_update':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
-                break;
+            }
 
             case 'embedded_update':
                 await handleEmbeddedResponse(data, this);
@@ -270,7 +267,12 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: { error: data.error, traceback: data.traceback || null }
                 }));
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else {
+                    cancelEventRequests(this);
+                }
+                if (data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -278,15 +280,15 @@ class LiveViewSSE {
                 this._recoverFailedNavigation();
                 break;
 
-            case 'noop':
-                if (this.lastEventName) {
+            case 'noop': {
+                const event = acknowledgeEventRequest(this, data);
+                if (event?.eventName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
                 break;
+            }
 
             case 'push_event':
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
@@ -397,14 +399,23 @@ class LiveViewSSE {
             return false;
         }
 
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
+            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+                cancelEventRequests(this, request.ref);
+            }
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
-    sendTeardownEvent(eventName, params, triggerElement) {
-        return this.sendEvent(eventName, params, triggerElement, true);
+    sendTeardownEvent(eventName, params, _triggerElement) {
+        // The outgoing page cannot await a stream reply. Preserve the existing
+        // keepalive dispatch contract without retaining an orphaned request.
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'event', event: eventName, params }, true);
     }
 
     /**
@@ -449,7 +460,9 @@ class LiveViewSSE {
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
-                if (eventName) {
+                if (eventName && data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;

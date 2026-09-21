@@ -68,12 +68,16 @@ function applyEmbeddedUpdate(data) {
 /** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
-    const tracked = data.ref != null && _pendingEventRefs.has(data.ref);
+    const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
     const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
     const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
     const owner = trigger && trigger.closest('[data-djust-embedded]');
     const ownerId = owner && owner.getAttribute('data-djust-embedded');
-    if (!applyEmbeddedUpdate(data)) return false;
+    const applied = applyEmbeddedUpdate(data);
+    // A legitimate reply may arrive after its owner was removed. Settle its
+    // own request rather than leaking the promise, but reject malformed frames.
+    if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
+        typeof data.html !== 'string')) return false;
     if (data.source === 'async') return true;
     // No-ref SSE replies must match the pending element's scope. A reply for
     // another child must not consume the most recently sent event's state.
@@ -81,19 +85,8 @@ async function handleEmbeddedResponse(data, transport) {
         (data.event_name && data.event_name !== eventName))) {
         return true;
     }
-    if (tracked) {
-        _pendingEventRefs.delete(data.ref);
-        _pendingEventNames.delete(data.ref);
-        _pendingTriggerEls.delete(data.ref);
-        const resolve = _pendingEventResolvers.get(data.ref);
-        _pendingEventResolvers.delete(data.ref);
-        if (resolve) resolve(data);
-    }
-    if (eventName && !data.async_pending) globalLoadingManager.stopLoading(eventName, trigger);
-    if (transport.lastEventName === eventName && transport.lastTriggerElement === trigger) {
-        transport.lastEventName = null;
-        transport.lastTriggerElement = null;
-    }
+    const event = acknowledgeEventRequest(transport, data);
+    if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
         const buffered = _tickBuffer.splice(0);
         for (const frame of buffered) await handleServerResponse(frame, null, null);

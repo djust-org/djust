@@ -172,6 +172,14 @@ const globalLoadingManager = {
     },
 
     stopLoading(eventName, triggerElement) {
+        // Loading scopes coalesce DOM triggers; the request registry is the
+        // authority for overlapping sends from the same trigger.
+        for (const ref of _pendingEventRefs) {
+            const pendingTrigger = _pendingTriggerEls.get(ref);
+            if (_pendingEventNames.get(ref) === eventName && (triggerElement
+                ? pendingTrigger === triggerElement
+                : this.scopeFor(pendingTrigger) === null)) return;
+        }
         const scopes = this.pendingScopes.get(eventName);
         if (!scopes) return;
         let owner;

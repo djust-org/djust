@@ -11,14 +11,72 @@ let clientVdomVersion = null;
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
-// `let` (NOT const) — `++_eventRefCounter` in 03-websocket.js reassigns.
-// eslint-disable-next-line prefer-const
+// Both transports allocate from this single monotonic sequence.
 let _eventRefCounter = 0;
 const _pendingEventRefs = new Set();     // refs of events awaiting server response
 const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
+const _pendingEventOwners = new Map();   // ref -> transport instance
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+
+/** Register before sending: even an immediate reply must find its request. */
+function registerEventRequest(transport, eventName, triggerElement) {
+    const ref = ++_eventRefCounter;
+    _pendingEventRefs.add(ref);
+    _pendingEventNames.set(ref, eventName);
+    _pendingTriggerEls.set(ref, triggerElement);
+    _pendingEventOwners.set(ref, transport);
+    transport.lastEventName = eventName;
+    transport.lastTriggerElement = triggerElement;
+    const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    return { ref, promise };
+}
+
+/** Consume only an owned acknowledgement; unknown refs never use last-event state. */
+function acknowledgeEventRequest(transport, data) {
+    if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
+    let ref = data.ref;
+    if (ref == null) {
+        // Compatibility with old no-ref servers is unambiguous only with one
+        // outstanding request. Never guess between overlapping requests.
+        const owned = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+        if (owned.length > 1) return null;
+        if (owned.length === 1) ref = owned[0][0];
+        else {
+            const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
+            transport.lastEventName = null;
+            transport.lastTriggerElement = null;
+            return legacy;
+        }
+    }
+    if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
+    const eventName = _pendingEventNames.get(ref);
+    const trigger = _pendingTriggerEls.get(ref);
+    const resolve = _pendingEventResolvers.get(ref);
+    _pendingEventRefs.delete(ref);
+    _pendingEventNames.delete(ref);
+    _pendingTriggerEls.delete(ref);
+    _pendingEventResolvers.delete(ref);
+    _pendingEventOwners.delete(ref);
+    const remaining = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+    const latest = remaining.length ? remaining[remaining.length - 1][0] : null;
+    transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
+    transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
+    if (resolve) resolve(data.cancelled ? null : data);
+    return { eventName, trigger };
+}
+
+/** Cancel this transport's requests, never those of a replacement connection. */
+function cancelEventRequests(transport, ref = null) {
+    const refs = ref == null
+        ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
+        : [ref];
+    for (const key of refs) {
+        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+}
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>

@@ -351,12 +351,16 @@ function applyEmbeddedUpdate(data) {
 /** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
-    const tracked = data.ref != null && _pendingEventRefs.has(data.ref);
+    const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
     const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
     const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
     const owner = trigger && trigger.closest('[data-djust-embedded]');
     const ownerId = owner && owner.getAttribute('data-djust-embedded');
-    if (!applyEmbeddedUpdate(data)) return false;
+    const applied = applyEmbeddedUpdate(data);
+    // A legitimate reply may arrive after its owner was removed. Settle its
+    // own request rather than leaking the promise, but reject malformed frames.
+    if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
+        typeof data.html !== 'string')) return false;
     if (data.source === 'async') return true;
     // No-ref SSE replies must match the pending element's scope. A reply for
     // another child must not consume the most recently sent event's state.
@@ -364,19 +368,8 @@ async function handleEmbeddedResponse(data, transport) {
         (data.event_name && data.event_name !== eventName))) {
         return true;
     }
-    if (tracked) {
-        _pendingEventRefs.delete(data.ref);
-        _pendingEventNames.delete(data.ref);
-        _pendingTriggerEls.delete(data.ref);
-        const resolve = _pendingEventResolvers.get(data.ref);
-        _pendingEventResolvers.delete(data.ref);
-        if (resolve) resolve(data);
-    }
-    if (eventName && !data.async_pending) globalLoadingManager.stopLoading(eventName, trigger);
-    if (transport.lastEventName === eventName && transport.lastTriggerElement === trigger) {
-        transport.lastEventName = null;
-        transport.lastTriggerElement = null;
-    }
+    const event = acknowledgeEventRequest(transport, data);
+    if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
         const buffered = _tickBuffer.splice(0);
         for (const frame of buffered) await handleServerResponse(frame, null, null);
@@ -1040,11 +1033,7 @@ class LiveViewWebSocket {
         this._removeReconnectBanner();
 
         // Event sequencing (#560): clear pending event state
-        _pendingEventResolvers.forEach(resolve => resolve(null));
-        _pendingEventRefs.clear();
-        _pendingEventNames.clear();
-        _pendingTriggerEls.clear();
-        _pendingEventResolvers.clear();
+        cancelEventRequests(this);
         _tickBuffer.length = 0;
     }
 
@@ -1131,11 +1120,7 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Event sequencing (#560): clear pending event state
-            _pendingEventResolvers.forEach(resolve => resolve(null));
-            _pendingEventRefs.clear();
-            _pendingEventNames.clear();
-            _pendingTriggerEls.clear();
-            _pendingEventResolvers.clear();
+            cancelEventRequests(this);
             _tickBuffer.length = 0;
 
             // Remove loading indicators from DOM
@@ -1619,7 +1604,7 @@ class LiveViewWebSocket {
                     data.source === 'async'
                 );
                 const isEventResponse = (
-                    data.ref != null && _pendingEventRefs.has(data.ref)
+                    !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
                 );
 
                 if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
@@ -1673,37 +1658,8 @@ class LiveViewWebSocket {
                 }
 
                 // Determine event name and trigger for loading state
-                let evName = this.lastEventName;
-                let evTrigger = this.lastTriggerElement;
-
-                if (isEventResponse) {
-                    // This response matches a pending event — use tracked
-                    // event name/trigger and remove from pending set.
-                    evName = _pendingEventNames.get(data.ref) || this.lastEventName;
-                    evTrigger = _pendingTriggerEls.get(data.ref) || this.lastTriggerElement;
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise so callers awaiting
-                    // the server response (e.g. _handleDjSubmit) can proceed.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                } else if (isServerInitiated) {
-                    // Server-initiated patch with no pending events — apply
-                    // without consuming event loading state.
-                    evName = null;
-                    evTrigger = null;
-                }
-
-                await handleServerResponse(data, evName, evTrigger);
-
-                if (!isServerInitiated) {
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
@@ -1785,15 +1741,11 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                _pendingEventResolvers.forEach(resolve => resolve(null));
-                _pendingEventRefs.clear();
-                _pendingEventNames.clear();
-                _pendingTriggerEls.clear();
-                _pendingEventResolvers.clear();
+                cancelEventRequests(this, data.ref ?? null);
                 _tickBuffer.length = 0;
 
                 // Phase 5: Stop loading state on error
-                if (this.lastEventName) {
+                if (data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -1836,23 +1788,9 @@ class LiveViewWebSocket {
             case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                const noopEvName = (data.ref != null ? _pendingEventNames.get(data.ref) : null)
-                    || this.lastEventName;
-                const noopTrigger = (data.ref != null ? _pendingTriggerEls.get(data.ref) : null)
-                    || this.lastTriggerElement;
-
-                // Clear pending event ref (#560)
-                if (data.ref != null && _pendingEventRefs.has(data.ref)) {
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise on noop too.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                }
+                const event = acknowledgeEventRequest(this, data);
+                const noopEvName = event?.eventName;
+                const noopTrigger = event?.trigger;
 
                 if (noopEvName) {
                     if (!data.async_pending) {
@@ -1860,8 +1798,6 @@ class LiveViewWebSocket {
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
 
                 // Flush buffered patches only when all pending events resolved
@@ -2226,33 +2162,19 @@ class LiveViewWebSocket {
             return false;
         }
 
-        // Phase 5: Track event name and trigger element for loading state
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        // Event sequencing (#560): assign monotonic ref so we can match
-        // the server's response to this specific event and distinguish
-        // it from server-initiated patches. Uses Set to track multiple
-        // concurrent pending events.
-        const ref = ++_eventRefCounter;
-        _pendingEventRefs.add(ref);
-        _pendingEventNames.set(ref, eventName);
-        _pendingTriggerEls.set(ref, triggerElement);
-
-        // #1315: Return a Promise so callers can await the server response
-        // before running post-response logic (e.g. _setFormPending(false)).
-        // Without this, fire-and-forget WS dispatch causes handleEvent to
-        // resolve synchronously, and form-pending toggles off before any
-        // browser repaint.
-        return new Promise((resolve) => {
-            _pendingEventResolvers.set(ref, resolve);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
             this.sendMessage({
                 type: 'event',
                 event: eventName,
                 params: params,
-                ref: ref
+                ref: request.ref
             });
-        });
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
     // Removed duplicate applyPatches and patch helper methods
@@ -2558,6 +2480,7 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                cancelEventRequests(this);
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -2569,6 +2492,7 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -2681,16 +2605,11 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'html_update': {
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger);
                 break;
-
-            case 'html_update':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
-                break;
+            }
 
             case 'embedded_update':
                 await handleEmbeddedResponse(data, this);
@@ -2701,7 +2620,12 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: { error: data.error, traceback: data.traceback || null }
                 }));
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else {
+                    cancelEventRequests(this);
+                }
+                if (data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -2709,15 +2633,15 @@ class LiveViewSSE {
                 this._recoverFailedNavigation();
                 break;
 
-            case 'noop':
-                if (this.lastEventName) {
+            case 'noop': {
+                const event = acknowledgeEventRequest(this, data);
+                if (event?.eventName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
                 break;
+            }
 
             case 'push_event':
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
@@ -2828,14 +2752,23 @@ class LiveViewSSE {
             return false;
         }
 
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
+            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+                cancelEventRequests(this, request.ref);
+            }
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
-    sendTeardownEvent(eventName, params, triggerElement) {
-        return this.sendEvent(eventName, params, triggerElement, true);
+    sendTeardownEvent(eventName, params, _triggerElement) {
+        // The outgoing page cannot await a stream reply. Preserve the existing
+        // keepalive dispatch contract without retaining an orphaned request.
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'event', event: eventName, params }, true);
     }
 
     /**
@@ -2880,7 +2813,9 @@ class LiveViewSSE {
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
-                if (eventName) {
+                if (eventName && data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -2958,14 +2893,72 @@ let clientVdomVersion = null;
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
-// `let` (NOT const) — `++_eventRefCounter` in 03-websocket.js reassigns.
-// eslint-disable-next-line prefer-const
+// Both transports allocate from this single monotonic sequence.
 let _eventRefCounter = 0;
 const _pendingEventRefs = new Set();     // refs of events awaiting server response
 const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
+const _pendingEventOwners = new Map();   // ref -> transport instance
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+
+/** Register before sending: even an immediate reply must find its request. */
+function registerEventRequest(transport, eventName, triggerElement) {
+    const ref = ++_eventRefCounter;
+    _pendingEventRefs.add(ref);
+    _pendingEventNames.set(ref, eventName);
+    _pendingTriggerEls.set(ref, triggerElement);
+    _pendingEventOwners.set(ref, transport);
+    transport.lastEventName = eventName;
+    transport.lastTriggerElement = triggerElement;
+    const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    return { ref, promise };
+}
+
+/** Consume only an owned acknowledgement; unknown refs never use last-event state. */
+function acknowledgeEventRequest(transport, data) {
+    if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
+    let ref = data.ref;
+    if (ref == null) {
+        // Compatibility with old no-ref servers is unambiguous only with one
+        // outstanding request. Never guess between overlapping requests.
+        const owned = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+        if (owned.length > 1) return null;
+        if (owned.length === 1) ref = owned[0][0];
+        else {
+            const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
+            transport.lastEventName = null;
+            transport.lastTriggerElement = null;
+            return legacy;
+        }
+    }
+    if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
+    const eventName = _pendingEventNames.get(ref);
+    const trigger = _pendingTriggerEls.get(ref);
+    const resolve = _pendingEventResolvers.get(ref);
+    _pendingEventRefs.delete(ref);
+    _pendingEventNames.delete(ref);
+    _pendingTriggerEls.delete(ref);
+    _pendingEventResolvers.delete(ref);
+    _pendingEventOwners.delete(ref);
+    const remaining = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+    const latest = remaining.length ? remaining[remaining.length - 1][0] : null;
+    transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
+    transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
+    if (resolve) resolve(data.cancelled ? null : data);
+    return { eventName, trigger };
+}
+
+/** Cancel this transport's requests, never those of a replacement connection. */
+function cancelEventRequests(transport, ref = null) {
+    const refs = ref == null
+        ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
+        : [ref];
+    for (const key of refs) {
+        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+}
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
@@ -6807,6 +6800,14 @@ const globalLoadingManager = {
     },
 
     stopLoading(eventName, triggerElement) {
+        // Loading scopes coalesce DOM triggers; the request registry is the
+        // authority for overlapping sends from the same trigger.
+        for (const ref of _pendingEventRefs) {
+            const pendingTrigger = _pendingTriggerEls.get(ref);
+            if (_pendingEventNames.get(ref) === eventName && (triggerElement
+                ? pendingTrigger === triggerElement
+                : this.scopeFor(pendingTrigger) === null)) return;
+        }
         const scopes = this.pendingScopes.get(eventName);
         if (!scopes) return;
         let owner;

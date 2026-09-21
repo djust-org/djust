@@ -61,7 +61,12 @@ const src = readFileSync(
     resolve(__dirname, '../../python/djust/static/djust/src/03b-sse.js'),
     'utf8'
 );
-eval(src); // eslint-disable-line no-eval
+const requestSource = readFileSync(
+    resolve(__dirname, '../../python/djust/static/djust/src/04-cache.js'), 'utf8'
+);
+// Use the real shared registry rather than mocking acknowledgement semantics.
+eval(requestSource.slice(requestSource.indexOf('// Event sequencing'),
+    requestSource.indexOf('// State management')) + '\n' + src); // eslint-disable-line no-eval
 
 const { LiveViewSSE } = global.window.djust;
 
@@ -115,7 +120,7 @@ describe('LiveViewSSE', () => {
             expect(sse.sendEvent('increment', {})).toBe(false);
         });
 
-        it('returns true and posts when enabled and mounted', async () => {
+        it('returns server completion and posts when enabled and mounted', async () => {
             sse.enabled = true;
             sse.viewMounted = true;
             sse.sseBaseUrl = '/djust/sse/test-id/';
@@ -127,7 +132,9 @@ describe('LiveViewSSE', () => {
 
             const result = sse.sendEvent('increment', { count: 1 });
 
-            expect(result).toBe(true);
+            expect(typeof result.then).toBe('function');
+            const ref = JSON.parse(global.fetch.mock.calls[0][1].body).ref;
+            expect(Number.isSafeInteger(ref)).toBe(true);
             // #1237: sendEvent now delegates through sendMessage to /message/.
             expect(global.fetch).toHaveBeenCalledWith(
                 '/djust/sse/test-id/message/',
@@ -137,6 +144,7 @@ describe('LiveViewSSE', () => {
                         type: 'event',
                         event: 'increment',
                         params: { count: 1 },
+                        ref,
                     }),
                 })
             );

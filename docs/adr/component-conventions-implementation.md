@@ -147,14 +147,15 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
 
 ### Next milestone: E4 — request correlation
 
-Owner: current task implementer. Status: reproducer available; implementation
-open. This is a transport correctness slice, not permission to enable ADR-038.
+Owner: current task implementer. Status: foreground correlation implemented;
+background completion and remaining lifecycle verification open. This is a
+transport correctness slice, not permission to enable ADR-038.
 
-The working-tree `tests/js/request-correlation.test.js` reproducer last reported
-four failures and two passes: overlapping same-trigger replies clear loading
-early in WS/SSE; SSE supplies neither request refs nor an awaitable server
-completion. Duplicate-reply assertions were not reached after the earlier
-failure, so duplicate handling is a required test, not an established finding.
+The original `tests/js/request-correlation.test.js` reproducer reported four
+failures and two passes: overlapping same-trigger replies cleared loading early
+in WS/SSE; SSE supplied neither request refs nor an awaitable server completion.
+Those regressions now pass, including the formerly unreachable duplicate-reply
+assertions. The expanded suite covers cancellation and response variants.
 
 Deliverable: one shared request register/acknowledge/cancel contract used by WS
 and SSE. Inventory existing callers first: embedded responses, patch/HTML/no-op
@@ -163,11 +164,11 @@ Implementation must preserve their invariants rather than add parallel counters.
 
 Exit checklist:
 
-- [ ] Distinct request identities and awaitable completion on the actual server
+- [x] Distinct request identities and awaitable completion on the actual server
   reply; SSE POST acceptance alone does not complete the event.
-- [ ] Two requests from the same trigger remain pending after the first reply;
+- [x] Two requests from the same trigger remain pending after the first reply;
   out-of-order, duplicate and unknown refs cannot clear unrelated work.
-- [ ] Embedded, patch, HTML and no-op responses resolve only their own request;
+- [x] Embedded, patch, HTML and no-op responses resolve only their own request;
   background frames do not acknowledge a foreground request.
 - [ ] Failure, disconnect, replacement transport and removed/morphed controls
   drain only owned work and settle promises without stranding loading state.
@@ -927,6 +928,39 @@ Records coalesce repeated dispatches from the same element within one scope;
 they are not a per-request counter. Overlapping same-trigger requests, concurrent
 no-ref SSE replies, error/disconnect draining and multi-task background loading
 still need correlated lifecycle coverage before the broader ADR is accepted.
+
+### Foreground request correlation: WS and SSE
+
+Both transports now register requests in the same reference sequence and record
+the owning transport. Ordinary SSE sends return a server-response promise;
+accepting the HTTP POST is not completion. Teardown keepalive sends retain the
+existing fire-and-forget contract because the outgoing page cannot await its
+stream. Unknown/duplicate references never fall back to last-event pointers.
+No-ref compatibility can acknowledge one outstanding request, but does not guess
+between several. A background frame cannot acknowledge a foreground request.
+
+Loading consults outstanding requests before clearing a coalesced trigger or
+page scope. Replies can arrive out of order or after removal of the child owner.
+Targeted errors and failed SSE POSTs cancel only their reference; disconnect
+settles that transport's promises without consuming a replacement transport's
+requests. Cached/HTTP behavior and teardown tests remain in the full suite.
+
+Verification: the original six-test reproducer failed before the change; the
+expanded request tests and full JavaScript suite pass (2,001 tests, 188 files).
+Selected actual SSE endpoint/runtime and child-async server tests pass (55 tests).
+ESLint and whitespace checks pass. Generated clients were rebuilt from source.
+Live browser checks against an ephemeral Django backend observed a patch then
+no-op with loading true then false for WS; SSE returned ref 2 before ref 1 and
+still preserved loading until both completed. The temporary server reused the
+staged exposure fixture with its constructor bypass; this is not production
+activation, cross-worker coverage, or a complete provider/browser matrix.
+
+E4 remains open: background-task completion identity/multiplicity, ambiguous
+legacy no-ref overlap, and the remaining lifecycle matrix are not proven by
+foreground acknowledgements. In particular, acknowledging `async_pending`
+still separates the foreground promise from loading retained for later work;
+it does not establish per-task completion tracking. E1–E3 and ADR034–037 remain
+open, and explicit exposure is still unavailable to applications.
 
 ## Readiness audit
 

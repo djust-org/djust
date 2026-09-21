@@ -266,7 +266,7 @@ describe('LiveViewSSE', () => {
 
             const result = sse.sendEvent('increment', { amount: 1 });
 
-            expect(result).toBe(true);
+            expect(typeof result.then).toBe('function');
             expect(window.fetch).toHaveBeenCalledTimes(1);
             const [url, opts] = window.fetch.mock.calls[0];
             expect(url).toContain('/djust/sse/');
