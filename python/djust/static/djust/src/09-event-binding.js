@@ -797,6 +797,15 @@ async function _handleDjClick(element, e) {
 
     const parsed = parseEventHandler(rawClickValue);
 
+    // Client-owned dropdown selection dismisses immediately. Confirmation has
+    // already succeeded; notification/server failures must not reopen the UI.
+    const nativeMenu = element.closest('[data-dj-native-dropdown]');
+    if (parsed.name === 'select' && !element.disabled && nativeMenu
+        && getComponentId(nativeMenu) === getComponentId(element)
+        && typeof nativeMenu.hidePopover === 'function' && nativeMenu.matches(':popover-open')) {
+        nativeMenu.hidePopover();
+    }
+
     // dj-disable-with: disable and show loading text
     _applyDisableWith(element);
 
@@ -1463,8 +1472,106 @@ function installDelegatedListeners(root) {
     });
 }
 
+// Native visibility belongs to the browser. The weak record owns only delivery
+// bookkeeping; never write visibility in response to an acknowledgement.
+const _nativeDropdownObservers = new WeakMap();
+let _nativeObservationGeneration = 0;
+for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
+    window.addEventListener(event, () => { _nativeObservationGeneration += 1; });
+}
+
+function _nativeObservationReady() {
+    if (navigator.onLine === false) return false;
+    if (!liveViewWS) return !document.querySelector('[dj-view]');
+    if (!liveViewWS.enabled) {
+        return window.DJUST_USE_WEBSOCKET === false && !liveViewWS.eventSource;
+    }
+    const connection = liveViewWS.ws || liveViewWS.eventSource;
+    return !!(liveViewWS.viewMounted && connection && connection.readyState === 1);
+}
+
+function _nativeObservationIdentity(element) {
+    return [_nativeObservationGeneration, getComponentId(element), getEmbeddedViewId(element),
+        element.getAttribute('data-dj-observe-toggle'),
+        element.getAttribute('data-dj-observe-lifetime')].join('\u0000');
+}
+
+async function _flushNativeObservation(element, record) {
+    if (record.sending || !record.dirty || !_nativeObservationReady()
+        || !element.isConnected || _nativeDropdownObservers.get(element) !== record
+        || !element.hasAttribute('data-dj-native-dropdown')
+        || _nativeObservationIdentity(element) !== record.identity) return;
+    if (record.sequence >= Number.MAX_SAFE_INTEGER) return;
+    const open = record.open;
+    record.dirty = false;
+    record.sending = true;
+    const params = {open, sequence: ++record.sequence, lifetime: record.lifetime,
+        _targetElement: element, _skipLoading: true};
+    addEventContext(params, element);
+    try {
+        await handleEvent(record.handler, params);
+    } catch (error) {
+        // Transport diagnostics remain normal; no rollback or automatic retry.
+        if (globalThis.djustDebug) console.warn('[djust] Visibility observation failed', error);
+    } finally {
+        record.sending = false;
+        // Intermediate transitions may be dropped, including a return to the
+        // already-reported value. A response alone never schedules another send.
+        if (record.dirty && record.open === open) record.dirty = false;
+        if (record.dirty) void _flushNativeObservation(element, record);
+    }
+}
+
+function _bindNativeDropdownObservers(root) {
+    const selector = '[data-dj-native-dropdown]';
+    const elements = Array.from(root.querySelectorAll(selector));
+    if (root.matches && root.matches(selector)) elements.unshift(root);
+    elements.forEach(element => {
+        let record = _nativeDropdownObservers.get(element);
+        const handler = element.getAttribute('data-dj-observe-toggle');
+        const lifetime = element.getAttribute('data-dj-observe-lifetime');
+        const identity = _nativeObservationIdentity(element);
+        const changed = record && record.identity !== identity;
+        if (record && (changed || !handler || !lifetime)) {
+            element.removeEventListener('toggle', record.listener);
+            _nativeDropdownObservers.delete(element);
+            record = null;
+        }
+        if (!handler || !lifetime || !getComponentId(element)) return;
+        const sequence = Number(element.getAttribute('data-dj-observe-sequence'));
+        if (!Number.isSafeInteger(sequence) || sequence < 0) {
+            if (record) element.removeEventListener('toggle', record.listener);
+            _nativeDropdownObservers.delete(element);
+            return;
+        }
+        if (!record) {
+            record = {identity, handler, lifetime, sequence, sending: false, dirty: false};
+            const owned = record;
+            record.listener = event => {
+                if (event.target !== element || !['open', 'closed'].includes(event.newState)) return;
+                owned.open = event.newState === 'open';
+                owned.dirty = true;
+                void _flushNativeObservation(element, owned);
+            };
+            _nativeDropdownObservers.set(element, record);
+            element.addEventListener('toggle', record.listener);
+        } else {
+            record.sequence = Math.max(record.sequence, sequence);
+        }
+        if (changed || window.djust._isReconnect) {
+            record.open = element.matches(':popover-open');
+            record.dirty = true;
+        }
+        const current = record;
+        queueMicrotask(() => { void _flushNativeObservation(element, current); });
+    });
+}
+
+window.addEventListener('online', () => _bindNativeDropdownObservers(document));
+
 function bindLiveViewEvents(scope) {
     const root = scope || getLiveViewRoot() || document;
+    _bindNativeDropdownObservers(root);
 
     // Install delegated listeners on the LiveView root element.
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
