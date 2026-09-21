@@ -447,6 +447,15 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
   unchanged legacy behavior. Invalid input must never invoke application code.
+  The [staged client collector](036-strict-client-collection.md) now rejects
+  malformed typed literals, normalized collisions, unsafe numeric values and
+  reserved routing keys, and returns bounded detached JSON snapshots. Its 57
+  parser tests pass; independent review verified the serialization-hook fix.
+  It is not yet connected to native binders: scoped public contract delivery,
+  wire-hint conflicts, generated-value conventions and real browser/transport
+  integration remain open. Legacy bindings are unchanged.
+  Three final unchanged-code JavaScript runs each passed 2,093 tests in 190
+  files; 91 client-asset tests and zero-warning bundle ESLint also passed.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 
