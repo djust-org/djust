@@ -1482,7 +1482,7 @@ for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide'])
 
 function _nativeObservationReady() {
     if (navigator.onLine === false) return false;
-    if (!liveViewWS) return !document.querySelector('[dj-view]');
+    if (!liveViewWS) return !findPageViewContainer();
     if (!liveViewWS.enabled) {
         return window.DJUST_USE_WEBSOCKET === false && !liveViewWS.eventSource;
     }
