@@ -1,0 +1,1 @@
+- Add staged owner-addressed public parameter contracts to WebSocket and SSE mount frames, keeping same-named root, component and embedded-view handlers separate without exposing defaults or instance state. Native strict event binding and post-mount contract refresh remain pending.

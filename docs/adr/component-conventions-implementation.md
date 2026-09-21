@@ -456,6 +456,16 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   integration remain open. Legacy bindings are unchanged.
   Three final unchanged-code JavaScript runs each passed 2,093 tests in 190
   files; 91 client-asset tests and zero-warning bundle ESLint also passed.
+  Subsequent [owner-addressed mount manifests](036-owner-contract-manifests.md)
+  now reach actual WS (including actors) and SSE clients. Public contracts are
+  separated by transport, mount path and registered owner address, not merged
+  by handler name. Focused server coverage passes 61 cases; the browser-bundle
+  mount fixture covers primary/additional mounts, navigation and invalid
+  replacement metadata. Initial HTTP delivery, applied-render refresh,
+  DOM-generation matching and native binder activation remain open.
+  Three final full Python runs each passed 30,565 tests (952 skipped); three
+  full JavaScript runs each passed 2,104 tests in 191 files. Asset checks (91),
+  mypy (1,034 files) and zero-warning bundle ESLint also passed.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 
