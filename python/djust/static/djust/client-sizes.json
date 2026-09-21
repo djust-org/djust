@@ -9,9 +9,9 @@
   "minified_raw": { "artifact": "client.min.js", "bytes": 253413 },
   "unminified": {
     "artifact": "client.js",
-    "bytes": 850538,
-    "gz_bytes": 219940,
-    "gz_kb": 214.8,
+    "bytes": 856513,
+    "gz_bytes": 221451,
+    "gz_kb": 216.3,
     "modules": 56,
     "note": "A build INPUT, not a deliverable. Claims about it need <!-- size-claim: unminified --> on the line."
   }

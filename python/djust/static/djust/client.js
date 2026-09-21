@@ -4295,6 +4295,120 @@ function collectDjValues(element) {
     return values;
 }
 
+// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// owner-scoped binder must supply only documented generated application values;
+// routing context is attached afterwards, never collected from markup here.
+function _collectStrictEventParams(element, generated = {}, positional = []) {
+    const reject = () => { throw new Error('Invalid strict event arguments'); };
+    const values = Object.create(null);
+    const reserved = new Set([...UNSAFE_KEYS, '_args', 'component_id', 'view_id',
+        '_targetElement', '_optimisticUpdateId', '_skipLoading', '_djTargetSelector']);
+    let nodes = 0;
+    let textSize = 0;
+    const active = new Set();
+    const plainObject = value => {
+        const proto = Object.getPrototypeOf(value);
+        return proto === null || Object.getPrototypeOf(proto) === null;
+    };
+    const ownValue = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor || !Object.hasOwn(descriptor, 'value')) reject();
+        return descriptor.value;
+    };
+    const visit = (value, depth = 0) => {
+        if (++nodes > 10000 || depth > 32) reject();
+        if (typeof value === 'string') {
+            textSize += value.length;
+            if (textSize > 65536) reject();
+        } else if (typeof value === 'number') {
+            if (!Number.isFinite(value)) reject();
+        } else if (value !== null && typeof value === 'object') {
+            if (active.has(value)) reject();
+            const array = Array.isArray(value);
+            if (array && value.length > 1024) reject();
+            if (!array && !plainObject(value)) reject();
+            const keys = array ? null : Object.keys(value);
+            if (keys && keys.length > 1024) reject();
+            active.add(value);
+            const snapshot = array ? [] : Object.create(null);
+            if (array) {
+                for (let i = 0; i < value.length; i++) {
+                    snapshot.push(visit(ownValue(value, String(i)), depth + 1));
+                }
+            } else {
+                for (const key of keys) {
+                    visit(key, depth + 1);
+                    // eslint-disable-next-line security/detect-object-injection
+                    snapshot[key] = visit(ownValue(value, key), depth + 1);
+                }
+            }
+            active.delete(value);
+            return snapshot;
+        } else if (value !== null && typeof value !== 'boolean') reject();
+        return value;
+    };
+    const put = (key, value) => {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || reserved.has(key) || Object.hasOwn(values, key)) reject();
+        // eslint-disable-next-line security/detect-object-injection
+        values[key] = value;
+    };
+    if (!generated || typeof generated !== 'object' || Array.isArray(generated) || !plainObject(generated) || !Array.isArray(positional)) reject();
+    for (const key of Object.keys(generated)) put(key, ownValue(generated, key));
+    let literalSize = 0;
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+        literalSize += attr.value.length + attr.name.length;
+        if (literalSize > 65536) reject();
+        const parts = attr.name.slice(9).split(':');
+        if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
+        const key = parts[0].replace(/-/g, '_');
+        const hint = parts[1];
+        let value = attr.value;
+        const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
+        if (hint) {
+            switch (hint) {
+                case 'int': case 'integer':
+                    if (text.length > 1024 || !/^[+-]?[0-9]+(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    if (!Number.isSafeInteger(value)) reject();
+                    break;
+                case 'float': case 'number':
+                    // Bounded input and disjoint decimal/exponent delimiters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    if (text.length > 1024 || !/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    break;
+                case 'bool': case 'boolean': {
+                    const lower = text.toLowerCase();
+                    if (!['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(lower)) reject();
+                    value = ['true', '1', 'yes', 'on'].includes(lower);
+                    break;
+                }
+                case 'json': case 'array': case 'list': case 'object':
+                    try { value = JSON.parse(value); } catch { reject(); }
+                    // Inspect number tokens before their integer spelling is
+                    // lost. Strings are matched as whole tokens, including
+                    // escapes, so their digits are never treated as numbers.
+                    // JSON.parse has already validated this bounded literal;
+                    // the alternatives have disjoint starting characters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    for (const token of attr.value.match(/"(?:\\[\s\S]|[^"\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/g) || []) {
+                        if (!token.startsWith('"') && !/[.eE]/.test(token) && !Number.isSafeInteger(Number(token))) reject();
+                    }
+                    if ((hint === 'array' || hint === 'list') && !Array.isArray(value)) reject();
+                    if (hint === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) reject();
+                    break;
+                default: reject();
+            }
+        }
+        put(key, value);
+    }
+    const snapshot = visit(values);
+    const args = visit(positional);
+    if (args.length) snapshot._args = args;
+    return snapshot;
+}
+
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
