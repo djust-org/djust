@@ -7,6 +7,10 @@ let _djustHttpFallbackWarned = false;
 // Local operations share request bookkeeping with socket transports. Their
 // completion is owned by the awaited operation, never by a server-supplied ref.
 const _localEventTransport = {};
+let _httpPageGeneration = 0;
+for (const event of ['djust:before-navigate', 'turbo:before-visit']) {
+    window.addEventListener(event, () => { _httpPageGeneration += 1; });
+}
 
 // Main Event Handler
 //
@@ -230,6 +234,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     const httpRequest = teardown ? null
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpUrl = window.location.href;
+    const httpGeneration = _httpPageGeneration;
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+        && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
     try {
         // Read CSRF token from hidden input first, fall back to cookie.
         // Skip the hidden input if its value is empty — the Rust engine
@@ -253,8 +262,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         }
 
         // This response belongs to the outgoing view; never patch the new one.
-        if (teardown) return;
+        if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();
+        // Parsing can yield after headers arrived; navigation during either
+        // await invalidates every response effect, including metadata/cache.
+        if (!ownsHttpResponse()) return;
         // Same client-owned-flag strip as the WebSocket and SSE transports
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.

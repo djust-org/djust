@@ -101,6 +101,24 @@ transport ownership of buffered unsolicited patches, and failure/recovery
 ordering. Keep those separate from mount-time frames, which do not own a
 foreground request. This slice does not close E4.
 
+## Outgoing HTTP response ownership — E4 slice
+
+HTTP fallback captures the root DOM owner, URL and navigation generation before
+sending. Responses are discarded before application if those change while
+waiting for headers or parsing the body. The navigation generation also covers
+same-URL navigation that reuses the root node. Teardown remains detached and
+the existing finally cleanup releases each local request.
+
+Two replacement tests failed before the guard, demonstrating that stale page
+metadata reached the new page from either await boundary. The final fixture
+also covers the native before-navigate signal without changing the DOM or URL.
+These controlled-fetch bundled-client tests do not establish live browser
+navigation or cancellation of a fetch that never settles. Buffered socket
+update ownership and navigation/disconnect cancellation remain E4 audit items.
+The final rebuilt-client suite passed 2,021 tests in 189 files and bundle
+ESLint passed without warnings. The earlier six fragment-test failures were a
+window stub missing addEventListener, corrected without changing their asserts.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
