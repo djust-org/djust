@@ -188,7 +188,12 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                     "url": request.path,
                 }
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            mounted = await socket.receive_json_from(timeout=3)
+            assert mounted["type"] == "mount"
+            contracts = mounted["parameter_contracts"]
+            assert contracts["version"] == 1
+            assert contracts["owners"][0]["handlers"]["select"]["policy"] == "strict"
+            assert "double" not in contracts["owners"][0]["handlers"]
             for value, expected in [("7", "patch"), ("SECRET_INVALID", "error")]:
                 await socket.send_json_to(
                     {
@@ -228,7 +233,11 @@ async def test_real_sse_strict_positional_and_rejection():
         assert response.status_code == 200
         session = _sse_sessions[sid]
         try:
-            drain(session)
+            mounted = next(frame for frame in drain(session) if frame["type"] == "mount")
+            assert (
+                mounted["parameter_contracts"]["owners"][0]["handlers"]["select"]["policy"]
+                == "strict"
+            )
             for value in ("7", "SECRET_INVALID"):
                 post = await sync_to_async(request_for)(
                     "POST",

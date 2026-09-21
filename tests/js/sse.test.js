@@ -19,6 +19,8 @@ global.window.djust = global.window.djust || {};
 // Stubs for functions LiveViewSSE calls inside handleMessage
 global.clientVdomVersion = 0;
 global.installMountEventConfig = vi.fn();
+// Owner contracts are exercised with the full bundle in parameter_contract_mounts.test.js.
+global._installParameterContracts = vi.fn();
 global.cancelPendingRateLimits = vi.fn();
 global._stampDjIds = vi.fn();
 global.bindLiveViewEvents = vi.fn();

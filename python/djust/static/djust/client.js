@@ -988,6 +988,7 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
+        this._parameterContracts = new Map();
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -1267,6 +1268,7 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
+                _installParameterContracts(this, data.parameter_contracts, data.view);
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
@@ -2501,6 +2503,7 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        this._parameterContracts = new Map();
         cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
@@ -2563,6 +2566,7 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
+                _installParameterContracts(this, data.parameter_contracts, data.view);
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -4293,6 +4297,59 @@ function collectDjValues(element) {
     }
 
     return values;
+}
+
+// A mount owns its manifest. Never merge contracts by handler name, or retain
+// a previous mount's contracts when a legacy server omits this field.
+function _installParameterContracts(transport, manifest, viewPath) {
+    if (!transport._parameterContracts || viewPath === transport.primaryViewPath) transport._parameterContracts = new Map();
+    transport._parameterContracts.set(viewPath, null);
+    if (manifest === undefined || manifest === null) return;
+    const reject = () => { throw new Error('Invalid public parameter contracts'); };
+    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    transport._parameterContracts.set(viewPath, false);
+    if (typeof viewPath !== 'string' || !viewPath) reject();
+    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
+    const owners = new Map();
+    let count = 0;
+    for (const owner of manifest.owners) {
+        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
+        const key = JSON.stringify([owner.view_id, owner.component_id]);
+        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+        const handlers = new Map();
+        for (const [name, contract] of Object.entries(owner.handlers)) {
+            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
+            if (contract.policy === 'legacy') {
+                handlers.set(name, Object.freeze({policy: 'legacy'}));
+            } else if (contract.policy === 'strict') {
+                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+                const seen = new Set();
+                const parameters = contract.parameters.map(parameter => {
+                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+                    seen.add(parameter.name);
+                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                        required: parameter.required, reduced_checking: parameter.reduced_checking});
+                });
+                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
+            } else reject();
+        }
+        owners.set(key, handlers);
+    }
+    if (!owners.has('[null,null]')) reject();
+    transport._parameterContracts.set(viewPath, owners);
+}
+
+function _lookupParameterContract(transport, viewPath, viewId, componentId, eventName) {
+    const mounts = transport._parameterContracts;
+    if (!mounts || !mounts.has(viewPath)) throw new Error('Unknown parameter contract mount');
+    const owners = mounts.get(viewPath);
+    if (owners === null) return null;
+    if (owners === false) throw new Error('Invalid public parameter contracts');
+    const handlers = owners.get(JSON.stringify([viewId, componentId]));
+    if (!handlers || !handlers.has(eventName)) throw new Error('Unknown parameter contract owner or handler');
+    return handlers.get(eventName);
 }
 
 // ADR-036 staged collector. Deliberately not called by legacy binders. The

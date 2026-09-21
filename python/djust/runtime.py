@@ -3007,6 +3007,14 @@ class ViewRuntime:
         if handler_config:
             mount_msg["handler_config"] = handler_config
 
+        # ADR-036: public input contracts retain their dispatch owner rather
+        # than being merged into the global handler-name rate-limit map.
+        from ._parameter_metadata import parameter_contract_manifest
+
+        parameter_contracts = parameter_contract_manifest(view_instance)
+        if parameter_contracts is not None:
+            mount_msg["parameter_contracts"] = parameter_contracts
+
         # optimistic_rules (DEP-002, WS websocket.py:2823-2826) — descriptor
         # components with tier="optimistic" ship their client-side rules on the
         # mount frame so the client can apply an optimistic UI update before the

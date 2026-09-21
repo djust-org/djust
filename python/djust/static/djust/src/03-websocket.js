@@ -252,6 +252,7 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
+        this._parameterContracts = new Map();
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -531,6 +532,7 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
+                _installParameterContracts(this, data.parameter_contracts, data.view);
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'

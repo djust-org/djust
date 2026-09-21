@@ -139,6 +139,7 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        this._parameterContracts = new Map();
         cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
@@ -201,6 +202,7 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
+                _installParameterContracts(this, data.parameter_contracts, data.view);
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
