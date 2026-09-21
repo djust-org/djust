@@ -33,7 +33,11 @@ from django.db import models
 
 from ..serialization import decode_state_roundtrip, normalize_django_value
 from ..utils import is_model_list
-from ..validation import validate_handler_params
+from ..validation import (
+    validate_handler_params,
+    validated_call_arguments,
+    get_handler_parameter_policy,
+)
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
@@ -813,6 +817,9 @@ class RequestMixin:
                     event_meta = handler._djust_decorators.get("event_handler", {})
                     coerce = event_meta.get("coerce_types", True)
 
+                if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
+                    if "_args" in data:
+                        params["_args"] = data["_args"]
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
                     logger.error("Parameter validation failed: %s", validation["error"])
@@ -829,12 +836,9 @@ class RequestMixin:
                         status=400,
                     )
 
-                coerced_params = validation.get("coerced_params", params)
+                call_args, call_kwargs = validated_call_arguments(validation)
                 t0_handler = time.perf_counter()
-                if coerced_params:
-                    handler(**coerced_params)
-                else:
-                    handler()
+                handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
 
             # Persist user-defined _private attributes BEFORE get_context_data()

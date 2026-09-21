@@ -9,7 +9,7 @@ import asyncio
 import functools
 import logging
 import threading
-from typing import Callable, Any, TypeVar, Union, cast, List, Optional, overload
+from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal, overload
 
 from ._deprecation import warn_deprecated
 from ._state import StateProperty as StateProperty
@@ -77,6 +77,7 @@ def event_handler(
     coerce_types: bool = ...,
     expose_api: bool = ...,
     serialize: Optional[Union[Callable[..., Any], str]] = ...,
+    parameter_policy: Optional[Literal["legacy", "strict"]] = ...,
 ) -> Callable[[F], F]: ...
 
 
@@ -86,6 +87,7 @@ def event_handler(
     coerce_types: bool = True,
     expose_api: bool = False,
     serialize: Optional[Union[Callable[..., Any], str]] = None,
+    parameter_policy: Optional[Literal["legacy", "strict"]] = None,
 ) -> Any:
     """
     Mark method as event handler with automatic signature introspection.
@@ -101,6 +103,10 @@ def event_handler(
         params: Optional explicit parameter list (overrides auto-extraction)
         description: Human-readable description (overrides docstring)
         coerce_types: Whether to coerce string params to expected types (default: True)
+        parameter_policy: Override the server parameter policy with "strict" or
+            "legacy"; None inherits LIVEVIEW_CONFIG['event_parameter_policy']
+            (default "legacy"). ADR-036's strict client collection and complete
+            migration/acceptance matrix are still staged.
         expose_api: Expose this handler as an HTTP API endpoint at
             ``POST /djust/api/<view_slug>/<handler_name>/`` with OpenAPI 3.1 schema.
             Default is False (WebSocket-only). When True, the same handler runs with
@@ -156,6 +162,9 @@ def event_handler(
     Note: The @event alias is deprecated. Use @event_handler directly.
     """
 
+    if parameter_policy not in (None, "legacy", "strict"):
+        raise ValueError("parameter_policy must be 'legacy', 'strict', or None")
+
     def decorator(func: F) -> F:
         # Import here to avoid circular dependency
         from djust.validation import get_handler_signature_info
@@ -180,7 +189,9 @@ def event_handler(
             )
 
         # Extract comprehensive signature information
-        sig_info = get_handler_signature_info(func)
+        sig_info = get_handler_signature_info(
+            func, parameter_policy=parameter_policy, for_declaration=True
+        )
 
         # Use explicit params if provided, otherwise use extracted
         if params is not None:
@@ -205,6 +216,7 @@ def event_handler(
                 "coerce_types": coerce_types,  # Whether to coerce string params
                 "expose_api": expose_api,  # ADR-008: expose as HTTP API endpoint
                 "serialize": serialize,  # ADR-008 follow-up: per-handler HTTP response override
+                "parameter_policy": parameter_policy,
             },
         )
 
@@ -450,6 +462,7 @@ def is_action(func: Any) -> bool:
 def server_function(
     description: Any = "",
     coerce_types: bool = True,
+    parameter_policy: Optional[Literal["legacy", "strict"]] = None,
 ) -> Any:
     """Mark a method as a same-origin browser RPC target (v0.7.0).
 
@@ -473,6 +486,8 @@ def server_function(
         description: Optional human-readable description (overrides docstring).
         coerce_types: Coerce string params to the method's typed signature.
             Default True.
+        parameter_policy: Server parameter policy override ("strict" or "legacy").
+            None inherits the project's event_parameter_policy, default "legacy".
 
     Usage::
 
@@ -493,6 +508,9 @@ def server_function(
     inner wrapper and the dispatcher cannot see it.
     """
 
+    if parameter_policy not in (None, "legacy", "strict"):
+        raise ValueError("parameter_policy must be 'legacy', 'strict', or None")
+
     def decorator(func: F) -> F:
         from djust.validation import get_handler_signature_info
 
@@ -504,7 +522,9 @@ def server_function(
                 f"@server_function (RPC/no-re-render). Pick one."
             )
 
-        sig_info = get_handler_signature_info(func)
+        sig_info = get_handler_signature_info(
+            func, parameter_policy=parameter_policy, for_declaration=True
+        )
         _desc = description if isinstance(description, str) else ""
         _add_decorator_metadata(
             func,
@@ -517,6 +537,7 @@ def server_function(
                 "required": [p["name"] for p in sig_info["params"] if p["required"]],
                 "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
                 "coerce_types": coerce_types,
+                "parameter_policy": parameter_policy,
             },
         )
         return func

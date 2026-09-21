@@ -43,7 +43,7 @@ from djust.rate_limit import (
     handler_rate_check,
     reset_handler_buckets,
 )
-from djust.validation import validate_handler_params
+from djust.validation import validate_handler_params, validated_call_arguments
 from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
 logger = logging.getLogger(__name__)
@@ -361,14 +361,14 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
                 "type_errors": validation.get("type_errors") or [],
             },
         )
-    coerced = validation["coerced_params"]
+    call_args, call_kwargs = validated_call_arguments(validation)
 
     # 11. Snapshot pre-state.
     pre = _snapshot_assigns(view)
 
     # 12. Invoke the handler.
     try:
-        return_value = _call_possibly_async(handler, **coerced)
+        return_value = _call_possibly_async(handler, *call_args, **call_kwargs)
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except Exception:
@@ -573,11 +573,11 @@ def dispatch_server_function(
                 "type_errors": validation.get("type_errors") or [],
             },
         )
-    coerced = validation["coerced_params"]
+    call_args, call_kwargs = validated_call_arguments(validation)
 
     # 9. Invoke (supports sync + async def via _call_possibly_async).
     try:
-        result = _call_possibly_async(fn, **coerced)
+        result = _call_possibly_async(fn, *call_args, **call_kwargs)
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except Exception:

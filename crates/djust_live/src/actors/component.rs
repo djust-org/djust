@@ -245,6 +245,11 @@ impl ComponentActor {
         // Phase 8.2: Call Python event handler if available
         let result = self.call_python_handler(&event_name, &params);
 
+        // A rejected strict payload must never enter the legacy state fallback.
+        if matches!(result, Err(ActorError::InvalidParameters)) {
+            return Err(ActorError::InvalidParameters);
+        }
+
         // If handler call succeeded, sync state from Python
         if result.is_ok() {
             if let Err(e) = self.sync_state_from_python() {
@@ -310,8 +315,9 @@ impl ComponentActor {
                     .map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
             }
 
-            // Call handler(**params)
-            handler.call((), Some(&params_dict)).map_err(|e| {
+            // Same Python contract boundary as view actors.
+            let (args, kwargs) = super::prepare_python_handler_call(py, &handler, &params_dict)?;
+            handler.call(&args, Some(&kwargs)).map_err(|e| {
                 ActorError::Python(format!(
                     "Error in component '{}' handler '{}': {}",
                     self.component_id, event_name, e

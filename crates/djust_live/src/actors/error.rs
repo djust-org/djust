@@ -37,6 +37,10 @@ pub enum ActorError {
     #[error("Python error: {0}")]
     Python(String),
 
+    /// A strict parameter contract rejected input before application execution.
+    #[error("Invalid handler parameters")]
+    InvalidParameters,
+
     /// Serialization error
     #[error("Serialization error: {0}")]
     Serialization(String),

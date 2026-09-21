@@ -20,6 +20,7 @@ class PostProcessingMixin:
         # so the strict-island mypy run resolves it on the mixin without a
         # runtime change — this mixin is never instantiated standalone.
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+        def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
 
     def get_debug_info(self) -> Dict[str, Any]:
         """
@@ -70,7 +71,7 @@ class PostProcessingMixin:
                         "params": sig_info["params"],
                         "description": sig_info["description"],
                         "accepts_kwargs": sig_info["accepts_kwargs"],
-                        "decorators": getattr(attr, "_djust_decorators", {}),
+                        "decorators": self._extract_handler_metadata().get(name, {}),
                     }
 
             elif (

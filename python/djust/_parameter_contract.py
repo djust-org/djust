@@ -30,6 +30,7 @@ _ASCII_SPACE = " \t\n\r\v\f"
 _INTEGER = re.compile(r"[+-]?[0-9]+\Z")
 _NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+_SERVER_DEFAULT = object()
 
 
 class ContractError(ValueError):
@@ -198,7 +199,20 @@ class ParameterContract:
     def compile(cls, handler: Callable[..., Any]) -> "ParameterContract":
         try:
             signature = inspect.signature(handler)
-            hints = get_type_hints(handler, include_extras=True)
+
+            # An input contract must not evaluate a return annotation (which
+            # may refer to a containing class or an optional output provider).
+            def inputs() -> None:
+                pass
+
+            inputs.__annotations__ = {
+                name: parameter.annotation
+                for name, parameter in signature.parameters.items()
+                if parameter.annotation is not inspect.Parameter.empty
+            }
+            origin = inspect.unwrap(handler)
+            namespace = getattr(origin, "__globals__", None)
+            hints = get_type_hints(inputs, globalns=namespace, include_extras=True)
         except (TypeError, ValueError, NameError, AttributeError):
             raise ContractError(
                 "Cannot resolve the handler's signature and parameter annotations."
@@ -216,7 +230,25 @@ class ParameterContract:
                         f"Parameter '{name}' requires an annotation; use Any for unchecked input."
                     )
             compiled.append((name, _compile_type(annotation)))
-        return cls(signature, tuple(compiled))
+        # Binding only needs to know whether a default exists. Retaining the
+        # actual object here would let a function-keyed cache retain its owner
+        # through a default/owner/function cycle. Python applies real defaults
+        # when the handler is called; never apply_defaults() to this call plan.
+        binding_signature = signature.replace(
+            parameters=[
+                parameter.replace(
+                    annotation=inspect.Parameter.empty,
+                    default=(
+                        _SERVER_DEFAULT
+                        if parameter.default is not inspect.Parameter.empty
+                        else inspect.Parameter.empty
+                    ),
+                )
+                for parameter in signature.parameters.values()
+            ],
+            return_annotation=inspect.Signature.empty,
+        )
+        return cls(binding_signature, tuple(compiled))
 
     def metadata(self) -> tuple[dict[str, Any], ...]:
         """Value-free public contract; defaults stay exclusively on the server."""

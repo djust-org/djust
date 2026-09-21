@@ -381,6 +381,7 @@ impl ViewActor {
                     })
                     .map_err(|e| ActorError::template(e.to_string()))
             }
+            Err(ActorError::InvalidParameters) => Err(ActorError::InvalidParameters),
             Err(e) => {
                 // Handler call failed - still try to render current state
                 warn!(
@@ -444,8 +445,10 @@ impl ViewActor {
                     .map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
             }
 
-            // Call handler(**params)
-            handler.call((), Some(&params_dict)).map_err(|e| {
+            // Bind strict contracts at the Python boundary, so typed values and
+            // positional-only arguments are not flattened into Rust Value.
+            let (args, kwargs) = super::prepare_python_handler_call(py, &handler, &params_dict)?;
+            handler.call(&args, Some(&kwargs)).map_err(|e| {
                 ActorError::Python(format!(
                     "Error in {}.{}(): {}",
                     self.view_path, event_name, e

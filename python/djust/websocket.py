@@ -18,7 +18,7 @@ from .change_detection import (
     warn_fingerprint_truncated,
 )
 from .serialization import DjangoJSONEncoder, fast_json_loads
-from .validation import validate_handler_params
+from .validation import validate_handler_params, validated_call_arguments
 from .profiler import profiler
 from .security import handle_exception, sanitize_for_log
 from .config import config as djust_config
@@ -1725,11 +1725,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return
         coerced_params = validation.get("coerced_params", params)
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # --- handler invocation ----------------------------------------
         pre_assigns = _snapshot_assigns(self.view_instance)
         try:
-            await _call_handler(handler, coerced_params if coerced_params else None)
+            await _call_handler(handler, call_kwargs or None, positional_args=call_args)
         except Exception:  # noqa: BLE001 — never break the flush
             logger.exception(
                 "Deferred-activity event %r on %s raised during dispatch",

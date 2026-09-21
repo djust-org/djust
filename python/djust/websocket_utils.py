@@ -105,9 +105,9 @@ def get_handler_coerce_setting(handler: Callable[..., Any]) -> bool:
     Returns:
         True if type coercion should be enabled (default), False if disabled
     """
-    if hasattr(handler, "_djust_decorators"):
-        return bool(handler._djust_decorators.get("event_handler", {}).get("coerce_types", True))
-    return True
+    from .validation import get_handler_coercion
+
+    return get_handler_coercion(handler)
 
 
 def _check_event_security(
@@ -328,7 +328,10 @@ async def _validate_event_security(
 
 
 async def _call_handler(
-    handler: Callable[..., Any], params: Optional[Dict[str, Any]] = None
+    handler: Callable[..., Any],
+    params: Optional[Dict[str, Any]] = None,
+    *,
+    positional_args: tuple[Any, ...] = (),
 ) -> Any:
     """
     Call an event handler, handling both sync and async handlers.
@@ -337,20 +340,17 @@ async def _call_handler(
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
-            Positional args from dj-click="handler('value')" syntax are merged
-            into params by validate_handler_params() before calling this.
+        positional_args: Validated positional arguments. Strict call plans
+            preserve positional-only arguments rather than flattening them into
+            keywords. Legacy validation retains its existing keyword mapping.
 
     Returns:
         The result of calling the handler
     """
     if inspect.iscoroutinefunction(handler):
         # Handler is already async, call it directly
-        if params:
-            return await handler(**params)
-        return await handler()
+        return await handler(*positional_args, **(params or {}))
     else:
         # Sync handler — run via sync_to_async to avoid blocking the event
         # loop. Handlers commonly do ORM queries or other I/O.
-        if params:
-            return await sync_to_async(handler)(**params)
-        return await sync_to_async(handler)()
+        return await sync_to_async(handler)(*positional_args, **(params or {}))

@@ -45,6 +45,32 @@ class HandlerMixin:
 
                 if hasattr(method, "_djust_decorators"):
                     metadata[name] = method._djust_decorators
+                    from ..validation import (
+                        get_handler_parameter_policy,
+                        get_strict_handler_contract,
+                    )
+
+                    if get_handler_parameter_policy(method) == "strict":
+                        # No server default values or mutable shared decorator
+                        # dictionaries cross into strict client metadata.
+                        metadata[name] = dict(method._djust_decorators)
+                        key = (
+                            "event_handler"
+                            if "event_handler" in metadata[name]
+                            else "server_function"
+                        )
+                        if key in metadata[name]:
+                            contract = get_strict_handler_contract(method)
+                            parameters = list(contract.metadata())
+                            item = dict(metadata[name][key])
+                            item.update(
+                                parameter_policy="strict",
+                                params=parameters,
+                                param_names=[p["name"] for p in parameters],
+                                required=[p["name"] for p in parameters if p["required"]],
+                                optional=[p["name"] for p in parameters if not p["required"]],
+                            )
+                            metadata[name][key] = item
                     logger.debug(
                         f"[LiveView]   Found decorated handler: {name} -> "
                         f"{list(method._djust_decorators.keys())}"

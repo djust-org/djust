@@ -69,7 +69,11 @@ if TYPE_CHECKING:
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
-from .validation import validate_handler_params
+from .validation import (
+    validate_handler_params,
+    validated_call_arguments,
+    get_handler_parameter_policy,
+)
 from .websocket_utils import (
     _call_handler,
     _safe_error,
@@ -1213,6 +1217,9 @@ class WSConsumerTransport:
 
             # Validate parameters before sending to actor (websocket.py:3308-3323).
             coerce = get_handler_coerce_setting(handler)
+            strict_params = (
+                dict(params) if get_handler_parameter_policy(handler) == "strict" else None
+            )
             positional_args = params.pop("_args", []) if isinstance(params, dict) else []
             validation = validate_handler_params(
                 handler, params, event_name, coerce=coerce, positional_args=positional_args
@@ -1232,6 +1239,8 @@ class WSConsumerTransport:
 
             # Call actor event handler (will call Python handler internally)
             # (websocket.py:3326).
+            if strict_params is not None:
+                params = strict_params
             result = await consumer.actor_handle.event(event_name, params)
 
             # Send patches if available, otherwise full HTML. Ignore the actor
@@ -3387,6 +3396,7 @@ class ViewRuntime:
             return
 
         coerced_params = validation.get("coerced_params", params)
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # Snapshot pre-handler assigns for change detection.
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
@@ -3410,7 +3420,7 @@ class ViewRuntime:
         _handler_start = time.perf_counter()
         try:
             try:
-                await _call_handler(handler, coerced_params if coerced_params else None)
+                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
                 restrict_diagnostics(view)
             except Exception as exc:
                 restrict_diagnostics(view)
@@ -3711,11 +3721,12 @@ class ViewRuntime:
             )
             return
         coerced_params = validation.get("coerced_params", params)
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # --- handler invocation -------------------------------------------
         pre_assigns = _snapshot_assigns(self.view_instance)
         try:
-            await _call_handler(handler, coerced_params if coerced_params else None)
+            await _call_handler(handler, call_kwargs or None, positional_args=call_args)
             restrict_diagnostics(target_view)
         except Exception:  # noqa: BLE001 — never break the flush
             restrict_diagnostics(target_view)
@@ -4145,6 +4156,7 @@ class ViewRuntime:
             return True
 
         coerced_params = validation.get("coerced_params", params)
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # Time-travel record (ADR-022 Iter 2 Phase 2.2). For a sticky-child event
         # the snapshot records against the CHILD (``target_view``) — the child is
@@ -4159,7 +4171,7 @@ class ViewRuntime:
 
         try:
             try:
-                await _call_handler(handler, coerced_params if coerced_params else None)
+                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
             except Exception as exc:
                 if explicit_child:
                     _tt_error = "Child event failed"
@@ -4362,6 +4374,7 @@ class ViewRuntime:
             return True
 
         coerced_event_data = validation.get("coerced_params", event_data)
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # Time-travel record (ADR-022 Iter 2 Phase 2.2). Per #1467 canon a
         # LiveComponent has NO separate time-travel buffer in Phase 1, so the
@@ -4386,7 +4399,7 @@ class ViewRuntime:
 
         try:
             try:
-                await _call_handler(handler, coerced_event_data if coerced_event_data else None)
+                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
             except Exception as exc:
                 _tt_error = str(exc)[:200]
                 response = handle_exception(
