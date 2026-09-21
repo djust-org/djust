@@ -88,8 +88,7 @@ async function handleEmbeddedResponse(data, transport) {
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
-        const buffered = takeServerUpdates(transport);
-        for (const frame of buffered) await handleServerResponse(frame, null, null);
+        await flushServerUpdates(transport);
     }
     return true;
 }

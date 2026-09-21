@@ -412,7 +412,7 @@ the ASGI server."* djust does not own the deflate context and cannot seed it.
 The only remaining route is application-layer compression **inside** the message
 payload plus a JS decompressor on the client. That means:
 - double compression (app-layer output is then re-deflated by the transport),
-- a decompressor added to a client budget CLAUDE.md pins at **~61 KB gzipped**,
+- a decompressor added to a client budget CLAUDE.md pins at **~64 KB gzipped**,
 - and a wire-format version negotiation for older deployed clients.
 
 **Effort:** Medium-to-large, not Small. **Confidence:** Low as specified.

@@ -31,9 +31,9 @@ function bufferServerUpdate(transport, data) {
     _tickBuffer.push(data);
 }
 
-function takeServerUpdates(transport) {
+function takeServerUpdates(transport, limit = Infinity) {
     const owned = [];
-    for (let index = 0; index < _tickBuffer.length;) {
+    for (let index = 0; index < _tickBuffer.length && owned.length < limit;) {
         // index is a bounded local array cursor, never a wire-provided key.
         // eslint-disable-next-line security/detect-object-injection
         const frame = _tickBuffer[index];
@@ -44,6 +44,16 @@ function takeServerUpdates(transport) {
         } else index += 1;
     }
     return owned;
+}
+
+async function flushServerUpdates(transport) {
+    // Leave unprocessed frames owned by the queue across application awaits.
+    // Disconnect can discard them, and a newly started event can defer them.
+    while (!hasPendingEventRequests(transport)) {
+        const [frame] = takeServerUpdates(transport, 1);
+        if (!frame) return;
+        await handleServerResponse(frame, null, null);
+    }
 }
 
 /** Register before sending: even an immediate reply must find its request. */

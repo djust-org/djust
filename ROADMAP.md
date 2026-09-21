@@ -5147,7 +5147,7 @@ Items below expand Rust's footprint beyond the existing template-engine / VDOM /
   - WebSocket subscription pulls from the cache, then takes over for live patches.
   - Win: TTI on marketing pages drops from "WebSocket connect + initial render" to "static HTML + WebSocket upgrade." Real meaningful for SEO / first-paint perception.
 
-- **Rust + WASM client patcher (post-1.0, v1.x or v2.x ambitious bet)** — The biggest single Rust opportunity djust hasn't taken yet: replace the shipped client (`client.min.js.gz`, ~61 KB gz — run `make sizes`) with a Rust-compiled WASM patcher. Wire protocol unchanged — just a different patcher implementation on the client side. ~2-3 month project. Wins:
+- **Rust + WASM client patcher (post-1.0, v1.x or v2.x ambitious bet)** — The biggest single Rust opportunity djust hasn't taken yet: replace the shipped client (`client.min.js.gz`, ~64 KB gz — run `make sizes`) with a Rust-compiled WASM patcher. Wire protocol unchanged — just a different patcher implementation on the client side. ~2-3 month project. Wins:
   - **Bundle size**: ~50% reduction (target ~30-40 KB gzipped).
   - **Apply perf**: VDOM apply in Rust > VDOM apply in JS, especially for large diffs (1000+ node tables).
   - **Code sharing**: client and server share the same VDOM types from `crates/djust_vdom` — eliminates "the JS patcher and Rust differ on edge case X" failure class.

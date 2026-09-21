@@ -22,7 +22,7 @@ no JavaScript to write, no bundler, and no build step in your project.
 - **Fast** — Rust-powered template engine and virtual DOM diffing (roughly 7–11x faster than Django on variable- and filter-heavy templates, and no faster on static markup; see [Performance](#performance))
 - **Reactive components** — Phoenix LiveView-style server-side reactivity
 - **Django compatible** — works with existing Django templates and components
-- **No build step** — ~61 KB gzipped client JavaScript, no bundling required
+- **No build step** — ~64 KB gzipped client JavaScript, no bundling required
 - **WebSocket updates** — real-time DOM patches over WebSocket, with HTTP fallback
 - **Minimal payloads** — diffing sends only what changed
 - **Rust core** — performance-critical paths (templates, VDOM, parsing) are written in Rust
@@ -121,7 +121,7 @@ everything click.
 
 | Attribute | Where | Purpose |
 |---|---|---|
-| `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~61 KB gz client runtime into every LiveView response — no manual `<script>` tag needed |
+| `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~64 KB gz client runtime into every LiveView response — no manual `<script>` tag needed |
 | `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched. This is the only root attribute you write — djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page |
 | `dj-view="myapp.views.MyView"` | any root | Optional. Write it yourself only to name a specific view — an embedded or sticky view, or a template shared by several views. There is no `dj_view_id` variable; it is a literal path |
 
@@ -968,7 +968,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── client.min.js.gz (~61 KB) — events   │
+│  ├── client.min.js.gz (~64 KB) — events   │
 │  └── WebSocket connection                   │
 └─────────────────────────────────────────────┘
            ↕ WebSocket (Binary/JSON)

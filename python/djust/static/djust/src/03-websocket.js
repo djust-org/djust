@@ -933,10 +933,7 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
-                    const buffered = takeServerUpdates(this);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                    await flushServerUpdates(this);
                 }
                 break;
             }
@@ -1014,8 +1011,7 @@ class LiveViewWebSocket {
                     // Retain them until the other owned requests settle, then
                     // apply with the same version checks as a successful reply.
                     if (!hasPendingEventRequests(this)) {
-                        const buffered = takeServerUpdates(this);
-                        for (const frame of buffered) await handleServerResponse(frame, null, null);
+                        await flushServerUpdates(this);
                     }
                 }
 
@@ -1081,10 +1077,7 @@ class LiveViewWebSocket {
 
                 // Flush buffered patches only when all pending events resolved
                 if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
-                    const buffered = takeServerUpdates(this);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                    await flushServerUpdates(this);
                 }
                 break;
             }

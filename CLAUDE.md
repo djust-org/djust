@@ -66,7 +66,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~61 KB
+│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~64 KB
 ├── crates/
 │   ├── djust_live/         # PyO3 bindings — the entry point
 │   │                       #   (pyproject `manifest-path`; module `djust._rust`)
@@ -101,7 +101,7 @@ djust/
   `python/djust/static/djust/client-sizes.json` by `scripts/build-client.sh`
   and enforced by `scripts/check-doc-snippets.py` against the artifact each
   line names — run `make sizes` to print the current values (#2138).
-  - **Shipped**: `client.min.js.gz` is **~61 KB** gz — what a user downloads,
+  - **Shipped**: `client.min.js.gz` is **~64 KB** gz — what a user downloads,
     and the only figure that constrains anything.
   - **Build input**: unminified `client.js` is ~212 KB gz <!-- size-claim: unminified -->
     across 56 modules in `static/djust/src/`. Not a deliverable; do not quote

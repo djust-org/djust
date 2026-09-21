@@ -168,6 +168,22 @@ transport/browser evidence. The E4 final evidence audit remains open.
 The full rebuilt-client suite passed 2,031 tests in 189 files; bundle ESLint
 passed without warnings. No Python implementation changed in this slice.
 
+## Disconnect during buffered delivery — E4 audit finding
+
+The acceptance audit reproduced stale delivery after disconnect inside the
+first buffered update: root/noop/error/embedded drains had detached their entire
+batch before application awaited. A shared drain now takes one frame at a time,
+leaving later frames queued and owned so disconnect can discard them. It also
+rechecks outstanding owned requests before taking the next frame.
+
+Three failing-before tests cover noop, error and embedded acknowledgements,
+disconnect from the first update's metadata callback, and assert that the
+second update is never applied. This is actual bundled-client callback behavior
+with controlled frames, not a live reconnect test. E4 remains open for the final
+evidence audit and refreshed live backend/browser checks.
+The rebuilt-client suite passed 2,034 tests in 189 files; bundle ESLint passed
+without warnings. No Python implementation changed in this slice.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

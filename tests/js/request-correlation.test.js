@@ -5,6 +5,27 @@ import { readFileSync } from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
+it.each(['noop', 'error', 'embedded_update'])('disconnect during a %s drain drops later buffered effects', async type => {
+    const {dom, transport, sent, send} = setup('LiveViewWebSocket');
+    try {
+        transport.ws.close = vi.fn();
+        const applied = [];
+        dom.window.djust.pageMetadata = {handlePageMetadata: cmd => {
+            applied.push(cmd.title);
+            if (cmd.title === 'first') transport.disconnect();
+        }};
+        send();
+        for (const title of ['first', 'stale']) {
+            await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
+                _page_metadata: [{title}]});
+        }
+        await transport.handleMessage({type, ref: sent[0].ref, error: 'Rejected',
+            view_id: 'child', html: '<p>Updated</p>'});
+        expect(applied).toEqual(['first']);
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+    } finally { dom.window.close(); }
+});
+
 it.each(['noop', 'error'])('retains buffered state through an error until the remaining %s response', async lastType => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {
