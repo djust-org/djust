@@ -103,6 +103,25 @@ event handlers, or every callback invoked during a mount. Those remain E1 work.
 
 ## Remaining inventory work
 
+### Event diagnostic evidence
+
+Runtime root handler and full-render failures now inherit an owned diagnostic
+scope across foreground, deferred and direct render calls. Both successful and
+failing handlers recheck their owner; rendering also rechecks policy before
+handling an exception or continuing downstream. A protected handler exception
+is not stringified for time-travel metadata. Deferred handler failures retain
+their existing no-response/no-traceback-ring behavior, with a static protected
+log instead of a traceback.
+
+`test_exposure_event_diagnostics.py` covers 68 cases across DEBUG modes, initial
+and final policies, handler/render failure, and exceptions that must not be
+stringified. The initial matrix reproduced 24 leaks; independent review added
+render-time policy transitions and reproduced six more failures before the fix.
+All 68 cases pass. This evidence covers the named runtime catches, not all
+component/child callbacks, outer transport catches or constructor failures.
+
+### Open work
+
 1. Trace every legacy/Rust backend writer from actor, render cache, mount,
    navigation, teardown and reconnect; inspect the actual stored payload.
 2. Trace browser snapshot writers/readers and debug/error transport hooks,

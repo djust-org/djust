@@ -283,6 +283,25 @@ acceptance is inferred from these Python results.
 
 ## Current acceptance checklist
 
+### Runtime event diagnostic slice
+
+The root foreground/deferred handler catches and full-render catch now preserve
+entry-time diagnostic restrictions and recheck policy after callbacks. Tests
+cover log, traceback-ring and response-frame destinations, legacy behavior,
+unprintable protected exceptions, and policy changes inside rendering itself.
+The 68-case regression file passes; its initial matrix reproduced 24 leaks and
+the independent review's render-transition matrix reproduced six more before
+correction. Outer transport errors, constructor failures and other callback
+catches remain E1 work. This slice does not accept ADR-038 or open its
+production construction guard.
+
+Final unchanged code passed three consecutive full Python runs across all three
+roots: 30,209 passed and 952 skipped per run (four workers; 235.39s, 240.42s,
+239.87s). Mypy passed 1,027 source files. Independent read-only re-review found
+no further issues in this bounded slice. The earlier full run failed only the
+new changelog fragment's required bullet format; that was corrected before these
+three clean runs. No browser or Rust-suite acceptance is inferred.
+
 Updated 2026-09-20. This section is the current work queue; the implementation
 sections below are chronological evidence, not independent open-task lists.
 An earlier "pending" statement may be superseded by a later implementation
