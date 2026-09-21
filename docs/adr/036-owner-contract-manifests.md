@@ -110,8 +110,8 @@ The shipped gzip grew by 484 bytes. These are automated receiver/transport
 results, not real-browser strict-binding acceptance.
 
 Actual normal/actor WebSocket and SSE event tests now assert render snapshots as
-well as mount snapshots. Actor capture is described below; bespoke WebSocket
-tick/push paths, initial HTTP and HTTP fallback remain delivery gates.
+well as mount snapshots. Actor and background capture are described below;
+initial HTTP and HTTP fallback remain delivery gates.
 No claim of complete transport parity is made.
 
 ### Recovery snapshots
@@ -129,8 +129,8 @@ worker; if that fails, fallback uses the old HTML and its old snapshot together.
 Errors omit exception text. Cancellation keeps the lock until an in-flight
 render worker settles, then propagates without delivering a result.
 
-This does not make actor or bespoke producers contract-aware. Their uncaptured
-strict recovery is rejected rather than fabricated from current declarations.
+Uncaptured strict recovery from any remaining bespoke producer is rejected
+rather than fabricated from current declarations.
 Legacy-only recovery retains its existing wire shape. The real normal-WebSocket
 endpoint test checks recovery HTML, version, manifest and mount-path identity.
 This is server recovery evidence, not native strict-binding acceptance.
@@ -196,6 +196,42 @@ owner replacement and binary-envelope preservation. Final unchanged-code Python
 verification passed 30,625 tests with 952 skipped. The Rust workspace suite,
 all 75 `djust_live` library tests, warnings-denied Rust lint, and mypy over
 1,038 files passed. No live-browser strict-binding acceptance is claimed.
+
+### Consumer-owned background renders
+
+Ticks, server pushes, database notifications and both async-result branches use
+one synchronous render operation under their existing consumer render lock.
+It captures the raw HTML, full-HTML fallback content and public contract snapshot
+together. Delivery does not rediscover declarations after returning from the
+worker. Registered runtime/mount ownership is required for strict snapshots;
+legacy-only frames keep their existing shape. Removing the last strict handler
+emits explicit clears until remount. Strict frames use a JSON envelope even
+when the connection normally sends binary patches.
+
+Metadata failure withholds the DOM update and discards the unsent Rust diff
+baseline without clearing Python assigns or calling the application's async
+result handler again. The next successful render sends full HTML. The previous
+valid recovery pair remains intact. Errors are fixed and redacted in DEBUG too.
+Owner identity is rechecked after lock acquisition, after handlers and after
+rendering. Cancellation during the render operation holds the lock until its
+worker settles, discards that unsent baseline and propagates without delivery.
+This does not add cancellation of arbitrary application callbacks.
+
+The 48-case producer matrix covers patch/full-HTML delivery, strict removals,
+legacy controls, discovery/import/owner failures, real DEBUG errors, matching
+recovery, replacement and repeated cancellation. The expanded focused group
+passes 155 tests, with mypy passing 1,041 files. Tests use real consumers and the
+Rust differ with captured outbound frames, not a live browser connection.
+Deferred activities, debug replay/hot reload and HTTP delivery remain gates.
+
+Two full Python runs passed 30,676 tests with 952 skipped. After the last run,
+review corrected unsolicited metadata-error frames to use the client's reserved
+`source="async"` classification, preventing them from settling foreground work.
+All 155 focused tests and mypy passed after that correction; the unchanged
+client's 51 request-correlation tests also passed. Separate failing-before probes
+verified both that error-label correction and consumption of the forced-render
+flag after a successful async retry. Their assertions are in the permanent
+producer matrix. The full suite was not repeated after the error-label change.
 
 ## Evidence and remaining gates
 

@@ -519,6 +519,23 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   changelog entry's formatting check. After correcting that entry and a helper
   return annotation, all 81 final targeted tests passed; mypy passed 1,039 files.
   The full suite was not repeated after those corrections.
+  Ticks, pushes, database notifications and both async-result branches now
+  capture raw HTML, fallback content and public contracts in one worker under
+  the render lock. Strict snapshots require the mounted runtime identity;
+  legacy frames remain unchanged and strict removal sends explicit clears.
+  Cancellation waits for the render worker and discards its unsent baseline.
+  Metadata failures leave the previous recovery pair intact, suppress the
+  frame, reset the unsent diff baseline and return redacted errors without
+  invoking application result handlers again. Owner replacement is checked
+  across lock and render waits. The 48-case matrix and 155-test expanded
+  focused group pass; mypy passes 1,041 files. Deferred/debug/hot-reload
+  producers and HTTP delivery remain open, along with native activation.
+  Two full Python runs passed 30,676 tests (952 skipped). A subsequent review
+  corrected unsolicited error labels to `source="async"`, preserving the
+  existing foreground-request correlation contract. Final focused tests (155),
+  client correlation tests (51) and mypy passed after that correction; the full
+  suite was not repeated afterward. The shared helper also consumes the forced
+  render flag on success, including async retries after a withheld render.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

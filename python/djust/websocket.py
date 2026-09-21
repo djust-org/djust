@@ -11,6 +11,7 @@ import weakref
 from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from ._background_render import BackgroundRender, render_background
 from ._child_rendering import reconcile_child_render
 from .change_detection import (
     CONTAINER_TYPES,
@@ -1261,6 +1262,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # wait and skipping: a skipped async render is an async result the
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
+                if self.view_instance is not view:
+                    return
                 # Call handle_async_result if defined (success path) — INSIDE
                 # the lock (#2840): a handler that mutates view state (the
                 # documented pattern — set ``self.result`` / ``self.error`` so
@@ -1288,10 +1291,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if self.view_instance is not view:
                     return
                 # Re-render and send patches (mirrors the server_push path)
-                if hasattr(view, "_sync_state_to_rust"):
-                    await sync_to_async(view._sync_state_to_rust)()
-
-                html, patches, version = await sync_to_async(view.render_with_diff)()
+                rendered = await self._render_background(view)
+                if rendered is None:
+                    return
+                html, patches = rendered.html, rendered.patches
 
                 if patches is not None:
                     patch_list = fast_json_loads(patches) if patches else []
@@ -1311,24 +1314,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         version=version,
                         event_name=event_name,
                         source="async",
+                        **rendered.send_fields,
                     )
                 else:
                     # Full HTML fallback
-                    html_stripped, html_content = await sync_to_async(
-                        lambda h: (
-                            view._strip_comments_and_whitespace(h),
-                            view._extract_liveview_content(view._strip_comments_and_whitespace(h)),
-                        )
-                    )(html)
                     # The fallback sends the full render to the client, so the
                     # recovery baseline must track it too (#1636). Consumer-owned
                     # wire version + recovery arm in one step (#1788, #1817).
                     version = self._next_version_armed(html)
                     await self._send_update(
-                        html=html_content,
+                        html=rendered.content,
                         version=version,
                         event_name=event_name,
                         source="async",
+                        **rendered.send_fields,
                     )
 
                 await self._flush_all_pending()
@@ -1383,6 +1382,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # documented contention philosophy (db_notify's note), but it
                     # is why an async render must not be slow.
                     async with self._render_lock:
+                        if self.view_instance is not view:
+                            return
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=error
                         )
@@ -1395,10 +1396,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # with old-view HTML.
                         if self.view_instance is not view:
                             return
-                        if hasattr(view, "_sync_state_to_rust"):
-                            await sync_to_async(view._sync_state_to_rust)()
-
-                        html, patches, version = await sync_to_async(view.render_with_diff)()
+                        rendered = await self._render_background(view)
+                        if rendered is None:
+                            return
+                        html, patches = rendered.html, rendered.patches
 
                         if patches is not None:
                             patch_list = fast_json_loads(patches) if patches else []
@@ -1410,21 +1411,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 version=self._next_version_armed(html),
                                 event_name=event_name,
                                 source="async",
+                                **rendered.send_fields,
                             )
                         else:
-                            html_stripped, html_content = await sync_to_async(
-                                lambda h: (
-                                    view._strip_comments_and_whitespace(h),
-                                    view._extract_liveview_content(
-                                        view._strip_comments_and_whitespace(h)
-                                    ),
-                                )
-                            )(html)
                             await self._send_update(
-                                html=html_content,
+                                html=rendered.content,
                                 version=self._next_version_armed(html),
                                 event_name=event_name,
                                 source="async",
+                                **rendered.send_fields,
                             )
 
                 except Exception:
@@ -4243,6 +4238,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         if not self.view_instance:
             return
+        view = self.view_instance
 
         try:
             # Skip our OWN self-broadcast (#1677): when a handler on THIS
@@ -4282,6 +4278,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
             try:
+                if self.view_instance is not view:
+                    return
                 # Apply state updates before handler call so the handler can read
                 # the new values. _sync_state_to_rust runs after both to push the
                 # final Python state to Rust for rendering.
@@ -4319,6 +4317,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             payload = event.get("payload") or {}
                             await sync_to_async(handler_fn)(**payload)
 
+                if self.view_instance is not view:
+                    return
                 # Views can set _skip_render = True in a handler to
                 # suppress the re-render cycle (e.g. sender ignoring its own
                 # broadcast). _resolve_skip_render owns the decision (#2834):
@@ -4333,17 +4333,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Sync state and re-render
                 # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
-                if hasattr(self.view_instance, "_sync_state_to_rust"):
-                    await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                # Consume the force flag (one render per
-                # set_changed_keys()/_force_full_html, #1981) — mirrors
-                # _tick_once; without this a collision-served forced render
-                # leaks into a later unrelated turn.
-                if getattr(self.view_instance, "_force_full_html", False):
-                    self.view_instance._force_full_html = False
+                rendered = await self._render_background(view)
+                if rendered is None:
+                    return
+                html, patches = rendered.html, rendered.patches
 
                 if patches is not None:
                     if isinstance(patches, str):
@@ -4360,14 +4353,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         version=wire_version,
                         broadcast=True,
                         source="broadcast",
+                        **rendered.send_fields,
                     )
                 else:
-                    content = await self._background_html_content(html)
                     await self._send_update(
-                        html=content,
+                        html=rendered.content,
                         version=self._next_version_armed(html),
                         broadcast=True,
                         source="broadcast",
+                        **rendered.send_fields,
                     )
             finally:
                 self._render_lock.release()
@@ -4418,6 +4412,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         if not self.view_instance:
             return
+        view = self.view_instance
 
         channel = event.get("channel", "")
         payload = event.get("payload", {})
@@ -4443,6 +4438,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
             try:
+                if self.view_instance is not view:
+                    return
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
@@ -4455,6 +4452,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                         return
 
+                if self.view_instance is not view:
+                    return
                 # _resolve_skip_render owns the decision (#2834):
                 # _force_full_html (#1981, set_changed_keys()) wins over
                 # _skip_render — the explicitly requested forced render must
@@ -4465,17 +4464,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._send_noop()
                     return
 
-                if hasattr(self.view_instance, "_sync_state_to_rust"):
-                    await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                # Consume the force flag (one render per
-                # set_changed_keys()/_force_full_html, #1981) — mirrors
-                # _tick_once; without this a collision-served forced render
-                # leaks into a later unrelated turn.
-                if getattr(self.view_instance, "_force_full_html", False):
-                    self.view_instance._force_full_html = False
+                rendered = await self._render_background(view)
+                if rendered is None:
+                    return
+                html, patches = rendered.html, rendered.patches
 
                 if patches is not None:
                     if isinstance(patches, str):
@@ -4488,14 +4480,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         version=self._next_version_armed(html),
                         broadcast=True,
                         source="broadcast",
+                        **rendered.send_fields,
                     )
                 else:
-                    content = await self._background_html_content(html)
                     await self._send_update(
-                        html=content,
+                        html=rendered.content,
                         version=self._next_version_armed(html),
                         broadcast=True,
                         source="broadcast",
+                        **rendered.send_fields,
                     )
 
                 # v0.7.0 — If handle_info flipped an activity to visible,
@@ -4514,17 +4507,29 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:  # noqa: BLE001
             logger.exception("Error in db_notify: %s", e)
 
-    async def _background_html_content(self, html: str) -> str:
-        """Prepare full-HTML fallback without altering the raw recovery baseline."""
-        view = self.view_instance
-        if view is None:
-            raise RuntimeError("View not mounted")
-
-        def prepare() -> str:
-            content: str = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
-            return content
-
-        return await sync_to_async(prepare)()
+    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
+        """Capture one background render under the caller's existing render lock."""
+        if self.view_instance is not view:
+            return None
+        runtime = getattr(self, "_runtime", None)
+        with _tenant_context(getattr(view, "_tenant", None)):
+            rendered = await render_background(view, runtime)
+        if self.view_instance is not view:
+            return None
+        if rendered is None:
+            logger.warning("Background render parameter contracts unavailable")
+            await self.send_error(
+                "Render parameter contracts unavailable.",
+                code="render_error",
+                # Error correlation reserves "async" for unsolicited errors:
+                # tick/broadcast sources are only categories for render frames.
+                source="async",
+                _exc_info=(None, None, None),
+            )
+            return None
+        if rendered.send_fields and runtime is not None:
+            runtime._parameter_contracts_active = True
+        return rendered
 
     async def _run_tick(self, interval_ms: int) -> None:
         """
@@ -4578,6 +4583,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         if not self.view_instance:
             return False
+        view = self.view_instance
 
         # User events take priority over ticks (#560). If a user event is
         # currently being processed, skip this tick entirely — the next tick
@@ -4603,11 +4609,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return False
 
         try:
+            if self.view_instance is not view:
+                return False
             # Snapshot state before tick to detect changes
             pre_assigns = _snapshot_assigns(self.view_instance)
 
             await sync_to_async(self.view_instance.handle_tick)()
 
+            if self.view_instance is not view:
+                return False
             # Views can set _skip_render = True inside handle_tick to
             # suppress the re-render cycle entirely (e.g. an early return
             # for a non-host session), which also skips the second
@@ -4642,16 +4652,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_all_pending()
                 return False
 
-            if hasattr(self.view_instance, "_sync_state_to_rust"):
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-            # Consume the force flag (one render per
-            # set_changed_keys()/_force_full_html, #1981) — mirrors
-            # the runtime's reset in _render_and_send.
-            if getattr(self.view_instance, "_force_full_html", False):
-                self.view_instance._force_full_html = False
+            rendered = await self._render_background(view)
+            if rendered is None:
+                return False
+            html, patches = rendered.html, rendered.patches
 
             if patches is not None:
                 if isinstance(patches, str):
@@ -4664,14 +4668,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     version=self._next_version_armed(html),
                     event_name="tick",
                     source="tick",
+                    **rendered.send_fields,
                 )
                 return True
-            content = await self._background_html_content(html)
             await self._send_update(
-                html=content,
+                html=rendered.content,
                 version=self._next_version_armed(html),
                 event_name="tick",
                 source="tick",
+                **rendered.send_fields,
             )
             return True
         finally:
