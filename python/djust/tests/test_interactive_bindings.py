@@ -54,6 +54,72 @@ def mounted():
     return view
 
 
+@pytest.mark.parametrize("single", [False, True])
+def test_debug_snapshot_restores_state_without_emitting_or_rebinding(single):
+    from djust.time_travel import EventSnapshot, restore_component_snapshot, restore_snapshot
+
+    view = mounted()
+    view.menu.open = True
+    identity = view.menu.component_id
+    captured = view._capture_snapshot_state()
+    assert captured["__components__"][identity] == {"open": True, "selected": ""}
+    snapshot = EventSnapshot("select", {}, None, 0, captured)
+    async_to_sync(view.menu.select)(value="edit")
+    assert view.calls == 1
+    if single:
+        assert restore_component_snapshot(view, snapshot, identity)
+        assert view.calls == 1 and view.other.open
+    else:
+        assert restore_snapshot(view, snapshot)
+        assert view.calls == 0
+    assert view.menu.open and view.menu.selected == ""
+    assert view.menu.component_id == identity
+    assert view._components[identity] is view.menu
+
+
+@pytest.mark.parametrize("single", [False, True])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [],
+        {"open": False},
+        {"open": False, "selected": 2},
+        {"open": 1, "selected": ""},
+        {"open": False, "selected": "", "component_id": "other"},
+    ],
+)
+def test_debug_component_restore_rejects_invalid_state_atomically(single, bad):
+    from djust.time_travel import EventSnapshot, restore_component_snapshot, restore_snapshot
+
+    view = mounted()
+    view.menu.open = True
+    identity = view.menu.component_id
+    captured = view._capture_snapshot_state()
+    captured["__components__"][identity] = bad
+    snapshot = EventSnapshot("select", {}, None, 0, captured)
+    if single:
+        assert not restore_component_snapshot(view, snapshot, identity)
+    else:
+        assert not restore_snapshot(view, snapshot)
+    assert view.menu.open and view.menu.selected == ""
+    assert view.menu.component_id == identity
+
+
+def test_debug_restore_uses_current_configuration_and_rejects_stale_owner():
+    from djust.time_travel import EventSnapshot, restore_component_snapshot
+
+    view = mounted()
+    identity = view.menu.component_id
+    state = {"__components__": {identity: {"open": True, "selected": "disabled"}}}
+    snapshot = EventSnapshot("select", {}, None, 0, state)
+    assert restore_component_snapshot(view, snapshot, identity)
+    assert view.menu.open and view.menu.selected == "" and view.calls == 0
+    view.menu.unmount()
+    state["__components__"][identity] = {"open": False, "selected": "edit"}
+    assert not restore_component_snapshot(view, snapshot, identity)
+    assert view.menu.open and view.menu.selected == "" and view.calls == 0
+
+
 def test_concrete_identity_registry_and_isolation():
     first, second = mounted(), mounted()
     assert type(first.menu) is DropdownMenu

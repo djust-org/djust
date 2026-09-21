@@ -603,7 +603,10 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   produce no-op responses. The type fixtures now use these real classes: Pyright
   rejects all twenty negative locations, but mypy misses the component-attribute
   typo because Django's unstubbed base contributes Any. Django-stubs approval is
-  pending; do not waive that failing gate. Signed snapshots/debug/actor lifecycle,
+  pending; do not waive that failing gate. Both debug scrubbers now restore the
+  concrete state schema within the existing lifetime, without callbacks or ID
+  changes; malformed component state is rejected before component mutation.
+  Signed snapshots/debug transport/actor lifecycle,
   public export and browser acceptance remain open.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,

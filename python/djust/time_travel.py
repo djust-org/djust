@@ -244,6 +244,20 @@ def record_event_end(
 _COMPONENTS_SNAPSHOT_KEY = "__components__"
 
 
+def _restore_interactive_state(component: Any, state: Any) -> Optional[bool]:
+    """Use the concrete state schema; None retains the legacy component path."""
+    from .components._interactive import DropdownMenu
+
+    if not isinstance(component, DropdownMenu):
+        return None
+    try:
+        component._restore_state(state)
+    except (TypeError, ValueError, RuntimeError):
+        logger.warning("time_travel: interactive component state rejected")
+        return False
+    return True
+
+
 def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") -> bool:
     """Restore view public state from a snapshot.
 
@@ -357,6 +371,10 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
                 )
                 ok = False
                 continue
+            restored = _restore_interactive_state(component, component_snap)
+            if restored is not None:
+                ok = restored and ok
+                continue
             for key, value in component_snap.items():
                 try:
                     applied = safe_setattr(component, key, value, allow_private=False)
@@ -433,6 +451,9 @@ def restore_component_snapshot(
             component_id,
         )
         return False
+    restored = _restore_interactive_state(component, component_snap)
+    if restored is not None:
+        return restored
     ok = True
     for key, value in component_snap.items():
         try:

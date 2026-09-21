@@ -66,7 +66,7 @@ identity/isolation/async assertions. General pytest tests protect the runner's
 missing/unexpected diagnostic detection and execute the runtime proof.
 
 Next C1 deliverable: close the real-view typing dependency gap, then complete
-lifecycle and transport acceptance (including signed snapshots/debug restore,
+lifecycle and transport acceptance (including signed snapshots/debug transport,
 dynamic registration/checks and real-browser verification). Neither a standalone
 type proof nor session reconnect alone is sufficient to close C1.
 
@@ -122,7 +122,7 @@ part of the full parent render. These tests exercise Rust-backed HTTP/WS renderi
 a separate Django Engine test verifies bound markup/state rendering and escaping.
 
 Still open: public export, browser accessibility, native client observations,
-keyed collections, full signed-snapshot/debug lifecycle, actor integration and
+keyed collections, signed snapshots/debug transport, actor integration and
 website/AI-reference publication. Actor binding is explicitly refused rather
 than pretending the actor's separate dispatch path supports the new registry.
 
@@ -132,3 +132,25 @@ with 952 skipped; the focused binding/catalogue/compiler/dispatch matrix passed
 gate remains failing at one expected negative mypy location (a component-name
 typo inherited through untyped Django); Pyright rejects all twenty locations.
 These are not browser or complete lifecycle acceptance results.
+
+## Same-lifetime debug restoration
+
+Debug capture now reads the concrete dropdown's explicit `open`/`selected` state,
+not its public framework attributes. Both the whole-view and single-component
+scrubbers use the same exact state validator. Malformed component records are
+rejected before changing that component; stale/unmounted owners are rejected.
+Restoration preserves the registry identity, applies current configuration when
+validating selections, and emits no output callback. Whole-view restoration
+retains the existing per-field/partial-failure semantics for other view state;
+this does not introduce a transaction across the entire snapshot.
+
+Thirteen new regression cases cover capture, both restore paths, malformed
+records, current configuration and stale owners. The initial eight cases failed
+before implementation. The focused binding and time-travel suites pass 131
+tests. This is server-helper coverage, not live debug-panel or signed
+back-navigation acceptance. Those transport/lifecycle gates remain open.
+
+The full Python run passed 30,850 tests with 952 skipped and one failure in the
+new changelog fragment's formatting. The fragment was corrected and its complete
+test module rerun; no Python source changed after that full run. Package mypy
+passed all 1,048 source files.

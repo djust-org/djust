@@ -238,6 +238,20 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._bound_owner()
         return {"binding_id": self.component_id, **self.state}
 
+    def _restore_state(self, state: object) -> None:
+        """Restore state within this lifetime, without callbacks or identity changes."""
+        self._bound_owner()
+        if (
+            type(state) is not dict
+            or set(state) != {"open", "selected"}
+            or type(state["open"]) is not bool
+            or type(state["selected"]) is not str
+        ):
+            raise ValueError("Invalid interactive component state")
+        opened, selected = state["open"], state["selected"]
+        self._open = opened
+        self._selected = selected if self._allowed(selected) else ""
+
     def _restore_binding(self, state: dict[str, object]) -> None:
         owner = self._bound_owner()
         identity = state.get("binding_id")

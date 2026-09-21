@@ -43,7 +43,7 @@ The small runtime assertions here call callbacks directly. Separate framework
 tests in `python/djust/tests/test_interactive_bindings.py` exercise real HTTP,
 WebSocket, reconnect, native registry lookup, output injection and callback errors.
 The new component remains private: browser keyboard/focus acceptance, observations,
-collections, signed snapshots/debug restore and publication are not complete.
+collections, signed snapshots/debug transport and publication are not complete.
 `runtime_check.py` supplies minimal Django settings for the standalone identity
 assertions. Fixed pilot configuration is constructor-owned; `open` is mutable
 state, while labels/items are not a dynamic configuration API yet.

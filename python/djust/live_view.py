@@ -1142,6 +1142,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             return {}
         components_state: Dict[str, Dict[str, Any]] = {}
         from .components.base import BoundComponent
+        from .components._interactive import DropdownMenu
 
         for component_id, component in registry.items():
             try:
@@ -1149,7 +1150,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 # ADR-031: a bound component's public state IS its State dict.
                 items = (
                     component.state.items()
-                    if isinstance(component, BoundComponent)
+                    if isinstance(component, (BoundComponent, DropdownMenu))
                     else component.__dict__.items()
                 )
                 for key, value in items:
