@@ -86,3 +86,10 @@ def test_policy_transition_cannot_reuse_shared_legacy_renderer(backend, rf):
     assert "LEGACY_TRANSITION_SENTINEL" not in view._rust_view.render()
     view._rust_view.update_state({"display": "EXPLICIT_TRANSITION_SENTINEL"})
     assert "EXPLICIT_TRANSITION_SENTINEL" not in legacy_renderer.render()
+
+
+def test_renderer_policy_marker_is_framework_state(backend, rf):
+    view = initialize("legacy", "http", rf)
+    view._snapshot_user_private_attrs()
+    assert "_rust_view_explicit" in view._framework_attrs
+    assert "_rust_view_explicit" not in view._get_private_state()

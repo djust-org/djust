@@ -601,6 +601,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         super().__init__(**kwargs)
         self._validate_exposure_configuration()
         self._rust_view: Optional[RustLiveView] = None
+        self._rust_view_explicit: bool = False
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None

@@ -2196,6 +2196,18 @@ class ViewRuntime:
                 self._instantiate_error_frame = None
             return
 
+        # Actor renderers retain their own context/state outside the explicit
+        # projections. Refuse before lifecycle/transport registration, not just
+        # on the first event. Do not close a shared mount_batch socket.
+        from ._exposure import uses_legacy_exposure
+
+        if getattr(view_instance, "use_actors", False) and not uses_legacy_exposure(view_instance):
+            self.view_instance = None
+            await self.transport.send_error(
+                "Explicit actor mounts are not yet supported", error_type="mount_error"
+            )
+            return
+
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
@@ -2378,8 +2390,6 @@ class ViewRuntime:
         # component state saved by the per-event session-save (#1466) onto a
         # plain reconnect. Gated on ``enable_state_snapshot`` (#1552).
         opt_in = getattr(view_instance, "enable_state_snapshot", False)
-        from ._exposure import uses_legacy_exposure
-
         legacy_exposure = uses_legacy_exposure(view_instance)
         # Explicit server persistence is independent of client snapshot opt-in.
         # Until the explicit signed-client adapter lands, never use either

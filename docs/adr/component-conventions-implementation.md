@@ -236,6 +236,22 @@ case. This is not actor, cross-worker, or browser acceptance. Actor mount remain
 an uncovered route distinct from the already-refused actor event path; E1 stays
 open. The loss of shared render-baseline reuse must be measured under E6.
 
+### Staged actor mount refusal
+
+The actor mount route is now refused for nonlegacy policies before lifecycle
+hooks or transport registration, matching the existing actor-event refusal.
+Six real-WebSocket single/batch cases first failed because lifecycle work ran;
+the explicit-policy cases also entered actor dispatch. They now assert static
+refusal, no lifecycle/actor call, surviving batch siblings, and a responsive
+shared socket. The actor rendering/auth/mount/runtime regression set passed 65
+tests. Actor support itself is still an acceptance blocker, not completed by
+this safety gate. A separate cache-marker regression ensures the renderer's
+policy flag is framework state rather than persisted application-private state.
+
+After both changes, the full three-root Python suite passed 30,081 tests with
+952 skipped (four workers), and full-package mypy passed 1,024 source files.
+No JavaScript changed or browser acceptance was performed in these two slices.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

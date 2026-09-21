@@ -20,11 +20,12 @@ an implemented projection is not proof that every caller uses it.
 | Root WS/SSE foreground frames | runtime.py: dispatch_mount, _dispatch_event, _dispatch_single_event, _render_and_send | Staged runtime/HTTP/SSE tests exist; full destinations and debug/provider matrix still open. |
 | Root background frames and logs | runtime.py: _execute_async_task, _render_async_result | Diagnostic sentinel regression added by this inventory. Authorization, persistence, signed-snapshot refresh and render failures remain E3/E1 closure work. |
 | Explicit child results/state | _child_async.py and _exposure_child_persistence.py | test_exposure_child_async.py and child lifecycle suites cover selected eager/sticky owners. Parent/mount queued work and unsupported lifecycle combinations remain E3. |
-| Actor event frames | runtime.py actor branch; WebSocketTransport.dispatch_actor_event | Explicit actor events currently fail closed. Actor mount/backend integration must be implemented or receive an explicit supported-boundary decision before activation. |
+| Actor mount/event frames | runtime.py actor branches; WSConsumerTransport.dispatch_actor_mount/dispatch_actor_event | Staged nonlegacy actor mounts now refuse before lifecycle/transport registration, matching the existing event refusal. test_exposure_actor_mount.py checks actual single/batch WebSocket dispatch and surviving sibling mounts. Actor integration still requires implementation or an explicit supported-boundary decision before activation. |
 | Debug assign endpoint | observability/views.py: _lenient_assigns/view_assigns | test_exposure_debug.py asserts actual response bytes and redacted defaults under DEBUG. Debug mutation is not ordinary authorized event dispatch. |
 | Time-travel history and restore | time_travel.py: record_event_start/end, restore/replay paths | test_exposure_debug.py covers projected records and denied raw restoration. Explicit records are not legacy-restorable snapshots. |
 | Bug capture/export | bug_capture.py: encode_view_state | Same debug suite covers historical provenance and reprojection; cannot reuse legacy history after policy changes. |
 | Runtime debug frames | runtime.py transport debug projection | Inspect all transport diagnostic hooks, not only the observability endpoint. Existing projection is not exhaustive error/traceback evidence. |
+| Exception logs, DEBUG responses and traceback ring | security/error_handling.py: handle_exception; observability/tracebacks.py: record_traceback | Mount, handle_params and render catches in runtime.py still pass exceptions to the generic handler, which records traceback data and logs details in both DEBUG modes. These callers need exposure-aware destination tests; root-background redaction does not cover them. |
 
 ## Diagnostic finding addressed first
 
@@ -59,9 +60,17 @@ Legacy cache entries remain intact for legacy callers. This intentionally
 forgoes shared render-baseline reuse for explicit views; measure the cost in E6.
 
 This proof concerns the Python render-cache entry point. Actor mounts dispatch
-separately through `WebSocketTransport.dispatch_actor_mount`, passing context
-to the actor, and are **not** protected by the explicit actor-event refusal.
-Actor mount/backend handling remains an activation blocker.
+separately through `WSConsumerTransport.dispatch_actor_mount`, passing context
+to the actor. The actor-event refusal did not protect that path. A subsequent
+guard now refuses nonlegacy actor mounts before lifecycle hooks or transport
+registration, without closing a shared batch socket. Real WebSocket single and
+batch tests reproduce the missing guard; legacy actor template tests remain
+green. This is a temporary staged refusal, not implemented explicit actor
+support or a decision to remove actors from ADR-038's acceptance scope.
+
+The renderer-policy marker is initialized with framework attributes, before
+the private-state classification snapshot, so legacy user-private persistence
+cannot accidentally carry it. A regression exercises that classification.
 
 ## Remaining inventory work
 
