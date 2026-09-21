@@ -95,11 +95,13 @@ logger = logging.getLogger(__name__)
 
 
 def _mount_tenant_scope(method: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
-    """Restore the caller's tenant even when mount/auth fails or returns early."""
+    """Restore mount-local tenant/diagnostic scopes on failure and early return."""
 
     @wraps(method)
     async def scoped(*args: Any, **kwargs: Any) -> None:
-        with _tenant_context(None):
+        from ._exposure_diagnostics import diagnostic_scope
+
+        with diagnostic_scope(), _tenant_context(None):
             await method(*args, **kwargs)
 
     return scoped
@@ -2208,6 +2210,10 @@ class ViewRuntime:
             )
             return
 
+        from ._exposure_diagnostics import restrict_diagnostics
+
+        restrict_diagnostics(view_instance)
+
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
@@ -2320,6 +2326,7 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Error initializing {sanitize_for_log(view_path)}",
+                expose_details=uses_legacy_exposure(view_instance),
             )
             await self.transport.send(response)
             self.view_instance = None
@@ -2612,6 +2619,7 @@ class ViewRuntime:
                     view_class=view_path,
                     logger=logger,
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
+                    expose_details=uses_legacy_exposure(view_instance),
                 )
                 await self.transport.send(response)
                 return
@@ -2707,6 +2715,7 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
+                expose_details=uses_legacy_exposure(view_instance),
             )
             await self.transport.send(response)
             return
@@ -2748,6 +2757,7 @@ class ViewRuntime:
                         view_class=view_path,
                         logger=logger,
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
+                        expose_details=uses_legacy_exposure(view_instance),
                     )
                     await self.transport.send(response)
                     return
@@ -2778,6 +2788,7 @@ class ViewRuntime:
                     view_class=view_path,
                     logger=logger,
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
+                    expose_details=uses_legacy_exposure(view_instance),
                 )
                 await self.transport.send(response)
                 return
@@ -4650,8 +4661,11 @@ class ViewRuntime:
           aborts on any non-auth-verdict exception during this sequence.
         """
         from .auth import run_pre_mount_auth
+        from ._exposure import uses_legacy_exposure
         from django.core.exceptions import PermissionDenied
 
+        auth_view = self.view_instance
+        legacy_diagnostics = uses_legacy_exposure(auth_view)
         try:
             redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
         except PermissionDenied:
@@ -4671,6 +4685,7 @@ class ViewRuntime:
                 logger=logger,
                 log_message="Error in pre-mount security sequence for %s"
                 % sanitize_for_log(self.view_instance.__class__.__name__),
+                expose_details=legacy_diagnostics and uses_legacy_exposure(auth_view),
             )
             await self.transport.send(response)
             # No close: the WS bespoke path lets a non-auth-verdict exception

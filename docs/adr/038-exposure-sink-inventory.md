@@ -25,7 +25,7 @@ an implemented projection is not proof that every caller uses it.
 | Time-travel history and restore | time_travel.py: record_event_start/end, restore/replay paths | test_exposure_debug.py covers projected records and denied raw restoration. Explicit records are not legacy-restorable snapshots. |
 | Bug capture/export | bug_capture.py: encode_view_state | Same debug suite covers historical provenance and reprojection; cannot reuse legacy history after policy changes. |
 | Runtime debug frames | runtime.py transport debug projection | Inspect all transport diagnostic hooks, not only the observability endpoint. Existing projection is not exhaustive error/traceback evidence. |
-| Exception logs, DEBUG responses and traceback ring | security/error_handling.py: handle_exception; observability/tracebacks.py: record_traceback | Mount, handle_params and render catches in runtime.py still pass exceptions to the generic handler, which records traceback data and logs details in both DEBUG modes. These callers need exposure-aware destination tests; root-background redaction does not cover them. |
+| Exception logs, DEBUG responses and traceback ring | security/error_handling.py: handle_exception; observability/tracebacks.py: record_traceback | test_exposure_mount_diagnostics.py covers runtime initialization, auth, mount, handle_params, initial render and actor-render catches at frames/logs/ring destinations. The shared redacted mode does not inspect exceptions or record traceback data. Instantiation, outer transport catches, foreground events and other lifecycle hooks still require closure; this is not a global diagnostics guarantee. |
 
 ## Diagnostic finding addressed first
 
@@ -71,6 +71,35 @@ support or a decision to remove actors from ADR-038's acceptance scope.
 The renderer-policy marker is initialized with framework attributes, before
 the private-state classification snapshot, so legacy user-private persistence
 cannot accidentally carry it. A regression exercises that classification.
+
+## Mount diagnostic finding
+
+The generic exception handler previously recorded full exception messages and
+tracebacks in the observability ring and logs in both DEBUG modes, and included
+them in DEBUG response frames. Runtime mount failure tests reproduced this at
+initialization, authorization, mount, handle_params and initial rendering.
+
+`handle_exception(expose_details=False)` now produces a static log and generic
+error response before inspecting an exception, metadata or traceback. Only
+exact `True` permits detailed diagnostics, and an inherited restricted scope
+still overrides that permission. Mount callers require legacy policy both
+before lifecycle work and at the failure boundary. A turn-local ContextVar
+carries the entry restriction into nested calls and sync_to_async workers,
+so a successful policy change in an earlier lifecycle hook cannot grant later
+diagnostics. Scope exit restores the caller's permission; nested scopes cannot
+loosen it. Concurrent-request and exception-reset tests cover that isolation.
+Legacy behavior remains tested in both DEBUG modes.
+
+An actor-render catch also rechecks policy: the tested actor adapter starts
+legacy and changes policy before failing. This tests the catch, not support for
+explicit actor mounting. The ordinary explicit actor mount remains refused.
+Template-hash fallback logging was another leak on the tested legacy-to-explicit
+render path; after such a failure it now propagates to the redacted boundary
+instead of logging and continuing into the legacy cache.
+
+These tests cover the named local mount catches. They do not cover arbitrary
+exceptions escaping outer WS/SSE handlers, constructor failures, all foreground
+event handlers, or every callback invoked during a mount. Those remain E1 work.
 
 ## Remaining inventory work
 

@@ -531,6 +531,13 @@ class RustBridgeMixin:
             template_source = self.get_template()
             slot = f"_t{compute_template_hash(template_source)}"
         except Exception:
+            from .._exposure import uses_legacy_exposure
+            from .._exposure_diagnostics import diagnostics_allowed
+
+            if not diagnostics_allowed() or not uses_legacy_exposure(self):
+                # get_template() can change policy before failing. Do not log
+                # its payload or continue into the legacy cache after that.
+                raise
             # Defensive: if the Rust extension is unavailable for any
             # reason, fall back to the legacy un-hashed key shape rather
             # than raising. Don't memoize the empty fallback so a future

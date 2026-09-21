@@ -252,6 +252,35 @@ After both changes, the full three-root Python suite passed 30,081 tests with
 952 skipped (four workers), and full-package mypy passed 1,024 source files.
 No JavaScript changed or browser acceptance was performed in these two slices.
 
+## Mount diagnostic destinations — additional E1 evidence
+
+`test_exposure_mount_diagnostics.py` first reproduced 30 leaks across five
+mount failure stages, two DEBUG modes, and policy transitions, while ten legacy
+cases preserved existing behavior. The shared error handler now has a redacted
+mode that emits only a static log and generic frame without inspecting the
+exception or writing the traceback ring. The runtime mount catches require
+legacy policy at both entry and failure, including authorization and actor
+render failure. Template-hash fallback logging also propagates nonlegacy
+failures rather than exposing them before the outer boundary.
+
+Independent review found another on-path bypass: a successful explicit-to-legacy
+transition before a later template failure still enabled nested hash-fallback
+logging. Two added regressions failed before correction. A turn-local diagnostic
+scope now carries the initial restriction through nested/worker calls, with
+tests for nested scopes, concurrent requests and cleanup after exceptions.
+
+All 60 diagnostics cases pass. Turning off the actor catch's policy check made
+both explicit-transition cases fail again. The final focused error/auth/runtime
+set passed 142 tests; mypy passed 1,026 source files. Remaining
+outer-transport/constructor/event diagnostic
+routes are still open; neither E1 nor ADR-038 is accepted by this evidence.
+
+The final unchanged code passed three consecutive full Python runs across all
+three roots: 30,141 passed and 952 skipped in each run (four workers). The
+independent read-only re-review found no further issues within the named mount
+diagnostic scope after the policy-transition fix. No browser or Rust-suite
+acceptance is inferred from these Python results.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

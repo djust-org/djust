@@ -178,6 +178,7 @@ def handle_exception(
     logger: Optional[Any] = None,
     log_message: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    expose_details: bool = True,
 ) -> Dict[str, Any]:
     """
     Handle an exception: log it appropriately and return a safe response.
@@ -185,8 +186,8 @@ def handle_exception(
     This is the recommended single entry point for exception handling.
     It automatically:
     - Determines DEBUG mode from Django settings
-    - Logs exception type, message, and stack trace at ERROR level
-    - Returns a safe response (detailed in DEBUG, generic in production)
+    - Logs details and permits DEBUG responses only when diagnostics are allowed
+    - Otherwise emits a value-free log and generic response without capture
 
     Args:
         exception: The exception that occurred.
@@ -196,6 +197,11 @@ def handle_exception(
         logger: Optional logger instance. If None, uses module logger.
         log_message: Optional custom log message. Defaults to "Error occurred".
         extra: Optional extra data for logging (will be sanitized).
+        expose_details: Only exact True permits exception inspection, traceback
+            recording, diagnostic metadata and DEBUG details. Explicit-exposure
+            callers pass False regardless of DEBUG. An inherited restricted
+            diagnostic scope also denies details. This mode logs a static
+            failure and returns a generic response without inspecting exception.
 
     Returns:
         A dictionary suitable for JSON response.
@@ -216,6 +222,20 @@ def handle_exception(
         'error'
     """
     import logging as logging_module
+    from .._exposure_diagnostics import diagnostics_allowed
+
+    if expose_details is not True or not diagnostics_allowed():
+        # Do not stringify the exception or pass exc_info/extra to a logger:
+        # undeclared state can occur in the message, traceback and metadata.
+        # This must precede observability capture as well as DEBUG selection.
+        protected_logger = (
+            logger if logger is not None else logging_module.getLogger("djust.security")
+        )
+        protected_logger.error("Protected view operation failed")
+        return {
+            "type": "error",
+            "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),
+        }
 
     # Determine DEBUG mode once
     try:
