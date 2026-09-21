@@ -222,7 +222,7 @@ legacy controls, discovery/import/owner failures, real DEBUG errors, matching
 recovery, replacement and repeated cancellation. The expanded focused group
 passes 155 tests, with mypy passing 1,041 files. Tests use real consumers and the
 Rust differ with captured outbound frames, not a live browser connection.
-Deferred activities, debug replay/hot reload and HTTP delivery remain gates.
+Deferred activities, hot reload and HTTP delivery remain gates.
 
 Two full Python runs passed 30,676 tests with 952 skipped. After the last run,
 review corrected unsolicited metadata-error frames to use the client's reserved
@@ -232,6 +232,41 @@ client's 51 request-correlation tests also passed. Separate failing-before probe
 verified both that error-label correction and consumption of the forced-render
 flag after a successful async retry. Their assertions are in the permanent
 producer matrix. The full suite was not repeated after the error-label change.
+
+### Debug restoration and replay
+
+Root time-travel jumps, component-only jumps and forward replay now hold the
+consumer render lock through restoration/replay, rendering and delivery.
+They recheck owner identity after waiting and after worker completion. A shared
+worker-wait primitive keeps the lock until a cancelled restore or render worker
+settles. Cancellation does not roll back application state or replay side
+effects; it suppresses that operation's DOM response and final cursor
+acknowledgement. Cancelled renders discard their unsent diff baseline.
+
+The existing DEBUG gate and rejection of nonrestorable explicit projections
+remain in place. These routes use the same render-bound metadata and recovery
+capture as background producers. Invalid metadata withholds both the DOM update
+and cursor acknowledgement, sends a redacted error, and forces a full-HTML retry.
+Legacy-only responses omit contracts; strict removal emits explicit clears.
+
+Debug control messages are not foreground event requests. Their DOM responses
+use `source="broadcast"`; their errors use the existing `source="async"`
+error convention. Without those fields, the client could treat a debug frame as
+the reply to an unrelated pending request. Three locking and six metadata
+regressions failed before implementation; nine subsequent correlation assertions
+failed before the source labels were added. The 39-case debug matrix and expanded
+175-test Python group pass. Four bundled-client tests verify foreground loading
+and promises survive debug updates/errors, including buffered delivery.
+
+This is consumer/real-Rust and bundled-client evidence, not live-browser
+acceptance. Hot reload, deferred activity and HTTP delivery remain open. It does
+not establish complete replay argument-validation or explicit-exposure support.
+
+Final frozen-source verification: 30,715 Python tests passed (952 skipped);
+2,135 JavaScript tests passed across 192 files; mypy passed 1,043 files, and
+Ruff/JavaScript lint passed. A separate probe reproduced the outstanding replay
+argument-binding gap: numeric strings bypass conversion and booleans reach an
+integer handler. That remains P1/P2 work, not a completed validation guarantee.
 
 ## Evidence and remaining gates
 

@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optiona
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from ._background_render import BackgroundRender, render_background
+from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
 from .change_detection import (
     CONTAINER_TYPES,
@@ -3907,7 +3908,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             ),
         }
 
+    async def _run_debug_render(
+        self,
+        data: Dict[str, Any],
+        operation: Callable[[Dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Serialize debug restoration and rendering against normal events."""
+        view = self.view_instance
+        async with self._render_lock:
+            if self.view_instance is not view:
+                return
+            with _tenant_context(getattr(view, "_tenant", None)):
+                await operation(data)
+
+    async def _send_debug_error(self, error: str) -> None:
+        """Debug controls are not foreground event requests."""
+        await self.send_error(error, source="async")
+
     async def handle_time_travel_jump(self, data: Dict[str, Any]) -> None:
+        """Restore and render a historical root state under the render lock."""
+        await self._run_debug_render(data, self._handle_time_travel_jump_locked)
+
+    async def _handle_time_travel_jump_locked(self, data: Dict[str, Any]) -> None:
         """Jump the view to a past :class:`EventSnapshot`.
 
         Dev-only. The debug panel's Time Travel tab emits
@@ -3922,63 +3944,74 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.conf import settings
 
         if not getattr(settings, "DEBUG", False):
-            await self.send_error("time_travel requires DEBUG=True")
+            await self._send_debug_error("time_travel requires DEBUG=True")
             return
         if not self.view_instance:
-            await self.send_error("View not mounted")
+            await self._send_debug_error("View not mounted")
             return
-        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        view = self.view_instance
+        buffer = getattr(view, "_time_travel_buffer", None)
         if buffer is None:
-            await self.send_error("time_travel not enabled on this view")
+            await self._send_debug_error("time_travel not enabled on this view")
             return
 
         index = data.get("index")
         which = data.get("which", "before")
         if not isinstance(index, int):
-            await self.send_error("time_travel_jump: index must be int")
+            await self._send_debug_error("time_travel_jump: index must be int")
             return
         if which not in ("before", "after"):
-            await self.send_error("time_travel_jump: which must be 'before' or 'after'")
+            await self._send_debug_error("time_travel_jump: which must be 'before' or 'after'")
             return
 
         snapshot = buffer.jump(index)
         if snapshot is None:
-            await self.send_error("time_travel_jump: no snapshot at index %d" % index)
+            await self._send_debug_error("time_travel_jump: no snapshot at index %d" % index)
             return
 
         from djust.time_travel import restore_snapshot
 
-        ok = await sync_to_async(restore_snapshot)(self.view_instance, snapshot, which)
+        ok = await settle_render_operation(sync_to_async(restore_snapshot)(view, snapshot, which))
+        if self.view_instance is not view:
+            return
         if not ok:
-            await self.send_error("time_travel_jump: restore failed")
+            await self._send_debug_error("time_travel_jump: restore failed")
             return
 
         # Re-render via the existing patch pipeline so the client sees
         # the restored state without a full mount. Use render_with_diff
         # directly (mirrors the hotreload / broadcast paths).
         try:
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            rendered = await self._render_background(view)
+            if rendered is None:
+                return
+            html, patches = rendered.html, rendered.patches
             patch_list = None
             if patches is not None:
                 patch_list = fast_json_loads(patches) if patches else []
             await self._send_update(
                 patches=patch_list,
-                html=html,
+                html=html if patches is not None else rendered.content,
                 # Render-send: arm recovery so _recovery_version tracks this
                 # jump's version (#1817). ``html`` is the pre-strip render.
                 version=self._next_version_armed(html),
                 event_name="__time_travel_jump__",
+                source="broadcast",
+                **rendered.send_fields,
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
             logger.exception("time_travel_jump: re-render failed")
-            await self.send_error("time_travel_jump: re-render failed: %s" % exc)
+            await self._send_debug_error("time_travel_jump: re-render failed: %s" % exc)
             return
 
-        await self.send_json(
-            self._build_time_travel_state(self.view_instance, buffer, index, which)
-        )
+        if self.view_instance is view:
+            await self.send_json(self._build_time_travel_state(view, buffer, index, which))
 
     async def handle_time_travel_component_jump(self, data: Dict[str, Any]) -> None:
+        """Restore and render one component under its parent's render lock."""
+        await self._run_debug_render(data, self._handle_time_travel_component_jump_locked)
+
+    async def _handle_time_travel_component_jump_locked(self, data: Dict[str, Any]) -> None:
         """Scrub a SINGLE component's state (#1151, v0.9.4).
 
         Dev-only. Mirrors :meth:`handle_time_travel_jump` but restores
@@ -3992,68 +4025,83 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.conf import settings
 
         if not getattr(settings, "DEBUG", False):
-            await self.send_error("time_travel requires DEBUG=True")
+            await self._send_debug_error("time_travel requires DEBUG=True")
             return
         if not self.view_instance:
-            await self.send_error("View not mounted")
+            await self._send_debug_error("View not mounted")
             return
-        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        view = self.view_instance
+        buffer = getattr(view, "_time_travel_buffer", None)
         if buffer is None:
-            await self.send_error("time_travel not enabled on this view")
+            await self._send_debug_error("time_travel not enabled on this view")
             return
 
         index = data.get("index")
         component_id = data.get("component_id")
         which = data.get("which", "before")
         if not isinstance(index, int):
-            await self.send_error("time_travel_component_jump: index must be int")
+            await self._send_debug_error("time_travel_component_jump: index must be int")
             return
         if not isinstance(component_id, str) or not component_id:
-            await self.send_error(
+            await self._send_debug_error(
                 "time_travel_component_jump: component_id must be a non-empty string"
             )
             return
         if which not in ("before", "after"):
-            await self.send_error("time_travel_component_jump: which must be 'before' or 'after'")
+            await self._send_debug_error(
+                "time_travel_component_jump: which must be 'before' or 'after'"
+            )
             return
 
         snapshot = buffer.jump(index)
         if snapshot is None:
-            await self.send_error("time_travel_component_jump: no snapshot at index %d" % index)
+            await self._send_debug_error(
+                "time_travel_component_jump: no snapshot at index %d" % index
+            )
             return
 
         from djust.time_travel import restore_component_snapshot
 
-        ok = await sync_to_async(restore_component_snapshot)(
-            self.view_instance, snapshot, component_id, which
+        ok = await settle_render_operation(
+            sync_to_async(restore_component_snapshot)(view, snapshot, component_id, which)
         )
+        if self.view_instance is not view:
+            return
         if not ok:
-            await self.send_error("time_travel_component_jump: restore failed")
+            await self._send_debug_error("time_travel_component_jump: restore failed")
             return
 
         try:
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            rendered = await self._render_background(view)
+            if rendered is None:
+                return
+            html, patches = rendered.html, rendered.patches
             patch_list = None
             if patches is not None:
                 patch_list = fast_json_loads(patches) if patches else []
             await self._send_update(
                 patches=patch_list,
-                html=html,
+                html=html if patches is not None else rendered.content,
                 # Render-send: arm recovery so _recovery_version tracks this
                 # component-jump's version (#1817). ``html`` is the pre-strip render.
                 version=self._next_version_armed(html),
                 event_name="__time_travel_component_jump__",
+                source="broadcast",
+                **rendered.send_fields,
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
             logger.exception("time_travel_component_jump: re-render failed")
-            await self.send_error("time_travel_component_jump: re-render failed: %s" % exc)
+            await self._send_debug_error("time_travel_component_jump: re-render failed: %s" % exc)
             return
 
-        await self.send_json(
-            self._build_time_travel_state(self.view_instance, buffer, index, which)
-        )
+        if self.view_instance is view:
+            await self.send_json(self._build_time_travel_state(view, buffer, index, which))
 
     async def handle_forward_replay(self, data: Dict[str, Any]) -> None:
+        """Replay and render a historical event under the render lock."""
+        await self._run_debug_render(data, self._handle_forward_replay_locked)
+
+    async def _handle_forward_replay_locked(self, data: Dict[str, Any]) -> None:
         """Forward-replay a recorded event with optional override params (#1151, v0.9.4).
 
         Dev-only. Restores the view to ``state_before`` of the snapshot at
@@ -4068,28 +4116,29 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.conf import settings
 
         if not getattr(settings, "DEBUG", False):
-            await self.send_error("time_travel requires DEBUG=True")
+            await self._send_debug_error("time_travel requires DEBUG=True")
             return
         if not self.view_instance:
-            await self.send_error("View not mounted")
+            await self._send_debug_error("View not mounted")
             return
-        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        view = self.view_instance
+        buffer = getattr(view, "_time_travel_buffer", None)
         if buffer is None:
-            await self.send_error("time_travel not enabled on this view")
+            await self._send_debug_error("time_travel not enabled on this view")
             return
 
         from_index = data.get("from_index")
         override_params = data.get("override_params")
         if not isinstance(from_index, int):
-            await self.send_error("forward_replay: from_index must be int")
+            await self._send_debug_error("forward_replay: from_index must be int")
             return
         if override_params is not None and not isinstance(override_params, dict):
-            await self.send_error("forward_replay: override_params must be dict or null")
+            await self._send_debug_error("forward_replay: override_params must be dict or null")
             return
 
         snapshot = buffer.jump(from_index)
         if snapshot is None:
-            await self.send_error("forward_replay: no snapshot at index %d" % from_index)
+            await self._send_debug_error("forward_replay: no snapshot at index %d" % from_index)
             return
 
         # Decide whether this replay forks the timeline. Two conditions
@@ -4110,44 +4159,50 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         history_len_before = len(buffer)
         forks_timeline = from_index < history_len_before - 1 or override_params is not None
 
-        replayed = await sync_to_async(replay_event)(
-            self.view_instance, snapshot, override_params, True
+        replayed = await settle_render_operation(
+            sync_to_async(replay_event)(view, snapshot, override_params, True)
         )
+        if self.view_instance is not view:
+            return
         if replayed is None:
-            await self.send_error("forward_replay: replay handler missing or refused")
+            await self._send_debug_error("forward_replay: replay handler missing or refused")
             return
 
         # Replay succeeded — commit the branch_id mutation now.
         if forks_timeline:
-            new_branch = next_branch_id(self.view_instance)
+            new_branch = next_branch_id(view)
             try:
-                self.view_instance._time_travel_branch_id = new_branch
+                view._time_travel_branch_id = new_branch
             except Exception:  # noqa: BLE001 — slot/descriptor readonly
                 logger.exception("forward_replay: failed to set branch_id")
 
         try:
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            rendered = await self._render_background(view)
+            if rendered is None:
+                return
+            html, patches = rendered.html, rendered.patches
             patch_list = None
             if patches is not None:
                 patch_list = fast_json_loads(patches) if patches else []
             await self._send_update(
                 patches=patch_list,
-                html=html,
+                html=html if patches is not None else rendered.content,
                 # Render-send: arm recovery so _recovery_version tracks this
                 # forward-replay's version (#1817). ``html`` is the pre-strip render.
                 version=self._next_version_armed(html),
                 event_name="__forward_replay__",
+                source="broadcast",
+                **rendered.send_fields,
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
             logger.exception("forward_replay: re-render failed")
-            await self.send_error("forward_replay: re-render failed: %s" % exc)
+            await self._send_debug_error("forward_replay: re-render failed: %s" % exc)
             return
 
         # Cursor lands at the new tip after the replay's recorded snapshot.
         new_cursor = len(buffer) - 1
-        await self.send_json(
-            self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
-        )
+        if self.view_instance is view:
+            await self.send_json(self._build_time_travel_state(view, buffer, new_cursor, "after"))
 
     async def handle_bug_capture_share(self, data: Dict[str, Any]) -> None:
         """Compute a `djbug1.` bug-capture blob for the debug panel's Share button (#1562).

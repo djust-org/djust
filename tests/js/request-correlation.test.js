@@ -5,6 +5,43 @@ import { readFileSync } from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
+it.each(['__time_travel_jump__', '__time_travel_component_jump__', '__forward_replay__'])(
+    'debug render %s cannot acknowledge foreground work',
+    async eventName => {
+        const {dom, transport, button, sent, send} = setup('LiveViewWebSocket');
+        try {
+            let completed = false;
+            send().then(() => { completed = true; });
+            await transport.handleMessage({
+                type: 'patch', patches: [], event_name: eventName, source: 'broadcast'
+            });
+            expect(completed).toBe(false);
+            expect(button.disabled).toBe(true);
+            expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            expect(completed).toBe(true);
+            expect(button.disabled).toBe(false);
+            expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+        } finally { dom.window.close(); }
+    }
+);
+
+it('a debug control error cannot cancel foreground work', async () => {
+    const {dom, transport, button, sent, send} = setup('LiveViewWebSocket');
+    try {
+        let completed = false;
+        send().then(() => { completed = true; });
+        await transport.handleMessage({
+            type: 'error', error: 'time_travel_jump: restore failed', source: 'async'
+        });
+        expect(completed).toBe(false);
+        expect(button.disabled).toBe(true);
+        await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+        expect(completed).toBe(true);
+        expect(button.disabled).toBe(false);
+    } finally { dom.window.close(); }
+});
+
 it.each(['noop', 'error', 'embedded_update'])('disconnect during a %s drain drops later buffered effects', async type => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {

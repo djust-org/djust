@@ -536,6 +536,19 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   client correlation tests (51) and mypy passed after that correction; the full
   suite was not repeated afterward. The shared helper also consumes the forced
   render flag on success, including async retries after a withheld render.
+  Time-travel root/component jumps and forward replay now serialize restoration
+  and rendering under the consumer lock, capture render-bound contracts, and
+  reject stale owners across waits. Cancellation waits for workers before
+  releasing the lock and withholds the DOM/cursor response. Their update/error
+  source labels preserve foreground request correlation. The 39-case debug
+  matrix, 175-test expanded Python group and four new bundled-client cases pass.
+  This does not close replay argument-validation, hot-reload/deferred producers,
+  HTTP delivery, native binding or explicit-exposure acceptance.
+  Final debug-delivery verification passed 30,715 Python tests (952 skipped),
+  2,135 JavaScript tests (192 files), and mypy over 1,043 files. Direct replay
+  argument-binding probes still fail: strict numeric conversion is skipped and
+  boolean-as-integer input reaches the handler. This is a concrete remaining
+  P1/P2 dispatch gap, not acceptance of the complete replay route.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 

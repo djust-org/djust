@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from ._render_operation import settle_render_operation
 
 
 @dataclass(frozen=True)
@@ -69,18 +70,8 @@ async def render_background(view: Any, runtime: Any) -> BackgroundRender | None:
             view._force_full_html = False
         return BackgroundRender(html, patches, content, fields)
 
-    task = asyncio.create_task(sync_to_async(render)())
     try:
-        return await asyncio.shield(task)
+        return await settle_render_operation(sync_to_async(render)())
     except asyncio.CancelledError:
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not task.cancelled():
-            task.exception()
         _discard_baseline(view)
         raise
