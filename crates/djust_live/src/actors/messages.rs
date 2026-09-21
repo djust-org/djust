@@ -123,7 +123,7 @@ pub struct MountResponse {
 /// `lib.rs:679`), but future cross-process actor transport could exercise
 /// the round-trip. Cost of always serializing both optionals is 1 byte each
 /// when `None` (msgpack `nil`) — negligible.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PatchResponse {
     /// VDOM patches (if available)
     pub patches: Option<Vec<Patch>>,
@@ -131,6 +131,12 @@ pub struct PatchResponse {
     pub html: Option<String>,
     /// Version number for ordering
     pub version: u64,
+    /// Full render for server-side recovery, even when patches are available.
+    #[serde(default)]
+    pub recovery_html: String,
+    /// Detached public contract JSON from the actor's render operation.
+    #[serde(default)]
+    pub parameter_contracts: Option<String>,
 }
 
 // ============================================================================
@@ -168,6 +174,7 @@ pub enum ViewMsg {
     /// Set Python view instance for event handler callbacks (Phase 5)
     SetPythonView {
         view: Py<PyAny>,
+        parameter_contract_module: Option<Py<PyAny>>,
         reply: oneshot::Sender<Result<()>>,
     },
 
@@ -223,7 +230,7 @@ pub enum ViewMsg {
 }
 
 /// Result from rendering with VDOM diff
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RenderResult {
     /// Rendered HTML
     pub html: String,
@@ -231,6 +238,8 @@ pub struct RenderResult {
     pub patches: Option<Vec<Patch>>,
     /// Version number
     pub version: u64,
+    /// Detached public contract JSON; None denotes a legacy-only owner tree.
+    pub parameter_contracts: Option<String>,
 }
 
 // ============================================================================
@@ -289,6 +298,7 @@ mod tests {
             patches: None,
             html: Some("<div>Updated</div>".to_string()),
             version: 2,
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -297,6 +307,22 @@ mod tests {
         assert_eq!(deserialized.version, 2);
         assert_eq!(deserialized.html, Some("<div>Updated</div>".to_string()));
         assert!(deserialized.patches.is_none());
+    }
+
+    #[test]
+    fn old_patch_response_defaults_new_render_metadata() {
+        let json = r#"{"patches":null,"html":null,"version":3}"#;
+        let restored: PatchResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(restored.version, 3);
+        assert!(restored.parameter_contracts.is_none());
+        assert!(restored.recovery_html.is_empty());
+
+        let old = (None::<Vec<Patch>>, None::<String>, 3_u64);
+        let restored: PatchResponse =
+            rmp_serde::from_slice(&rmp_serde::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(restored.version, 3);
+        assert!(restored.parameter_contracts.is_none());
+        assert!(restored.recovery_html.is_empty());
     }
 
     #[test]
@@ -309,6 +335,7 @@ mod tests {
             patches: Some(patches),
             html: None,
             version: 3,
+            ..Default::default()
         };
 
         // Both fields are now always serialized (#1541 — `skip_serializing_if`
@@ -329,6 +356,7 @@ mod tests {
             html: "<div>Test</div>".to_string(),
             patches: None,
             version: 1,
+            ..Default::default()
         };
 
         let cloned = result.clone();
@@ -370,6 +398,7 @@ mod tests {
             patches: None,
             html: None,
             version: 1,
+            ..Default::default()
         };
         let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
         let restored: PatchResponse = rmp_serde::from_slice(&bytes)
@@ -387,6 +416,7 @@ mod tests {
             patches: None,
             html: Some("<div>updated</div>".to_string()),
             version: 2,
+            ..Default::default()
         };
         let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
         let restored: PatchResponse =
@@ -403,6 +433,7 @@ mod tests {
             patches: Some(Vec::new()),
             html: None,
             version: 3,
+            ..Default::default()
         };
         let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
         let restored: PatchResponse =
@@ -422,6 +453,8 @@ mod tests {
             patches: Some(Vec::new()),
             html: Some("<div/>".to_string()),
             version: 4,
+            recovery_html: "<div/>".to_string(),
+            parameter_contracts: Some(r#"{"version":1,"owners":[]}"#.to_string()),
         };
         let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
         let restored: PatchResponse = rmp_serde::from_slice(&bytes).expect("msgpack deserialize");
@@ -429,5 +462,7 @@ mod tests {
         assert!(patches.is_empty());
         assert_eq!(restored.html.as_deref(), Some("<div/>"));
         assert_eq!(restored.version, 4);
+        assert_eq!(restored.recovery_html, original.recovery_html);
+        assert_eq!(restored.parameter_contracts, original.parameter_contracts);
     }
 }

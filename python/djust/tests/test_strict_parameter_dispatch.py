@@ -210,20 +210,18 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                 else:
                     assert frame["type"] in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
-                    # Actors emit through the separate Rust result path; its
-                    # render-bound contract capture remains an activation gate.
-                    if not actor_mode:
-                        assert frame["parameter_contracts"] == contracts
-                        assert frame["parameter_contract_view"] == __name__ + ".StrictTransportView"
-                        await socket.send_json_to({"type": "request_html"})
-                        recovery = await socket.receive_json_from(timeout=3)
-                        assert recovery["type"] == "html_recovery"
-                        assert recovery["version"] == frame["version"]
-                        assert "7:2026-09-21" in recovery["html"]
-                        assert recovery["parameter_contracts"] == contracts
-                        assert (
-                            recovery["parameter_contract_view"] == frame["parameter_contract_view"]
-                        )
+                    assert frame["parameter_contracts"] == contracts
+                    expected_view = __name__ + (
+                        ".StrictActorTransportView" if actor_mode else ".StrictTransportView"
+                    )
+                    assert frame["parameter_contract_view"] == expected_view
+                    await socket.send_json_to({"type": "request_html"})
+                    recovery = await socket.receive_json_from(timeout=3)
+                    assert recovery["type"] == "html_recovery"
+                    assert recovery["version"] == frame["version"]
+                    assert "7:2026-09-21" in recovery["html"]
+                    assert recovery["parameter_contracts"] == contracts
+                    assert recovery["parameter_contract_view"] == expected_view
         finally:
             await socket.disconnect()
 

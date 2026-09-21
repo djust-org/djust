@@ -109,13 +109,9 @@ Minified-asset checks passed 91 tests and bundle ESLint reported zero warnings.
 The shipped gzip grew by 484 bytes. These are automated receiver/transport
 results, not real-browser strict-binding acceptance.
 
-Actual normal WebSocket and SSE event tests now assert render snapshots as well
-as mount snapshots. The same regression on actor WebSocket responses still
-fails: actor results are emitted through a separate Rust render path, outside
-the Python runtime's render lock. Capturing contracts from the Python owner
-after awaiting that result is not sufficient evidence that they describe the
-same render. Actor capture, bespoke WebSocket tick/push paths, initial HTTP and
-HTTP fallback remain delivery gates.
+Actual normal/actor WebSocket and SSE event tests now assert render snapshots as
+well as mount snapshots. Actor capture is described below; bespoke WebSocket
+tick/push paths, initial HTTP and HTTP fallback remain delivery gates.
 No claim of complete transport parity is made.
 
 ### Recovery snapshots
@@ -163,6 +159,43 @@ Verification: seven missing-metadata regressions failed before routing these
 frames through the shared helper. The expanded runtime/metadata/batch group
 passed 46 tests; final full Python passed 30,611 with 952 skipped, and mypy
 passed for 1,037 files.
+
+### Actor render snapshots
+
+The Django session bridge supplies the public metadata service to its Rust view
+actor. The actor captures detached JSON inside the same serialized operation as
+rendering and carries it through the session result. Python forwards that
+snapshot, never a later rediscovery. Generic Rust/Python actors without the
+Django bridge remain independent of Django metadata imports.
+
+The session result exposes `recovery_html` and `parameter_contracts` to Python.
+It retains exact full HTML even when returning patches, so
+WebSocket recovery can use the same render and consumer-owned version.
+Strict snapshots and explicit clears use a JSON envelope even when binary
+patches are requested; the legacy binary payload has no place for metadata.
+Legacy-only wire frames retain their previous optional-field behavior.
+
+Actor dispatch now holds the consumer render lock, rechecks the owner after
+waiting and after the actor result, and retains the lock until a cancelled Rust
+operation settles. Cancelled operations send no result or deferred redispatch.
+Normal deferred work runs after releasing the lock. Contract failures are
+redacted and invalidate the unsent render baseline without discarding assigns;
+the next successful actor response is full HTML, not a diff against an unseen
+DOM. Failed mounts shut down unregistered actors and release their Python view.
+
+This adds render-contract delivery for the existing legacy-exposure actor path.
+Explicit-exposure actor events remain rejected by their existing construction/
+dispatch guards. Native binder activation and actor browser acceptance remain
+open alongside the other P2/P3 gates.
+
+Verification: the actual actor WebSocket contract test failed before delivery
+was added; four subsequent-error tests reproduced an unseen-DOM diff baseline.
+The dedicated suite now has 14 passing cases, including real Rust results,
+failure recovery, detached metadata, failed-mount view collection, cancellation,
+owner replacement and binary-envelope preservation. Final unchanged-code Python
+verification passed 30,625 tests with 952 skipped. The Rust workspace suite,
+all 75 `djust_live` library tests, warnings-denied Rust lint, and mypy over
+1,038 files passed. No live-browser strict-binding acceptance is claimed.
 
 ## Evidence and remaining gates
 

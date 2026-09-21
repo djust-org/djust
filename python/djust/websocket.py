@@ -1574,6 +1574,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         async_pending: bool = False,
         source: Optional[str] = None,
         ref: Optional[int] = None,
+        parameter_contract_snapshot: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -1599,6 +1600,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 user event round-trips to prevent version interleaving.
             ref: Event reference number echoed back from the client's request,
                 allowing the client to match responses to sent events (#560).
+            parameter_contract_snapshot: Public contract fields captured with this
+                render. Forces a JSON envelope and caches the fields with the
+                matching recovery baseline; never rebuild these from current state.
         """
         # #763's empty-patch hot-reload suppression USED TO LIVE HERE, and it is
         # deliberately gone: it now happens at the one `hotreload=True` call
@@ -1626,7 +1630,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
         if patches is not None:
-            if self.use_binary:
+            if self.use_binary and parameter_contract_snapshot is None:
                 patches_data = msgpack.packb(patches)
                 await self._send_frame(bytes_data=patches_data)
             else:
@@ -1667,6 +1671,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if ref is not None:
                     response["ref"] = ref
                 self._attach_debug_payload(response, event_name, performance)
+                if parameter_contract_snapshot is not None:
+                    response.update(parameter_contract_snapshot)
+                    self._capture_recovery_contracts(response)
                 await self.send_json(response)
                 await self._flush_all_pending()
         else:
@@ -1688,6 +1695,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if ref is not None:
                 response["ref"] = ref
             self._attach_debug_payload(response, event_name)
+            if parameter_contract_snapshot is not None:
+                response.update(parameter_contract_snapshot)
+                self._capture_recovery_contracts(response)
             await self.send_json(response)
             await self._flush_all_pending()
 

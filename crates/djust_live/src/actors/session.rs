@@ -256,6 +256,21 @@ impl SessionActor {
             "Creating new view"
         );
 
+        // Resolve the Django service before spawning a view, so import failure
+        // cannot leave an unregistered actor running. Generic ViewActor callers
+        // remain independent of the Django package.
+        let parameter_contract_module = if python_view.is_some() {
+            Some(
+                pyo3::Python::attach(|py| {
+                    py.import("djust._parameter_metadata")
+                        .map(|module| module.unbind().into())
+                })
+                .map_err(|_| ActorError::RenderContractsUnavailable)?,
+            )
+        } else {
+            None
+        };
+
         // Create ViewActor on the view's OWN template (#2599). `ViewActor::new`
         // builds an empty-template backend, which is what made every
         // `use_actors=True` mount render `<html><head></head><body></body></html>`.
@@ -270,16 +285,23 @@ impl SessionActor {
         view_actor.set_render_env(render_env);
         tokio::spawn(view_actor.run());
 
-        // Phase 5: Set Python view instance if provided
-        if let Some(python_view) = python_view {
-            view_handle.set_python_view(python_view).await?;
+        let initialized = async {
+            if let Some(python_view) = python_view {
+                view_handle
+                    .set_python_view_with_contracts(python_view, parameter_contract_module)
+                    .await?;
+            }
+            view_handle.update_state(params).await?;
+            view_handle.render_with_diff().await
         }
-
-        // Initialize state
-        view_handle.update_state(params).await?;
-
-        // Render initial HTML
-        let result = view_handle.render_with_diff().await?;
+        .await;
+        let result = match initialized {
+            Ok(result) => result,
+            Err(error) => {
+                view_handle.shutdown().await;
+                return Err(error);
+            }
+        };
 
         // Phase 6: Store handle with UUID key
         self.views.insert(view_id.clone(), view_handle);
@@ -321,6 +343,8 @@ impl SessionActor {
 
         Ok(PatchResponse {
             patches: result.patches,
+            recovery_html: result.html.clone(),
+            parameter_contracts: result.parameter_contracts,
             html: if !has_patches {
                 Some(result.html)
             } else {

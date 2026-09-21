@@ -429,8 +429,8 @@ class Transport(Protocol):
         - SSE: holds the session render lock so event/background results cannot
           race with another POST replacing the page.
 
-        The actor-event branch (added later in Phase 2.3a) runs OUTSIDE this
-        context, matching WS where the actor block holds no render lock.
+        The WS actor-event hook also acquires this context before dispatching to
+        Rust, so actor results cannot race with these Python render producers.
         """
         return contextlib.nullcontext()
 
@@ -467,13 +467,12 @@ class Transport(Protocol):
     ) -> None:
         """Run one event turn through the actor system + send the framed result.
 
-        Called by ``_dispatch_event_inner`` (OUTSIDE ``event_context`` — the actor
-        block holds NO render lock, matching the WS bespoke block which runs the
-        actor path before acquiring the lock) when :meth:`uses_actors` is true and
+        Called by ``_dispatch_event_inner`` before its normal event context; the
+        WS implementation acquires that context itself when :meth:`uses_actors` is true and
         the event is NOT routed to a sticky child (the WS
         ``not is_embedded_child_target`` mutual exclusion, websocket.py:3280-3282).
 
-        - WS: runs the bespoke actor block VERBATIM against the consumer —
+        - WS: serializes actor dispatch against the consumer's render producers —
           time-travel record, shared security + param validation,
           ``actor_handle.event()``, patch/HTML framing with the consumer-owned
           wire version (#1788), error handling, and the deferred-activity flush.
@@ -1171,20 +1170,55 @@ class WSConsumerTransport:
         event_ref: Optional[int] = None,
         cache_request_id: Optional[str] = None,
     ) -> None:
-        """Run the WS bespoke actor block VERBATIM against the consumer (#1901).
+        """Serialize actor dispatch with Python render producers and recovery."""
+        consumer = self._consumer
+        cancelled = False
+        try:
+            async with self.event_context(view):
+                if consumer.view_instance is not view:
+                    await consumer.send_error(
+                        "Actor owner changed. Reload the page.", recoverable=False
+                    )
+                    return
+                await self._dispatch_actor_event_locked(
+                    view,
+                    event_name,
+                    params,
+                    event_ref=event_ref,
+                    cache_request_id=cache_request_id,
+                )
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            # Deferred activity can dispatch another event: release the render
+            # lock before draining it, and never dispatch against a replaced owner.
+            if (
+                not cancelled
+                and consumer.view_instance is view
+                and hasattr(view, "_flush_deferred_activity_events")
+            ):
+                try:
+                    await view._flush_deferred_activity_events(consumer)
+                except Exception:
+                    logger.exception("dj_activity: deferred-event flush raised (actor path)")
 
-        This is a line-for-line port of the WS actor branch
-        (websocket.py:3282-3379) operating on ``self._consumer`` instead of
-        ``self`` (the consumer). The actor branch runs OUTSIDE any render lock
-        (the bespoke block acquires no lock before ``actor_handle.event()``), so
-        this method is invoked from ``_dispatch_event_inner`` BEFORE
-        ``event_context``.
+    async def _dispatch_actor_event_locked(
+        self,
+        view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        *,
+        event_ref: Optional[int] = None,
+        cache_request_id: Optional[str] = None,
+    ) -> None:
+        """Forward contracts captured inside the actor's serialized render.
 
-        Framing / version-stamping notes (what Phase 2.3b must watch):
+        Framing / version-stamping notes:
         - The consumer OWNS the monotonic wire version (#1788); the actor's
           ``result['version']`` is IGNORED for the wire — ``_send_update`` is
-          stamped with ``consumer._next_version()`` (the same source
-          ``handle_event`` uses). The actor's internal version still drives its
+          stamped with the consumer counter and arms recovery from the actor's
+          exact full HTML. The actor's internal version still drives its own
           server-side diff baseline.
         - ``cache_request_id`` is read (not popped) from ``params`` by the WS
           bespoke caller; it is forwarded here so the ``@cache`` decorator's
@@ -1244,7 +1278,57 @@ class WSConsumerTransport:
             # (websocket.py:3326).
             if strict_params is not None:
                 params = strict_params
-            result = await consumer.actor_handle.event(event_name, params)
+            actor_task = asyncio.ensure_future(consumer.actor_handle.event(event_name, params))
+            try:
+                result = await asyncio.shield(actor_task)
+            except asyncio.CancelledError:
+                # The Rust mailbox operation survives cancellation of its Python
+                # waiter. Keep the lock until it settles, without sending a frame.
+                while not actor_task.done():
+                    try:
+                        await asyncio.shield(actor_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not actor_task.cancelled():
+                    actor_task.exception()
+                raise
+            if consumer.view_instance is not view:
+                await consumer.send_error(
+                    "Actor owner changed. Reload the page.", recoverable=False
+                )
+                return
+
+            runtime = getattr(consumer, "_runtime", None)
+            active = getattr(runtime, "_parameter_contracts_active", False)
+            snapshot: Dict[str, Any] = {}
+            if "parameter_contracts" not in result and (
+                active or get_handler_parameter_policy(handler) == "strict"
+            ):
+                await consumer.send_error(
+                    "Actor render parameter contracts unavailable.", recoverable=False
+                )
+                return
+            manifest = result.get("parameter_contracts")
+            if manifest is not None or active:
+                path = getattr(runtime, "_parameter_contract_view", None)
+                if (
+                    runtime is None
+                    or getattr(runtime, "view_instance", None) is not view
+                    or not isinstance(path, str)
+                    or not path
+                    or not isinstance(result.get("recovery_html"), str)
+                ):
+                    await consumer.send_error(
+                        "Actor render parameter contracts unavailable.", recoverable=False
+                    )
+                    return
+                snapshot["parameter_contract_snapshot"] = {
+                    "parameter_contracts": manifest,
+                    "parameter_contract_view": path,
+                }
+                runtime._parameter_contracts_active = True
 
             # Send patches if available, otherwise full HTML. Ignore the actor
             # ``result['version']`` for the wire — the consumer owns the monotonic
@@ -1263,12 +1347,19 @@ class WSConsumerTransport:
                     len(html) if html else 0,
                 )
 
+            raw_html = result.get("recovery_html")
+            version = (
+                consumer._next_version_armed(raw_html)
+                if isinstance(raw_html, str)
+                else consumer._next_version()
+            )
             await consumer._send_update(
                 patches=patches,
                 html=html,
-                version=consumer._next_version(),  # consumer-owned (#1788)
+                version=version,  # consumer-owned (#1788)
                 cache_request_id=cache_request_id,
                 event_name=event_name,
+                **snapshot,
             )
 
         except Exception as e:
@@ -1286,14 +1377,6 @@ class WSConsumerTransport:
         finally:
             _tt_end(view, _tt_snapshot, error=_tt_error)
             await consumer._maybe_push_tt_event(view, _tt_snapshot)
-            # v0.7.0 — Drain deferred activity queue in the actor path too. The
-            # flush is async and awaited inline so drained events complete in the
-            # SAME round-trip as this handler (websocket.py:3372-3379).
-            if hasattr(view, "_flush_deferred_activity_events"):
-                try:
-                    await view._flush_deferred_activity_events(consumer)
-                except Exception:  # noqa: BLE001
-                    logger.exception("dj_activity: deferred-event flush raised (actor path)")
 
     async def recheck_event_auth(self, view: Any) -> bool:
         """WS per-event auth re-check — verbatim from websocket.py:3193-3222 (#1777).
@@ -3174,8 +3257,8 @@ class ViewRuntime:
                 await self.transport.send_error("Explicit actor events are not yet supported")
                 await self.transport.close(code=4403)
                 return
-            # Actor path: runs OUTSIDE event_context (no render lock), mirroring
-            # the WS bespoke block. Parse ref / cache id the same way the WS event
+            # The transport owns actor event_context acquisition. Parse ref /
+            # cache id the same way the WS event
             # handler does (websocket.py:3168-3172) so the framed actor result
             # carries the same wire metadata.
             params: Dict[str, Any] = dict(data.get("params") or {})

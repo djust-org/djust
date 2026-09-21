@@ -28,6 +28,11 @@ pub struct ViewActor {
     /// Python LiveView instance for calling event handlers
     /// Set via SetPythonView message after actor creation
     python_view: Option<Py<PyAny>>,
+    /// Supplied by the Django session bridge; generic Rust/Python actors need
+    /// not import the Django package just to render an undecorated Python object.
+    parameter_contract_module: Option<Py<PyAny>>,
+    /// Preserve strict failure semantics after a previously advertised owner is removed.
+    parameter_contracts_active: bool,
     /// Child component actors (Phase 8)
     /// Keyed by component_id for routing messages
     components: IndexMap<String, ComponentActorHandle>,
@@ -101,7 +106,9 @@ impl ViewActor {
             receiver: rx,
             sender: tx.clone(), // Phase 8.2: Store sender for creating child component handles
             backend,
-            python_view: None,           // Phase 5: Set via SetPythonView message
+            python_view: None, // Phase 5: Set via SetPythonView message
+            parameter_contract_module: None,
+            parameter_contracts_active: false,
             components: IndexMap::new(), // Phase 8: Child components
         };
 
@@ -160,9 +167,13 @@ impl ViewActor {
                     self.handle_render_with_diff(reply);
                 }
 
-                ViewMsg::SetPythonView { view, reply } => {
+                ViewMsg::SetPythonView {
+                    view,
+                    parameter_contract_module,
+                    reply,
+                } => {
                     debug!(view_path = %self.view_path, "SetPythonView");
-                    self.handle_set_python_view(view, reply);
+                    self.handle_set_python_view(view, parameter_contract_module, reply);
                 }
 
                 ViewMsg::Event {
@@ -321,17 +332,59 @@ impl ViewActor {
         &mut self,
         reply: tokio::sync::oneshot::Sender<Result<RenderResult, ActorError>>,
     ) {
-        let result = self
-            .backend
-            .render_with_diff_rust()
-            .map(|(html, patches, version)| RenderResult {
+        let result = self.render_with_contracts();
+        let _ = reply.send(result);
+    }
+
+    fn parameter_contracts(&self) -> Result<Option<String>, ActorError> {
+        let (Some(view), Some(module)) = (&self.python_view, &self.parameter_contract_module)
+        else {
+            return Ok(None);
+        };
+        Python::attach(|py| -> PyResult<Option<String>> {
+            let manifest = module
+                .bind(py)
+                .call_method1("parameter_contract_manifest", (view.bind(py),))?;
+            if manifest.is_none() {
+                return Ok(None);
+            }
+            py.import("json")?
+                .call_method1("dumps", (manifest,))?
+                .extract()
+                .map(Some)
+        })
+        .map_err(|_| ActorError::RenderContractsUnavailable)
+    }
+
+    fn render_with_contracts(&mut self) -> Result<RenderResult, ActorError> {
+        let has_python_view = self.python_view.is_some();
+        let mut render = || {
+            let (html, patches, version) = self
+                .backend
+                .render_with_diff_rust()
+                .map_err(|e| ActorError::template(e.to_string()))?;
+            let parameter_contracts = self.parameter_contracts()?;
+            self.parameter_contracts_active |= parameter_contracts.is_some();
+            Ok(RenderResult {
                 html,
                 patches,
                 version,
+                parameter_contracts,
             })
-            .map_err(|e| ActorError::template(e.to_string()));
-
-        let _ = reply.send(result);
+        };
+        // Pure-Rust actors do not require a Python interpreter. Python-backed
+        // actors keep rendering and property-free metadata discovery together.
+        let result = if has_python_view {
+            Python::attach(|_| render())
+        } else {
+            render()
+        };
+        if matches!(&result, Err(ActorError::RenderContractsUnavailable)) {
+            // No client received this render. Never diff a later success
+            // against the withheld DOM; preserve assigns but reset the baseline.
+            self.backend.reset_rust();
+        }
+        result
     }
 
     /// Handle SetPythonView message (Phase 5)
@@ -340,9 +393,12 @@ impl ViewActor {
     fn handle_set_python_view(
         &mut self,
         view: Py<PyAny>,
+        parameter_contract_module: Option<Py<PyAny>>,
         reply: tokio::sync::oneshot::Sender<Result<(), ActorError>>,
     ) {
         self.python_view = Some(view);
+        self.parameter_contract_module = parameter_contract_module;
+        self.parameter_contracts_active = false;
         let _ = reply.send(Ok(()));
     }
 
@@ -356,14 +412,32 @@ impl ViewActor {
         params: HashMap<String, Value>,
         reply: tokio::sync::oneshot::Sender<Result<RenderResult, ActorError>>,
     ) {
-        // Phase 5.3: Call Python event handler
-        let result = self.call_python_handler(&event_name, &params);
+        let result = if self.python_view.is_some() {
+            Python::attach(|_| self.event_render_result(&event_name, &params))
+        } else {
+            self.event_render_result(&event_name, &params)
+        };
+        if matches!(&result, Err(ActorError::RenderContractsUnavailable)) {
+            self.backend.reset_rust();
+        }
+        let _ = reply.send(result);
+    }
+
+    fn event_render_result(
+        &mut self,
+        event_name: &str,
+        params: &HashMap<String, Value>,
+    ) -> Result<RenderResult, ActorError> {
+        let result = self.call_python_handler(event_name, params);
 
         // If handler call succeeded, sync state and render
-        let render_result = match result {
+        match result {
             Ok(()) => {
                 // Sync state from Python to Rust backend
                 if let Err(e) = self.sync_state_from_python() {
+                    if self.parameter_contracts_active || self.parameter_contracts()?.is_some() {
+                        return Err(ActorError::RenderContractsUnavailable);
+                    }
                     warn!(
                         view_path = %self.view_path,
                         error = %e,
@@ -372,17 +446,13 @@ impl ViewActor {
                 }
 
                 // Render with diff
-                self.backend
-                    .render_with_diff_rust()
-                    .map(|(html, patches, version)| RenderResult {
-                        html,
-                        patches,
-                        version,
-                    })
-                    .map_err(|e| ActorError::template(e.to_string()))
+                self.render_with_contracts()
             }
             Err(ActorError::InvalidParameters) => Err(ActorError::InvalidParameters),
             Err(e) => {
+                if self.parameter_contracts_active || self.parameter_contracts()?.is_some() {
+                    return Err(ActorError::RenderContractsUnavailable);
+                }
                 // Handler call failed - still try to render current state
                 warn!(
                     view_path = %self.view_path,
@@ -392,18 +462,9 @@ impl ViewActor {
                 );
 
                 // Return error but include current rendered state
-                self.backend
-                    .render_with_diff_rust()
-                    .map(|(html, patches, version)| RenderResult {
-                        html,
-                        patches,
-                        version,
-                    })
-                    .map_err(|e| ActorError::template(e.to_string()))
+                self.render_with_contracts()
             }
-        };
-
-        let _ = reply.send(render_result);
+        }
     }
 
     /// Call Python event handler (Phase 5.3)
@@ -863,10 +924,22 @@ impl ViewActorHandle {
     ///
     /// Returns `ActorError::Shutdown` if the actor has been shutdown.
     pub async fn set_python_view(&self, view: Py<PyAny>) -> Result<(), ActorError> {
+        self.set_python_view_with_contracts(view, None).await
+    }
+
+    pub(crate) async fn set_python_view_with_contracts(
+        &self,
+        view: Py<PyAny>,
+        parameter_contract_module: Option<Py<PyAny>>,
+    ) -> Result<(), ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
-            .send(ViewMsg::SetPythonView { view, reply: tx })
+            .send(ViewMsg::SetPythonView {
+                view,
+                parameter_contract_module,
+                reply: tx,
+            })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 

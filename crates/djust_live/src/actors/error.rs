@@ -41,6 +41,10 @@ pub enum ActorError {
     #[error("Invalid handler parameters")]
     InvalidParameters,
 
+    /// A render cannot safely advertise its public parameter contract.
+    #[error("Actor render parameter contracts unavailable")]
+    RenderContractsUnavailable,
+
     /// Serialization error
     #[error("Serialization error: {0}")]
     Serialization(String),

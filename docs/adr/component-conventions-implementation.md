@@ -497,6 +497,16 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   producers and HTTP delivery remain open.
   Child-background verification: 46 focused tests, final full Python 30,611
   passed (952 skipped), and mypy 1,037 files clean.
+  Actor render results now carry snapshots captured inside Rust and retain full
+  recovery HTML. The Python transport serializes actor dispatch, guards owner
+  identity and cancellation, and forwards the captured metadata. Strict failure
+  clears the unsent VDOM baseline; failed mounts release unregistered views.
+  This covers legacy-exposure actors only: explicit actor support, bespoke
+  producers, HTTP delivery, owner generations and native binding remain gated.
+  Actor verification: 14 dedicated cases; final unchanged-code Python 30,625
+  passed (952 skipped); Rust workspace and all 75 live-library tests passed;
+  warnings-denied Rust lint and mypy (1,038 files) passed. Native browser
+  acceptance is still open.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 
