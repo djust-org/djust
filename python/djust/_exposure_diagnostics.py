@@ -15,18 +15,33 @@ _details_allowed: ContextVar[bool] = ContextVar("djust_exception_details_allowed
 _owner_slots: ContextVar[tuple[tuple[Any, str], ...]] = ContextVar(
     "djust_diagnostic_owner_slots", default=()
 )
+_scope_depth: ContextVar[int] = ContextVar("djust_diagnostic_scope_depth", default=0)
 
 
 @contextmanager
 def diagnostic_scope() -> Iterator[None]:
-    """Inherit the caller's restriction and restore it on every exit path."""
+    """Restore caller state, carrying protected failures to an enclosing catch.
+
+    A nested restricted failure must not regain details while unwinding toward
+    its transport boundary. The outermost scope still resets on every exit,
+    including cancellation; successful nested operations retain local cleanup.
+    """
     token = _details_allowed.set(_details_allowed.get())
     owners_token = _owner_slots.set(_owner_slots.get())
+    parent_depth = _scope_depth.get()
+    depth_token = _scope_depth.set(parent_depth + 1)
+    protected_failure = False
     try:
         yield
+    except BaseException:
+        protected_failure = not diagnostics_allowed()
+        raise
     finally:
+        _scope_depth.reset(depth_token)
         _owner_slots.reset(owners_token)
         _details_allowed.reset(token)
+        if protected_failure and parent_depth:
+            _details_allowed.set(False)
 
 
 def restrict_diagnostics(view: Any) -> None:

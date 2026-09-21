@@ -2117,6 +2117,7 @@ class ViewRuntime:
     # Top-level dispatch
     # ------------------------------------------------------------------ #
 
+    @_runtime_diagnostic_scope
     async def dispatch_message(self, data: Dict[str, Any]) -> None:
         """Route an inbound frame to the appropriate handler by ``type``.
 
@@ -2125,15 +2126,41 @@ class ViewRuntime:
         future frame types (uploads, presence) the runtime doesn't yet
         own.
         """
-        msg_type = data.get("type")
-        if msg_type == "mount":
-            await self.dispatch_mount(data)
-        elif msg_type == "event":
-            await self.dispatch_event(data)
-        elif msg_type == "url_change":
-            await self.dispatch_url_change(data)
-        else:
-            await self.transport.send_error(f"Unknown message type: {msg_type}")
+        from ._exposure_diagnostics import diagnostics_allowed
+
+        try:
+            msg_type = data.get("type")
+            if msg_type == "mount":
+                await self.dispatch_mount(data)
+            elif msg_type == "event":
+                await self.dispatch_event(data)
+            elif msg_type == "url_change":
+                await self.dispatch_url_change(data)
+            else:
+                await self.transport.send_error(f"Unknown message type: {msg_type}")
+        except Exception as exc:
+            if diagnostics_allowed():
+                # Legacy callers keep their existing transport-specific catches.
+                raise
+            response = handle_exception(exc, expose_details=False, logger=logger)
+            if isinstance(data, dict) and data.get("type") == "event":
+                response["source"] = "event"
+                raw_ref = data.get("ref")
+                if type(raw_ref) is int or type(raw_ref) is float:
+                    try:
+                        response["ref"] = int(raw_ref)
+                    except (ValueError, OverflowError):
+                        # Match existing numeric refs without letting a forged
+                        # NaN/infinity defeat the protected error boundary.
+                        pass
+            try:
+                await self.transport.send(response)
+            except Exception:  # noqa: BLE001 — do not leak delivery errors to outer handlers
+                logger.error("Protected error response could not be delivered")
+                try:
+                    await self.transport.close(code=1011)
+                except Exception:  # noqa: BLE001 — even close failures must be value-free
+                    logger.error("Protected transport could not be closed")
 
     # ------------------------------------------------------------------ #
     # Mount dispatch (used by SSE in this PR; WS still uses handle_mount)
