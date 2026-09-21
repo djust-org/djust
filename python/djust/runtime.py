@@ -4294,6 +4294,10 @@ class ViewRuntime:
                     exc,
                 )
 
+        from ._async_batch import AsyncBatch
+
+        async_batch = AsyncBatch(view)
+
         # ADR-032 D5: the scoped path first. Same helper as the runtime event
         # path; the frame is the ``patch`` frame that path emits.
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
@@ -4312,8 +4316,9 @@ class ViewRuntime:
                 }
                 if event_ref is not None:
                     noop_msg["ref"] = event_ref
+                noop_msg.update(async_batch.fields())
                 await self.transport.send(noop_msg)
-                self._dispatch_async_work(event_name)
+                self._dispatch_async_work(event_name, async_batch)
                 await self._flush_deferred_activity_events()
                 return True
             if _scoped_component_for(view, changed) is component:
@@ -4326,9 +4331,10 @@ class ViewRuntime:
                         (time.perf_counter() - _scoped_start) * 1000,
                         event_name=event_name,
                         event_ref=event_ref,
+                        async_batch=async_batch,
                     )
                     await self._flush_all_pending()
-                    self._dispatch_async_work(event_name)
+                    self._dispatch_async_work(event_name, async_batch)
                     return True
 
         # Component VDOM is separate from the parent's, so re-render the parent
@@ -4358,11 +4364,12 @@ class ViewRuntime:
         }
         if event_ref is not None:
             msg["ref"] = event_ref
+        msg.update(async_batch.fields())
         await self.transport.send(msg)
         await self._flush_all_pending()
 
         # Dispatch any background work the component handler scheduled (WS parity).
-        self._dispatch_async_work(event_name)
+        self._dispatch_async_work(event_name, async_batch)
         return True
 
     # ------------------------------------------------------------------ #
@@ -5247,6 +5254,7 @@ class ViewRuntime:
         *,
         event_name: str,
         event_ref: Optional[int],
+        async_batch: Optional["AsyncBatch"] = None,
     ) -> None:
         """Emit the ``patch`` frame for a scoped render on the component
         dispatch path — the same shape ``_render_and_send`` emits (D4), with
@@ -5262,6 +5270,8 @@ class ViewRuntime:
         }
         if event_ref is not None:
             msg["ref"] = event_ref
+        if async_batch is not None:
+            msg.update(async_batch.fields())
         await self.transport.send(
             self._stamp_event_frame(
                 view,

@@ -28,6 +28,29 @@ Queues created after batch capture, failure ordering and the remaining lifecycle
 matrix require further coverage. No ADR is accepted by this slice and the
 explicit-exposure construction guard remains in place.
 
+## Component-route background acknowledgements — E4 slice
+
+The separate component dispatch route now advertises the same captured batch
+for noop, subtree patch and full-page responses. All three dispatch that exact
+batch after the acknowledgement. Background queue/cancellation bookkeeping is
+classified as framework-internal for change detection, preserving noop and
+subtree rendering. Capturing an empty batch no longer creates an uninitialized
+task queue (which could otherwise break later unnamed task scheduling).
+
+The focused runtime, child-routing, SSE and batch suite passed 72 tests. Native
+browser clicks against a temporary server passed over WebSocket and SSE: a
+descriptor component's foreground subtree patch and both background patches
+kept the button disabled; batch completion released it. No synthetic frames
+were supplied by the browser harness. This verifies the legacy-root descriptor
+component route, not explicit-root authorization or cross-worker restoration.
+
+The full Python run passed 30,049 tests with 952 skipped; mypy passed 1,021
+source files. A subsequently added unnamed-task regression passed with all
+five batch tests; that extra test is not included in the full-run count.
+
+Mount callers and legacy child dispatch remain on the lifecycle checklist;
+this slice does not close E4 or activate explicit exposure.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
@@ -173,8 +196,8 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
 ### Next milestone: E4 — request correlation
 
 Owner: current task implementer. Status: foreground correlation and staged
-explicit-child task batches implemented; root/background integration and
-remaining lifecycle verification open. This is a
+explicit-child, root, deferred and component-route task batches implemented;
+mount/legacy-child integration and remaining lifecycle verification open. This is a
 transport correctness slice, not permission to enable ADR-038.
 
 The original `tests/js/request-correlation.test.js` reproducer reported four

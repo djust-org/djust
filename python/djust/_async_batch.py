@@ -22,7 +22,8 @@ class AsyncBatch:
     def __init__(self, owner: Any) -> None:
         self.owner = owner
         self.queued = list(getattr(owner, "_async_tasks", {}).items())
-        owner._async_tasks = {}
+        if hasattr(owner, "_async_tasks"):
+            owner._async_tasks = {}
         pending = getattr(owner, "_async_pending", None)
         if pending:
             self.queued.append(("_default", pending))

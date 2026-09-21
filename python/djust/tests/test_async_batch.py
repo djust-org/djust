@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from djust._async_batch import AsyncBatch
+from djust.mixins.async_work import AsyncWorkMixin
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,6 +60,15 @@ async def test_empty_batch_never_advertises_or_emits_background_work():
     batch = AsyncBatch(owner)
     assert batch.fields() == {}
     batch.dispatch(None, None)
+    assert not hasattr(owner, "_async_tasks")
+
+
+async def test_empty_batch_does_not_break_later_unnamed_work():
+    owner = AsyncWorkMixin()
+    assert AsyncBatch(owner).fields() == {}
+    owner.start_async(lambda: None)
+    batch = AsyncBatch(owner)
+    assert [name for name, _ in batch.queued] == ["_task_0"]
 
 
 async def test_captured_batches_have_distinct_tokens_and_do_not_drain_later_work():

@@ -370,6 +370,60 @@ class TestScopedComponentFor:
 @pytest.mark.django_db
 class TestScopedPath:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("frame_type", ["noop", "patch", "html_update"])
+    async def test_component_background_batch_waits_for_all_work(self, monkeypatch, frame_type):
+        import asyncio
+
+        release = asyncio.Event()
+        completed = []
+        view, runtime, transport = _mounted(OpaquePage)
+
+        @event_handler()
+        def select(component, **kwargs):
+            if frame_type != "noop":
+                component.state.active = "billing"
+            if frame_type == "html_update":
+                view._force_full_html = True
+
+            async def first():
+                completed.append("first")
+
+            async def second():
+                await release.wait()
+                completed.append("second")
+
+            view.start_async(first, name="first")
+            view.start_async(second, name="second")
+
+        monkeypatch.setattr(Tabs, "select", select)
+        try:
+            await runtime.dispatch_event(
+                {"type": "event", "event": "select", "params": {"component_id": "nav"}, "ref": 19}
+            )
+            ack = next(frame for frame in transport.sent if frame.get("ref") == 19)
+            assert ack["type"] == frame_type
+            assert ack.get("async_pending") is True
+            token = ack["async_batch"]
+            for _ in range(100):
+                if "first" in completed:
+                    break
+                await asyncio.sleep(0.01)
+            assert completed == ["first"]
+            assert not any(f["type"] == "async_complete" for f in transport.sent)
+            release.set()
+            for _ in range(100):
+                if any(f["type"] == "async_complete" for f in transport.sent):
+                    break
+                await asyncio.sleep(0.01)
+            assert {"type": "async_complete", "async_batch": token} in transport.sent
+            assert completed == ["first", "second"]
+        finally:
+            release.set()
+            handles = tuple(getattr(view, "_async_task_handles", ()))
+            if handles:
+                await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+
+    @pytest.mark.asyncio
     async def test_component_event_patches_only_the_component_subtree(self):
         view, runtime, transport = _mounted(OpaquePage)
         prefix = _component_prefix(view, "nav")
