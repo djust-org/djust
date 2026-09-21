@@ -51,6 +51,28 @@ five batch tests; that extra test is not included in the full-run count.
 Mount callers and legacy child dispatch remain on the lifecycle checklist;
 this slice does not close E4 or activate explicit exposure.
 
+## Legacy child-owned background dispatch — E3/E4 slice
+
+Legacy embedded events now capture and acknowledge the selected child's task
+batch rather than draining the root queue. Callbacks and result handlers run on
+that child; successful results render an async embedded update and use the
+existing sticky-child persistence policy. Registry identity and disposal/
+generation checks before dispatch and after asynchronous boundaries suppress
+late result handling and delivery for removed or replaced owners. Completion
+still releases the acknowledged batch even when delivery is suppressed.
+
+The new runtime tests verify child results, untouched parent queues, removed
+owners and completion. Temporarily restoring the old parent dispatch caused
+both tests to fail; the corrected tests pass. The affected runtime, async,
+explicit-child and sticky-child regression set passed 455 tests, and mypy
+passed 1,021 source files. This slice has no new live-browser or cross-worker
+evidence and does not claim the legacy best-effort persistence policy is the
+explicit exposure contract. The strict explicit-child path remains separate.
+
+Mount-time work has no originating event request: do not attach its completion
+to a later foreground request. Its ownership/failure matrix still needs review
+before E4 closes, along with the remaining client fallbacks.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation
@@ -196,8 +218,8 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
 ### Next milestone: E4 — request correlation
 
 Owner: current task implementer. Status: foreground correlation and staged
-explicit-child, root, deferred and component-route task batches implemented;
-mount/legacy-child integration and remaining lifecycle verification open. This is a
+explicit/legacy-child, root, deferred and component-route task batches implemented;
+mount ownership and remaining lifecycle verification open. This is a
 transport correctness slice, not permission to enable ADR-038.
 
 The original `tests/js/request-correlation.test.js` reproducer reported four

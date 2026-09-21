@@ -4120,12 +4120,10 @@ class ViewRuntime:
         }
         if event_ref is not None:
             msg["ref"] = event_ref
-        child_batch = None
-        if explicit_child:
-            from ._async_batch import AsyncBatch
+        from ._async_batch import AsyncBatch
 
-            child_batch = AsyncBatch(target_view)
-            msg.update(child_batch.fields())
+        child_batch = AsyncBatch(target_view)
+        msg.update(child_batch.fields())
         await self.transport.send(msg)
         await self._flush_all_pending()
 
@@ -4138,7 +4136,9 @@ class ViewRuntime:
             assert child_batch is not None
             dispatch_child_work(self, target_view, event_name, child_batch)
         else:
-            self._dispatch_async_work(event_name)
+            from ._child_async import dispatch_legacy_child_work
+
+            dispatch_legacy_child_work(self, target_view, view_id, event_name, child_batch)
         return True
 
     async def _dispatch_component_event(
