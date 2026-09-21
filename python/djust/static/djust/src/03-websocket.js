@@ -926,6 +926,7 @@ class LiveViewWebSocket {
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger);
+                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.

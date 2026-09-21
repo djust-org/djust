@@ -53,6 +53,7 @@ async function flushServerUpdates(transport) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
         await handleServerResponse(frame, null, null);
+        completeLegacyAsyncBatches(transport, frame);
     }
 }
 
@@ -70,10 +71,23 @@ function registerEventRequest(transport, eventName, triggerElement) {
 }
 
 function rememberAsyncBatch(transport, data, eventName, trigger) {
+    if (data.async_pending && data.async_batch == null && eventName) {
+        _pendingAsyncBatches.set(Symbol('legacy'), {transport, eventName, trigger, legacy: true});
+        return;
+    }
     if (data.async_pending && typeof data.async_batch === 'string' &&
         data.async_batch.length > 0 && data.async_batch.length <= 128 &&
         !_pendingAsyncBatches.has(data.async_batch)) {
         _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+    }
+}
+
+function completeLegacyAsyncBatches(transport, data) {
+    if (data.source !== 'async' || data.async_pending || !data.event_name) return;
+    for (const [token, batch] of _pendingAsyncBatches) {
+        if (batch.legacy && batch.transport === transport && batch.eventName === data.event_name) {
+            completeAsyncBatch(transport, token);
+        }
     }
 }
 

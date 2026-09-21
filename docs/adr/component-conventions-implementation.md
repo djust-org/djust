@@ -184,6 +184,24 @@ evidence audit and refreshed live backend/browser checks.
 The rebuilt-client suite passed 2,034 tests in 189 files; bundle ESLint passed
 without warnings. No Python implementation changed in this slice.
 
+## Legacy async compatibility — E4 audit finding
+
+Actual bundled-client tests exposed stuck scoped loading for old servers that
+send async_pending without an opaque batch token. The client now retains those
+legacy origins in transport-owned records and releases them on the matching
+async event result, including deferred and embedded results. Modern tokenized
+batches remain independent. Disconnect clears both types through shared cleanup.
+The legacy protocol identifies completion by event name, not individual task;
+it cannot provide modern per-task identity when names overlap.
+
+Both WS/SSE regressions failed before the fix. The final rebuilt-client suite
+passed 2,036 tests in 189 files and bundle ESLint passed without warnings.
+The refreshed server regression set passed 455 tests at 8515822e2; subsequent
+changes are client-only. Native browser overlap checks at that revision passed
+for both WS and SSE: ref 1's patch retained loading and ref 2's noop released it.
+That browser fixture bypasses the explicit construction guard only in its
+temporary process; it is not evidence for production exposure activation.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

@@ -78,7 +78,10 @@ async function handleEmbeddedResponse(data, transport) {
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
         typeof data.html !== 'string')) return false;
-    if (data.source === 'async') return true;
+    if (data.source === 'async') {
+        completeLegacyAsyncBatches(transport, data);
+        return true;
+    }
     // No-ref SSE replies must match the pending element's scope. A reply for
     // another child must not consume the most recently sent event's state.
     if (!tracked && (ownerId !== data.view_id ||

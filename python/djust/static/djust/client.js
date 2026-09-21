@@ -361,7 +361,10 @@ async function handleEmbeddedResponse(data, transport) {
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
         typeof data.html !== 'string')) return false;
-    if (data.source === 'async') return true;
+    if (data.source === 'async') {
+        completeLegacyAsyncBatches(transport, data);
+        return true;
+    }
     // No-ref SSE replies must match the pending element's scope. A reply for
     // another child must not consume the most recently sent event's state.
     if (!tracked && (ownerId !== data.view_id ||
@@ -1659,6 +1662,7 @@ class LiveViewWebSocket {
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger);
+                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
@@ -2613,6 +2617,7 @@ class LiveViewSSE {
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger);
+                completeLegacyAsyncBatches(this, data);
                 break;
             }
 
@@ -2942,6 +2947,7 @@ async function flushServerUpdates(transport) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
         await handleServerResponse(frame, null, null);
+        completeLegacyAsyncBatches(transport, frame);
     }
 }
 
@@ -2959,10 +2965,23 @@ function registerEventRequest(transport, eventName, triggerElement) {
 }
 
 function rememberAsyncBatch(transport, data, eventName, trigger) {
+    if (data.async_pending && data.async_batch == null && eventName) {
+        _pendingAsyncBatches.set(Symbol('legacy'), {transport, eventName, trigger, legacy: true});
+        return;
+    }
     if (data.async_pending && typeof data.async_batch === 'string' &&
         data.async_batch.length > 0 && data.async_batch.length <= 128 &&
         !_pendingAsyncBatches.has(data.async_batch)) {
         _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+    }
+}
+
+function completeLegacyAsyncBatches(transport, data) {
+    if (data.source !== 'async' || data.async_pending || !data.event_name) return;
+    for (const [token, batch] of _pendingAsyncBatches) {
+        if (batch.legacy && batch.transport === transport && batch.eventName === data.event_name) {
+            completeAsyncBatch(transport, token);
+        }
     }
 }
 

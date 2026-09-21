@@ -268,6 +268,17 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
+    it('completes legacy async_pending without a batch token', async () => {
+        const {dom, transport, button, sent, send} = setup(name);
+        try {
+            send();
+            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true});
+            expect(button.disabled).toBe(true);
+            await transport.handleMessage({type: 'patch', source: 'async', event_name: 'save', patches: []});
+            expect(button.disabled).toBe(false);
+        } finally { dom.window.close(); }
+    });
+
     it('retains each background batch independently of foreground acknowledgements', async () => {
         const {dom, transport, button, sent, send, loading} = setup(name);
         try {
