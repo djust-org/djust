@@ -51,6 +51,46 @@ replacement manifest records an invalid state rather than retaining old rules or
 falling back to legacy. Unknown mounts, owners and handlers are distinct from a
 known legacy mount. These are advisory public records, never authorization.
 
+## Render-frame delivery (in progress)
+
+The shared Python runtime rebuilds contracts for each emitted patch, full-HTML
+or embedded render response. The snapshot travels on that response together
+with `parameter_contract_view`, the mounted path (not a child's `view_id`).
+Removing the last strict owner emits explicit `parameter_contracts: null`
+on subsequent render responses until remount. All-legacy sessions retain their
+existing response shape. No owner or manifest is cached by this mechanism.
+Invalid contract discovery suppresses that DOM frame and returns a fixed,
+redacted render error instead.
+
+URL-change handling now borrows the same WS/SSE render lock as events and
+background results, and rechecks the mounted owner after acquiring it. A
+scheduling probe demonstrated that URL handling previously entered its body
+while that lock was held. Six regressions using the real transport adapters
+cover serialization, replacement while waiting and cancellation cleanup; all
+failed before the fix. Related focused coverage passes 124 tests, including
+URL wire versions and object-permission checks. This does not prove actor or
+external render-producer serialization.
+
+Final render-delivery verification: three unchanged-code full Python runs each
+passed 30,576 tests with 952 skipped. Normal pre-commit checks passed. Independent
+review found no actionable issues in the bounded server-delivery/URL-lock change.
+JavaScript and Rust were unchanged in this slice; the earlier mount-manifest
+JavaScript results below are not new browser activation evidence.
+
+This is delivery, not client installation. A receiver must not update its
+contracts merely because a frame arrived: version rejection, buffering and
+failed patches must be resolved first, and successful installation must precede
+`reinitAfterDOMUpdate()` (which can fire `dj-mounted`).
+
+Actual normal WebSocket and SSE event tests now assert render snapshots as well
+as mount snapshots. The same regression on actor WebSocket responses still
+fails: actor results are emitted through a separate Rust render path, outside
+the Python runtime's render lock. Capturing contracts from the Python owner
+after awaiting that result is not sufficient evidence that they describe the
+same render. Actor capture, bespoke WebSocket tick/push/recovery paths, explicit
+child background frames, initial HTTP and HTTP fallback remain delivery gates.
+No claim of complete transport parity is made.
+
 ## Evidence and remaining gates
 
 Actual WebSocket (normal and actor mode) and SSE endpoint tests failed before the

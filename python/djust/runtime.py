@@ -2108,6 +2108,11 @@ class ViewRuntime:
         # Explicit request/auth/save state is per turn, including the work
         # before entering a transport's render lock.
         self._explicit_event_lock = asyncio.Lock()
+        # ADR-036: only transport-local advertisement state, never application
+        # state or a cached owner/contract. A later all-legacy render must clear
+        # a previously advertised strict manifest.
+        self._parameter_contracts_active = False
+        self._parameter_contract_view: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -3012,6 +3017,8 @@ class ViewRuntime:
         from ._parameter_metadata import parameter_contract_manifest
 
         parameter_contracts = parameter_contract_manifest(view_instance)
+        self._parameter_contracts_active = parameter_contracts is not None
+        self._parameter_contract_view = view_path
         if parameter_contracts is not None:
             mount_msg["parameter_contracts"] = parameter_contracts
 
@@ -4271,7 +4278,7 @@ class ViewRuntime:
 
         child_batch = AsyncBatch(target_view)
         msg.update(child_batch.fields())
-        await self.transport.send(msg)
+        await self._send_render_frame(msg)
         await self._flush_all_pending()
 
         # Child side effects carry their own audio scope; drain the child's queue.
@@ -4510,7 +4517,7 @@ class ViewRuntime:
         if event_ref is not None:
             msg["ref"] = event_ref
         msg.update(async_batch.fields())
-        await self.transport.send(msg)
+        await self._send_render_frame(msg)
         await self._flush_all_pending()
 
         # Dispatch any background work the component handler scheduled (WS parity).
@@ -4531,9 +4538,20 @@ class ViewRuntime:
         Wrapped in the tenant context (Finding #6) so handle_params + the
         object-permission re-check + render see the correct tenant.
         """
-        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
-        with _tenant_context(tenant):
-            await self._dispatch_url_change_inner(data)
+        view = self.view_instance
+        if view is None:
+            await self.transport.send_error("View not mounted")
+            return
+        # URL renders participate in the same mutation order as events and
+        # background results. Otherwise their HTML and owner contracts can
+        # describe different turns. Navigation may replace the owner while
+        # this task waits for the borrowed transport lock.
+        async with self.transport.event_context(view):
+            if self.view_instance is not view:
+                await self.transport.send_error("View changed. Please reload the page.")
+                return
+            with _tenant_context(getattr(view, "_tenant", None)):
+                await self._dispatch_url_change_inner(data)
 
     async def _dispatch_url_change_inner(self, data: Dict[str, Any]) -> None:
         """URL-change body (see :meth:`dispatch_url_change` for the tenant wrapper)."""
@@ -4593,7 +4611,7 @@ class ViewRuntime:
                     "version": wire_version,
                     "event_name": "url_change",
                 }
-                await self.transport.send(msg)
+                await self._send_render_frame(msg)
             else:
                 if hasattr(self.view_instance, "_strip_comments_and_whitespace"):
                     html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
@@ -4607,7 +4625,7 @@ class ViewRuntime:
                     "version": wire_version,
                     "event_name": "url_change",
                 }
-                await self.transport.send(msg)
+                await self._send_render_frame(msg)
 
             # Full flush-queue parity with WS (#1885 / #1646): the url_change
             # path is the runtime's one production user, so flash / page_metadata
@@ -5195,7 +5213,7 @@ class ViewRuntime:
                     msg["async_pending"] = True
                 if event_ref is not None:
                     msg["ref"] = event_ref
-                await self.transport.send(_send_event_frame(msg))
+                await self._send_render_frame(_send_event_frame(msg))
             else:
                 # Compression fallback — send full HTML.
                 html_stripped = view._strip_comments_and_whitespace(html)
@@ -5230,7 +5248,7 @@ class ViewRuntime:
                     msg["async_pending"] = True
                 if event_ref is not None:
                     msg["ref"] = event_ref
-                await self.transport.send(_send_event_frame(msg))
+                await self._send_render_frame(_send_event_frame(msg))
         else:
             # No VDOM diff available — send HTML directly.
             if html and hasattr(view, "_strip_comments_and_whitespace"):
@@ -5299,11 +5317,36 @@ class ViewRuntime:
                 msg["async_pending"] = True
             if event_ref is not None:
                 msg["ref"] = event_ref
-            await self.transport.send(_send_event_frame(msg))
+            await self._send_render_frame(_send_event_frame(msg))
 
         # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues
         # in canonical order, not just push_events/navigation/deferred.
         await self._flush_all_pending()
+
+    async def _send_render_frame(self, frame: Dict[str, Any]) -> None:
+        """Attach a fresh public owner snapshot to this render, not a side frame.
+
+        Receivers must install it only when applying the associated DOM update.
+        Mount-path identity is separate from an embedded frame's child view_id.
+        No owner objects or mutable manifests are cached between renders.
+        """
+        from ._parameter_metadata import parameter_contract_manifest
+
+        try:
+            manifest = parameter_contract_manifest(self.view_instance)
+        except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
+            logger.warning("Render parameter contracts unavailable")
+            await self.transport.send_error(
+                "Render parameter contracts unavailable.", code="render_error"
+            )
+            return
+        if manifest is not None or self._parameter_contracts_active:
+            frame["parameter_contracts"] = manifest
+            frame["parameter_contract_view"] = self._parameter_contract_view
+            # Keep emitting explicit clears until remount: omission must not
+            # revive a client's pre-clear contracts during deferred delivery.
+            self._parameter_contracts_active = True
+        await self.transport.send(frame)
 
     def _stamp_event_frame(
         self,
@@ -5428,7 +5471,7 @@ class ViewRuntime:
             msg["ref"] = event_ref
         if async_batch is not None:
             msg.update(async_batch.fields())
-        await self.transport.send(
+        await self._send_render_frame(
             self._stamp_event_frame(
                 view,
                 msg,
@@ -5866,5 +5909,5 @@ class ViewRuntime:
                 "event_name": event_name,
                 "source": "async",
             }
-        await self.transport.send(msg)
+        await self._send_render_frame(msg)
         await self._flush_all_pending()

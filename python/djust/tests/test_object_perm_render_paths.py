@@ -9,6 +9,7 @@ all of them.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
@@ -98,6 +99,12 @@ class _FakeTransport:
 
     def __init__(self):
         self.sent = []
+        self.render_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def event_context(self, view):
+        async with self.render_lock:
+            yield
 
     async def send(self, msg):
         self.sent.append(msg)

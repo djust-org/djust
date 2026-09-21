@@ -210,6 +210,11 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                 else:
                     assert frame["type"] in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
+                    # Actors emit through the separate Rust result path; its
+                    # render-bound contract capture remains an activation gate.
+                    if not actor_mode:
+                        assert frame["parameter_contracts"] == contracts
+                        assert frame["parameter_contract_view"] == __name__ + ".StrictTransportView"
         finally:
             await socket.disconnect()
 
@@ -256,6 +261,9 @@ async def test_real_sse_strict_positional_and_rejection():
                 if value == "SECRET_INVALID":
                     assert any(frame["type"] == "error" for frame in frames), frames
                     assert "SECRET_INVALID" not in json.dumps(frames)
+                else:
+                    rendered = next(frame for frame in frames if frame["type"] == "patch")
+                    assert rendered["parameter_contracts"] == mounted["parameter_contracts"]
         finally:
             _sse_sessions.pop(sid, None)
 

@@ -466,6 +466,15 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   Three final full Python runs each passed 30,565 tests (952 skipped); three
   full JavaScript runs each passed 2,104 tests in 191 files. Asset checks (91),
   mypy (1,034 files) and zero-warning bundle ESLint also passed.
+  Shared-runtime render responses now rebuild owner manifests, including
+  explicit clears after strict-owner removal and redacted discovery failures.
+  Normal WS and SSE endpoint tests assert these snapshots; actors, bespoke WS
+  producers, child background frames and HTTP delivery remain open. Receivers
+  do not yet install render snapshots; applied-DOM ordering and owner-generation
+  matching are still activation gates, not covered by these server tests.
+  URL changes now use the transport render lock and reject owner replacement
+  while waiting. Three final full Python runs each passed 30,576 tests with 952
+  skipped; independent bounded review and normal pre-commit checks passed.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 
@@ -525,6 +534,9 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   Verify website navigation and report skipped fixtures. Include the originally
   reported code-snippet whitespace, checkbox appearance, dropdown items and
   missing menu handler, plus multi-menu interactions and visible server errors.
+  A read-only audit of all 179 generated usage snippets found placeholder
+  handlers referencing an uninitialized component in dropdown, modal and tabs.
+  This is a shared-generator defect, not proof that the other examples execute.
 - [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
