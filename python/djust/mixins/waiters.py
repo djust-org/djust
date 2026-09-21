@@ -193,6 +193,16 @@ class WaiterMixin:
         This method is a no-op if no waiters are registered for the
         given name — the common case on every handler call.
         """
+        from .._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+
+        with diagnostic_scope():
+            restrict_diagnostics(self)
+            self._notify_waiters_inner(event_name, kwargs)
+
+    def _notify_waiters_inner(self, event_name: str, kwargs: Dict[str, Any]) -> None:
+        """Run the notification pass inside its owner's diagnostic scope."""
+        from .._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
         if not getattr(self, "_waiters", None):
             return
         waiters = self._waiters.get(event_name)
@@ -212,12 +222,19 @@ class WaiterMixin:
                 try:
                     matched = bool(waiter.predicate(kwargs))
                 except Exception as exc:
-                    logger.warning(
-                        "wait_for_event predicate for %r raised %r — treating as no-match",
-                        event_name,
-                        exc,
-                    )
+                    restrict_diagnostics(self)
+                    if diagnostics_allowed():
+                        logger.warning(
+                            "wait_for_event predicate for %r raised %r — treating as no-match",
+                            event_name,
+                            exc,
+                        )
+                    else:
+                        logger.warning("Protected waiter predicate failed; treating as no-match")
                     matched = False
+                finally:
+                    restrict_diagnostics(self)
+                    diagnostics_allowed()  # Preserve an observed root restriction for later predicates.
                 if not matched:
                     remaining.append(waiter)
                     continue

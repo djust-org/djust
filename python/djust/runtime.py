@@ -114,10 +114,10 @@ def _runtime_diagnostic_scope(
 
     @wraps(method)
     async def scoped(runtime: Any, *args: Any, **kwargs: Any) -> None:
-        from ._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+        from ._exposure_diagnostics import diagnostic_scope, watch_diagnostic_owner
 
         with diagnostic_scope():
-            restrict_diagnostics(runtime.view_instance)
+            watch_diagnostic_owner(runtime, "view_instance")
             await method(runtime, *args, **kwargs)
 
     return scoped
@@ -3425,15 +3425,13 @@ class ViewRuntime:
         # the deferred-event path at websocket.py:1478-1482). No-op when the view
         # has no pending waiters. Best-effort: a waiter-callback failure must never
         # break the event turn (matches WS posture).
-        if hasattr(view, "_notify_waiters"):
-            try:
-                view._notify_waiters(event_name, coerced_params or {})
-            except Exception as exc:  # noqa: BLE001 — waiter bugs must not break events
-                logger.warning(
-                    "Waiter notification for %r failed: %s",
-                    sanitize_for_log(event_name),
-                    exc,
-                )
+        self._notify_waiters_safely(
+            view,
+            event_name,
+            coerced_params or {},
+            log_message="Waiter notification for %r failed: %s",
+            log_args=(event_name,),
+        )
 
         # Persist updated LiveView state to the Django session (#1466, ADR-022
         # Iter 2 Phase 2.2). Verbatim gate from the WS save block
@@ -3607,6 +3605,7 @@ class ViewRuntime:
     # through the full auth stack here (a denied queued event never dispatches).
     # ------------------------------------------------------------------ #
 
+    @_runtime_diagnostic_scope
     async def _flush_deferred_activity_events(self) -> None:
         """Drain the view's deferred-activity queues via the runtime re-dispatcher.
 
@@ -3617,10 +3616,17 @@ class ViewRuntime:
         view = self.view_instance
         if view is None or not hasattr(view, "_flush_deferred_activity_events"):
             return
+        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
         try:
             await view._flush_deferred_activity_events(self)
         except Exception:  # noqa: BLE001 — never fail the event for a drain bug
-            logger.exception("dj_activity: runtime deferred-event flush raised")
+            restrict_diagnostics(view)
+            restrict_diagnostics(self.view_instance)
+            if diagnostics_allowed():
+                logger.exception("dj_activity: runtime deferred-event flush raised")
+            else:
+                logger.error("Protected deferred-event flush failed")
 
     @_runtime_diagnostic_scope
     async def _dispatch_single_event(
@@ -3697,15 +3703,13 @@ class ViewRuntime:
             return
 
         # Waiter notification (ADR-002) — same posture as the live path.
-        if hasattr(target_view, "_notify_waiters"):
-            try:
-                target_view._notify_waiters(event_name, coerced_params or {})
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Waiter notification for deferred %r failed: %s",
-                    sanitize_for_log(event_name or ""),
-                    exc,
-                )
+        self._notify_waiters_safely(
+            target_view,
+            event_name,
+            coerced_params or {},
+            log_message="Waiter notification for deferred %r failed: %s",
+            log_args=(event_name or "",),
+        )
 
         # --- render + emit one frame (mirrors the live skip/render split) --
         # Bind the mounted view to a non-None local for the direct-attribute
@@ -3768,6 +3772,43 @@ class ViewRuntime:
     # Time-travel push hook (ADR-022 Iter 2 Phase 2.2)
     # ------------------------------------------------------------------ #
 
+    def _notify_waiters_safely(
+        self,
+        view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        *,
+        log_message: str,
+        log_args: Tuple[Any, ...],
+    ) -> None:
+        """Notify once, preserving owner restrictions and legacy warning text."""
+        from ._exposure_diagnostics import (
+            diagnostic_scope,
+            diagnostics_allowed,
+            restrict_diagnostics,
+            watch_diagnostic_owner,
+        )
+
+        with diagnostic_scope():
+            watch_diagnostic_owner(self, "view_instance")
+            restrict_diagnostics(view)
+            if not hasattr(view, "_notify_waiters"):
+                return
+            try:
+                view._notify_waiters(event_name, params)
+            except Exception as exc:  # noqa: BLE001 — waiter bugs must not break events
+                restrict_diagnostics(view)
+                restrict_diagnostics(self.view_instance)
+                if diagnostics_allowed():
+                    logger.warning(
+                        log_message,
+                        *(sanitize_for_log(str(arg)) for arg in log_args),
+                        exc,
+                    )
+                else:
+                    logger.warning("Protected waiter notification failed")
+
+    @_runtime_diagnostic_scope
     async def _push_tt_event(self, view: Any, snapshot: Any) -> None:
         """Invoke the transport's ``on_event_recorded`` hook after a record.
 
@@ -3782,10 +3823,18 @@ class ViewRuntime:
         hook = getattr(self.transport, "on_event_recorded", None)
         if hook is None:
             return
+        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
+        restrict_diagnostics(view)
         try:
             await hook(view, snapshot)
         except Exception:  # noqa: BLE001 — dev-only time-travel push; degrade silently
-            logger.exception("Runtime: time_travel on_event_recorded hook failed")
+            restrict_diagnostics(view)
+            restrict_diagnostics(self.view_instance)
+            if diagnostics_allowed():
+                logger.exception("Runtime: time_travel on_event_recorded hook failed")
+            else:
+                logger.error("Protected time-travel notification failed")
 
     # ------------------------------------------------------------------ #
     # Per-event state persistence (ADR-022 Iter 2 Phase 2.2)
@@ -4109,15 +4158,13 @@ class ViewRuntime:
 
         # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
         # view. Best-effort: a waiter bug must never break the event.
-        if hasattr(target_view, "_notify_waiters"):
-            try:
-                target_view._notify_waiters(event_name, coerced_params or {})
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Waiter notification for embedded child %r failed: %s",
-                    sanitize_for_log(event_name),
-                    exc,
-                )
+        self._notify_waiters_safely(
+            target_view,
+            event_name,
+            coerced_params or {},
+            log_message="Waiter notification for embedded child %r failed: %s",
+            log_args=(event_name,),
+        )
 
         # Sticky-child state save (ADR-018 Branch B, ADR-022 Iter 2 Phase 2.2).
         # Verbatim from the WS sticky save (websocket.py:3806-3888): persist the
@@ -4336,16 +4383,13 @@ class ViewRuntime:
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).
         notify_kwargs = dict(coerced_event_data or {})
         notify_kwargs.setdefault("component_id", component_id)
-        if hasattr(view, "_notify_waiters"):
-            try:
-                view._notify_waiters(event_name, notify_kwargs)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Waiter notification for component event %r on %s failed: %s",
-                    sanitize_for_log(event_name),
-                    sanitize_for_log(str(component_id)),
-                    exc,
-                )
+        self._notify_waiters_safely(
+            view,
+            event_name,
+            notify_kwargs,
+            log_message="Waiter notification for component event %r on %s failed: %s",
+            log_args=(event_name, component_id),
+        )
 
         from ._async_batch import AsyncBatch
 
