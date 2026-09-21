@@ -79,6 +79,28 @@ no-ref replies are accepted only when one request is outstanding. Both rules
 pass for WS and SSE. The full JavaScript suite passed 2,015 tests in 188 files.
 These are client frame tests, not live mount/reconnect deployment evidence.
 
+## HTTP/cache correlation — E4 slice
+
+HTTP fallback and cache-hit operations now participate in the shared request
+registry. Their awaited operation owns completion locally; no server-supplied
+ref is trusted to settle another request. Cleanup runs in finally, so an HTTP
+failure or cache application failure releases only that operation's loading.
+Teardown keepalive requests remain detached and never allocate foreground refs.
+
+Both HTTP overlap tests failed before the fix: the first response cleared the
+other request's loading, for success as well as failure. They now pass, as does
+a real cache-hit path interleaved with pending HTTP work in the bundled client.
+The focused HTTP/socket tests passed 49 cases before the cache case was added;
+all three new HTTP/cache cases pass. These tests drive the actual bundle with
+controlled fetch promises; they are not live Django/browser HTTP evidence.
+The full rebuilt-client suite passed 2,018 tests in 189 files; bundle ESLint
+passed with zero warnings. No Python implementation changed in this slice.
+
+Remaining E4 audit items include page replacement while HTTP work is pending,
+transport ownership of buffered unsolicited patches, and failure/recovery
+ordering. Keep those separate from mount-time frames, which do not own a
+foreground request. This slice does not close E4.
+
 ## Current acceptance checklist
 
 Updated 2026-09-20. This section is the current work queue; the implementation

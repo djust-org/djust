@@ -4,6 +4,10 @@
 // IIFE (#1635).
 let _djustHttpFallbackWarned = false;
 
+// Local operations share request bookkeeping with socket transports. Their
+// completion is owned by the awaited operation, never by a server-supplied ref.
+const _localEventTransport = {};
+
 // Main Event Handler
 //
 // `_rateBypass` (#2656) is the re-entry flag for the @debounce / @throttle
@@ -143,13 +147,16 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // Still show brief loading state for UX consistency
         if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
-        // Apply cached patches
-        if (cached.patches && cached.patches.length > 0) {
-            await applyPatches(cached.patches);
-            reinitAfterDOMUpdate();
+        const cachedRequest = registerEventRequest(_localEventTransport, eventName, triggerElement);
+        try {
+            // Apply cached patches
+            if (cached.patches && cached.patches.length > 0) {
+                await applyPatches(cached.patches);
+                reinitAfterDOMUpdate();
+            }
+        } finally {
+            cancelEventRequests(_localEventTransport, cachedRequest.ref);
         }
-
-        if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         return;
     }
 
@@ -221,6 +228,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
+    const httpRequest = teardown ? null
+        : registerEventRequest(_localEventTransport, eventName, triggerElement);
     try {
         // Read CSRF token from hidden input first, fall back to cookie.
         // Skip the hidden input if its value is empty — the Rust engine
@@ -254,7 +263,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
-        if (!teardown) globalLoadingManager.stopLoading(eventName, triggerElement);
+    } finally {
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
     }
 }
 window.djust.handleEvent = handleEvent;
