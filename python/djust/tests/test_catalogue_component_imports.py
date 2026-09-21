@@ -12,8 +12,9 @@ The USAGE snippet's import line used to be spelled out in
   `server_event_toast` defines only a mixin.
 
 A copy-paste that fails is worse than no snippet, so the line is now derived
-from the module and emitted over the public `djust.components` namespace. These
-tests are the guarantee: they execute every generated line.
+from the module and emitted over the public `djust.components` namespace only
+when it exports that exact class. Names shadowed by descriptors use their
+defining module. These tests execute every generated line and verify identity.
 """
 
 from djust.theming.gallery.component_registry import (
@@ -49,6 +50,21 @@ def test_every_generated_import_line_executes():
             broken[name] = f"{line!r} -> {type(exc).__name__}: {exc}"
 
     assert not broken, f"catalogue documents unimportable lines: {broken}"
+
+
+def test_generated_imports_name_the_classes_used_by_the_preview():
+    import importlib
+
+    mismatches = []
+    for name in _python_components():
+        module_path, names = get_python_component_import(name)
+        namespace = {}
+        exec(build_catalogue_detail_context(name)["import_line"], namespace)
+        module = importlib.import_module(module_path)
+        for class_name in names:
+            if namespace[class_name] is not getattr(module, class_name):
+                mismatches.append((name, class_name))
+    assert not mismatches, f"examples import different classes from their previews: {mismatches}"
 
 
 def test_a_module_with_no_component_class_documents_no_import():

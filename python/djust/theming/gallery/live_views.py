@@ -489,7 +489,19 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
             stubs.append((key, expr, initial))
         out[event] = stubs
     for event, pairs in _DESCRIPTOR_STUBS.items():
-        out.setdefault(event, [(key, expr, example.get(key)) for key, expr in pairs])
+        out.setdefault(
+            event,
+            [
+                (
+                    key,
+                    expr,
+                    bool(example.get(key))
+                    if expr == f"not self.component.{key}"
+                    else example.get(key),
+                )
+                for key, expr in pairs
+            ],
+        )
     return out
 
 

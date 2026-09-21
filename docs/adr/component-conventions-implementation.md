@@ -536,7 +536,19 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   missing menu handler, plus multi-menu interactions and visible server errors.
   A read-only audit of all 179 generated usage snippets found placeholder
   handlers referencing an uninitialized component in dropdown, modal and tabs.
-  This is a shared-generator defect, not proof that the other examples execute.
+  The shared generator now emits view-owned state and working handlers for these
+  template tags, preserves slot content and includes the modal opener. Six tests
+  execute the displayed Python and assert before/after output under Django and
+  Rust rendering. An execution sweep then found four namesake import collisions
+  (accordion, collapsible, carousel and sheet); examples now import the exact
+  renderer demonstrated by the preview. Of 179 catalogue entries, all 178 view
+  examples now mount and render without exceptions; server_event_toast documents
+  a mixin rather than a view. Tests no longer silently skip generation failures.
+  This is initial execution coverage, not full interaction acceptance or the
+  proposed multi-instance API. The final focused catalogue suite passes 240 tests.
+  The final full Python suite passes 30,583 tests with 952 skipped.
+  The corrected usage sections were checked in an isolated browser catalogue;
+  this does not establish publication on the user's running site or D2 closure.
 - [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining

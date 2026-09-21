@@ -9,6 +9,7 @@ Supports both template-based components (24 contracted) and Python components
 """
 
 import logging
+import importlib
 import re
 from typing import Any
 from pathlib import Path
@@ -479,12 +480,10 @@ def usage_with_events(
 
     A component that renders ``dj-click="set_rating"`` needs a host that
     answers it — that is the contract, and the part a reader copying the
-    assignment alone would miss. Two shapes:
-
-    * every event, the descriptor-backed ones included: an ``@event_handler`` stub on the view that writes the
-      new value to the component held in ``mount()`` (ADR-033 — the write
-      goes through to its state), the kwarg it drives named when the
-      catalogue knows it (``demo_stubs``).
+    assignment alone would miss. Python-component handlers write to the
+    component held in ``mount()`` (ADR-033). Template-tag handlers write to
+    view assigns passed to the tag. Known demo transforms supply the actual
+    state transition, not a placeholder.
     """
     if not events and not descriptor_class:
         return snippet
@@ -510,17 +509,29 @@ def usage_with_events(
                 initial.setdefault(key, start_value)
         keys = list(initial)
 
-        if keys and class_name:
-            # ADR-033: the component lives on the view and a handler writes
-            # to it — the write goes through to the component's state and the
-            # re-render carries it. No rebuild, no get_context_data.
+        if keys:
+            # Use the same state owner that the generated template reads.
+            owner = "self.component" if class_name else "self"
+            if not class_name:
+                # Template tags read view assigns, not a Python component.
+                # Their default state may be absent from the example kwargs.
+                template_lines = template_part.splitlines()
+                for key, value in initial.items():
+                    assignment = f"        self.{key} = "
+                    if not any(line.startswith(assignment) for line in lines):
+                        lines.append(f"{assignment}{value!r}")
+                    for index, line in enumerate(template_lines):
+                        if line.startswith("{% theme_") and f"{key}=" not in line:
+                            template_lines[index] = line.replace(" %}", f" {key}={key} %}}")
+                template_part = "\n".join(template_lines)
             for event in others:
                 uses_value = any("value" in expr for _k, expr, _s in stubs[event])
                 params = "self, value, **kwargs" if uses_value else "self, **kwargs"
                 lines += ["", "    @event_handler()", f"    def {event}({params}):"]
                 if stubs[event]:
                     for key, expr, _start in stubs[event]:
-                        lines.append(f"        self.component.{key} = {expr}")
+                        expr = expr.replace("self.component.", f"{owner}.")
+                        lines.append(f"        {owner}.{key} = {expr}")
                 else:
                     lines.append("        ...  # write to self.component; the re-render carries it")
         else:
@@ -564,24 +575,12 @@ def _usage_snippet(
     slot_args = [k for k in first if k.startswith("slot_")]
 
     if component_type == "template":
-
-        def is_literal(value: object) -> bool:
-            return value is None or isinstance(value, (str, int, float, bool))
-
-        named = {k: v for k, v in first.items() if not k.startswith("slot_")}
-        # A template argument is parsed by Django, not Python: `repr()` of a
-        # list of dicts — `[{'label': 'Home'}]` — is a TemplateSyntaxError, not
-        # a value. Anything the template cannot write as a literal is held on
-        # the view and passed by name, which is what a developer does anyway.
-        on_view = {k: v for k, v in named.items() if not is_literal(v)}
-        # One value always comes from the view even when it could be inlined,
-        # so the two files visibly connect instead of reading as unrelated.
-        first_name = next(iter(on_view), next(iter(named), "value"))
-        on_view.setdefault(first_name, named.get(first_name))
-
-        # Tag arguments are space-separated; a comma between them is a syntax
-        # error in the template, not a style choice.
-        tag_args = " ".join(f"{k}={k if k in on_view else repr(v)}" for k, v in named.items())
+        # Keep every argument on the view: event handlers must update the same
+        # value the tag reads, including scalar state such as is_open/active.
+        # Passing slot content by name also preserves the demonstrated menu
+        # without embedding quoted HTML or Python collections in tag syntax.
+        on_view = first
+        tag_args = " ".join(f"{key}={key}" for key in on_view)
 
         lines = [
             "# views.py",
@@ -593,15 +592,22 @@ def _usage_snippet(
             "",
             "    def mount(self, request, **kwargs):",
         ]
+        if slot_args:
+            lines.append("        # Slots contain trusted application markup, not user input.")
         for key, value in on_view.items():
             lines.append(f"        self.{key} = {value!r}")
+        if not on_view:
+            lines.append("        pass")
         lines += [
             "",
             "",
             "# my_template.html",
             "{% load theme_components %}",
-            f"{{% theme_{component_name}{' ' + tag_args if tag_args else ''} %}}",
         ]
+        trigger = _CATALOGUE_TRIGGERS.get(component_name)
+        if trigger:
+            lines.append(trigger)
+        lines.append(f"{{% theme_{component_name}{' ' + tag_args if tag_args else ''} %}}")
         return "\n".join(lines)
 
     if not import_line:
@@ -653,10 +659,20 @@ def _import_line(component_name: str) -> str:
     """The USAGE snippet's import line, or "" when there is nothing to import."""
     from .component_registry import get_python_component_import
 
-    _module_path, names = get_python_component_import(component_name)
+    module_path, names = get_python_component_import(component_name)
     if not names:
         return ""
-    return f"from djust.components import {', '.join(names)}"
+    # Some public names refer to descriptor classes, while the catalogue
+    # previews their plain-renderer namesakes. An import that succeeds is not
+    # enough: the example must instantiate the exact class it demonstrates.
+    module = importlib.import_module(module_path)
+    public = importlib.import_module("djust.components")
+    source = (
+        "djust.components"
+        if all(getattr(public, name, None) is getattr(module, name) for name in names)
+        else module_path
+    )
+    return f"from {source} import {', '.join(names)}"
 
 
 def _first_class_name(component_name: str) -> str:
