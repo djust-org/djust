@@ -1146,6 +1146,7 @@ class WSConsumerTransport:
         sql_scope = _dj_sql_capture(
             session_id=_sid,
             event_id=f"{_sid}:{time.perf_counter()}" if _sid else None,
+            owner=view,  # ADR-038 D-d: params are redacted for a nonlegacy owner
         )
         sql_scope.__enter__()
         try:
