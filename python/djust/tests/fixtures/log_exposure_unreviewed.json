@@ -1,29 +1,4 @@
 {
   "_comment": "ADR-038 E1 ratchet: exception-carrying log calls not yet classified. Generated from test_log_exposure_pin's scanner. May only shrink: classify a module into PINNED or fix its sites, then remove it here. A new site anywhere else fails the pin.",
-  "modules": {
-    "pwa/sync.py": [
-      [
-        "_perform_sync",
-        "Batch sync failed: %s"
-      ],
-      [
-        "resolve_conflict",
-        "Custom resolver failed for %s: %s"
-      ],
-      [
-        "sync_endpoint_view",
-        "Sync endpoint error: %s"
-      ]
-    ],
-    "template/rendering.py": [
-      [
-        "_jit_serialize_model",
-        "Model serialization failed for '%s': %s"
-      ],
-      [
-        "_jit_serialize_queryset",
-        "[JIT] Serialization failed for '%s': %s"
-      ]
-    ]
-  }
+  "modules": {}
 }

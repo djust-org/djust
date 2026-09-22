@@ -200,8 +200,10 @@ in `sse.py`, `mixins/rust_bridge.py`, `mixins/activity.py` and
 are 286 exception-carrying log calls in 79 modules; the 214 in the other 70
 modules are unclassified and frozen in `tests/fixtures/log_exposure_unreviewed.json`
 under a ratchet (new sites fail; the baseline only shrinks). As of this
-writing every module is classified except 14 sites in 7 deliberately held modules;
-see the ledger. The PWA offline cache was checked and is in-process server
+writing the baseline is **empty**: every exception-carrying log call in the
+package is pinned, fixed, or turn-gated. The last five, in the owner-less
+template backend and PWA sync endpoint, were closed by #2951; see the ledger.
+Two consumer sites stay `KNOWN_OPEN` until #2946 makes them reachable. The PWA offline cache was checked and is in-process server
 memory, not a browser-storage sink.
 
 `runtime.py`'s 26 sites (two identical sticky-unmount messages in

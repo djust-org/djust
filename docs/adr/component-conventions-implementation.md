@@ -356,6 +356,26 @@ resolvers, the sync endpoint) and `template/rendering.py` (the Django template
 backend's JIT serializer). Closing those needs an owner channel, not a log
 edit — a decision, not a mechanical fix.
 
+**Owner-less sites closed (#2951).** Decision: turn-gated `log_failure`, not
+an owner parameter or unconditional redaction. `DjustTemplate` (djust's Django
+template backend — LiveViews render through Rust, not through it) and the PWA
+sync endpoint, batch sync and custom conflict resolvers serve ordinary Django
+requests with no LiveView behind them, so outside a turn ADR-038 does not apply
+and their output is unchanged; inside a turn (a handler calling
+`render_to_string`) the turn's owner decides. An owner parameter had nothing
+to carry, and `DjustTemplate.render` is fixed by Django's
+`render(context, request)`; unconditional redaction would have changed logs for
+apps that never opted in. `test_exposure_ownerless_log_diagnostics.py` runs all
+five sites with no turn, a legacy turn and an explicit turn; the five explicit
+cases fail against the original catches. **The unreviewed baseline is empty.**
+The log dimension of E1 is closed apart from the two `_run_async_work` sites
+held `KNOWN_OPEN` behind #2946.
+
+Found reading `pwa/sync.py`, outside ADR-038 (not view state) and added to
+#2950: `_perform_sync` also appends `f"Batch sync error: {str(e)}"` to the
+result's `errors`, which `sync_endpoint_view` returns to the client in its JSON
+response.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.
