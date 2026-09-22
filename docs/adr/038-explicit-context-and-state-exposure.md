@@ -1,6 +1,6 @@
 # ADR-038: Explicit context, persistence, and browser exposure
 
-**Status**: Proposed
+**Status**: Accepted — gates E1–E6 closed and `exposure_policy="explicit"` activated on the completion PR #2954 (targets 1.3; acceptance is confirmed at that PR's review). ER (retirement) is scheduled post-activation work.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.

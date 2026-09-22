@@ -1,8 +1,10 @@
 # ADR-038 exposure sink inventory
 
-Working inventory, not activation approval. The constructor guard remains
-closed. Entries identify real producers/destinations and existing evidence;
-an implemented projection is not proof that every caller uses it.
+The inventory that closed E1. `exposure_policy="explicit"` is activated on the
+completion branch (#2954); see the ledger's *ADR-038 activation review*.
+Entries identify real producers and destinations with their evidence. An
+implemented projection is not proof that every caller uses it, which is why
+each row names a destination-level test.
 
 ## Classified entry points
 

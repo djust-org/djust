@@ -3,6 +3,118 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## ADR-038 activation review — E6-5
+
+This is the review E6 requires before the guard is removed. It covers every
+gate on the completion branch (#2954), including evidence produced earlier on
+`feat/components-catalogue`.
+
+**E1: every automatic sink is classified, with a destination test.**
+The sink inventory is the classification.
+
+- **Logs.** `test_log_exposure_pin.py` pins every exception-carrying log call
+  in the package. Its open tables and ratchet baseline are empty.
+- **Entry points** (HTTP GET, SSE stream and navigation, the WebSocket
+  catch-all, construction): `test_exposure_entry_scope_diagnostics.py`, 62
+  cases.
+- **Application sinks** (PWA, actions, presence, SQL capture):
+  `test_exposure_pwa_sync_sinks.py`, `test_exposure_action_errors.py`,
+  `test_exposure_presence_meta.py`, `test_exposure_sql_capture.py`.
+- **Service-worker caches** (state, VDOM, shell): `exposure_sw_caches.test.js`,
+  `exposure_sw_state_storage.test.js`, `test_exposure_sw_caches.py`.
+- **Rows that had only function-level evidence** now have destination tests:
+  - debug injection, at the HTML destination through E5;
+  - embedded children, through the child suites' `embedded_update` frames;
+  - React props and the native tree: `test_exposure_react_props.py`,
+    `test_exposure_native_render.py`.
+- **State-backend writers** were re-enumerated (remaining route 1). The
+  inventory row names every writer; the only other match is a docstring.
+- **Actors** are refused at configuration (D-o), and at runtime as a second
+  line.
+
+**E2: every provider is registered in a bounded manifest.** Components,
+actions, streams, uploads, forms, tenant, wizard, drafts, audio, PWA, offline
+and the Rust bridge keys all declare `ProviderContract`s, folded into the
+schema digest. Evidence:
+
+- `test_exposure_providers.py` and `test_exposure_provider_tags.py`;
+- `test_exposure_forms.py` (D-e);
+- `test_exposure_uploads.py` (D-g);
+- `test_exposure_components.py` (D-h);
+- `test_exposure_streams.py`;
+- `test_exposure_invalidation.py`;
+- `test_exposure_schema_versions.py` (D-i, D-j);
+- `test_exposure_orm_render.py`.
+
+Codec v1 is JSON primitives. Old envelopes remount or migrate through a
+validated hook.
+
+**E3: ownership and lifecycle.**
+
+- Root background work, `url_change` and every server-originated consumer
+  turn authorize fresh and commit before their frame (D-k, D-l):
+  `test_exposure_root_background_turns.py`, `test_exposure_consumer_turns.py`.
+- Child work queued at mount or by a parent turn runs under the child's owner:
+  `test_exposure_child_queued_work.py`.
+- Descendant and repeated-instance routing: `test_exposure_child_routing.py`.
+- Transient non-sticky children and refused lazy children (D-m):
+  `test_exposure_child_transient.py`.
+- Shell reconstruction on reconnect: `test_exposure_child_reconnect.py`.
+- Removal and re-addition: `test_exposure_child_readd.py`.
+- Snapshot keys include the query string (E3-8).
+- Revocation and failed storage never deliver a stale frame.
+
+**E5: the end-to-end matrix.** `tests/playwright/test_exposure_matrix.py`
+drives the explicit demo view and its legacy twin in Chromium, over WebSocket
+and over SSE, through mount, events, background work, a DEBUG failure,
+`url_change`, reconnect, cross-worker restore (a WebSocket mount of the same
+session on a second uvicorn process sharing the database) and live
+back-navigation.
+
+- **Destinations checked:** HTML, every received frame, the flow's decoded
+  session row and the server log.
+- **Result:** passed on two local workers against this branch.
+- **Controls:** the legacy twin's DEBUG frame carries the error sentinel (the
+  harness control), and declaring the undeclared sentinel as persisted state
+  fails the stored-session assertion on both transports.
+- **Restore attacks** (forged, expired, cross-identity, old-schema and
+  extra-key restores) are covered at the Python and ASGI level by
+  `test_exposure_snapshots.py`, `test_exposure_runtime.py` and
+  `test_exposure_schema_versions.py`, not re-driven in the browser.
+- **CI:** the matrix runs as a non-blocking `exposure-matrix` job, following
+  the browser-smoke promotion path.
+
+The harness found two real defects, both fixed:
+- the demo's tenant configuration without `TenantMiddleware` refused every
+  explicit request;
+- WebSocket mounts carried no tenant.
+
+**E6: activation.**
+- **Cost** (`docs/adr/notes/038-cost-measurement.md`): an explicit WebSocket
+  event costs about 2× legacy, and an HTTP GET about 15% more.
+- **Migration inventory:** the `djust_exposure_inventory` command.
+- **Published boundaries:** the "Explicit exposure" guide
+  (`docs/website/state/explicit-exposure.md`).
+- **Guard change** (`4d9d2cfc4`): "explicit" is accepted. Unknown policies,
+  grants on legacy views, and actors under explicit are still refused. Hot
+  view replacement refuses policy changes and invalid configurations. Tests:
+  `test_exposure_policy_guard.py`, `test_exposure_hot_swap.py`.
+
+**Limitations carried forward, not blockers:**
+- `persist="client"` fields are refreshed only by foreground events; a
+  background frame persists server state but not the client token.
+- A warm service-worker shell can show the previous user's page chrome on the
+  first navigation after an identity change.
+- The Rust renderer has no handler for `dj_activity`, `colocated_hook` or the
+  form tags in root templates.
+- Resumable-upload state is still written to the resume store for explicit
+  views, although resume is refused.
+- Findings filed separately: #2947 (log sanitizer), #2955 (fixed here),
+  #2956.
+
+**ER (retirement) stays open.** Its targets serve legacy views, which remain
+the default, so each is a separate post-activation PR per ADR-038 Step R.
+
 ## Child lifecycle closure — E3-3 to E3-7 and decision D-m
 
 - **E3-3, queued child work.** `start_async` queued in an explicit child's
@@ -1347,7 +1459,9 @@ section. The ADR decisions and acceptance sections remain authoritative: this
 checklist groups their requirements, it does not reduce them.
 
 The original four ADRs are 034–037. ADR-038 is their additional exposure-policy
-prerequisite. **No complete ADR is accepted, and explicit exposure is disabled.**
+prerequisite. **ADR-038's gates E1–E6 are closed on the completion branch (#2954) and
+`exposure_policy="explicit"` is activated there; ER (retirement) is scheduled work.
+ADRs 034–037 are not accepted.**
 No completion percentage or delivery date is inferred from commit/test counts.
 
 ### Completion rules
@@ -1377,17 +1491,17 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
 - [x] Foundation: eager sticky-child identity, authorization, restoration,
   persistence, disposal/pruning, and selected-child background dispatch.
   Evidence and limitations are in the corresponding sections below.
-- [ ] **E1 — exporter inventory and closure.** Enumerate actual rendering,
+- [x] **E1 — exporter inventory and closure.** Enumerate actual rendering,
   persistence, snapshot, browser-storage and diagnostic sinks, including actor
   and root-background paths. For each, map policy enforcement and a sentinel
   test at the destination; identify unsupported paths explicitly. No implicit
   context/attribute fallback or unclassified sink may remain at activation.
-- [ ] **E2 — provider contract closure.** Complete bounded manifests and
+- [x] **E2 — provider contract closure.** Complete bounded manifests and
   lifecycle tests for components, forms, actions, streams and uploads, including
   inheritance, dynamic context and invalidation. Resolve schema/codec needs and
   migration/expiry handling. Exercise deliberate ORM rendering without granting
   automatic persistence or client disclosure.
-- [ ] **E3 — ownership/lifecycle closure.** Cover mount/parent-queued child work,
+- [x] **E3 — ownership/lifecycle closure.** Cover mount/parent-queued child work,
   descendant and repeated-instance routing, lazy/nonsticky and mixed policies,
   shell reconstruction, removal/re-addition, and root-background authorization
   and persistence. Test revocation and failed storage without stale delivery.
@@ -1395,12 +1509,12 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
   milestone below passed its exit audit at cf73aeaf8. Acknowledgements/loading
   are request-owned and background work is distinct. E3 lifecycle authorization
   and E5 deployment/renderer acceptance remain separate open gates.
-- [ ] **E5 — end-to-end safety matrix.** Run actual HTTP, WebSocket and SSE
+- [x] **E5 — end-to-end safety matrix.** Run actual HTTP, WebSocket and SSE
   flows with Django/Rust rendering, browser reconnect/back navigation and
   cross-worker restoration. Assert sentinels at every destination under DEBUG,
   failures and forged/expired/cross-identity/old-schema restores. Include legacy
   coexistence and provider/no-op parity as those dependent APIs land.
-- [ ] **E6 — activation review.** Measure serialization/render cost and migration
+- [x] **E6 — activation review.** Measure serialization/render cost and migration
   effort; publish supported backend/provider/codec boundaries and migration
   guidance. Review E1–E5 evidence and dependent API integration before removing
   the constructor guard. No zero-leakage or performance claim without evidence.
