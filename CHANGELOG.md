@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0rc10] - 2026-09-22
+
+### Changed
+
+- **Exhaustive template differential sweeps moved to nightly CI.** `python/tests/test_differential_reachability_manifest_2345.py` and `python/tests/test_refusal_collapsed_agreement_2454.py` are now marked with `@pytest.mark.nightly` and excluded from PR CI runs and pre-push hooks (`-m "not nightly"`), shaving ~8.6 minutes of serial test runtime off PRs and developer pushes while continuing to run in the daily scheduled CI workflow and via `make test-nightly`.
+- **Test suite runtime hotspots optimized.** `TestV004LifecycleMethods` in `python/tests/test_checks.py` now batches its lifecycle method hook scan into a single pass rather than repeating 8 full liveview checks, reducing the class runtime from ~13s to ~1.5s. `TestTitleExhaustive` in `python/tests/test_truncate_slugify_parity_2262.py` now uses 4096-codepoint batches with an identical-string fast path, cutting test runtime from ~78s to ~25s while asserting all 4.4M character probes against Django.
+
+### Fixed
+
+- **`start_async` work from a NOTIFY-released activity event now runs**
+  (#2946). An event queued for a hidden `dj-activity` panel and released by a
+  `db_notify` goes through the WebSocket consumer's deferred-event dispatcher,
+  which started background work only when the legacy `_async_pending` field
+  was set. `start_async` queues `_async_tasks`, so the callback was silently
+  dropped. The dispatcher now starts queued work unconditionally, like the
+  runtime's own dispatcher already did (#1887).
+- **`djust.components`**: probing a name that does not exist — `hasattr(djust.components, "Thing")`, or anything that walks the public API — no longer recurses until the interpreter gives up. The lazy loader reached its subpackage with `from . import components`, which asks the import machinery for an attribute on the module doing the asking; until that submodule is bound the lookup came straight back into the loader, which asked again. Introduced in 1.2.0rc9; 1.2.0rc6 through rc8 are unaffected.
+
 ## [1.2.0rc9] - 2026-09-19
 
 ### Added
