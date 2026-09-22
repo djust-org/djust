@@ -630,20 +630,30 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # ============================================================================
 
     def _validate_exposure_configuration(self) -> None:
-        """Keep staged explicit runtime paths unavailable until every gate passes."""
+        """Refuse exposure configurations that would widen or silently fall back.
+
+        ``"legacy"`` and ``"explicit"`` are the supported policies (ADR-038).
+        Anything else is refused rather than treated as legacy. A legacy view
+        cannot declare exposure grants it would not honor, and actors are
+        excluded from the explicit policy (decision D-o). Only class
+        dictionaries are inspected: no property, factory, ORM query or
+        component descriptor is evaluated.
+        """
         from ._exposure import ExposureConfigurationError
 
-        if type(self.exposure_policy) is not str or self.exposure_policy != "legacy":
-            if type(self.exposure_policy) is str and self.exposure_policy == "explicit":
-                raise ExposureConfigurationError(
-                    "exposure_policy='explicit' is not yet available. ADR-038's "
-                    "persistence and browser-export boundaries are still being implemented; "
-                    "this view cannot run with implicit legacy exposure instead."
-                )
+        policy = self.exposure_policy
+        if type(policy) is not str or policy not in ("legacy", "explicit"):
             raise ExposureConfigurationError(
-                "Invalid exposure_policy. Only 'legacy' is currently supported; "
+                "Invalid exposure_policy. Supported policies are 'legacy' and 'explicit'; "
                 "unknown policies cannot fall back to legacy exposure."
             )
+        if policy == "explicit":
+            if getattr(type(self), "use_actors", False) is True:
+                raise ExposureConfigurationError(
+                    "exposure_policy='explicit' does not support actors (use_actors=True). "
+                    "Actor views keep the legacy policy."
+                )
+            return
         from ._state import StateProperty
 
         # Inspect class dictionaries only: checking configuration must not
@@ -658,8 +668,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                     declaration.exposure.persist is not None or declaration.exposure.client
                 ):
                     raise ExposureConfigurationError(
-                        "state() exposure grants require ADR-038's explicit policy, "
-                        "which is not yet available. Legacy views cannot honor these grants."
+                        "state() exposure grants require exposure_policy='explicit'. "
+                        "Legacy views cannot honor these grants."
                     )
 
     def __init_subclass__(cls, **kwargs: Any) -> None:

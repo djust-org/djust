@@ -480,7 +480,7 @@ class ContextMixin:
     def _get_explicit_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render-only context from deliberate additions and known providers.
 
-        This branch is staged behind LiveView's construction guard. It performs
+        The ``exposure_policy="explicit"`` context (ADR-038). It performs
         no public attribute walk, state projection, or JSON conversion: native
         Django model/queryset values deliberately supplied by the application
         remain native inputs to the renderer. This context must not be reused

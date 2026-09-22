@@ -1,9 +1,9 @@
-"""Internal ADR-038 projection primitives, not an enabled LiveView policy.
+"""ADR-038 projection primitives behind ``exposure_policy="explicit"``.
 
 Callers must select declarations, authenticate storage, bind identities and
 check freshness separately. A schema digest is NOT a signature. These helpers
 never discover ordinary attributes, invoke a fallback serializer, or mutate a
-view during restore. Legacy runtime exporters deliberately do not use them yet.
+view during restore. Legacy exporters do not use them.
 """
 
 import hashlib

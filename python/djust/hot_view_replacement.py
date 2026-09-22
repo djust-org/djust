@@ -316,12 +316,24 @@ def apply_class_swap(
         if not ok:
             return False, reason
         if old_cls is not new_cls:
+            # ADR-038: an in-place swap never runs the construction guard. A
+            # policy change would keep state built under one exposure contract
+            # in a view governed by another, so it reloads instead.
+            if getattr(old_cls, "exposure_policy", None) != getattr(
+                new_cls, "exposure_policy", None
+            ):
+                return False, "exposure_policy_changed"
             try:
                 view_instance.__class__ = new_cls
             except TypeError as e:
                 # Slot-layout mismatch Python couldn't catch earlier, or
                 # immutable type. Fall back to full reload.
                 return False, f"class_assign_failed:{e}"
+            try:
+                view_instance._validate_exposure_configuration()
+            except Exception:  # noqa: BLE001 — the new class's configuration is invalid
+                view_instance.__class__ = old_cls
+                return False, "exposure_configuration_invalid"
 
     # Recurse into sticky / composed children.
     if hasattr(view_instance, "_get_all_child_views"):

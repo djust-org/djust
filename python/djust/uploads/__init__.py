@@ -46,7 +46,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Type
 
-from .._exposure_providers import UPLOADS_PROVIDER
+try:
+    from .._exposure_providers import UPLOADS_PROVIDER
+except ImportError:  # pragma: no cover - loaded standalone, outside the djust package
+    # python/tests/test_uploads.py loads this module without djust/__init__.py
+    # (no Django/channels). Provider registration only matters for LiveViews,
+    # which always import it through the package.
+    UPLOADS_PROVIDER = None
 
 logger = logging.getLogger(__name__)
 
@@ -1317,7 +1323,7 @@ class UploadMixin:
     # ADR-038 E2-6: under the explicit policy, ``uploads`` is a registered,
     # render-only provider key (see ``_get_upload_context``). Legacy views
     # have no ``uploads`` context, exactly as before.
-    _djust_context_providers = (UPLOADS_PROVIDER,)
+    _djust_context_providers = (UPLOADS_PROVIDER,) if UPLOADS_PROVIDER is not None else ()
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
