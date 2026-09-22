@@ -3,6 +3,93 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Provider manifest and view-dependent tags — E2-0, E2-1, E2-2
+
+**The manifest.** `ProviderContract` (`_exposure.py`) is an immutable record of
+what a framework context provider renders, tracks, persists and exposes to the
+client, with its codec. Every current provider persists and exposes nothing.
+Mixins declare their contracts in `_djust_context_providers`. The view's
+contracts are folded into the `ExposureContract` schema digest, so a provider
+change invalidates stored envelopes; a contract with no providers keeps its
+old digest. `ExplicitRenderContext` and `provide_context`
+(`_exposure_providers.py`) record which provider owns each key.
+
+**Keys registered.**
+- Components, actions and streams are registered on `ContextMixin`, and
+  `csrf_token` and the date/time formats on `RustBridgeMixin`.
+- `TenantMixin`, `WizardMixin`, `DraftModeMixin`, `AudioMixin`, `PWAMixin` and
+  `OfflineMixin`, which wrote context without registering, now register.
+- Under explicit, an application kwarg, a later write (set, update, setdefault,
+  pop, del, `|=` or clear) or a context-processor value that collides with a
+  provider key raises. Legacy is unchanged.
+- An `_action_state` entry for an undeclared action is refused.
+- The wizard's flat `<field>_choices` aliases are not rendered under explicit,
+  because they depend on runtime form fields and cannot be declared;
+  `form_choices` remains.
+
+**View-dependent tags.** `dj_activity`, `colocated_hook`, `live_form`,
+`live_field`, `live_errors` and the `field_value`/`has_errors` filters resolve
+a nonlegacy rendering view through `get_active_parent_view()` and never put
+the raw view into context. The Rust renderer has **no handler for these tags**:
+in a root LiveView template they fail with "Invalid block tag" under both
+policies. They only run on Django's engine, which in practice means embedded
+and sticky children, so they are tested there.
+
+Evidence:
+- `test_exposure_providers.py` (59 cases, 29 red on the base).
+- `test_exposure_provider_tags.py` (9 cases, 4 red).
+- The combined exposure suites passed 1,175 tests after the merge.
+
+Findings recorded, not fixed:
+- `{% dj_activity %}` cannot be used in any root template, because Rust has no
+  handler for it.
+- Sticky-child events have no activity gate under either policy.
+- A legacy child's event re-render gets no `view`, so its activities are not
+  re-registered.
+- The form tags' output is HTML-escaped on Django's engine.
+- The non-sticky explicit child's initial render still set a raw `view` in the
+  child context; this was routed to the E3-5 slice.
+
+## Schema versions, server-state lifetime and codec — E2-9, E2-5, E2-10
+
+Decisions D-i and D-j.
+
+- **Schema version.** A class-level `exposure_schema_version` (an int from 1 to
+  2**31-1, read without evaluating properties) feeds the contract version,
+  which the digest already covered. A bump rejects old server and snapshot
+  envelopes, and the view remounts.
+- **Envelope format.** Server envelopes move to format 2 and record
+  `schema_version`. Format-1 envelopes remount.
+- **Lifetime.** `DJUST_SERVER_STATE_MAX_AGE` (1 to 86400 seconds, default 3600)
+  sets the envelope lifetime for root and child state. System check
+  **djust.C018** validates it, and an invalid value fails closed at runtime.
+- **Migration hook.** An opt-in `migrate_state(old_version, values)` translates
+  an older root envelope before `prepare_restore`. Its output is validated
+  exactly like fresh input (extra keys, missing keys and non-primitives are
+  rejected). A raising hook remounts, with a log line naming only the class and
+  the versions. Child envelopes and client snapshots do not migrate; they
+  remount.
+- **Codec.** v1 accepts JSON primitives only. `Decimal`, `datetime`, `UUID`,
+  model instances, `repr`-able objects and tuples are rejected at save and at
+  capture, never stringified.
+
+Evidence:
+- `test_exposure_schema_versions.py` has 53 cases, 36 red on the base; a
+  `repr()` fallback made 12 of the 14 codec cases fail.
+- `test_exposure_streams.py` (5 cases) runs real stream insert and delete
+  through the explicit runtime. The Rust and Django renders agree, and the
+  item's unrendered field is absent from frames, snapshots, server state and
+  debug output.
+- `test_exposure_orm_render.py` (2 cases) renders a `User` row over HTTP and
+  the real WebSocket under DEBUG, with password and unrendered-field sentinels
+  absent from every destination.
+- Both of those test-only slices passed on unchanged code and were
+  mutation-checked.
+
+Finding recorded, not fixed: `_get_stream_operations()` has no callers, so
+stream operations are never sent as frames under either policy; streams reach
+the page as ordinary updates.
+
 ## Server-originated turns: authorization and persistence — E3-1/E3-2 slice
 
 Decisions D-k and D-l. An explicit root's turns that arrive with no inbound
