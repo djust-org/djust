@@ -4,4 +4,6 @@
   event through the WebSocket consumer without the fresh authorization explicit
   views require, so it ran even after the session was deleted. The consumer now
   applies the runtime's check and fail-closed outcome (static error, close
-  4403). Legacy views are unchanged.
+  4403). Legacy views are unchanged. When such an
+  event's handler or re-render fails, the consumer no longer logs its exception
+  or traceback for a nonlegacy owner.

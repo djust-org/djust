@@ -98,14 +98,12 @@ FRAMEWORK_ONLY = {
 }
 
 KNOWN_OPEN = {
-    ("_run_async_work", "[djust] Error in start_async callback '%s' on %s"): "async callback",
-    ("_run_async_work", "[djust] Error in handle_async_result for task '%"): "async result",
-    ("_dispatch_single_event", "Deferred-activity event %r on %s raised during d"): (
-        "live for explicit views via db_notify's activity flush"
+    ("_run_async_work", "[djust] Error in start_async callback '%s' on %s"): (
+        "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
     ),
-    ("_dispatch_single_event", "Waiter notification for deferred %r failed: %s"): "waiter",
-    ("_dispatch_single_event", "Deferred-activity render failed for %s"): "activity render",
-    ("_dispatch_single_event", "Deferred-activity HTML strip/extract failed for "): "activity",
+    ("_run_async_work", "[djust] Error in handle_async_result for task '%"): (
+        "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
+    ),
     ("_maybe_push_tt_event", "time_travel: failed to push event frame"): "not yet verified",
     ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
 }

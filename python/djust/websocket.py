@@ -1821,11 +1821,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         pre_assigns = _snapshot_assigns(self.view_instance)
         try:
             await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-        except Exception:  # noqa: BLE001 — never break the flush
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — never break the flush
+            self._log_view_hook_failure(
+                target_view,
+                exc,
                 "Deferred-activity event %r on %s raised during dispatch",
                 sanitize_for_log(event_name or ""),
                 type(target_view).__name__,
+                traceback=True,
             )
             return
 
@@ -1834,7 +1837,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 target_view._notify_waiters(event_name, coerced_params or {})
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Waiter notification for deferred %r failed: %s", event_name, exc)
+                self._log_view_hook_failure(
+                    target_view,
+                    exc,
+                    "Waiter notification for deferred %r failed: %s",
+                    event_name,
+                    exc,
+                    level="warning",
+                )
 
         # --- render + emit one update frame ----------------------------
         # Bind the mounted view to a non-None local for the direct-attribute
@@ -1893,8 +1903,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return view.render_with_diff()
 
                 html, patches, version = await sync_to_async(_sync_context_and_render)()
-        except Exception:  # noqa: BLE001
-            logger.exception("Deferred-activity render failed for %s", event_name)
+        except Exception as exc:  # noqa: BLE001
+            self._log_view_hook_failure(
+                view, exc, "Deferred-activity render failed for %s", event_name, traceback=True
+            )
             return
         # Consume the force flag (one render per set_changed_keys()/_force_full_html,
         # #1981) — mirrors the runtime's reset in _render_and_send; without it the
@@ -1936,8 +1948,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     return stripped, content
 
                 html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
-            except Exception:  # noqa: BLE001
-                logger.exception("Deferred-activity HTML strip/extract failed for %s", event_name)
+            except Exception as exc:  # noqa: BLE001
+                self._log_view_hook_failure(
+                    view,
+                    exc,
+                    "Deferred-activity HTML strip/extract failed for %s",
+                    event_name,
+                    traceback=True,
+                )
                 return
             await self._send_update(
                 html=html_content,

@@ -111,3 +111,156 @@ async def test_notify_released_activity_event_requires_fresh_authorization(monke
                 assert closed == {"type": "websocket.close", "code": 4403}
         finally:
             await socket.disconnect()
+
+
+RAN = []
+
+
+class ActivityFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+    _listen_channels = frozenset({"exposure_activity_fail"})
+
+    def mount(self, request, **kwargs):
+        self._fail_render = False
+        self.set_activity_visible("panel", False)
+
+    def get_context_data(self, **kwargs):
+        if getattr(self, "_fail_render", False):
+            raise ValueError("ACT_RENDER_SENTINEL")
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def explode(self, **kwargs):
+        RAN.append("explode")
+        raise ValueError("ACT_HANDLER_SENTINEL")
+
+    @event_handler()
+    def bad_render(self, **kwargs):
+        RAN.append("bad_render")
+        self.count += 1
+        self._fail_render = True
+
+    @event_handler()
+    def spawn(self, **kwargs):
+        RAN.append("spawn")
+        self.start_async(self._work)
+
+    def _work(self):
+        RAN.append("work")
+        raise ValueError("ACT_ASYNC_SENTINEL")
+
+    def handle_info(self, message):
+        self.set_activity_visible("panel", True)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize(
+    "event,ran,sentinel",
+    [
+        ("explode", "explode", "ACT_HANDLER_SENTINEL"),
+        ("bad_render", "bad_render", "ACT_RENDER_SENTINEL"),
+    ],
+)
+async def test_notify_released_event_failures_log_value_free_for_explicit_views(
+    monkeypatch, caplog, policy, event, ran, sentinel
+):
+    """Once a released event is authorized, the consumer's dispatcher runs its
+    handler, re-render and any ``start_async`` work; each catch logged the
+    exception with its traceback for any policy."""
+    import asyncio
+    import logging
+
+    RAN.clear()
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(ActivityFailureView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".ActivityFailureView", "url": "/af/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            await socket.send_json_to(
+                {"type": "event", "event": event, "params": {"_activity": "panel"}}
+            )
+            await _collect(socket, quiet=0.4)
+            assert RAN == [], "the event must be queued, not dispatched"
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await get_channel_layer().group_send(
+                    "djust_db_notify_exposure_activity_fail",
+                    {"type": "db_notify", "channel": "exposure_activity_fail", "payload": {}},
+                )
+                await _collect(socket)
+                for _ in range(40):
+                    if ran in RAN and (sentinel in caplog.text or "Protected" in caplog.text):
+                        break
+                    await asyncio.sleep(0.05)
+            assert ran in RAN, f"{ran} never ran; the test would be vacuous"
+            if policy == "legacy":
+                assert sentinel in caplog.text
+            else:
+                assert sentinel not in caplog.text
+                assert "Protected" in caplog.text
+        finally:
+            await socket.disconnect()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "start_async work from a NOTIFY-released activity event is dropped: the "
+        "consumer's _dispatch_single_event decides has_async from the legacy "
+        "_async_pending field, but start_async writes _async_tasks. Recorded in the "
+        "ADR-034-038 ledger; when fixed, drop this marker and move the two "
+        "_run_async_work log sites into the exposure test above."
+    ),
+)
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_notify_released_event_runs_its_start_async_work(monkeypatch):
+    import asyncio
+
+    RAN.clear()
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(ActivityFailureView, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".ActivityFailureView", "url": "/as/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            await socket.send_json_to(
+                {"type": "event", "event": "spawn", "params": {"_activity": "panel"}}
+            )
+            await _collect(socket, quiet=0.4)
+            await get_channel_layer().group_send(
+                "djust_db_notify_exposure_activity_fail",
+                {"type": "db_notify", "channel": "exposure_activity_fail", "payload": {}},
+            )
+            await _collect(socket)
+            for _ in range(40):
+                if "work" in RAN:
+                    break
+                await asyncio.sleep(0.05)
+            assert "spawn" in RAN
+            assert "work" in RAN, "start_async work was dropped"
+        finally:
+            await socket.disconnect()

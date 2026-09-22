@@ -157,9 +157,7 @@ view before any re-render); `disconnect`'s upload cleanup (runs only when
 the view was not disposed as nonlegacy).
 
 **Open — application code, not yet reproduced or fixed:** `_run_async_work` (`start_async` callback and
-`handle_async_result`); the consumer's `_dispatch_single_event` (deferred
-activity dispatch, waiter notification, render and strip) — live for explicit
-views because `db_notify` passes the consumer to the activity flush;
+`handle_async_result`);
 `_maybe_push_tt_event`;
 and `handle_bug_capture_share`.
 

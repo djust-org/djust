@@ -218,6 +218,24 @@ adds no separate exposure.
 
 E1 remains open. The actor caller inventory was then the remaining named E1 task.
 
+## NOTIFY-released event diagnostics and a dropped start_async — E1 slice
+
+Once a released event passes fresh authorization, the consumer's
+`_dispatch_single_event` runs its handler, re-render and any `start_async`
+work. Reproduced over the NOTIFY path (explicit from mount, legacy controls
+passing, each case recording that its handler ran): the handler and re-render
+catches logged the exception and traceback. Both, plus the waiter-notification
+and strip/extract catches in the same function (converted, not independently
+reproduced), now log through `_log_view_hook_failure`.
+
+The `start_async` case exposed a functional defect, recorded and not fixed:
+the dispatcher decides `has_async` from the legacy single-task `_async_pending`
+field, but `start_async` writes `_async_tasks`, so `start_async` work from a
+NOTIFY-released activity event is silently dropped — for legacy views too. A
+strict-xfail test pins it; fixing the drop will fail that marker. Until then
+the consumer's two `_run_async_work` log sites are unreachable from this drain
+and stay open, to be fixed with it. 8 open (4 consumer, 4 runtime).
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a
