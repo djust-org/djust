@@ -100,6 +100,42 @@ rest. Three findings follow; none is fixed in this slice.
    can offer the wrong query's token. A restoration-correctness question, not
    an exposure one; belongs to **E3**.
 
+## Consumer-local exception logging finding
+
+`handle_exception` refuses to stringify an exception for a nonlegacy owner
+because undeclared state can occur in its message. `LiveViewConsumer` has 44
+log calls that bypass it — `logger.<level>("…%s", e)`, `logger.exception(…)`
+or `exc_info=True`, each of which writes the exception message and, for the
+latter two, the traceback.
+
+**Reproduced and fixed:** `handle_presence_heartbeat` and `handle_cursor_move`
+call view methods an application may override and logged the exception
+unconditionally. Over the real consumer, an explicit/None/invalid view's
+`CURSOR_HOOK_SENTINEL` and `PRESENCE_HOOK_SENTINEL` reached the log (6 failing
+cases). Both now log through `_log_view_hook_failure`, which checks the policy
+of the view the hook ran on and of the current owner at the logging boundary —
+either restricts, neither grants — and emits the value-free line
+`handle_exception` uses. Legacy logging is byte-identical; a legacy control
+proves the hook ran. `test_exposure_consumer_hook_diagnostics.py` pins it.
+
+**Open — the same class, wrapping application code** (websocket.py lines at
+this commit): embedded child render (:554); `set_layout` template render
+(:822); deferred callbacks (:895); `start_async` and `handle_async_result`
+(:1347, :1436); deferred-activity dispatch, waiter notification and render
+(:1772, :1784, :1844, :1887); disconnect cleanups (:2071–:2129); sticky
+`_on_sticky_unmount` hooks (:2147, :3369, :3376, :3505); `mount_batch` escapes
+(:2513); time-travel push, jump, component jump and replay (:3876, :4012,
+:4102, :4186, :4207); `bug_capture_share` (:4268); `server_push` (:4434).
+Each needs a reproduction and the same boundary check; a `logger.exception`
+site needs a nonlegacy branch without `exc_info`.
+
+**Classified as framework-only** (message not derived from application
+values): sticky-slot parse (:604), teardown step names (:644 — confirm no
+application hook runs there), accessibility and focus flushes (:1062, :1078),
+debug-payload attach (:1937), actor shutdown (:2094), upload session and
+active-ref checks (:2798, :2811), and hot reload (:3060, :3110, :3176), which
+is dev-only and file-derived.
+
 ## Mount diagnostic finding
 
 The generic exception handler previously recorded full exception messages and

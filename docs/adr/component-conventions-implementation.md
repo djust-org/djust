@@ -3,6 +3,27 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Consumer hook diagnostics — E1 slice
+
+`LiveViewConsumer.receive` dispatches `presence_heartbeat` and `cursor_move`
+straight to view methods an application may override, and their catches
+logged the stringified exception with no policy check — the leak
+`handle_exception` exists to prevent. Reproduced over the real consumer: for
+explicit, `None` and invalid policies the hook's sentinel reached the log
+(6 of 8 cases failed; the legacy controls passed, proving the hooks ran).
+Both now log through `_log_view_hook_failure`, which checks the hook's view
+and the current owner at the logging boundary and emits the value-free line
+for nonlegacy owners. All 8 cases pass; the 82 existing presence, cursor and
+heartbeat tests are unchanged; mypy is clean.
+
+The same pattern is wider. The consumer has 44 exception-logging sites that
+bypass `handle_exception`; about twenty wrap application code — embedded child
+and layout renders, deferred and async callbacks, sticky unmount hooks,
+`mount_batch`, time travel, bug-capture share, `server_push`. The inventory's
+*Consumer-local exception logging finding* lists them by line with a
+framework-only classification for the rest. They are the next E1 slice and
+each needs its own reproduction. E1 remains open.
+
 ## Actor caller inventory — E1 slice
 
 The actor system has exactly two runtime entrances — the actor mount call

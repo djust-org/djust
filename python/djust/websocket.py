@@ -3610,22 +3610,40 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance or not hasattr(self.view_instance, "update_presence_heartbeat"):
             return
 
+        view = self.view_instance
         try:
-            await sync_to_async(self.view_instance.update_presence_heartbeat)()
+            await sync_to_async(view.update_presence_heartbeat)()
         except Exception as e:
-            logger.error("Error updating presence heartbeat: %s", e)
+            self._log_view_hook_failure("Error updating presence heartbeat", view, e)
 
     async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
         """Handle cursor movement for live cursors."""
         if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
             return
 
+        view = self.view_instance
         try:
             x = data.get("x", 0)
             y = data.get("y", 0)
-            await sync_to_async(self.view_instance.handle_cursor_move)(x, y)
+            await sync_to_async(view.handle_cursor_move)(x, y)
         except Exception as e:
-            logger.error("Error handling cursor move: %s", e)
+            self._log_view_hook_failure("Error handling cursor move", view, e)
+
+    def _log_view_hook_failure(self, message: str, view: Any, exc: BaseException) -> None:
+        """Log a failed application hook, value-free for a nonlegacy owner (ADR-038).
+
+        An exception raised by application code can carry undeclared state in
+        its message, so a nonlegacy view gets the same value-free line
+        ``handle_exception`` uses. Both the view the hook ran on and the current
+        owner are checked at the logging boundary: either may restrict, neither
+        grants.
+        """
+        from ._exposure import uses_legacy_exposure
+
+        if uses_legacy_exposure(view) and uses_legacy_exposure(self.view_instance):
+            logger.error("%s: %s", message, exc)
+        else:
+            logger.error("Protected view operation failed")
 
     def _has_live_sticky_children(self) -> bool:
         """True if the parent view currently holds at least one registered
