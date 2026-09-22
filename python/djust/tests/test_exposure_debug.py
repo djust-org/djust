@@ -98,6 +98,48 @@ def test_bug_capture_reprojects_history_without_reading_current_state(view, sett
     assert "_state_transient_value" not in view.__dict__
 
 
+def test_bug_capture_store_destination_holds_only_the_debug_projection(view, settings):
+    """ADR-038 E1: the snapshot store is a destination of its own.
+
+    Above ``bug_capture_inline_limit`` the encoded capture is written to the
+    configured store and only a reference is emitted, so the inline tests
+    above never see these bytes. Assert the store path was taken, then read
+    the stored bytes themselves.
+    """
+    import base64
+
+    from djust.bug_capture import BugCapture, encode_view_state
+    from djust.bug_capture_store import InMemorySnapshotStore, reset_store_cache
+
+    store = InMemorySnapshotStore()
+    settings.DEBUG = True
+    settings.LIVEVIEW_CONFIG = {
+        **getattr(settings, "LIVEVIEW_CONFIG", {}),
+        "bug_capture_store": store,
+        "bug_capture_inline_limit": 1,
+    }
+    reset_store_cache()
+    try:
+        snapshot = record_event_start(view, "change", {}, 1)
+        view.client_value = [2]
+        record_event_end(view, snapshot)
+        encoded = encode_view_state(view, [])
+
+        # Without these, the byte assertions below would pass vacuously.
+        assert ".store." in encoded
+        assert len(store._entries) == 1
+        ((_, stored),) = store._entries.values()
+        raw = base64.urlsafe_b64decode(stored + "=" * (-len(stored) % 4)).decode("utf-8")
+
+        assert "SENTINEL" not in raw
+        assert "SENTINEL" not in encoded
+        capture = BugCapture.decode(encoded)
+        assert capture.state_after["client_value"] == [2]
+        assert capture.state_after["server_value"] == "[redacted]"
+    finally:
+        reset_store_cache()
+
+
 def test_debug_codec_failure_does_not_fall_back_to_repr_or_raw_attrs(view, caplog):
     class Secret:
         def __repr__(self):

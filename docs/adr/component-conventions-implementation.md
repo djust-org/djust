@@ -3,6 +3,29 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Backend and store writers — E1 slice
+
+The inventory's backend row claimed the three `backend.set` calls in
+`RustBridgeMixin._initialize_rust_view` were the automatic Python writers.
+Enumerating every `get_backend()` caller found more writers to the same
+backend: the ADR-034 C2 observation claims and registrations
+(`components/_interactive.py:234`, `:414`), plus `session_utils` and the CLI.
+The observation writes are value-free — a `uuid4` lifetime key and an integer
+sequence in both the memory and Redis backends — so the claim about
+*application* data holds, and the row now names every writer.
+
+Two destinations outside the state backend are now classified. The bug-capture
+snapshot store (`bug_capture.py:180`), used above the inline limit, was never
+exercised by an exposure test; `test_bug_capture_store_destination_holds_only_the_debug_projection`
+forces the store path, asserts it was taken, and reads the stored bytes. It was
+mutation-checked against a skipped store path (which would otherwise pass
+vacuously) and against unprojected bytes reaching the store. Django's
+`{% cache %}` fragment cache (`template_libraries.py:1489`) is developer-invoked
+and stores rendered output derived from the template-context projection, so it
+adds no separate exposure.
+
+E1 remains open. The actor caller inventory is the remaining E1 closure task.
+
 ## Service-worker state storage — E1 slice
 
 Closes the browser-storage row of [the sink inventory](notes/038-exposure-sink-inventory.md),
@@ -21,7 +44,7 @@ worker's forget each fail exactly their own test.
 Three findings are recorded, not fixed: no at-rest TTL on state entries and no
 logout/identity clearing (both **E5**, decided before **E6**), and pathname-only
 keys that collapse query strings (**E3**). E1 remains open; the actor and
-legacy/Rust backend caller inventories are the remaining E1 closure tasks.
+legacy/Rust backend caller inventories were then the remaining E1 closure tasks.
 
 ## Root and deferred background acknowledgements — E4 slice
 
