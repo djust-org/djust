@@ -3,6 +3,29 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Actor caller inventory — E1 slice
+
+The actor system has exactly two runtime entrances — the actor mount call
+(`runtime.py:2883`) and the actor event call (`:3283`) — and every other actor
+call is reachable only through them. Both are refused for nonlegacy views, so
+actor render state is unreachable under explicit policy; the inventory now
+classifies actors as **unsupported, refused at entry**.
+
+The mount refusal already had a test. The event refusal (`:3268`) had none,
+because it cannot be reached by mounting a nonlegacy view: only a late policy
+transition after a legacy actor mount gets there.
+`test_actor_event_refuses_after_a_late_policy_transition` does exactly that
+over the real WebSocket consumer, for `explicit`, `None` and `invalid`, with a
+`legacy` control that must reach the actor so the refusal cases cannot pass by
+bypassing the actor branch. Removing the refusal fails all three nonlegacy
+cases and leaves the control green.
+
+With this, the three caller inventories the earlier E1 slices named — browser
+storage, backends and actors — are classified. E1 itself stays open: the
+runtime debug hooks, the outer transport and foreground-event diagnostic
+catches, and the foreground frame matrix are still listed as open in the
+inventory, and remaining routes 2-5 are not closed.
+
 ## Backend and store writers — E1 slice
 
 The inventory's backend row claimed the three `backend.set` calls in
@@ -24,7 +47,7 @@ vacuously) and against unprojected bytes reaching the store. Django's
 and stores rendered output derived from the template-context projection, so it
 adds no separate exposure.
 
-E1 remains open. The actor caller inventory is the remaining E1 closure task.
+E1 remains open. The actor caller inventory was then the remaining named E1 task.
 
 ## Service-worker state storage — E1 slice
 
