@@ -2076,7 +2076,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await sync_to_async(view.untrack_presence)()
             except Exception as e:
-                self._log_view_hook_failure(view, e, "Error cleaning up presence: %s", e)
+                self._log_view_hook_failure(
+                    view, e, "Error cleaning up presence: %s", e, level="warning"
+                )
 
         # Cancel tick task and wait for it to finish
         if self._tick_task:
@@ -3647,26 +3649,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._log_view_hook_failure(view, e, "Error handling cursor move: %s", e)
 
     def _log_view_hook_failure(
-        self, view: Any, exc: BaseException, msg: str, *args: Any, traceback: bool = False
+        self,
+        view: Any,
+        exc: BaseException,
+        msg: str,
+        *args: Any,
+        level: str = "error",
+        traceback: bool = False,
     ) -> None:
         """Log a failed application hook, value-free for a nonlegacy owner (ADR-038).
 
-        An exception raised by application code can carry undeclared state in
-        its message and traceback, so a nonlegacy view gets the same value-free
-        line ``handle_exception`` uses. Both the view the hook ran on and the
-        current owner are checked at the logging boundary: either may restrict,
-        neither grants.
-
-        ``msg``/``args`` are exactly what the call site passed to ``logger``, and
-        ``traceback=True`` stands for ``logger.exception``, so a legacy owner's
-        output is unchanged at every converted site.
+        Consumer hooks run outside a runtime turn, so no diagnostic scope is
+        open. This opens one, restricts it to the view the hook ran on and to
+        the current owner — either restricts, neither grants — and logs through
+        :func:`log_failure`, which keeps the call site's message, level and
+        traceback wherever details are allowed.
         """
-        from ._exposure import uses_legacy_exposure
+        from ._exposure_diagnostics import diagnostic_scope, log_failure, restrict_diagnostics
 
-        if uses_legacy_exposure(view) and uses_legacy_exposure(self.view_instance):
-            logger.error(msg, *args, exc_info=exc if traceback else None)
-        else:
-            logger.error("Protected view operation failed")
+        with diagnostic_scope():
+            restrict_diagnostics(view)
+            restrict_diagnostics(self.view_instance)
+            log_failure(logger, exc, msg, *args, level=level, traceback=traceback)
 
     def _has_live_sticky_children(self) -> bool:
         """True if the parent view currently holds at least one registered

@@ -7,14 +7,15 @@ because undeclared state can occur in its message and traceback. A raw
 that carries exception data — the exception in its arguments,
 ``logger.exception``, or ``exc_info`` — must be one of:
 
-- ``HELPER``: the policy-checked branch inside ``_log_view_hook_failure``;
+- ``HELPER``: a raw call that is itself the policy gate (none today: the
+  consumer helper now delegates to ``_exposure_diagnostics.log_failure``);
 - ``LEGACY_GATED``: reachable only for a legacy owner, by a guard that was read;
 - ``FRAMEWORK_ONLY``: the logged exception cannot derive from application values;
 - ``KNOWN_OPEN``: application code, not yet fixed. This list may only shrink.
 
 A new site fails this test until it is classified. The usual fix is to log
-through ``self._log_view_hook_failure(view, exc, msg, *args, traceback=...)``,
-which keeps legacy output unchanged. Sites are keyed by enclosing function and
+through ``self._log_view_hook_failure(view, exc, msg, *args, level=...,
+traceback=...)``, which keeps legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
 the first 48 characters of the message literal, so line drift does not matter.
 The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
 """
@@ -24,9 +25,7 @@ import pathlib
 
 WEBSOCKET = pathlib.Path(__file__).resolve().parents[1] / "websocket.py"
 
-HELPER = {
-    ("_log_view_hook_failure", "<Name>"): "the policy-checked legacy branch itself",
-}
+HELPER: dict = {}
 
 LEGACY_GATED = {
     ("render_embedded_child_html", "Failed to render embedded child %s: %s"): (
@@ -180,7 +179,7 @@ def test_every_exception_carrying_consumer_log_call_is_classified():
     stale = sorted(declared - found)
     assert not unclassified, (
         "New exception-carrying log call(s) in websocket.py. Log through "
-        "self._log_view_hook_failure(view, exc, msg, *args, traceback=...) or "
+        "self._log_view_hook_failure(view, exc, msg, *args, level=..., traceback=...) or "
         f"classify with a reason: {unclassified}"
     )
     assert not stale, (

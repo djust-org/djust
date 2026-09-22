@@ -267,6 +267,9 @@ async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_v
 
     if policy == "legacy":
         assert "Error cleaning up presence: UNTRACK_HOOK_SENTINEL" in caplog.text
+        # The original catch logged at WARNING; the converted site keeps it.
+        [record] = [r for r in caplog.records if "UNTRACK_HOOK_SENTINEL" in r.getMessage()]
+        assert record.levelno == logging.WARNING
     else:
         assert "UNTRACK_HOOK_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text

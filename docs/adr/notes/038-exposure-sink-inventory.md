@@ -175,6 +175,21 @@ assigned after `dispatch_mount` returns, and `_run_tick` stops on its first
 wake-up if the view is not set yet. A view whose `tick_interval` is shorter
 than its mount time never ticks — 20 ms reproduces it; 300 ms does not.
 
+## Runtime and mixin exception logging
+
+The consumer finding's rule applies wherever a raw `logger` call carries
+exception data, and a runtime turn's diagnostic scope does not change that —
+only `handle_exception` consults `diagnostics_allowed()`. Scanned counts:
+`runtime.py` 26, `time_travel.py` 10, `mixins/request.py` 5,
+`mixins/async_work.py` 4, `mixins/sticky.py` 3, `live_view.py` 2, and one each
+in `sse.py`, `mixins/rust_bridge.py`, `mixins/activity.py` and
+`mixins/waiters.py`. Unclassified; the consumer pin covers `websocket.py` only.
+
+Fixed: `ViewRuntime._flush_pending_layout` now logs through
+`_exposure_diagnostics.log_failure` (reproduced, explicit from mount). Already
+known to be value-free: `mixins/activity.py`'s drain logs "Protected deferred
+activity event failed" for restricted owners.
+
 ## Mount diagnostic finding
 
 The generic exception handler previously recorded full exception messages and

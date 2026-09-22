@@ -3,6 +3,38 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Shared log_failure primitive and runtime layout — E1 slice
+
+Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:
+the same AST rule finds 26 exception-carrying raw log calls there, plus 10 in
+`time_travel.py`, 5 in `mixins/request.py`, 4 in `mixins/async_work.py`, 3 in
+`mixins/sticky.py`, 2 in `live_view.py` and one each in `sse.py`,
+`mixins/rust_bridge.py`, `mixins/activity.py` and `mixins/waiters.py`. A runtime
+turn's diagnostic scope does not help them: only `handle_exception` consults
+`diagnostics_allowed()`.
+
+`_exposure_diagnostics.log_failure(log, exc, msg, *args, level=…, traceback=…)`
+is now the logging counterpart of that gate: the call site's own message,
+level and traceback wherever details are allowed, the value-free line
+otherwise. Runtime sites call it directly, since the turn's scope already
+tracks the owner. The consumer's `_log_view_hook_failure` now opens a scope,
+restricts it to its two owners and delegates — which also corrected an
+earlier inaccuracy: the helper had logged `untrack_presence` at ERROR where the
+original catch used WARNING. A test now asserts the level.
+
+First runtime site: `ViewRuntime._flush_pending_layout` logged a `set_layout`
+render failure with `logger.exception`. Reproduced over the real consumer with
+views explicit **from mount** — an earlier probe that flipped the policy
+mid-session was discarded as vacuous, because fresh event authorization
+rejected the event before the layout path. Explicit cases fail against the
+original `runtime.py` and pass after; legacy controls pass throughout.
+
+The same probe tested a structural hypothesis — that an explicit view's
+exception escapes to `LiveViewConsumer.receive`'s unscoped outer catch and
+reaches the client. It did not reproduce: the runtime's protected catch sent
+the generic error first. No entry-point scope was added for a leak that could
+not be shown.
+
 ## Consumer log-exposure pin — E1 slice
 
 Fixing leak sites one at a time is a denylist: the next `logger.exception`
@@ -34,8 +66,9 @@ Mutation-checked three ways: reverting the cursor fix fails the pin naming
 the reintroduced site; renaming a message fails it as unclassified; fixing an
 open site without deleting its entry fails it as stale. A self-test pins the
 scanner against each carrying form, so the pin cannot pass by the scanner
-going blind. Only `websocket.py` is pinned; `runtime.py` routes its catches
-through `handle_exception` and has not been scanned the same way.
+going blind. Only `websocket.py` is pinned. *(Corrected: this slice first
+said `runtime.py` routes its catches through `handle_exception`. It does not —
+see the next slice.)*
 
 ## Tick and NOTIFY hook diagnostics — E1 slice
 

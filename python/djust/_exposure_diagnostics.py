@@ -71,3 +71,25 @@ def diagnostics_allowed() -> bool:
         except Exception:  # noqa: BLE001 — an unreadable owner cannot grant diagnostics
             _details_allowed.set(False)
     return _details_allowed.get() is True
+
+
+def log_failure(
+    log: Any,
+    exc: BaseException,
+    msg: str,
+    *args: Any,
+    level: str = "error",
+    traceback: bool = False,
+) -> None:
+    """Log a caught failure, value-free unless diagnostics are allowed here.
+
+    The logging counterpart of ``handle_exception``'s gate: a raw ``logger``
+    call does not consult ``diagnostics_allowed()``, and undeclared state can
+    occur in an exception's message and traceback. ``msg``/``args``/``level`` are
+    what the call site passed to its logger and ``traceback=True`` stands for
+    ``logger.exception``, so output is unchanged wherever details are allowed.
+    """
+    if diagnostics_allowed():
+        getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
+    else:
+        log.error("Protected view operation failed")

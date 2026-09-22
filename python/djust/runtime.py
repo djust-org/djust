@@ -5722,9 +5722,15 @@ class ViewRuntime:
                 "set_layout(%r) — template not found; ignoring swap request", layout_path
             )
             return
-        except Exception:  # noqa: BLE001 — layout errors must not kill the wire
-            logger.exception(
-                "set_layout(%r) — template rendering raised; ignoring swap request", layout_path
+        except Exception as exc:  # noqa: BLE001 — layout errors must not kill the wire
+            from ._exposure_diagnostics import log_failure
+
+            log_failure(
+                logger,
+                exc,
+                "set_layout(%r) — template rendering raised; ignoring swap request",
+                layout_path,
+                traceback=True,
             )
             if getattr(django_settings, "DEBUG", False):
                 raise
