@@ -225,3 +225,47 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class UntrackFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>untrack</div>"
+
+    def untrack_presence(self):
+        raise ValueError("UNTRACK_HOOK_SENTINEL")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
+async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, policy
+):
+    """``disconnect`` calls ``untrack_presence``, which an application may
+    override, and its catch logged the exception. Disconnect is the trigger, so
+    the log is checked after the socket closes."""
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(UntrackFailureView, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        await socket.send_json_to(
+            {"type": "mount", "view": __name__ + ".UntrackFailureView", "url": "/u/"}
+        )
+        mounted = await socket.receive_json_from(timeout=3)
+        assert mounted["type"] == "mount", mounted
+        monkeypatch.setattr(UntrackFailureView, "exposure_policy", policy)
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            await socket.disconnect()
+
+    if policy == "legacy":
+        assert "Error cleaning up presence: UNTRACK_HOOK_SENTINEL" in caplog.text
+    else:
+        assert "UNTRACK_HOOK_SENTINEL" not in caplog.text
+        assert "Protected view operation failed" in caplog.text

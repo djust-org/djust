@@ -125,8 +125,9 @@ current owner at the logging boundary. Each reproduced site fails before the
 fix for explicit/None/invalid and a legacy control proves the hook ran.
 
 - Reproduced: `handle_presence_heartbeat`, `handle_cursor_move`, `server_push`
-  (via `apush_to_view`), `_run_tick` (`handle_tick`), and `db_notify`'s
-  `handle_info` catch (via the NOTIFY channel group).
+  (via `apush_to_view`), `_run_tick` (`handle_tick`), `db_notify`'s
+  `handle_info` catch (via the NOTIFY channel group), and `disconnect`'s
+  `untrack_presence` cleanup.
 - Converted in the same function, **not independently reproduced**: the
   `db_notify` outer catch and its deferred-activity flush catch.
 
@@ -137,7 +138,8 @@ framework exceptions); `render_embedded_child_html` (a nonlegacy child raises
 a value-free `ExposureError … from None` before logging); time-travel jump,
 component jump and forward replay (`restore_snapshot`,
 `restore_component_snapshot` and `replay_event` return `False` for a nonlegacy
-view before any re-render).
+view before any re-render); `disconnect`'s upload cleanup (runs only when
+the view was not disposed as nonlegacy).
 
 **Open — application code, not yet reproduced or fixed:** `_flush_pending_layout`
 (`set_layout` template render); `_flush_deferred` (deferred callbacks,
@@ -146,15 +148,16 @@ view before any re-render).
 activity dispatch, waiter notification, render and strip) — live for explicit
 views because `db_notify` passes the consumer to the activity flush;
 `_mount_one` (`mount_batch` escapes); `_maybe_push_tt_event`;
-`handle_bug_capture_share`; and the `disconnect` cleanups for db_notify
-groups, presence, uploads, waiters and embedded children, whose guards sit
-elsewhere in `disconnect` and have not been confirmed for these catches.
+and `handle_bug_capture_share`.
 
 **Framework-only** (message not derived from application values):
 `_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm
 no application hook runs there), `_flush_accessibility` (two sites),
 `_attach_debug_payload`, the actor shutdown in `disconnect`,
 `_handle_upload_resume` (two sites), `_send_frame`, `_clear_template_caches`,
+`disconnect`'s db_notify group leave, waiter cancellation (scheduling only)
+and child unregistration (nonlegacy children disposed, legacy hooks caught
+inside `_unregister_child`),
 `handle_live_redirect_mount`'s upload cleanup, and hot reload (three sites,
 dev-only and file-derived).
 

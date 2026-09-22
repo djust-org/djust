@@ -15,6 +15,12 @@ exactly one table — `HELPER`, `LEGACY_GATED` (guard read), `FRAMEWORK_ONLY` or
 drift does not matter. `KNOWN_OPEN` holds the 16 application-code sites not yet
 fixed and may only shrink.
 
+The first shrink followed: of the five `disconnect` cleanups marked
+unconfirmed, `untrack_presence` was a real leak (reproduced, 3 failing cases,
+now routed through the helper); the upload cleanup is legacy-gated; the
+NOTIFY group leave, waiter cancellation and child unregistration are
+framework-only. `KNOWN_OPEN` is down to 11.
+
 Mutation-checked three ways: reverting the cursor fix fails the pin naming
 the reintroduced site; renaming a message fails it as unclassified; fixing an
 open site without deleting its entry fails it as stale. A self-test pins the

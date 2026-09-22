@@ -54,6 +54,9 @@ LEGACY_GATED = {
     ("_handle_forward_replay_locked", "forward_replay: re-render failed"): (
         "replay_event returns False for a nonlegacy view before re-rendering"
     ),
+    ("disconnect", "Error cleaning up uploads: %s"): (
+        "runs only when not explicit_disposed; a nonlegacy view is disposed instead"
+    ),
 }
 
 FRAMEWORK_ONLY = {
@@ -76,6 +79,15 @@ FRAMEWORK_ONLY = {
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
         "outer catch of the staging block; hooks inside it are legacy-gated"
     ),
+    ("disconnect", "Error leaving db_notify group for %s: %s"): (
+        "channel-layer group_discard; the channel name is an identifier, not state"
+    ),
+    ("disconnect", "Error cancelling waiters: %s"): (
+        "_cancel_all_waiters only schedules future cancellation; no hook runs"
+    ),
+    ("disconnect", "Error cleaning up embedded children: %s"): (
+        "_unregister_child disposes nonlegacy children and catches legacy hooks itself"
+    ),
 }
 
 KNOWN_OPEN = {
@@ -92,11 +104,6 @@ KNOWN_OPEN = {
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): "mount_batch escape",
     ("_maybe_push_tt_event", "time_travel: failed to push event frame"): "not yet verified",
     ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
-    ("disconnect", "Error leaving db_notify group for %s: %s"): "guard not confirmed",
-    ("disconnect", "Error cleaning up presence: %s"): "guard not confirmed",
-    ("disconnect", "Error cleaning up uploads: %s"): "guard not confirmed",
-    ("disconnect", "Error cancelling waiters: %s"): "guard not confirmed",
-    ("disconnect", "Error cleaning up embedded children: %s"): "guard not confirmed",
 }
 
 _LEVELS = {"debug", "info", "warning", "error", "exception", "critical"}

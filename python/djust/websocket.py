@@ -2072,10 +2072,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Clean up presence tracking if view supports it
         if self.view_instance and hasattr(self.view_instance, "untrack_presence"):
+            view = self.view_instance
             try:
-                await sync_to_async(self.view_instance.untrack_presence)()
+                await sync_to_async(view.untrack_presence)()
             except Exception as e:
-                logger.warning("Error cleaning up presence: %s", e)
+                self._log_view_hook_failure(view, e, "Error cleaning up presence: %s", e)
 
         # Cancel tick task and wait for it to finish
         if self._tick_task:
