@@ -3614,7 +3614,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             await sync_to_async(view.update_presence_heartbeat)()
         except Exception as e:
-            self._log_view_hook_failure("Error updating presence heartbeat", view, e)
+            self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
     async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
         """Handle cursor movement for live cursors."""
@@ -3627,10 +3627,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             y = data.get("y", 0)
             await sync_to_async(view.handle_cursor_move)(x, y)
         except Exception as e:
-            self._log_view_hook_failure("Error handling cursor move", view, e)
+            self._log_view_hook_failure(view, e, "Error handling cursor move: %s", e)
 
     def _log_view_hook_failure(
-        self, message: str, view: Any, exc: BaseException, *, traceback: bool = False
+        self, view: Any, exc: BaseException, msg: str, *args: Any, traceback: bool = False
     ) -> None:
         """Log a failed application hook, value-free for a nonlegacy owner (ADR-038).
 
@@ -3638,13 +3638,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         its message and traceback, so a nonlegacy view gets the same value-free
         line ``handle_exception`` uses. Both the view the hook ran on and the
         current owner are checked at the logging boundary: either may restrict,
-        neither grants. ``traceback=True`` keeps a legacy ``logger.exception``
-        site's output unchanged.
+        neither grants.
+
+        ``msg``/``args`` are exactly what the call site passed to ``logger``, and
+        ``traceback=True`` stands for ``logger.exception``, so a legacy owner's
+        output is unchanged at every converted site.
         """
         from ._exposure import uses_legacy_exposure
 
         if uses_legacy_exposure(view) and uses_legacy_exposure(self.view_instance):
-            logger.error("%s: %s", message, exc, exc_info=exc if traceback else None)
+            logger.error(msg, *args, exc_info=exc if traceback else None)
         else:
             logger.error("Protected view operation failed")
 
@@ -4452,7 +4455,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._render_lock.release()
 
         except Exception as e:
-            self._log_view_hook_failure("Error in server_push", view, e, traceback=True)
+            self._log_view_hook_failure(view, e, "Error in server_push: %s", e, traceback=True)
 
     async def client_push_event(self, event: Dict[str, Any]) -> None:
         """
@@ -4530,10 +4533,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     try:
                         await sync_to_async(handler)(message)
                     except Exception as exc:  # noqa: BLE001
-                        logger.exception(
-                            "db_notify: handle_info raised on %s: %s",
-                            self.view_instance.__class__.__name__,
+                        self._log_view_hook_failure(
+                            view,
                             exc,
+                            "db_notify: handle_info raised on %s: %s",
+                            view.__class__.__name__,
+                            exc,
+                            traceback=True,
                         )
                         return
 
@@ -4583,14 +4589,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if hasattr(self.view_instance, "_flush_deferred_activity_events"):
                     try:
                         await self.view_instance._flush_deferred_activity_events(self)
-                    except Exception:  # noqa: BLE001
-                        logger.exception(
-                            "dj_activity: deferred-event flush raised (db_notify path)"
+                    except Exception as exc:  # noqa: BLE001
+                        self._log_view_hook_failure(
+                            view,
+                            exc,
+                            "dj_activity: deferred-event flush raised (db_notify path)",
+                            traceback=True,
                         )
             finally:
                 self._render_lock.release()
         except Exception as e:  # noqa: BLE001
-            logger.exception("Error in db_notify: %s", e)
+            self._log_view_hook_failure(view, e, "Error in db_notify: %s", e, traceback=True)
 
     async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock."""
@@ -4632,12 +4641,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             while True:
                 await asyncio.sleep(interval_s)
-                if not self.view_instance:
+                view = self.view_instance
+                if not view:
                     break
                 try:
                     await self._tick_once()
                 except Exception as e:
-                    logger.exception("Error in tick handler: %s", e)
+                    self._log_view_hook_failure(
+                        view, e, "Error in tick handler: %s", e, traceback=True
+                    )
         except asyncio.CancelledError:
             pass  # Normal shutdown path when tick loop is cancelled
 

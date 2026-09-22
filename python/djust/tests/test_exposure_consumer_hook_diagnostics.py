@@ -136,3 +136,92 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class TickFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>tick</div>"
+    # Longer than a test mount takes. The tick task is created during mount but
+    # the consumer's view_instance is assigned after it returns, and _run_tick
+    # stops if it wakes before then; a short interval never ticks at all. The
+    # legacy control fails loudly rather than passing if that race recurs.
+    tick_interval = 300
+
+    def handle_tick(self):
+        raise ValueError("TICK_HOOK_SENTINEL")
+
+
+class NotifyFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>notify</div>"
+    # Class-level so the consumer joins the NOTIFY group at wiring time, which
+    # reads it before mount(); listen() itself needs a PostgreSQL backend.
+    _listen_channels = {"exposure_hooks"}
+
+    def handle_info(self, message):
+        raise ValueError("NOTIFY_HOOK_SENTINEL")
+
+
+async def _poll_log(caplog, *needles, attempts=80):
+    import asyncio
+
+    for _ in range(attempts):
+        if any(n in caplog.text for n in needles):
+            return
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
+@pytest.mark.parametrize("hook", ["tick", "db_notify"])
+async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, policy, hook
+):
+    """``handle_tick`` runs on the consumer's tick timer and ``handle_info`` on a
+    Postgres NOTIFY delivered through the channel layer; both catches logged the
+    exception and its traceback. Both paths are production, not debug-only."""
+    from channels.layers import get_channel_layer
+
+    view_cls = TickFailureView if hook == "tick" else NotifyFailureView
+    sentinel = "TICK_HOOK_SENTINEL" if hook == "tick" else "NOTIFY_HOOK_SENTINEL"
+    expected_legacy = (
+        "Error in tick handler: TICK_HOOK_SENTINEL"
+        if hook == "tick"
+        else "db_notify: handle_info raised on NotifyFailureView: NOTIFY_HOOK_SENTINEL"
+    )
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    # Hold the policy at legacy through mount; flip it before the hook can run.
+    monkeypatch.setattr(view_cls, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to(
+                    {"type": "mount", "view": f"{__name__}.{view_cls.__name__}", "url": "/h/"}
+                )
+                mounted = await socket.receive_json_from(timeout=3)
+                assert mounted["type"] == "mount", mounted
+                monkeypatch.setattr(view_cls, "exposure_policy", policy)
+                caplog.clear()
+                if hook == "db_notify":
+                    await get_channel_layer().group_send(
+                        "djust_db_notify_exposure_hooks",
+                        {"type": "db_notify", "channel": "exposure_hooks", "payload": {}},
+                    )
+                await _poll_log(caplog, sentinel, "Protected view operation failed")
+
+            if policy == "legacy":
+                assert expected_legacy in caplog.text
+                assert "Traceback (most recent call last)" in caplog.text
+            else:
+                assert sentinel not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

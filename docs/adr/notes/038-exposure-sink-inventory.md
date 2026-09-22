@@ -103,44 +103,61 @@ rest. Three findings follow; none is fixed in this slice.
 ## Consumer-local exception logging finding
 
 `handle_exception` refuses to stringify an exception for a nonlegacy owner
-because undeclared state can occur in its message. `LiveViewConsumer` has 44
-log calls that bypass it — `logger.<level>("…%s", e)`, `logger.exception(…)`
-or `exc_info=True`, each of which writes the exception message and, for the
-latter two, the traceback.
+because undeclared state can occur in its message. Raw `logger` calls ignore
+that: `diagnostics_allowed()` is consulted only by `handle_exception`, and the
+`djust` logger's `DjustLogSanitizerFilter` strips control characters, not
+values. An AST scan of `websocket.py` finds 44 logging calls that carry
+exception data — the exception in the arguments, `logger.exception`, or
+`exc_info`. (An earlier single-line regex count was also 44 but a different,
+wrong set: it missed multi-line calls such as `db_notify` and `_run_tick`.)
+Every site is classified below by function; line numbers drift, names do not.
 
-**Reproduced and fixed:** `handle_presence_heartbeat` and `handle_cursor_move`
-call view methods an application may override and logged the exception
-unconditionally. Over the real consumer, an explicit/None/invalid view's
-`CURSOR_HOOK_SENTINEL` and `PRESENCE_HOOK_SENTINEL` reached the log (6 failing
-cases). Both now log through `_log_view_hook_failure`, which checks the policy
-of the view the hook ran on and of the current owner at the logging boundary —
-either restricts, neither grants — and emits the value-free line
-`handle_exception` uses. Legacy logging is byte-identical; a legacy control
-proves the hook ran. `test_exposure_consumer_hook_diagnostics.py` pins it.
+**Fixed — routed through `_log_view_hook_failure`.** The helper takes the
+call site's own `msg`/`args` and `traceback=True` for `logger.exception`, so
+legacy output is unchanged by construction; it checks the hook's view and the
+current owner at the logging boundary. Each reproduced site fails before the
+fix for explicit/None/invalid and a legacy control proves the hook ran.
 
-`server_push` followed: it runs an application handler delivered over the
-channel layer (Celery, management commands) and its `logger.exception` wrote
-the message and traceback. Reproduced through `apush_to_view` (3 failing
-cases), now logged through the same helper with `traceback=True`, which keeps
-the legacy message and traceback unchanged — asserted by the legacy control.
+- Reproduced: `handle_presence_heartbeat`, `handle_cursor_move`, `server_push`
+  (via `apush_to_view`), `_run_tick` (`handle_tick`), and `db_notify`'s
+  `handle_info` catch (via the NOTIFY channel group).
+- Converted in the same function, **not independently reproduced**: the
+  `db_notify` outer catch and its deferred-activity flush catch.
 
-**Open — the same class, wrapping application code** (websocket.py lines at
-this commit): embedded child render (:554); `set_layout` template render
-(:822); deferred callbacks (:895); `start_async` and `handle_async_result`
-(:1347, :1436); deferred-activity dispatch, waiter notification and render
-(:1772, :1784, :1844, :1887); disconnect cleanups (:2071–:2129); sticky
-`_on_sticky_unmount` hooks (:2147, :3369, :3376, :3505); `mount_batch` escapes
-(:2513); time-travel push, jump, component jump and replay (:3876, :4012,
-:4102, :4186, :4207); `bug_capture_share` (:4268).
-Each needs a reproduction and the same boundary check; a `logger.exception`
-site needs a nonlegacy branch without `exc_info`.
+**Legacy-gated — verified by reading the guard:** sticky `_on_sticky_unmount`
+in `disconnect` and `handle_live_redirect_mount` (nonlegacy children go to
+`dispose_child_subtree` first; the staging block's outer catch sees only
+framework exceptions); `render_embedded_child_html` (a nonlegacy child raises
+a value-free `ExposureError … from None` before logging); time-travel jump,
+component jump and forward replay (`restore_snapshot`,
+`restore_component_snapshot` and `replay_event` return `False` for a nonlegacy
+view before any re-render).
 
-**Classified as framework-only** (message not derived from application
-values): sticky-slot parse (:604), teardown step names (:644 — confirm no
-application hook runs there), accessibility and focus flushes (:1062, :1078),
-debug-payload attach (:1937), actor shutdown (:2094), upload session and
-active-ref checks (:2798, :2811), and hot reload (:3060, :3110, :3176), which
-is dev-only and file-derived.
+**Open — application code, not yet reproduced or fixed:** `_flush_pending_layout`
+(`set_layout` template render); `_flush_deferred` (deferred callbacks,
+`exc_info`); `_run_async_work` (`start_async` callback and
+`handle_async_result`); the consumer's `_dispatch_single_event` (deferred
+activity dispatch, waiter notification, render and strip) — live for explicit
+views because `db_notify` passes the consumer to the activity flush;
+`_mount_one` (`mount_batch` escapes); `_maybe_push_tt_event`;
+`handle_bug_capture_share`; and the `disconnect` cleanups for db_notify
+groups, presence, uploads, waiters and embedded children, whose guards sit
+elsewhere in `disconnect` and have not been confirmed for these catches.
+
+**Framework-only** (message not derived from application values):
+`_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm
+no application hook runs there), `_flush_accessibility` (two sites),
+`_attach_debug_payload`, the actor shutdown in `disconnect`,
+`_handle_upload_resume` (two sites), `_send_frame`, `_clear_template_caches`,
+`handle_live_redirect_mount`'s upload cleanup, and hot reload (three sites,
+dev-only and file-derived).
+
+**Separate defect found while reproducing `_run_tick`** (not an exposure
+issue, not fixed here): the tick task is created during mount
+(`ViewRuntime`'s `on_view_mounted`) but the consumer's `view_instance` is
+assigned after `dispatch_mount` returns, and `_run_tick` stops on its first
+wake-up if the view is not set yet. A view whose `tick_interval` is shorter
+than its mount time never ticks — 20 ms reproduces it; 300 ms does not.
 
 ## Mount diagnostic finding
 

@@ -3,6 +3,28 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Tick and NOTIFY hook diagnostics — E1 slice
+
+Recounting the consumer's exception-carrying log calls with an AST scan
+(instead of a single-line regex) replaced the inventory's site list: the
+regex had missed multi-line calls, including two production application
+hooks. `_run_tick` logged `handle_tick` failures and `db_notify` logged
+`handle_info` failures, each with the message and traceback, for any policy.
+Both are reproduced over the real consumer — tick on its timer, NOTIFY through
+the channel group — failing for explicit/None/invalid with legacy controls
+passing, and both now go through `_log_view_hook_failure`. The helper now
+takes the call site's own `msg`/`args`, so every converted site's legacy
+output is unchanged by construction. The tick fix was also checked by
+restoring the original catch alone: the three nonlegacy cases fail again.
+
+Reproducing tick exposed an unrelated defect, recorded in the inventory and
+not fixed here: a view whose `tick_interval` is shorter than its mount time
+never ticks, because the loop wakes before the consumer's `view_instance` is
+assigned and stops.
+
+The inventory now classifies all 44 sites as fixed, legacy-gated (verified by
+reading each guard), open, or framework-only. E1 remains open.
+
 ## Consumer hook diagnostics — E1 slice
 
 `LiveViewConsumer.receive` dispatches `presence_heartbeat` and `cursor_move`
