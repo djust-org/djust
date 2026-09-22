@@ -431,11 +431,17 @@ def action(
                 # ``BaseException`` subclasses (KeyboardInterrupt, SystemExit,
                 # GeneratorExit) propagate via the bare ``except Exception``
                 # — by Python convention those should never be caught.
-                logger.exception(
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
                     "@action %s raised %s; recorded in _action_state[%r]",
                     action_name,
                     type(exc).__name__,
                     action_name,
+                    traceback=True,
                 )
                 self._action_state[action_name] = {
                     "pending": False,

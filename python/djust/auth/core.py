@@ -371,10 +371,16 @@ def enforce_object_permission(view_instance: Any, request: Any) -> None:
     except PermissionDenied:
         raise
     except Exception as exc:  # noqa: BLE001 — fail-closed by design
-        logger.exception(
+        from .._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger,
+            (view_instance,),
+            exc,
             "Object-permission check raised a non-PermissionDenied exception "
             "for %s; failing closed (denying)",
             view_instance.__class__.__name__,
+            traceback=True,
         )
         raise PermissionDenied("Access denied for this object.") from exc
 

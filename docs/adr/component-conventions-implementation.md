@@ -299,6 +299,25 @@ the offline sync queue (`mark_failed`) for any policy — a storage destination,
 not a log, pinned by the test's assertion so a change is visible. The baseline
 is 116 sites in 54 modules.
 
+Thirteen more modules are pinned. Converted, because they run application
+code with an owner in scope: the object-permission check in
+`auth.core.enforce_object_permission` and its event-path twin in
+`websocket_utils._validate_event_security` (both fail closed on a
+non-`PermissionDenied` error from the developer's `get_object` /
+`has_object_permission`, and logged its text — reproduced for the first, red
+against the original, denial unchanged), the `@action` wrapper, the tutorial
+steps and `SimpleLiveView.render_template`. Classified without change:
+`handle_exception`'s detailed branch sits behind its own diagnostics gate;
+`state_backends/memory.py`'s `get` serves the legacy view cache; the rest are
+framework-only.
+
+Left in the baseline on purpose: `components/base.py`, `components/suspense.py`,
+`serialization._rehydrate_component` and `session_utils.dom_id_for` run
+application code but have no reliable reference to their owning view, and an
+owner that defaults to legacy would grant rather than restrict. They need an
+owner threaded through, which is a design change, not a relabel. The baseline
+is 95 sites in 41 modules.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.

@@ -112,16 +112,6 @@
         "OAuth stats unavailable (allauth probe failed): "
       ]
     ],
-    "auth/core.py": [
-      [
-        "_check_django_access_mixins",
-        "check_view_auth: could not restore .request on %"
-      ],
-      [
-        "enforce_object_permission",
-        "Object-permission check raised a non-PermissionD"
-      ]
-    ],
     "auth/djust_admin.py": [
       [
         "get_context",
@@ -202,22 +192,6 @@
         "on_upload_complete hook raised for upload_id=%s "
       ]
     ],
-    "db/decorators.py": [
-      [
-        "_on_delete",
-        "notify_on_save: failed to emit NOTIFY for %s pk="
-      ],
-      [
-        "_on_save",
-        "notify_on_save: failed to emit NOTIFY for %s pk="
-      ]
-    ],
-    "decorators.py": [
-      [
-        "action_wrapper",
-        "@action %s raised %s; recorded in _action_state["
-      ]
-    ],
     "deploy_cli.py": [
       [
         "_create_tarball",
@@ -255,18 +229,6 @@
       [
         "logout",
         "Logout API call failed (proceeding to remove loc"
-      ]
-    ],
-    "forms.py": [
-      [
-        "_ensure_model_instance",
-        "Failed to re-hydrate model instance (label=%s, p"
-      ]
-    ],
-    "hot_view_replacement.py": [
-      [
-        "reload_module_if_liveview",
-        "HVR: importlib.reload failed for %s"
       ]
     ],
     "observability/dry_run.py": [
@@ -415,22 +377,6 @@
         "Command failed: %s\nstdout: %s\nstderr: %s"
       ]
     ],
-    "security/error_handling.py": [
-      [
-        "handle_exception",
-        "%s%s: %s: %s",
-        1
-      ],
-      [
-        "handle_exception",
-        "%s%s: %s: %s",
-        2
-      ],
-      [
-        "handle_exception",
-        "%s%s: %s: %s"
-      ]
-    ],
     "serialization.py": [
       [
         "_rehydrate_component",
@@ -443,22 +389,6 @@
         "Stream %r custom dom_id= factory raised on %r; f"
       ]
     ],
-    "simple_live_view.py": [
-      [
-        "render_template",
-        "[SimpleLiveView] template render failed"
-      ]
-    ],
-    "state_backends/memory.py": [
-      [
-        "get",
-        "InMemoryStateBackend.get: serialize/deserialize "
-      ],
-      [
-        "health_check",
-        "InMemory health check failed: %s"
-      ]
-    ],
     "template/rendering.py": [
       [
         "_jit_serialize_model",
@@ -469,32 +399,10 @@
         "[JIT] Serialization failed for '%s': %s"
       ]
     ],
-    "template_filters.py": [
-      [
-        "_ensure_custom_filters_bridged",
-        "Failed to bridge Django custom filters to Rust t"
-      ],
-      [
-        "bridge_library_filters",
-        "Failed to bridge custom filter '%s' to Rust regi"
-      ]
-    ],
     "template_tags/pwa.py": [
       [
         "_render_django_tag",
         "Error rendering {%% %s %%}"
-      ]
-    ],
-    "tenants/backends.py": [
-      [
-        "__init__",
-        "TenantAwareRedisBackend failed to connect: %s"
-      ]
-    ],
-    "tenants/resolvers.py": [
-      [
-        "_get_resolver",
-        "Failed to import custom tenant resolver %s: %s"
       ]
     ],
     "theming/context_processors.py": [
@@ -542,20 +450,6 @@
         "Rust extension unavailable; theme tags work via "
       ]
     ],
-    "tutorials/mixin.py": [
-      [
-        "_cleanup_active_step",
-        "Tutorial cleanup push failed: %s"
-      ],
-      [
-        "start_tutorial",
-        "Tutorial hide push failed: %s"
-      ],
-      [
-        "start_tutorial",
-        "Tutorial run failed at step %s: %s"
-      ]
-    ],
     "uploads/storage.py": [
       [
         "delete",
@@ -570,12 +464,6 @@
       [
         "get",
         "UploadStatusView: state store read failed for %s"
-      ]
-    ],
-    "websocket_utils.py": [
-      [
-        "_validate_event_security",
-        "Object-permission check raised non-PermissionDen"
       ]
     ]
   }

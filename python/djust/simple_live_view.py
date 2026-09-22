@@ -133,7 +133,7 @@ class SimpleLiveView(View):
                         template_auto_call_enabled(),
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 # The exception detail goes to the LOG, never to the response
                 # (CodeQL `py/stack-trace-exposure`, alert #2596; CWE-209).
                 #
@@ -161,7 +161,11 @@ class SimpleLiveView(View):
                 # one-line `str(e)` in a div. Nothing is DEBUG-gated any more,
                 # so dev and production return the same static string and there
                 # is no mode-dependent leak to reason about.
-                logger.exception("[SimpleLiveView] template render failed")
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger, (self,), exc, "[SimpleLiveView] template render failed", traceback=True
+                )
                 return "<div>An error occurred rendering this view.</div>"
         return "<div>Rust backend not available</div>"
 

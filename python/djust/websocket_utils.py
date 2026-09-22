@@ -318,12 +318,18 @@ async def _validate_event_security(
                 code="permission_denied",
             )
             return None
-        except Exception:  # noqa: BLE001 — fail-closed by design
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — fail-closed by design
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (owner_instance,),
+                exc,
                 "Object-permission check raised non-PermissionDenied exception "
                 "for %s on event %s; failing closed (denying)",
                 owner_instance.__class__.__name__,
                 sanitize_for_log(event_name or ""),
+                traceback=True,
             )
             await ws.send_error(
                 "Access denied for this object.",

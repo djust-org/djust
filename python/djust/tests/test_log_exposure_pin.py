@@ -553,6 +553,95 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "auth/core.py": (
+        {},
+        {
+            ("_check_django_access_mixins", "check_view_auth: could not restore .request on %"): (
+                "restores the mount request attribute"
+            ),
+        },
+    ),
+    "websocket_utils.py": (),
+    "decorators.py": (),
+    "tutorials/mixin.py": (),
+    "simple_live_view.py": (),
+    "security/error_handling.py": (
+        {
+            ("handle_exception", "%s%s: %s: %s"): (
+                "the detailed branch follows the `expose_details is True and diagnostics_allowed()` gate"
+            ),
+            ("handle_exception", "%s%s: %s: %s", 1): (
+                "the detailed branch follows the `expose_details is True and diagnostics_allowed()` gate"
+            ),
+            ("handle_exception", "%s%s: %s: %s", 2): (
+                "the detailed branch follows the `expose_details is True and diagnostics_allowed()` gate"
+            ),
+        },
+        {},
+    ),
+    "state_backends/memory.py": (
+        {
+            ("get", "InMemoryStateBackend.get: serialize/deserialize "): (
+                "legacy view cache; explicit initialization bypasses the backend"
+            ),
+        },
+        {
+            ("health_check", "InMemory health check failed: %s"): ("backend health check"),
+        },
+    ),
+    "db/decorators.py": (
+        {},
+        {
+            ("_on_delete", "notify_on_save: failed to emit NOTIFY for %s pk="): (
+                "NOTIFY emit on model delete"
+            ),
+            ("_on_save", "notify_on_save: failed to emit NOTIFY for %s pk="): (
+                "NOTIFY emit on model save"
+            ),
+        },
+    ),
+    "template_filters.py": (
+        {},
+        {
+            (
+                "_ensure_custom_filters_bridged",
+                "Failed to bridge Django custom filters to Rust t",
+            ): ("filter bridging"),
+            ("bridge_library_filters", "Failed to bridge custom filter '%s' to Rust regi"): (
+                "filter bridging"
+            ),
+        },
+    ),
+    "forms.py": (
+        {},
+        {
+            ("_ensure_model_instance", "Failed to re-hydrate model instance (label=%s, p"): (
+                "re-hydration names a model label and pk, not state"
+            ),
+        },
+    ),
+    "hot_view_replacement.py": (
+        {},
+        {
+            ("reload_module_if_liveview", "HVR: importlib.reload failed for %s"): (
+                "dev-only module reload"
+            ),
+        },
+    ),
+    "tenants/backends.py": (
+        {},
+        {
+            ("__init__", "TenantAwareRedisBackend failed to connect: %s"): ("Redis connection"),
+        },
+    ),
+    "tenants/resolvers.py": (
+        {},
+        {
+            ("_get_resolver", "Failed to import custom tenant resolver %s: %s"): (
+                "resolver import path from settings"
+            ),
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (
