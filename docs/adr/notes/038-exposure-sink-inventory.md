@@ -112,6 +112,12 @@ exception data — the exception in the arguments, `logger.exception`, or
 wrong set: it missed multi-line calls such as `db_notify` and `_run_tick`.)
 Every site is classified below by function; line numbers drift, names do not.
 
+The classification below is executable: `python/djust/tests/test_consumer_log_exposure_pin.py`
+scans `websocket.py` with the same AST rule and requires every site to
+appear in exactly one of its `HELPER`, `LEGACY_GATED`, `FRAMEWORK_ONLY` or
+`KNOWN_OPEN` tables, keyed by function and message literal. A new site
+fails until classified; a fixed open site fails until its entry is deleted.
+
 **Fixed — routed through `_log_view_hook_failure`.** The helper takes the
 call site's own `msg`/`args` and `traceback=True` for `logger.exception`, so
 legacy output is unchanged by construction; it checks the hook's view and the

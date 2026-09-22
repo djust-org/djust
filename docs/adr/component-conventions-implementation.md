@@ -3,6 +3,25 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Consumer log-exposure pin — E1 slice
+
+Fixing leak sites one at a time is a denylist: the next `logger.exception`
+added to consumer code reopens the risk silently — the omission problem
+ADR-038 cites against ADR-012. `test_consumer_log_exposure_pin.py` turns the
+inventory's classification into a structural pin. It scans `websocket.py` for
+every logging call that carries exception data and requires each to appear in
+exactly one table — `HELPER`, `LEGACY_GATED` (guard read), `FRAMEWORK_ONLY` or
+`KNOWN_OPEN` — with a reason, keyed by function and message literal so line
+drift does not matter. `KNOWN_OPEN` holds the 16 application-code sites not yet
+fixed and may only shrink.
+
+Mutation-checked three ways: reverting the cursor fix fails the pin naming
+the reintroduced site; renaming a message fails it as unclassified; fixing an
+open site without deleting its entry fails it as stale. A self-test pins the
+scanner against each carrying form, so the pin cannot pass by the scanner
+going blind. Only `websocket.py` is pinned; `runtime.py` routes its catches
+through `handle_exception` and has not been scanned the same way.
+
 ## Tick and NOTIFY hook diagnostics — E1 slice
 
 Recounting the consumer's exception-carrying log calls with an AST scan
