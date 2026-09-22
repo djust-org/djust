@@ -211,3 +211,54 @@ def test_explicit_server_persistence_under_explicit_parent_is_stored(rf):
     assert "Transient=1" in html
     stored = SessionStore(request.session.session_key).load()
     assert len(child_keys(stored)) == 1
+
+
+class RawViewProbe(TransientChild):
+    count = state(1)
+    secret = state("TRANSIENT_SECRET_SENTINEL")
+    template = "<div>Count={{ count }}|{{ view.raw_attr }}|{{ view.secret }}</div>"
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.raw_attr = "RAW_VIEW_ATTR_SENTINEL"
+
+
+class LegacyRawViewProbe(LiveView):
+    template = "<div>{{ view.raw_attr }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.raw_attr = "RAW_VIEW_ATTR_SENTINEL"
+
+
+def test_transient_explicit_child_template_gets_no_raw_view(rf):
+    """ADR-038 D2: the raw instance is not a default template value in explicit mode."""
+    parent = ExplicitParent()
+    request = make_request(rf, SessionStore())
+    html = render(parent, request, f'{{% live_render "{MODULE}.RawViewProbe" view_id="p" %}}')
+    assert "Count=1" in html
+    assert "RAW_VIEW_ATTR_SENTINEL" not in html
+    assert "TRANSIENT_SECRET_SENTINEL" not in html
+
+
+def test_legacy_non_sticky_child_template_still_gets_view(rf):
+    """Legacy control: the Phase A non-sticky render keeps ``view`` in context."""
+    parent = LiveView()
+    request = make_request(rf, SessionStore())
+    html = render(parent, request, f'{{% live_render "{MODULE}.LegacyRawViewProbe" %}}')
+    assert "RAW_VIEW_ATTR_SENTINEL" in html
+
+
+def test_lazy_explicit_refusal_builds_no_child(rf, monkeypatch):
+    built = []
+    monkeypatch.setattr(
+        TransientChild, "get_context_data", lambda self, **kw: built.append(self) or {}
+    )
+    monkeypatch.setattr(TransientChild, "mount", lambda self, request, **kw: built.append(self))
+    parent = ExplicitParent()
+    with pytest.raises(TemplateSyntaxError):
+        render(
+            parent,
+            make_request(rf, SessionStore()),
+            f'{{% live_render "{MODULE}.TransientChild" lazy=True %}}',
+        )
+    assert built == []

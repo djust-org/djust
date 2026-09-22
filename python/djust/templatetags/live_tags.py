@@ -1824,6 +1824,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "{% live_render %} a non-sticky explicit-exposure child is transient "
                 "and cannot declare persisted state."
             )
+        if preferred_view_id is not None:
+            if not isinstance(preferred_view_id, str):
+                raise TemplateSyntaxError(
+                    "{% live_render %} view_id must be a string for an explicit-exposure child."
+                )
+            # Template literals arrive as SafeString; the identity is exact-str.
+            preferred_view_id = str.__str__(preferred_view_id)
     sticky_id_value = None
     if sticky_kwarg:
         if getattr(child_cls, "sticky", False) is not True:
