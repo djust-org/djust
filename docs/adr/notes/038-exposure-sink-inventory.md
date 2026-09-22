@@ -156,10 +156,11 @@ component jump and forward replay (`restore_snapshot`,
 view before any re-render); `disconnect`'s upload cleanup (runs only when
 the view was not disposed as nonlegacy).
 
-**Open — application code, not yet reproduced or fixed:** `_run_async_work` (`start_async` callback and
-`handle_async_result`);
-`_maybe_push_tt_event`;
-and `handle_bug_capture_share`.
+**Open — application code, not yet reproduced or fixed:** `_run_async_work`
+(`start_async` callback and `handle_async_result`), unreachable from the
+NOTIFY drain until its dropped-`start_async` defect is fixed and to be fixed
+with it; and `handle_bug_capture_share`. The pin's `KNOWN_OPEN` tables are the
+authoritative list.
 
 **Framework-only** (message not derived from application values):
 `_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm

@@ -339,3 +339,65 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class TimeTravelPushView(LiveView):
+    exposure_policy = "legacy"
+    time_travel_enabled = True
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_time_travel_push_failure_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """The consumer's ``_maybe_push_tt_event`` (DEBUG-only) logged a failed push
+    with ``logger.exception``. Synthetic trigger: the recorded snapshot's
+    ``to_dict`` raises; the test records that it was reached."""
+    from djust.time_travel import EventSnapshot
+
+    calls = []
+
+    def failing_to_dict(self):
+        calls.append(True)
+        raise ValueError("TT_PUSH_SENTINEL")
+
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(TimeTravelPushView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".TimeTravelPushView", "url": "/tt/"}
+            )
+            await _drain(socket)
+            monkeypatch.setattr(EventSnapshot, "to_dict", failing_to_dict)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
+                await _drain(socket)
+            assert calls, "the time-travel push never ran; the test would be vacuous"
+            if policy == "legacy":
+                assert "time_travel: failed to push event frame" in caplog.text
+                assert "TT_PUSH_SENTINEL" in caplog.text
+            else:
+                assert "TT_PUSH_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

@@ -104,7 +104,6 @@ KNOWN_OPEN = {
     ("_run_async_work", "[djust] Error in handle_async_result for task '%"): (
         "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
     ),
-    ("_maybe_push_tt_event", "time_travel: failed to push event frame"): "not yet verified",
     ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
 }
 

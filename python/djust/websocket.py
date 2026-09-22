@@ -3988,8 +3988,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "components": components_mirror,
                 }
             )
-        except Exception:  # noqa: BLE001 — dev-only, degrade silently
-            logger.exception("time_travel: failed to push event frame")
+        except Exception as exc:  # noqa: BLE001 — dev-only, degrade silently
+            self._log_view_hook_failure(
+                view, exc, "time_travel: failed to push event frame", traceback=True
+            )
 
     def _build_time_travel_state(
         self,

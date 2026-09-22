@@ -252,6 +252,15 @@ legacy and explicit save paths share, and the test records that the save
 reached it. The sticky-child save has the identical shape and is converted
 without its own reproduction. 5 open (4 consumer, 1 runtime).
 
+The consumer's `_maybe_push_tt_event` (DEBUG-only time-travel push) logged a
+failed push with `logger.exception`. For explicit views the snapshot is already
+the redacted debug projection, so the realistic exposure is small, but the
+catch printed the traceback for any policy. Reproduced with the snapshot's
+`to_dict` stubbed to raise (synthetic; the test records it was reached) and now
+logged through `_log_view_hook_failure`. 4 open (3 consumer, 1 runtime): the two
+`_run_async_work` sites blocked on the dropped-`start_async` defect,
+`handle_bug_capture_share`, and scoped component render.
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a
