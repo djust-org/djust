@@ -5,6 +5,11 @@ with ``exc_info``, and under ``DEBUG`` returned it to the client together with
 ``traceback.format_exc()`` and the posted ``params``. The HTTP path serves
 explicit views (it has ``legacy_exposure`` branches throughout), so an explicit
 view's exception text reached both the log and the response.
+
+Contract (ADR-038 D-a, revised 2026-09-22): under ``DEBUG=False`` an explicit
+view's failure is value-free in both the response and the log. Under
+``DEBUG=True`` it reads like Django's own DEBUG output, exactly as a legacy
+view's does: exception text and traceback in the response and the log.
 """
 
 import json
@@ -45,13 +50,14 @@ def _request(rf, session, method="get"):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("debug", [True, False])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 def test_http_event_failure_is_value_free_for_explicit_views(
-    monkeypatch, rf, settings, caplog, policy
+    monkeypatch, rf, settings, caplog, policy, debug
 ):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(HTTPFailureView, "exposure_policy", policy)
-    settings.DEBUG = True
+    settings.DEBUG = debug
     session = SessionStore()
     assert HTTPFailureView.as_view()(_request(rf, session)).status_code == 200
 
@@ -63,9 +69,18 @@ def test_http_event_failure_is_value_free_for_explicit_views(
     body = response.content.decode()
     assert response.status_code == 500, body
 
-    if policy == "legacy":
-        # Unchanged legacy behaviour: DEBUG detail in the response, detail in the log.
-        assert "HTTP_EVENT_SENTINEL" in json.loads(body)["error"]
+    if debug:
+        # Legacy (unchanged) and, under DEBUG, explicit too: Django-like
+        # detail in the response and in the log, traceback included.
+        payload = json.loads(body)
+        assert "HTTP_EVENT_SENTINEL" in payload["error"]
+        assert "HTTP_EVENT_SENTINEL" in payload["traceback"]
+        assert "Traceback" in payload["traceback"]
+        assert "HTTP_EVENT_SENTINEL" in caplog.text
+        assert "Protected view operation failed" not in caplog.text
+    elif policy == "legacy":
+        # Unchanged legacy production behaviour: generic response, detail in the log.
+        assert "HTTP_EVENT_SENTINEL" not in body
         assert "HTTP_EVENT_SENTINEL" in caplog.text
     else:
         assert "HTTP_EVENT_SENTINEL" not in body

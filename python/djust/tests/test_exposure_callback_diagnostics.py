@@ -1,4 +1,10 @@
-"""Callback failures retain legacy diagnostics without exposing protected values."""
+"""Callback failures retain legacy diagnostics without exposing protected values.
+
+Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
+nonlegacy owner's callback failure logs value-free. Under ``DEBUG=True`` every
+owner's failure logs its exception like a legacy owner's. Tests without a
+``debug`` parameter run under pytest-django's default ``DEBUG=False``.
+"""
 
 import json
 from collections import deque
@@ -53,7 +59,9 @@ async def test_callback_diagnostic_destinations(monkeypatch, caplog, debug, hook
             transport.on_event_recorded = fail
             await runtime._push_tt_event(owner, object())
     assert called == [True]
-    assert ("CALLBACK_DIAGNOSTIC_SENTINEL" in caplog.text) == (initial == final == "legacy")
+    assert ("CALLBACK_DIAGNOSTIC_SENTINEL" in caplog.text) == (
+        initial == final == "legacy" or debug
+    )
     assert "CALLBACK_DIAGNOSTIC_SENTINEL" not in json.dumps(transport.sent)
     assert tracebacks.get_recent_tracebacks(50) == []
 
@@ -104,7 +112,7 @@ async def test_waiter_diagnostic_destinations(monkeypatch, caplog, debug, route,
         else:
             await runtime._dispatch_single_event(owner, "explode", {"stage": "render"})
     assert called == [True]
-    assert ("WAITER_DIAGNOSTIC_SENTINEL" in caplog.text) == (initial == final == "legacy")
+    assert ("WAITER_DIAGNOSTIC_SENTINEL" in caplog.text) == (initial == final == "legacy" or debug)
     assert "WAITER_DIAGNOSTIC_SENTINEL" not in json.dumps(transport.sent)
 
 
@@ -232,7 +240,7 @@ async def test_component_waiter_failure_is_protected_without_losing_injection(
         )
     assert component.received == 7
     assert called == [("click", {"component_id": "probe", "value": 7})]
-    assert ("COMPONENT_WAITER_SENTINEL" in caplog.text) == (initial == final == "legacy")
+    assert ("COMPONENT_WAITER_SENTINEL" in caplog.text) == (initial == final == "legacy" or debug)
     assert "COMPONENT_WAITER_SENTINEL" not in json.dumps(transport.sent)
 
 
@@ -263,7 +271,8 @@ async def test_sticky_child_waiter_failure_is_protected(
         transport.sent.clear()
         await increment(runtime)
     assert called == [("increment", {"mode": "ok"})]
-    assert "CHILD_WAITER_SENTINEL" not in caplog.text
+    # The child starts explicit, so only DEBUG allows its failure's detail.
+    assert ("CHILD_WAITER_SENTINEL" in caplog.text) == debug
     assert "CHILD_WAITER_SENTINEL" not in json.dumps(transport.sent)
 
 
@@ -357,7 +366,7 @@ async def test_native_mixin_catches_preserve_progress_without_exposing_errors(
             )
             assert called == [("first", {"value": 7}), ("second", {"value": 8})]
             assert not owner._deferred_activity_events
-    assert ("NATIVE_CALLBACK_SENTINEL" in caplog.text) == (initial == final == "legacy")
+    assert ("NATIVE_CALLBACK_SENTINEL" in caplog.text) == (initial == final == "legacy" or debug)
 
 
 @pytest.mark.asyncio
