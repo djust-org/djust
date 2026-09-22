@@ -125,6 +125,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_explicit_child_render_scope",
         "_explicit_child_rendered_full",
         "_explicit_child_state_tracked",
+        # ADR-038 E2-1: the keys registered providers rendered this pass.
+        "_explicit_context_provider_keys",
         "_djust_child_disposed",
         "_async_task_handles",
         "_async_tasks",

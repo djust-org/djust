@@ -10,6 +10,7 @@ from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
+from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
 from ..utils import is_model_list
 
@@ -122,6 +123,9 @@ def _is_json_serializable(value: Any) -> bool:
 
 class ContextMixin:
     """Context methods: get_context_data, _get_context_processors, _apply_context_processors."""
+
+    # ADR-038 E2-0: the providers the explicit base context renders.
+    _djust_context_providers = (components_provider, actions_provider, STREAMS_PROVIDER)
 
     if TYPE_CHECKING:
         # Cooperating attributes/methods supplied by the host class (LiveView)
@@ -485,6 +489,7 @@ class ContextMixin:
         from inspect import getattr_static
 
         from .._exposure import ExposureError
+        from .._exposure_providers import STREAMS_PROVIDER, new_render_context
         from ..components.base import LiveComponent
 
         policy = getattr(self, "exposure_policy", None)
@@ -492,6 +497,13 @@ class ContextMixin:
             raise ExposureError("Unknown context exposure policy")
         if "view" in kwargs or "streams" in kwargs:
             raise ExposureError("Explicit context contains a reserved framework name")
+        # Every provider key is declared in the class's manifest (E2-0). The
+        # render context enforces ownership so a later application write or
+        # kwarg can never silently replace a provider value, or be replaced.
+        context = new_render_context(self)
+        manifest = context._djust_manifest
+        if any(key in manifest for key in kwargs):
+            raise ExposureError("Explicit context provider collision")
         cached = getattr(self, "_cached_context", None)
         if cached is not None:
             if type(cached) is not dict or "view" in cached:
@@ -501,7 +513,15 @@ class ContextMixin:
             )
             if providers.intersection(kwargs):
                 raise ExposureError("Explicit context provider collision")
-            return {**cached, **kwargs}
+            # Cached provider values keep their owner, so the mixin that
+            # provided them may provide them again on this pass.
+            for key, value in cached.items():
+                if key in providers and key in manifest:
+                    context._provide(manifest[key], key, value)
+                else:
+                    dict.__setitem__(context, key, value)
+            context.update(kwargs)
+            return context
 
         reset_ids = getattr(self, "reset_unique_ids", None)
         if callable(reset_ids):
@@ -509,13 +529,6 @@ class ContextMixin:
         clear_providers = getattr(self, "clear_context_providers", None)
         if callable(clear_providers):
             clear_providers()
-
-        context: Dict[str, Any] = {}
-
-        def provide(name: str, value: Any) -> None:
-            if type(name) is not str or name == "view" or name in context or name in kwargs:
-                raise ExposureError("Explicit context provider collision or reserved name")
-            context[name] = value
 
         # The descriptor registry is a framework declaration manifest, not an
         # attribute discovery mechanism. Reject stale/shadowed entries BEFORE
@@ -529,19 +542,21 @@ class ContextMixin:
                 or getattr_static(type(self), name) is not declaration
             ):
                 raise ExposureError("Component context provider no longer matches its declaration")
-            provide(name, declaration.__get__(self, type(self)))
+            context._provide("djust.components", name, declaration.__get__(self, type(self)))
 
         # Action/stream render namespaces are registered by their framework
         # APIs. They grant rendering permission only, never persistence/client.
         for name, action_state in (getattr(self, "_action_state", None) or {}).items():
-            provide(name, action_state)
+            if type(name) is not str:
+                raise ExposureError("Undeclared explicit context provider key")
+            context._provide("djust.actions", name, action_state)
         get_streams = getattr(self, "_get_streams_context", None)
         if callable(get_streams):
             streams = get_streams()
             if streams:
-                provide("streams", streams)
+                context._provide(STREAMS_PROVIDER.name, "streams", streams)
 
-        self._explicit_context_provider_keys = frozenset(context)
+        self._explicit_context_provider_keys = context.provider_keys()
         context.update(kwargs)
         self._jit_serialized_keys = set()
         return context

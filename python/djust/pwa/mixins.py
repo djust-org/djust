@@ -9,11 +9,18 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+from .._exposure import ProviderContract
+from .._exposure_providers import provide_context
 from .storage import get_storage_backend, OfflineAction, OfflineStorage, SyncQueue
 from .sync import SyncManager
 from .utils import is_online, get_connection_info
 
 logger = logging.getLogger(__name__)
+
+
+#: ADR-038 E2-1: render-only PWA and offline context keys.
+PWA_PROVIDER = ProviderContract("djust.pwa", rendered=frozenset({"pwa_config"}))
+OFFLINE_PROVIDER = ProviderContract("djust.offline", rendered=frozenset({"offline_state"}))
 
 
 class PWAMixin:
@@ -47,6 +54,7 @@ class PWAMixin:
     pwa_orientation: str = "any"
     pwa_start_url: str = "/"
     pwa_scope: str = "/"
+    _djust_context_providers = (PWA_PROVIDER,)
 
     if TYPE_CHECKING:
         # Provided by LiveView at runtime when this mixin is combined with it.
@@ -141,7 +149,7 @@ class PWAMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        context["pwa_config"] = self.get_pwa_config()
+        provide_context(self, context, PWA_PROVIDER.name, "pwa_config", self.get_pwa_config())
         return context
 
 
@@ -179,6 +187,8 @@ class OfflineMixin:
     if TYPE_CHECKING:
         # Provided by LiveView at runtime when this mixin is combined with it.
         def push_event(self, event: str, payload: Dict[str, Any]) -> None: ...
+
+    _djust_context_providers = (OFFLINE_PROVIDER,)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -400,7 +410,9 @@ class OfflineMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        context["offline_state"] = self.get_offline_state()
+        provide_context(
+            self, context, OFFLINE_PROVIDER.name, "offline_state", self.get_offline_state()
+        )
         return context
 
 
