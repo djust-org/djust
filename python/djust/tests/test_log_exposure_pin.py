@@ -163,9 +163,70 @@ RUNTIME_FRAMEWORK_ONLY = {
 
 RUNTIME_KNOWN_OPEN = {}
 
+# Smaller modules. An empty table still pins the module: a new exception-
+# carrying log call there fails the test until it is classified.
+MIXIN_TABLES = {
+    "live_view.py": (
+        {
+            (
+                "_capture_components_snapshot",
+                "time_travel: component snapshot failed for id=%s",
+            ): (
+                "_capture_snapshot_state returns the explicit projection before "
+                "reaching the component snapshot"
+            ),
+        },
+        {
+            ("__init__", "time_travel: failed to allocate buffer"): "buffer allocation",
+        },
+    ),
+    "mixins/sticky.py": (
+        {
+            ("_on_sticky_unmount", "sticky _on_sticky_unmount: cancel_async_all() fa"): (
+                "inside `if uses_legacy_exposure(self)`"
+            ),
+            ("_preserve_sticky_children", "sticky child %s _on_sticky_unmount raised"): (
+                "nonlegacy auth-denied children go to dispose_child_subtree first"
+            ),
+            ("_unregister_child", "child view %s _cleanup_on_unregister raised"): (
+                "nonlegacy children go to dispose_child_subtree and return first"
+            ),
+        },
+    ),
+    "mixins/rust_bridge.py": (
+        {},
+        {
+            (
+                "_get_cached_template_hash_slot",
+                "[LiveView] compute_template_hash failed; cache k",
+            ): "template hashing",
+        },
+    ),
+    "mixins/activity.py": (
+        {
+            (
+                "_flush_deferred_activity_events_inner",
+                "dj_activity: deferred event %r on %s raised duri",
+            ): "inside `if diagnostics_allowed()` after restricting to both owners",
+        },
+    ),
+    "mixins/waiters.py": (
+        {
+            ("_notify_waiters_inner", "wait_for_event predicate for %r raised %r — trea"): (
+                "inside `if diagnostics_allowed()` after restricting to the view"
+            ),
+        },
+    ),
+    # assign_async's runners and the SSE deferred flush now log through
+    # log_failure_for; nothing raw remains.
+    "mixins/async_work.py": (),
+    "sse.py": (),
+}
+
 PINNED = {
     "websocket.py": (HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
     "runtime.py": (RUNTIME_LEGACY_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
+    **MIXIN_TABLES,
 }
 
 _LEVELS = {"debug", "info", "warning", "error", "exception", "critical"}
@@ -245,7 +306,7 @@ def test_classification_tables_do_not_overlap(module):
 @pytest.mark.parametrize("module", sorted(PINNED))
 def test_every_exception_carrying_log_call_is_classified(module):
     found = _exception_carrying_log_sites((PACKAGE / module).read_text())
-    declared: set = set().union(*(table.keys() for table in PINNED[module]))
+    declared: set = set().union(set(), *(table.keys() for table in PINNED[module]))
     unclassified = sorted(found - declared, key=str)
     stale = sorted(declared - found, key=str)
     assert not unclassified, (

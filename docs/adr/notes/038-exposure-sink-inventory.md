@@ -193,8 +193,10 @@ only `handle_exception` consults `diagnostics_allowed()`. Scanned counts:
 `runtime.py` 26, `time_travel.py` 10, `mixins/request.py` 5,
 `mixins/async_work.py` 4, `mixins/sticky.py` 3, `live_view.py` 2, and one each
 in `sse.py`, `mixins/rust_bridge.py`, `mixins/activity.py` and
-`mixins/waiters.py`. `runtime.py` is now pinned alongside `websocket.py`;
-the other modules are not yet classified.
+`mixins/waiters.py`. Pinned now: `websocket.py`, `runtime.py`, `live_view.py`,
+`sse.py`, and the `sticky`, `rust_bridge`, `activity`, `waiters` and
+`async_work` mixins. Not yet classified: `time_travel.py` and
+`mixins/request.py`.
 
 `runtime.py`'s 26 sites (two identical sticky-unmount messages in
 `on_mount_render_ready` are keyed separately): **10 legacy-gated**, each by a

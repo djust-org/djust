@@ -93,3 +93,24 @@ def log_failure(
         getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
     else:
         log.error("Protected view operation failed")
+
+
+def log_failure_for(
+    log: Any,
+    owners: tuple[Any, ...],
+    exc: BaseException,
+    msg: str,
+    *args: Any,
+    level: str = "error",
+    traceback: bool = False,
+) -> None:
+    """:func:`log_failure` for code that runs outside a runtime turn.
+
+    Opens a scope restricted to each owner — any nonlegacy owner restricts, none
+    grants — so background tasks, consumer hooks and SSE flushes that have no
+    turn scope of their own still log value-free for a nonlegacy owner.
+    """
+    with diagnostic_scope():
+        for owner in owners:
+            restrict_diagnostics(owner)
+        log_failure(log, exc, msg, *args, level=level, traceback=traceback)

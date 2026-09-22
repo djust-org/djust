@@ -445,3 +445,101 @@ async def test_scoped_component_render_failure_honours_a_restricted_turn(
     else:
         assert "Scoped render of component 'nav' failed; full render" in caplog.text
         assert "SCOPED_RENDER_SENTINEL" in caplog.text
+
+
+LOADER_CALLS = []
+
+
+def _failing_loader():
+    LOADER_CALLS.append(True)
+    raise ValueError("ASSIGN_ASYNC_SENTINEL")
+
+
+class AssignAsyncView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+    # Declared so the runner may store the errored AsyncResult on an explicit
+    # view; otherwise that setattr could fail first and skip the log line.
+    data = state(None)
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def load(self, **kwargs):
+        self.assign_async("data", _failing_loader)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """``assign_async``'s runners log a failed loader's exception text. They run
+    as background tasks, and ``_execute_async_task`` opens no diagnostic scope,
+    so the log needs its own owner check."""
+    import asyncio
+
+    LOADER_CALLS.clear()
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(AssignAsyncView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".AssignAsyncView", "url": "/aa/"}
+            )
+            await _drain(socket)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to({"type": "event", "event": "load", "params": {}})
+                await _drain(socket)
+                for _ in range(40):
+                    if "assign_async loader for data raised" in caplog.text or (
+                        LOADER_CALLS and "Protected view operation failed" in caplog.text
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
+            assert LOADER_CALLS, "the loader never ran; the test would be vacuous"
+            if policy == "legacy":
+                assert "assign_async loader for data raised: ASSIGN_ASYNC_SENTINEL" in caplog.text
+            else:
+                assert "ASSIGN_ASYNC_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_sse_deferred_callback_failure_is_value_free_for_explicit_views(caplog, policy):
+    """The third ``_flush_deferred`` twin, ``sse._flush_deferred_to_sse``, logged
+    the exception, traceback and ``repr(callback)``. Driven directly: it is a
+    module function over a view, and the view is the only owner it has."""
+    import functools
+    from types import SimpleNamespace
+
+    from djust.sse import _flush_deferred_to_sse
+
+    def fail(arg):
+        raise ValueError("SSE_DEFER_EXC_SENTINEL")
+
+    callbacks = [(functools.partial(fail, "SSE_DEFER_ARG_SENTINEL"), (), {})]
+    view = SimpleNamespace(exposure_policy=policy, _drain_deferred=lambda: list(callbacks))
+    with caplog.at_level(logging.DEBUG):
+        await _flush_deferred_to_sse(view)
+    if policy == "legacy":
+        assert "SSE_DEFER_EXC_SENTINEL" in caplog.text
+        assert "SSE_DEFER_ARG_SENTINEL" in caplog.text
+    else:
+        assert "SSE_DEFER_EXC_SENTINEL" not in caplog.text
+        assert "SSE_DEFER_ARG_SENTINEL" not in caplog.text
+        assert "Protected view operation failed" in caplog.text

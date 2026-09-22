@@ -3736,12 +3736,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         :func:`log_failure`, which keeps the call site's message, level and
         traceback wherever details are allowed.
         """
-        from ._exposure_diagnostics import diagnostic_scope, log_failure, restrict_diagnostics
+        from ._exposure_diagnostics import log_failure_for
 
-        with diagnostic_scope():
-            restrict_diagnostics(view)
-            restrict_diagnostics(self.view_instance)
-            log_failure(logger, exc, msg, *args, level=level, traceback=traceback)
+        log_failure_for(
+            logger, (view, self.view_instance), exc, msg, *args, level=level, traceback=traceback
+        )
 
     def _has_live_sticky_children(self) -> bool:
         """True if the parent view currently holds at least one registered

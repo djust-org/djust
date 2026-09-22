@@ -407,15 +407,32 @@ class AsyncWorkMixin:
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    from .._exposure_diagnostics import log_failure_for
+
+                    # The loader is application code and this runs as a
+                    # background task with no turn scope, so the owner check
+                    # is explicit (ADR-038).
                     if _superseded():
-                        logger.debug(
+                        log_failure_for(
+                            logger,
+                            (self,),
+                            exc,
                             "assign_async(%s) raised but superseded — discarding: %s",
                             name,
                             exc,
+                            level="debug",
                         )
                         return
                     setattr(self, name, AsyncResult.errored(exc))
-                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "assign_async loader for %s raised: %s",
+                        name,
+                        exc,
+                        level="debug",
+                    )
 
             self.start_async(_async_runner, name=f"assign_async:{name}")
         else:
@@ -428,14 +445,31 @@ class AsyncWorkMixin:
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    from .._exposure_diagnostics import log_failure_for
+
+                    # The loader is application code and this runs as a
+                    # background task with no turn scope, so the owner check
+                    # is explicit (ADR-038).
                     if _superseded():
-                        logger.debug(
+                        log_failure_for(
+                            logger,
+                            (self,),
+                            exc,
                             "assign_async(%s) raised but superseded — discarding: %s",
                             name,
                             exc,
+                            level="debug",
                         )
                         return
                     setattr(self, name, AsyncResult.errored(exc))
-                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "assign_async loader for %s raised: %s",
+                        name,
+                        exc,
+                        level="debug",
+                    )
 
             self.start_async(_sync_runner, name=f"assign_async:{name}")

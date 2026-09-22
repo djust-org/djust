@@ -403,12 +403,18 @@ async def _flush_deferred_to_sse(view_instance: Any) -> None:
             result = callback(*args, **kwargs)
             if inspect.iscoroutine(result):
                 await result
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view_instance,),
+                exc,
                 "[djust SSE] Deferred callback %s on %s raised; continuing to next",
                 getattr(callback, "__qualname__", repr(callback)),
                 view_instance.__class__.__name__,
-                exc_info=True,
+                level="warning",
+                traceback=True,
             )
 
 

@@ -298,6 +298,27 @@ drain until the dropped-`start_async` defect is fixed. 2 open (2 consumer,
 0 runtime). The other ~28 raw log sites in `time_travel.py`,
 `mixins/request.py`, `mixins/async_work.py` and elsewhere are still unpinned.
 
+Seven more modules are now pinned. Of their 13 exception-carrying log sites,
+6 are legacy-gated by guards read in place (three sticky hooks, the time-travel
+component snapshot, the activity drain and waiter predicates), 2 are
+framework-only (time-travel buffer allocation, template hashing), and 5 were
+open and are fixed:
+
+- `assign_async`'s four runner catches logged a failed loader's exception text.
+  They run as background tasks and `_execute_async_task` opens no diagnostic
+  scope, so `log_failure` alone would still have leaked; they use the new
+  `log_failure_for(log, owners, …)`, which opens a scope restricted to its
+  owners. Reproduced end to end (explicit from mount; `data` declared so the
+  errored result can be stored).
+- `sse._flush_deferred_to_sse`, the third deferred-callback twin, with the same
+  `repr(callback)` channel. Unit-level: the module function is driven directly
+  over a view.
+
+The consumer's `_log_view_hook_failure` now delegates to `log_failure_for`.
+`mixins/async_work.py` and `sse.py` are pinned with empty tables, so a new raw
+exception log there fails the pin (mutation-checked). Still unpinned:
+`time_travel.py` (10) and `mixins/request.py` (5).
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a
