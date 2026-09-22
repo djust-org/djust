@@ -122,10 +122,13 @@ class OfflineStorage(ABC):
 
 class IndexedDBStorage(OfflineStorage):
     """
-    IndexedDB-based storage backend.
+    Server-side in-process storage named after IndexedDB.
 
-    Provides large storage capacity and structured data support.
-    Requires JavaScript bridge for browser API access.
+    Despite the name, nothing here reaches the browser: values are JSON strings
+    in a dict held in this Python process's memory (``_js_bridge``), lost on
+    restart and not shared between workers. There is no JavaScript bridge. The
+    client's real IndexedDB is managed by the service worker, not by this class.
+    It is the default backend for ``SyncQueue``.
     """
 
     def __init__(self, storage_name: str, version: int = 1, **kwargs: Any) -> None:
@@ -136,7 +139,7 @@ class IndexedDBStorage(OfflineStorage):
 
     def _get_js_bridge(self) -> Dict[str, Any]:
         """
-        Get JavaScript bridge for IndexedDB operations.
+        Return the in-process dict that stands in for IndexedDB.
 
         Note: This is a server-side in-memory simulation of IndexedDB.
         Actual IndexedDB operations happen client-side (service worker).
