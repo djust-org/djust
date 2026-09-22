@@ -680,10 +680,14 @@ class ContextMixin:
                     if not supplied:
                         continue
                     for key in reserved.intersection(supplied):
-                        # A processor may repeat the very object the provider
-                        # supplied (djust.tenants.context_processor next to
-                        # TenantMixin); any other value is a collision.
-                        if key not in result or supplied[key] is not result[key]:
+                        # A processor may repeat what the provider supplied:
+                        # the same object, or an equal one (the stock
+                        # djust.tenants.context_processor re-resolves the
+                        # tenant next to TenantMixin). The provider's value is
+                        # kept either way; anything else is a collision.
+                        if key not in result or not _same_provider_value(
+                            supplied[key], result[key]
+                        ):
                             raise ExposureError("Context processor reserved provider collision")
                     for key, value in supplied.items():
                         if key not in result:
@@ -767,3 +771,13 @@ class ContextMixin:
         if all_succeeded:
             _resolved_processors_cache[cache_key] = resolved
         return resolved
+
+
+def _same_provider_value(supplied: Any, provided: Any) -> bool:
+    """Whether a context processor merely repeats a provider's own value."""
+    if supplied is provided:
+        return True
+    try:
+        return bool(supplied == provided) and type(supplied) is type(provided)
+    except Exception:  # noqa: BLE001 — an unequal-by-error value is a collision
+        return False

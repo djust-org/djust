@@ -530,8 +530,12 @@ def identical_tenant_processor(request):
 
 
 def other_tenant_processor(request):
-    """An equal-looking but distinct tenant, as a re-resolving processor gives."""
-    return {"tenant": TenantInfo("alpha", name="PROCESSOR_SENTINEL")}
+    """A different tenant than the view's: a genuine collision.
+
+    (A re-resolved *equal* tenant is accepted; see
+    ``test_tenant_processor_supplying_another_value``'s equal-copy case.)
+    """
+    return {"tenant": TenantInfo("beta", name="PROCESSOR_SENTINEL")}
 
 
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
@@ -565,8 +569,11 @@ def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, polic
     assert value is not view._tenant
     view._get_context_processors = lambda: []
     view._get_resolved_processors = lambda paths: [lambda request: {"tenant": value}]
-    if policy == "legacy":
-        # Control: the view's value wins silently and the processor ran.
+    equal = isinstance(value, type(view._tenant)) and value == view._tenant
+    if policy == "legacy" or equal:
+        # Legacy control: the view's value wins silently. An equal value (the
+        # stock tenant processor re-resolving the same tenant) is accepted
+        # under explicit too, and the provider's own object is kept.
         result = view._apply_context_processors(context, rf.get("/"))
         assert result["tenant"] is view._tenant
     else:
