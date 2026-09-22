@@ -42,6 +42,9 @@ def _make_consumer(render_return):
     """Minimal consumer wired to drive ``_run_async_work`` deterministically."""
     consumer = LiveViewConsumer()
     consumer.view_instance = MagicMock()
+    # A real LiveView declares its policy; a Mock's auto-attribute would
+    # read as an invalid policy and fail closed (ADR-038).
+    consumer.view_instance.exposure_policy = "legacy"
     consumer.view_instance._djust_child_disposed = False
     consumer.view_instance._async_work_generation = 0
     consumer.view_instance._skip_render = False
