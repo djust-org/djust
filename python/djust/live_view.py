@@ -254,6 +254,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     from ._exposure_diagnostics import (
         diagnostic_scope,
         diagnostics_allowed,
+        protected_http_outcome,
         protected_server_error,
         restrict_diagnostics,
     )
@@ -267,11 +268,13 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                 restrict_diagnostics(cls)
                 try:
                     return await view(request, *args, **kwargs)
-                except Exception:
-                    if diagnostics_allowed():
+                except Exception as exc:
+                    outcome = protected_http_outcome(exc)
+                    if diagnostics_allowed() or outcome == "raise":
                         raise
+                    del exc
             # Outside the except block: the signal's exception has no context.
-            return await sync_to_async(protected_server_error)(request, logger)
+            return await sync_to_async(protected_server_error)(request, logger, outcome)
 
         markcoroutinefunction(protected_async)
         return protected_async
@@ -282,10 +285,12 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
             restrict_diagnostics(cls)
             try:
                 return view(request, *args, **kwargs)
-            except Exception:
-                if diagnostics_allowed():
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
                     raise
-        return protected_server_error(request, logger)
+                del exc
+        return protected_server_error(request, logger, outcome)
 
     return protected
 

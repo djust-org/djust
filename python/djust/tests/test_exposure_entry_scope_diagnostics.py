@@ -29,7 +29,9 @@ from collections import deque
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.core.exceptions import SuspiciousOperation
 from django.core.signals import got_request_exception
+from django.http import Http404
 from django.test import AsyncClient, Client, override_settings
 from django.urls import path
 
@@ -46,6 +48,10 @@ STATIC_LOG = "Protected view operation failed"
 
 
 def _fail(view, stage):
+    if type(view).fail_at == f"{stage}:bad_request":
+        raise SuspiciousOperation(f"{SENTINEL} raised at {stage}")
+    if type(view).fail_at == f"{stage}:not_found":
+        raise Http404(f"{SENTINEL} raised at {stage}")
     if type(view).fail_at == stage:
         secret_local = SENTINEL  # a frame local, as a technical 500 page would show
         raise ValueError(f"{secret_local} raised at {stage}")
@@ -231,6 +237,34 @@ async def test_streaming_http_get_failure(monkeypatch, caplog, signals, policy, 
         _assert_generic_500(response, body)
         assert STATIC_LOG in caplog.text
         _assert_value_free_signal(signals)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("policy", POLICIES)
+def test_http_get_status_exceptions(monkeypatch, caplog, signals, policy):
+    """Django's status mapping survives: 400 stays 400, 404 stays 404.
+
+    Under DEBUG Django answers a ``SuspiciousOperation`` with its technical
+    page (status 400, frames and locals); a nonlegacy owner gets a plain 400.
+    ``Http404`` keeps Django's 404 handling for every policy.
+    """
+    url = f"/entry/{POLICIES.index(policy)}/"
+    monkeypatch.setattr(EntryView, "fail_at", "mount:bad_request")
+    caplog.clear()
+    response = Client(raise_request_exception=False).get(url)
+    body = response.content.decode()
+    assert response.status_code == 400
+    if policy == "legacy":
+        assert SENTINEL in body
+        assert "Traceback" in body
+    else:
+        assert (SENTINEL in body, SENTINEL in caplog.text) == (False, False)
+        assert "Traceback" not in body
+        assert STATIC_LOG in caplog.text
+    assert signals == []
+
+    monkeypatch.setattr(EntryView, "fail_at", "mount:not_found")
+    assert Client(raise_request_exception=False).get(url).status_code == 404
 
 
 # --------------------------------------------------------------------------- #

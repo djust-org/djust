@@ -133,7 +133,11 @@ def test_cookie_backend_rejects_server_persistence(staged, rf):
 
     session = CookieStore()
     with pytest.raises(ExposureError, match="server-side"):
-        HTTPView.as_view()(request(rf, session))
+        server_state_adapter(HTTPView(), request(rf, session))
+    # Through the HTTP entry the refusal is a generic 500 (ADR-038 D-a).
+    response = HTTPView.as_view()(request(rf, session))
+    assert response.status_code == 500
+    assert b"server-side" not in response.content
     assert "SENTINEL" not in json.dumps(dict(session.items()))
 
 

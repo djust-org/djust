@@ -605,6 +605,7 @@ class DjustSSEStreamView(View):
         from ._exposure_diagnostics import (
             diagnostic_scope,
             diagnostics_allowed,
+            protected_http_outcome,
             protected_server_error,
             watch_diagnostic_owner,
         )
@@ -624,13 +625,17 @@ class DjustSSEStreamView(View):
                         "params": mount_params,
                     }
                 )
-            except Exception:
-                if diagnostics_allowed():
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
                     raise
                 protected_failure = True
+                del exc
         if protected_failure:
             session.shutdown()
-            return cast(HttpResponse, await sync_to_async(protected_server_error)(request, logger))
+            return cast(
+                HttpResponse, await sync_to_async(protected_server_error)(request, logger, outcome)
+            )
         mounted = session.runtime.view_instance is not None
         if mounted:
             _sse_sessions[session_id] = session
@@ -861,6 +866,7 @@ class DjustSSEMessageView(View):
         from ._exposure_diagnostics import (
             diagnostic_scope,
             diagnostics_allowed,
+            protected_http_outcome,
             protected_server_error,
         )
 
@@ -870,12 +876,16 @@ class DjustSSEMessageView(View):
         with diagnostic_scope():
             try:
                 await session.dispatch(request, body)
-            except Exception:
-                if diagnostics_allowed():
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
                     raise
                 protected_failure = True
+                del exc
         if protected_failure:
-            return cast(HttpResponse, await sync_to_async(protected_server_error)(request, logger))
+            return cast(
+                HttpResponse, await sync_to_async(protected_server_error)(request, logger, outcome)
+            )
         return JsonResponse({"ok": True})
 
 

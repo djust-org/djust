@@ -153,7 +153,26 @@ def _generic_server_error(request: Any, log: Any) -> Any:
         return HttpResponseServerError("<h1>Server Error (500)</h1>", content_type="text/html")
 
 
-def protected_server_error(request: Any, log: Any) -> Any:
+def protected_http_outcome(exc: BaseException) -> str:
+    """Classify a nonlegacy owner's escaping HTTP failure (ADR-038 D-a).
+
+    ``"raise"``: ``Http404`` and ``PermissionDenied`` keep Django's 404/403
+    handling, which renders no frames or locals. ``"bad_request"``: the
+    exceptions Django answers with 400 (under ``DEBUG`` through the technical
+    page). ``"server_error"``: everything else.
+    """
+    from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
+    from django.http import Http404
+    from django.http.multipartparser import MultiPartParserError
+
+    if isinstance(exc, (Http404, PermissionDenied)):
+        return "raise"
+    if isinstance(exc, (BadRequest, SuspiciousOperation, MultiPartParserError)):
+        return "bad_request"
+    return "server_error"
+
+
+def protected_server_error(request: Any, log: Any, outcome: str = "server_error") -> Any:
     """ADR-038 D-a: the HTTP/SSE response for a nonlegacy owner's failure.
 
     Call it after the failing ``except`` block has exited. It logs a static
@@ -161,11 +180,17 @@ def protected_server_error(request: Any, log: Any) -> Any:
     :class:`ExposureError` is being handled (receivers such as error trackers
     read ``sys.exc_info()``; it has no cause, context or application frames),
     and returns the project's generic 500 page. Django's DEBUG technical page,
-    which shows the exception and its frames' locals, is never rendered.
+    which shows the exception and its frames' locals, is never rendered. An
+    ``outcome`` of ``"bad_request"`` (see :func:`protected_http_outcome`)
+    returns a plain 400 instead, without the signal, as Django does.
     """
     from django.core.signals import got_request_exception
+    from django.http import HttpResponseBadRequest
 
     log.error(PROTECTED_FAILURE)
+    if outcome == "bad_request":
+        # Django sends no signal for a 400 either.
+        return HttpResponseBadRequest("<h1>Bad Request (400)</h1>", content_type="text/html")
     try:
         raise ExposureError(PROTECTED_FAILURE) from None
     except ExposureError:
