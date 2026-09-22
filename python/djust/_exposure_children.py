@@ -84,6 +84,7 @@ def child_state_adapter(
             base.binding,
             tuple(reversed(slots)),
             {"ancestry": list(reversed(inputs))},
+            max_age=base.max_age,
         )
     except ExposureError:
         raise

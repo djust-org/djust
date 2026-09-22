@@ -215,6 +215,21 @@ def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> An
     return walk(value, 0)
 
 
+def declared_schema_version(view_class: type) -> int:
+    """Read an application's ``exposure_schema_version`` without descriptors.
+
+    Bumping it changes the schema digest, so stored envelopes from the older
+    contract are rejected (and the view remounts) unless the view opts into an
+    explicit ``migrate_state`` translation (ADR-038 D-j).
+    """
+    from inspect import getattr_static
+
+    value = getattr_static(view_class, "exposure_schema_version", 1)
+    if type(value) is not int or not 0 < value <= 2**31 - 1:
+        raise ExposureError("exposure_schema_version must be a positive integer")
+    return value
+
+
 @dataclass(frozen=True)
 class ExposureContract:
     """Immutable, purpose-specific field selection and schema checking.
@@ -231,7 +246,7 @@ class ExposureContract:
     schema: str = field(init=False)
 
     @classmethod
-    def from_view_class(cls, view_class: type, *, version: int = 1) -> "ExposureContract":
+    def from_view_class(cls, view_class: type, *, version: int | None = None) -> "ExposureContract":
         """Compile descriptors without evaluating defaults, properties or annotations.
 
         Inherited exposure grants require redeclaring the field in the concrete
@@ -255,6 +270,8 @@ class ExposureContract:
                         "Inherited exposure grants require explicit field redeclaration"
                     )
                 fields[name] = policy
+        if version is None:
+            version = declared_schema_version(view_class)
         return cls(f"{view_class.__module__}.{view_class.__qualname__}", fields, version=version)
 
     def __post_init__(self) -> None:
