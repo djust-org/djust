@@ -275,6 +275,15 @@ This exposed a gap in the pin: it scans logging calls, not client error frames
 that interpolate an exception (`send_error("…%s" % exc)`). That pattern is not
 yet inventoried. 3 open (2 consumer, 1 runtime).
 
+That gap is now pinned for direct interpolation. An AST scan of `websocket.py`
+and `runtime.py` for `send_error` / `_send_debug_error` / `send_json` / `send`
+calls whose arguments name the caught exception finds four sites, all gated:
+three time-travel `_send_debug_error` calls reached only after a restore or
+replay that refuses nonlegacy views, and `handle_bug_capture_share`'s legacy
+branch. A new such site fails the pin (mutation-checked in
+`handle_cursor_move`). Indirect flows — `detail = str(exc)` passed later — are
+not visible to the scan.
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

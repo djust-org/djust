@@ -300,3 +300,88 @@ def f(self):
         logger.exception("same")
 """
     assert _exception_carrying_log_sites(sample) == {("f", "same"), ("f", "same", 1)}
+
+
+# --------------------------------------------------------------------------
+# Client frames that interpolate an exception reach the browser, not just the
+# log. Direct interpolation (the exception name inside the send call's
+# arguments) is pinned the same way; an indirect flow such as
+# ``detail = str(exc)`` passed later is not visible to this scan.
+# --------------------------------------------------------------------------
+
+CLIENT_FRAME_SENDERS = {"send_error", "_send_debug_error", "send_json", "send"}
+
+CLIENT_FRAME_LEGACY_GATED = {
+    "websocket.py": {
+        ("_handle_time_travel_jump_locked", "_send_debug_error"): (
+            "re-render runs only after restore_snapshot, which refuses a nonlegacy view"
+        ),
+        ("_handle_time_travel_component_jump_locked", "_send_debug_error"): (
+            "re-render runs only after restore_component_snapshot, which refuses nonlegacy"
+        ),
+        ("_handle_forward_replay_locked", "_send_debug_error"): (
+            "re-render runs only after replay_event, which refuses a nonlegacy view"
+        ),
+        ("handle_bug_capture_share", "send_error"): (
+            "inside `if uses_legacy_exposure(view) or isinstance(exc, ExposureError)`"
+        ),
+    },
+    "runtime.py": {},
+}
+
+
+def _exception_interpolating_client_frames(source: str) -> set:
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def enclosing(node, kinds):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, kinds):
+                return node
+        return None
+
+    sites = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in CLIENT_FRAME_SENDERS:
+            continue
+        names = set()
+        cursor = node
+        while cursor in parents:
+            cursor = parents[cursor]
+            if isinstance(cursor, ast.ExceptHandler) and cursor.name:
+                names.add(cursor.name)
+        if not names:
+            continue
+        values = list(node.args) + [kw.value for kw in node.keywords]
+        if any(
+            isinstance(sub, ast.Name) and sub.id in names for v in values for sub in ast.walk(v)
+        ):
+            fn = enclosing(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            sites.add((fn.name if fn else "<module>", node.func.attr))
+    return sites
+
+
+@pytest.mark.parametrize("module", sorted(CLIENT_FRAME_LEGACY_GATED))
+def test_every_exception_interpolating_client_frame_is_classified(module):
+    found = _exception_interpolating_client_frames((PACKAGE / module).read_text())
+    declared = set(CLIENT_FRAME_LEGACY_GATED[module])
+    assert found == declared, (
+        f"{module}: client frames interpolating an exception must be gated for "
+        f"nonlegacy owners and classified here. New: {sorted(found - declared)}; "
+        f"stale: {sorted(declared - found)}"
+    )
+
+
+def test_client_frame_scanner_sees_direct_interpolation():
+    sample = """
+async def f(self):
+    try:
+        pass
+    except Exception as exc:
+        await self.send_error("x: %s" % exc)
+        await self.send_error("generic")
+"""
+    assert _exception_interpolating_client_frames(sample) == {("f", "send_error")}

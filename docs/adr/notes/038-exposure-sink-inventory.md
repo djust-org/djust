@@ -163,7 +163,9 @@ with it. The pin's `KNOWN_OPEN` tables are the authoritative list.
 
 The pin does not cover client error frames that interpolate an exception
 (`send_error("…%s" % exc)`); `handle_bug_capture_share` did exactly that and is
-fixed, but the pattern has not been inventoried elsewhere.
+fixed. The pin now covers direct interpolation in client frames too: four
+sites in `websocket.py`, all legacy-gated; `runtime.py` has none. Indirect
+flows (`detail = str(exc)` passed later) are not visible to it.
 
 **Framework-only** (message not derived from application values):
 `_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm
