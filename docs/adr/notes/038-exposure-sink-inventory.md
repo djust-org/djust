@@ -201,9 +201,8 @@ are 286 exception-carrying log calls in 79 modules; the 214 in the other 70
 modules are unclassified and frozen in `tests/fixtures/log_exposure_unreviewed.json`
 under a ratchet (new sites fail; the baseline only shrinks). As of this
 writing every module is classified except 14 sites in 7 deliberately held modules;
-see the ledger. Unverified candidate sink: PWA `OfflineMixin.get_cached_or_fetch`
-caches `queryset.values()` (all columns) into offline storage documented as
-mirrored to IndexedDB.
+see the ledger. The PWA offline cache was checked and is in-process server
+memory, not a browser-storage sink.
 
 `runtime.py`'s 26 sites (two identical sticky-unmount messages in
 `on_mount_render_ready` are keyed separately): **10 legacy-gated**, each by a

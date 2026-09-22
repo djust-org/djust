@@ -27,28 +27,6 @@
         "Sync endpoint error: %s"
       ]
     ],
-    "pwa/utils.py": [
-      [
-        "cleanup_old_data",
-        "Cleanup failed: %s"
-      ],
-      [
-        "cleanup_old_data",
-        "Error checking key %s during cleanup: %s"
-      ],
-      [
-        "compress_state",
-        "Failed to compress state: %s"
-      ],
-      [
-        "decompress_state",
-        "Failed to decompress state: %s"
-      ],
-      [
-        "merge_offline_changes",
-        "Merge failed: %s"
-      ]
-    ],
     "serialization.py": [
       [
         "_rehydrate_component",

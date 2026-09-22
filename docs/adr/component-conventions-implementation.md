@@ -329,14 +329,19 @@ on purpose**: `components/base.py`, `components/suspense.py`,
 reference), `template/rendering.py` (its JIT pair not yet traced to a legacy
 guard), and `pwa/sync.py` / `pwa/utils.py` (below).
 
-**Open E1 question, not verified end to end.** `OfflineMixin.get_cached_or_fetch`
+**PWA offline cache — resolved, not a browser sink.** `OfflineMixin.get_cached_or_fetch`
 caches `list(queryset.values())` — every column of the model, with no field
-allowlist, bypassing `serialization.py`'s sensitive-field floor — into
-`OfflineStorage`. Its `IndexedDBStorage` backend describes itself as a
-server-side simulation whose "actual IndexedDB operations happen client-side
-(service worker)". If those bytes reach the browser, this is an unclassified
-browser-storage sink for legacy and explicit views alike. The JS bridge has
-not been traced; the inventory should gain a row once it is.
+allowlist — into `OfflineStorage`, whose `IndexedDBStorage` docstring says
+"actual IndexedDB operations happen client-side (service worker)". Traced: its
+`_get_js_bridge` is an in-process Python dict ("used for server-side state
+tracking and testing"), no `push_event` or template ships the cached data, and
+the only IndexedDB code in the client bundle is the resumable-upload module. So
+the cache is server memory, which D1 permits; the docstring overstates a
+client counterpart that does not exist. `pwa/utils.py` is pinned
+framework-only. Still held, with corrected reasons: `pwa/sync.py` runs
+application conflict resolvers with no view owner, and `template/rendering.py`
+is djust's Django template backend, which JIT-serializes whatever context its
+caller supplies and has no LiveView owner reference.
 
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing

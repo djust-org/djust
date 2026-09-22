@@ -1077,6 +1077,31 @@ MIXIN_TABLES = {
             ("get", "UploadStatusView: state store read failed for %s"): "upload status store read",
         },
     ),
+    "pwa/utils.py": (
+        {},
+        {
+            (
+                "cleanup_old_data",
+                "Cleanup failed: %s",
+            ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
+            (
+                "cleanup_old_data",
+                "Error checking key %s during cleanup: %s",
+            ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
+            (
+                "compress_state",
+                "Failed to compress state: %s",
+            ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
+            (
+                "decompress_state",
+                "Failed to decompress state: %s",
+            ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
+            (
+                "merge_offline_changes",
+                "Merge failed: %s",
+            ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (
