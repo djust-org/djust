@@ -960,6 +960,23 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
+// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
+// identity marker is compared before anything from this mount is cached, so a
+// changed or vanished identity clears the previous identity's caches first.
+function applyServiceWorkerMountMetadata(data) {
+    if (!data || data.type !== 'mount') return;
+    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+    }
+    try {
+        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
+            window.djust._sw.syncIdentity(data.sw_identity);
+        }
+    } catch (_e) {
+        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -1269,6 +1286,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        applyServiceWorkerMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -1452,10 +1470,13 @@ class LiveViewWebSocket {
                     // is present and we actually have HTML from the
                     // server (skipped when the client used pre-rendered
                     // HTTP content).
+                    // ADR-038 D-b: a page the server marks ineligible
+                    // (explicit exposure) is never written to the cache.
+                    // E3-8: keyed by pathname + query.
                     try {
-                        if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                        if (data.sw_cache !== 'no-store' && window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
-                                ? window.location.pathname
+                                ? window.location.pathname + window.location.search
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
@@ -2570,6 +2591,8 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        // Defined in 03-websocket.js; guarded for module-isolated loads.
+        if (typeof applyServiceWorkerMountMetadata === 'function') applyServiceWorkerMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -12259,7 +12282,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
@@ -12386,11 +12409,12 @@ window.djust.getActiveStreams = getActiveStreams;
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
-        const fromUrl = window.location.pathname;
+        // ADR-038 E3-8: service-worker caches key on pathname + query.
+        const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         // Move the active-nav highlight immediately (the URL is now current),
         // rather than waiting for the WS mount round-trip. (#1756)
@@ -12573,7 +12597,10 @@ window.djust.getActiveStreams = getActiveStreams;
         // live_redirect still remounts, but it is no longer the only signal:
         // the entry the browser created on load has no state at all.
         const cameFrom = _renderedPathname;
-        _setRenderedPathname(url.pathname);
+        // ADR-038 E3-8: the cache key of the page being left includes its query.
+        const cameFromKey = _renderedCacheKey;
+        const destinationKey = url.pathname + url.search;
+        _setRenderedPathname(url.pathname, url.search);
         const isRedirect = (event.state && event.state.redirect) || url.pathname !== cameFrom;
 
         if (isRedirect) {
@@ -12588,7 +12615,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 // Popstate has already changed location. Capture/invalidate
                 // the page we are leaving before looking up the destination.
                 window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                    detail: { fromUrl: cameFrom, toUrl: url.pathname },
+                    detail: { fromUrl: cameFromKey, toUrl: url.pathname },
                 }));
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
@@ -12605,7 +12632,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 // the DOM shortly after.
                 try {
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
-                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        const vdomReply = await window.djust._sw.lookupVdom(destinationKey);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
@@ -12625,7 +12652,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 let stateSnapshot = null;
                 try {
                     if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
-                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(destinationKey);
                     } else if (window.djust && window.djust._pendingStateSnapshot) {
                         // Back-compat fallback — if the older async-race
                         // slot happens to be populated, honor it.
@@ -12697,7 +12724,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // WebSocket patch — pushState + url_change for selects, inputs, links, buttons
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         window.history.pushState({ djust: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         const allParams = Object.fromEntries(newUrl.searchParams);
         liveViewWS.sendMessage({
@@ -12909,7 +12936,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 return;
             }
             window.history.pushState({ djust: true }, '', url.pathname + url.search);
-            _setRenderedPathname(url.pathname);
+            _setRenderedPathname(url.pathname, url.search);
             liveViewWS.sendMessage({
                 type: 'url_change',
                 params: Object.fromEntries(url.searchParams),
@@ -12941,9 +12968,16 @@ window.djust.getActiveStreams = getActiveStreams;
      */
     let _renderedPathname =
         typeof window !== 'undefined' && window.location ? window.location.pathname : '';
+    // ADR-038 E3-8: pathname + query of the rendered page, the key its
+    // service-worker cache entries are stored under.
+    let _renderedCacheKey =
+        typeof window !== 'undefined' && window.location
+            ? window.location.pathname + window.location.search
+            : '';
 
-    function _setRenderedPathname(pathname) {
+    function _setRenderedPathname(pathname, search) {
         _renderedPathname = pathname;
+        _renderedCacheKey = pathname + (typeof search === 'string' ? search : '');
     }
 
     let _autoNavigateInstalled = false;
@@ -16450,6 +16484,65 @@ window.djust.bindModelElements = bindModelElements;
         return navigator.serviceWorker.controller;
     }
 
+    // ADR-038 E3-8: one cache key for every VDOM/state capture and lookup —
+    // pathname plus query string, so /orders?page=1 and /orders?page=2 never
+    // share an entry. Origin and fragment are dropped. Every bridge function
+    // below normalizes through here, so callers may pass a path, a
+    // path+query or an absolute same-origin URL.
+    function cacheKey(url) {
+        if (typeof url !== 'string' || !url) return url;
+        try {
+            const parsed = new URL(url, window.location.href);
+            return parsed.pathname + parsed.search;
+        } catch (_e) {
+            return url;
+        }
+    }
+
+    // ADR-038 D-n: the server's value-free identity marker (an HMAC digest of
+    // the session/user binding; never a raw id) arrives on each mount frame.
+    // When it differs from the stored one, or disappears (logout), every
+    // worker cache written under the previous identity is cleared. The
+    // worker queues these clears ahead of any later write or lookup.
+    const IDENTITY_STORAGE_KEY = 'djust:sw-identity';
+
+    function clearCaches() {
+        const ctrl = _swController();
+        if (!ctrl) return false;
+        ctrl.postMessage({ type: 'DJUST_CLEAR_STATE_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_VDOM_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_SHELL' });
+        return true;
+    }
+
+    function syncIdentity(marker) {
+        const current = typeof marker === 'string' && marker ? marker : null;
+        let stored;
+        try {
+            stored = window.localStorage.getItem(IDENTITY_STORAGE_KEY);
+        } catch (_e) {
+            // Unreadable storage cannot prove the identity is unchanged.
+            stored = undefined;
+        }
+        if (stored === current) return;
+        // Without a controller there is nothing to clear yet; keep the old
+        // marker so the comparison happens once a worker controls the page.
+        if (!clearCaches()) return;
+        try {
+            if (current === null) window.localStorage.removeItem(IDENTITY_STORAGE_KEY);
+            else window.localStorage.setItem(IDENTITY_STORAGE_KEY, current);
+        } catch (_e) {
+            // Storage unavailable: the next mount clears again (fails closed).
+        }
+    }
+
+    // ADR-038 D-n: the server's snapshot max age (seconds), learned from the
+    // mount frame; the worker falls back to its documented 3600s default.
+    function _stateMaxAge() {
+        const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
+        return typeof value === 'number' && value > 0 ? value : undefined;
+    }
+
     function initVdomCache() {
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
@@ -16501,7 +16594,7 @@ window.djust.bindModelElements = bindModelElements;
         if (!ctrl) return;
         ctrl.postMessage({
             type: 'VDOM_CACHE',
-            url: url,
+            url: cacheKey(url),
             html: html,
             version: typeof version === 'number' ? version : 0,
             ts: Date.now(),
@@ -16521,7 +16614,7 @@ window.djust.bindModelElements = bindModelElements;
             ctrl.postMessage({
                 type: 'VDOM_CACHE_LOOKUP',
                 requestId: rid,
-                url: url,
+                url: cacheKey(url),
             });
             // Safety timeout so callers are never stuck if the SW goes away.
             setTimeout(function () {
@@ -16549,7 +16642,7 @@ window.djust.bindModelElements = bindModelElements;
         }
         ctrl.postMessage({
             type: 'STATE_SNAPSHOT',
-            url: url,
+            url: cacheKey(url),
             view_slug: viewSlug,
             state_json: stateJson,
             ts: Date.now(),
@@ -16558,7 +16651,7 @@ window.djust.bindModelElements = bindModelElements;
 
     function forgetState(url) {
         const ctrl = _swController();
-        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: url });
+        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: cacheKey(url) });
     }
 
     function lookupState(url) {
@@ -16574,7 +16667,8 @@ window.djust.bindModelElements = bindModelElements;
             ctrl.postMessage({
                 type: 'STATE_SNAPSHOT_LOOKUP',
                 requestId: rid,
-                url: url,
+                url: cacheKey(url),
+                max_age_seconds: _stateMaxAge(),
             });
             setTimeout(function () {
                 // eslint-disable-next-line security/detect-object-injection
@@ -16667,6 +16761,9 @@ window.djust.bindModelElements = bindModelElements;
         captureState: captureState,
         forgetState: forgetState,
         lookupState: lookupState,
+        cacheKey: cacheKey,
+        syncIdentity: syncIdentity,
+        clearCaches: clearCaches,
     };
 })();
 
@@ -19014,10 +19111,12 @@ globalThis.djust.djTransitionGroup = {
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        const pathname = fromUrl
+        // ADR-038 E3-8: cache keys carry the query string; the route map
+        // is keyed by pathname alone.
+        const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
-                : '/');
+                : '/')).split('?')[0].split('#')[0];
         const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
         // `pathname` is derived from user-controllable URL state — walk
         // own entries via Object.entries instead of indexing with the
@@ -19056,9 +19155,10 @@ globalThis.djust.djTransitionGroup = {
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
+        // ADR-038 E3-8: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
-                ? window.location.pathname
+                ? window.location.pathname + window.location.search
                 : '/');
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
@@ -19084,7 +19184,7 @@ globalThis.djust.djTransitionGroup = {
         const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
         const url = (typeof window !== 'undefined' && window.location)
-            ? window.location.pathname
+            ? window.location.pathname + window.location.search
             : '/';
         bridge.lookupState(url).then(function (reply) {
             if (!reply || !reply.hit) {

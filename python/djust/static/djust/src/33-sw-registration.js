@@ -257,6 +257,65 @@
         return navigator.serviceWorker.controller;
     }
 
+    // ADR-038 E3-8: one cache key for every VDOM/state capture and lookup —
+    // pathname plus query string, so /orders?page=1 and /orders?page=2 never
+    // share an entry. Origin and fragment are dropped. Every bridge function
+    // below normalizes through here, so callers may pass a path, a
+    // path+query or an absolute same-origin URL.
+    function cacheKey(url) {
+        if (typeof url !== 'string' || !url) return url;
+        try {
+            const parsed = new URL(url, window.location.href);
+            return parsed.pathname + parsed.search;
+        } catch (_e) {
+            return url;
+        }
+    }
+
+    // ADR-038 D-n: the server's value-free identity marker (an HMAC digest of
+    // the session/user binding; never a raw id) arrives on each mount frame.
+    // When it differs from the stored one, or disappears (logout), every
+    // worker cache written under the previous identity is cleared. The
+    // worker queues these clears ahead of any later write or lookup.
+    const IDENTITY_STORAGE_KEY = 'djust:sw-identity';
+
+    function clearCaches() {
+        const ctrl = _swController();
+        if (!ctrl) return false;
+        ctrl.postMessage({ type: 'DJUST_CLEAR_STATE_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_VDOM_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_SHELL' });
+        return true;
+    }
+
+    function syncIdentity(marker) {
+        const current = typeof marker === 'string' && marker ? marker : null;
+        let stored;
+        try {
+            stored = window.localStorage.getItem(IDENTITY_STORAGE_KEY);
+        } catch (_e) {
+            // Unreadable storage cannot prove the identity is unchanged.
+            stored = undefined;
+        }
+        if (stored === current) return;
+        // Without a controller there is nothing to clear yet; keep the old
+        // marker so the comparison happens once a worker controls the page.
+        if (!clearCaches()) return;
+        try {
+            if (current === null) window.localStorage.removeItem(IDENTITY_STORAGE_KEY);
+            else window.localStorage.setItem(IDENTITY_STORAGE_KEY, current);
+        } catch (_e) {
+            // Storage unavailable: the next mount clears again (fails closed).
+        }
+    }
+
+    // ADR-038 D-n: the server's snapshot max age (seconds), learned from the
+    // mount frame; the worker falls back to its documented 3600s default.
+    function _stateMaxAge() {
+        const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
+        return typeof value === 'number' && value > 0 ? value : undefined;
+    }
+
     function initVdomCache() {
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
@@ -308,7 +367,7 @@
         if (!ctrl) return;
         ctrl.postMessage({
             type: 'VDOM_CACHE',
-            url: url,
+            url: cacheKey(url),
             html: html,
             version: typeof version === 'number' ? version : 0,
             ts: Date.now(),
@@ -328,7 +387,7 @@
             ctrl.postMessage({
                 type: 'VDOM_CACHE_LOOKUP',
                 requestId: rid,
-                url: url,
+                url: cacheKey(url),
             });
             // Safety timeout so callers are never stuck if the SW goes away.
             setTimeout(function () {
@@ -356,7 +415,7 @@
         }
         ctrl.postMessage({
             type: 'STATE_SNAPSHOT',
-            url: url,
+            url: cacheKey(url),
             view_slug: viewSlug,
             state_json: stateJson,
             ts: Date.now(),
@@ -365,7 +424,7 @@
 
     function forgetState(url) {
         const ctrl = _swController();
-        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: url });
+        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: cacheKey(url) });
     }
 
     function lookupState(url) {
@@ -381,7 +440,8 @@
             ctrl.postMessage({
                 type: 'STATE_SNAPSHOT_LOOKUP',
                 requestId: rid,
-                url: url,
+                url: cacheKey(url),
+                max_age_seconds: _stateMaxAge(),
             });
             setTimeout(function () {
                 // eslint-disable-next-line security/detect-object-injection
@@ -474,5 +534,8 @@
         captureState: captureState,
         forgetState: forgetState,
         lookupState: lookupState,
+        cacheKey: cacheKey,
+        syncIdentity: syncIdentity,
+        clearCaches: clearCaches,
     };
 })();
