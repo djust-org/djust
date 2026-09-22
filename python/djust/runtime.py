@@ -5030,7 +5030,41 @@ class ViewRuntime:
         if self.scope and "user" in self.scope:
             request.user = self.scope["user"]
 
+        await sync_to_async(self._attach_socket_tenant)(request)
         return request
+
+    def _attach_socket_tenant(self, request: Any) -> None:
+        """Resolve the tenant for a synthesized socket request, as HTTP does.
+
+        ``TenantMiddleware`` sets ``request.tenant`` on every HTTP request when
+        tenancy is configured; the request synthesized for a WebSocket mount
+        never had one. Explicit request binding refuses a configured tenancy
+        that silently disappears, so explicit WebSocket mounts failed in every
+        tenant-configured project. The resolver sees the handshake's headers
+        on a probe copy, so header-based resolution works while the request's
+        own ``META`` stays exactly as before. A resolver failure leaves
+        ``tenant`` unset, which explicit binding refuses (fail closed).
+        """
+        from copy import copy
+
+        from django.conf import settings
+
+        config = getattr(settings, "DJUST_CONFIG", None) or {}
+        if "TENANT_RESOLVER" not in config and not getattr(settings, "DJUST_TENANTS", None):
+            return
+        probe = copy(request)
+        probe.META = dict(request.META)
+        for raw_name, raw_value in (self.scope or {}).get("headers", ()) or ():
+            name = raw_name.decode("latin-1").upper().replace("-", "_")
+            if name in {"COOKIE", "HOST", "AUTHORIZATION"}:
+                continue
+            probe.META.setdefault("HTTP_" + name, raw_value.decode("latin-1"))
+        try:
+            from .tenants.resolvers import get_tenant_resolver
+
+            request.tenant = get_tenant_resolver().resolve(probe)
+        except Exception:  # noqa: BLE001 — unresolved tenancy stays visibly unresolved
+            logger.warning("Socket tenant resolution failed")
 
     async def _check_auth(self, request: Any) -> Optional[bool]:
         """Run the shared pre-mount security sequence. Returns:
