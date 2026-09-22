@@ -96,7 +96,17 @@ def _request_principal(request: Any) -> tuple[str, str]:
             "TENANT_RESOLVER" in (getattr(settings, "DJUST_CONFIG", None) or {})
         )
         if configured and not hasattr(request, "tenant"):
-            raise ExposureError("Configured tenant resolution is missing from the request")
+            # Tenancy configured without TenantMiddleware (views resolving
+            # their own tenant through TenantMixin) is supported: resolve it
+            # here with the configured resolver, as the middleware would. A
+            # resolver failure stays a refusal, never a silent "no tenant".
+            try:
+                from .tenants.resolvers import get_tenant_resolver
+
+                request.tenant = get_tenant_resolver().resolve(request)
+            except Exception:
+                raise ExposureError("Configured tenant resolution failed") from None
+            return _request_principal(request)
         tenant_id = "none"
     elif isinstance(tenant, TenantInfo):
         tenant_id = "tenant:" + _identity(tenant.id)

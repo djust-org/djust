@@ -111,3 +111,37 @@ async def test_legacy_socket_mount_is_unchanged_under_tenancy():
             assert (await socket.receive_json_from(timeout=3))["type"] in {"patch", "html_update"}
         finally:
             await socket.disconnect()
+
+
+@pytest.mark.parametrize("header,tenant_id", [("acme", "acme"), (None, None)])
+def test_explicit_http_binding_resolves_tenancy_without_middleware(rf, db, header, tenant_id):
+    """Tenancy configured without ``TenantMiddleware`` (views resolve their own
+    tenant through ``TenantMixin``) is a supported setup: explicit binding
+    resolves the tenant on demand instead of refusing every request."""
+    from djust._exposure_sessions import request_binding
+
+    extra = {"HTTP_X_TENANT_ID": header} if header else {}
+    request = rf.get("/t/", **extra)
+    request.user = AnonymousUser()
+    request.session = SessionStore()
+    request.session.create()
+    with override_settings(**TENANCY):
+        binding = request_binding(request)
+    assert binding.tenant == (f"tenant:str:{tenant_id}" if tenant_id else "none")
+
+
+def test_explicit_http_binding_fails_closed_when_the_resolver_fails(rf, db, monkeypatch):
+    from djust._exposure import ExposureError
+    from djust._exposure_sessions import request_binding
+
+    def broken():
+        raise RuntimeError("RESOLVER_SENTINEL")
+
+    monkeypatch.setattr("djust.tenants.resolvers.get_tenant_resolver", broken)
+    request = rf.get("/t/")
+    request.user = AnonymousUser()
+    request.session = SessionStore()
+    request.session.create()
+    with override_settings(**TENANCY), pytest.raises(ExposureError) as raised:
+        request_binding(request)
+    assert "RESOLVER_SENTINEL" not in str(raised.value)
