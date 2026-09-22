@@ -2954,6 +2954,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("upload_resume requires a ref")
             return
 
+        # ADR-038 decision D-g: an explicit view does not preserve uploads in
+        # flight across a reconnect. Answer exactly as for an unknown ref,
+        # without consulting the resumable state store, so the client falls
+        # back to a fresh ``upload_register``.
+        view = self.view_instance
+        if view is not None:
+            from ._exposure import uses_legacy_exposure
+
+            if not uses_legacy_exposure(view):
+                await self.send_json(
+                    {
+                        "type": "upload_resumed",
+                        "ref": upload_id,
+                        "status": "not_found",
+                        "bytes_received": 0,
+                        "chunks_received": [],
+                    }
+                )
+                return
+
         session_key = None
         try:
             session = self.scope.get("session") if hasattr(self, "scope") else None
