@@ -284,6 +284,20 @@ branch. A new such site fails the pin (mutation-checked in
 `handle_cursor_move`). Indirect flows — `detail = str(exc)` passed later — are
 not visible to the scan.
 
+`_render_scoped_component` (ADR-032) logged a failed component render with
+`exc_info` before its D6 fallback; its `try` covers `get_context_data` and the
+component's template. Now `log_failure` at DEBUG. The evidence is unit-level:
+the method runs inside a diagnostic scope restricted to a nonlegacy owner, as a
+runtime turn sets it up, and the log honours it (failing before the fix, the
+unrestricted control logging the sentinel). An end-to-end explicit-view
+reproduction needs bound components under the explicit policy, which is E2.
+
+`runtime.py` now has no open sites. The two that remain in the pinned modules
+are the consumer's `_run_async_work` catches, unreachable from the NOTIFY
+drain until the dropped-`start_async` defect is fixed. 2 open (2 consumer,
+0 runtime). The other ~28 raw log sites in `time_travel.py`,
+`mixins/request.py`, `mixins/async_work.py` and elsewhere are still unpinned.
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

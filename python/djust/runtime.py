@@ -5561,8 +5561,18 @@ class ViewRuntime:
             # the JSON decode of the patches. Route a large component through
             # ``sync_to_async`` before making it larger.
             result = patch(name, html)
-        except Exception:  # noqa: BLE001 — D6: fall back to the full render
-            logger.debug("Scoped render of component %r failed; full render", name, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — D6: fall back to the full render
+            from ._exposure_diagnostics import log_failure
+
+            # get_context_data and the component's template are application code.
+            log_failure(
+                logger,
+                exc,
+                "Scoped render of component %r failed; full render",
+                name,
+                level="debug",
+                traceback=True,
+            )
             return None
         if result is None:
             logger.debug("Scoped render of component %r not exact; full render", name)

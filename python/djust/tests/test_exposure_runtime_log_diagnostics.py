@@ -401,3 +401,47 @@ async def test_time_travel_push_failure_is_value_free_for_explicit_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", [False, True])
+async def test_scoped_component_render_failure_honours_a_restricted_turn(
+    monkeypatch, caplog, restricted
+):
+    """Unit-level evidence for ``ViewRuntime._render_scoped_component`` (ADR-032).
+
+    Its catch logged a failed component render with ``exc_info`` before falling
+    back to the full render. An end-to-end explicit-view reproduction needs bound
+    components under the explicit policy, which is ADR-038 E2 work; this drives
+    the method inside a diagnostic scope restricted to a nonlegacy owner, exactly
+    as a runtime turn sets it up, and checks the log honours it.
+    """
+    from types import SimpleNamespace
+
+    from djust._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+
+    from .test_component_scoped_render_2917 import OpaquePage, _mounted
+
+    view, runtime, _transport = _mounted(OpaquePage)
+    component = view.nav
+    calls = []
+
+    def failing_render(self, *args, **kwargs):
+        calls.append(True)
+        raise ValueError("SCOPED_RENDER_SENTINEL")
+
+    monkeypatch.setattr(type(component), "render", failing_render)
+    with caplog.at_level(logging.DEBUG):
+        with diagnostic_scope():
+            if restricted:
+                restrict_diagnostics(SimpleNamespace(exposure_policy="explicit"))
+            result = await runtime._render_scoped_component(view, component)
+
+    assert result is None, "a failed scoped render falls back to the full render (D6)"
+    assert calls, "the component render never ran; the test would be vacuous"
+    if restricted:
+        assert "SCOPED_RENDER_SENTINEL" not in caplog.text
+        assert "Protected view operation failed" in caplog.text
+    else:
+        assert "Scoped render of component 'nav' failed; full render" in caplog.text
+        assert "SCOPED_RENDER_SENTINEL" in caplog.text

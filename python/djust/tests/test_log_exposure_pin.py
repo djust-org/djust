@@ -161,11 +161,7 @@ RUNTIME_FRAMEWORK_ONLY = {
     ("_flush_accessibility", "Failed to flush focus command"): "frame send",
 }
 
-RUNTIME_KNOWN_OPEN = {
-    ("_render_scoped_component", "Scoped render of component %r failed; full rende"): (
-        "component templates are application code"
-    ),
-}
+RUNTIME_KNOWN_OPEN = {}
 
 PINNED = {
     "websocket.py": (HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN),

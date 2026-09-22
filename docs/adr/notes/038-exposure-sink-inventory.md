@@ -211,7 +211,8 @@ from mount, now `log_failure` at WARNING); the `full_html_update` Django signal
 re-auth checks (reclassified legacy-gated: only legacy views are re-checked); `state_snapshot_signed` emission (reclassified legacy-gated: a
 nonlegacy view reaches only the explicit branch, wrapped in its own catch); both
 post-event state saves (fixed: storage exceptions can carry `persist="server"`
-data; `log_failure`); scoped component render.
+data; `log_failure`); scoped component render (fixed, unit-level evidence; E2
+gates an end-to-end explicit reproduction).
 
 Fixed: `ViewRuntime._flush_pending_layout` now logs through
 `_exposure_diagnostics.log_failure` (reproduced, explicit from mount). Already
