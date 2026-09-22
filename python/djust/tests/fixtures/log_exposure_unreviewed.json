@@ -325,91 +325,10 @@
         "HVR: importlib.reload failed for %s"
       ]
     ],
-    "mixins/notifications.py": [
-      [
-        "_restore_listen_channels",
-        "NotificationMixin._restore_listen_channels: cros"
-      ],
-      [
-        "_restore_listen_channels",
-        "NotificationMixin._restore_listen_channels: fail",
-        1
-      ],
-      [
-        "_restore_listen_channels",
-        "NotificationMixin._restore_listen_channels: fail"
-      ],
-      [
-        "_restore_listen_channels",
-        "NotificationMixin._restore_listen_channels: retr"
-      ],
-      [
-        "listen",
-        "listen(%s): failed to start pg listener — %s"
-      ]
-    ],
-    "mixins/template.py": [
-      [
-        "_set_shell_sidecar",
-        "page-shell sidecar unavailable; object attribute"
-      ],
-      [
-        "arender_chunks",
-        "arender_chunks: lazy thunk raised for view_id=%s"
-      ],
-      [
-        "get_template",
-        "[LiveView] Template inheritance resolution faile"
-      ]
-    ],
     "observability/dry_run.py": [
       [
         "_uninstall",
         "DryRunContext failed to restore %s.%s: %s"
-      ]
-    ],
-    "observability/views.py": [
-      [
-        "eval_handler",
-        "eval_handler: handler call failed (TypeError) ha"
-      ],
-      [
-        "eval_handler",
-        "eval_handler: handler raised handler=%s"
-      ],
-      [
-        "eval_handler",
-        "eval_handler: invalid JSON body"
-      ],
-      [
-        "reset_view_state",
-        "reset_view_state: mount() raised for session %s"
-      ]
-    ],
-    "presence.py": [
-      [
-        "_broadcast_presence_change",
-        "PresenceMixin._broadcast_presence_change: push_t"
-      ],
-      [
-        "_refresh_online_count",
-        "PresenceMixin._refresh_online_count: %s"
-      ],
-      [
-        "_restore_presence",
-        "PresenceMixin._restore_presence: failed to re-re"
-      ],
-      [
-        "get_presence_key",
-        "Presence key format error: %s. Using unformatted"
-      ],
-      [
-        "track_presence",
-        "Error in handle_presence_join: %s"
-      ],
-      [
-        "untrack_presence",
-        "Error in handle_presence_leave: %s"
       ]
     ],
     "pwa/manifest.py": [
@@ -797,24 +716,6 @@
       [
         "start_tutorial",
         "Tutorial run failed at step %s: %s"
-      ]
-    ],
-    "updates.py": [
-      [
-        "check",
-        "update check failed"
-      ],
-      [
-        "refresh",
-        "update check failed"
-      ],
-      [
-        "run",
-        "background update check failed"
-      ],
-      [
-        "save_cache",
-        "update-check cache is not writable"
       ]
     ],
     "uploads/__init__.py": [

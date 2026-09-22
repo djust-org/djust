@@ -733,11 +733,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     # branch. Re-raising here would short-circuit that.
                     continue
                 if exc is not None:
-                    logger.exception(
+                    from .._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
                         "arender_chunks: lazy thunk raised for view_id=%s; "
                         "thunks should catch + emit error envelope themselves",
                         view_id,
-                        exc_info=exc,
+                        traceback=True,
                     )
                     continue
                 if chunk_bytes is None:
@@ -1231,11 +1236,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             from ..serialization import build_render_sidecar
 
             temp_rust.set_raw_py_values(build_render_sidecar(source))
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            from .._exposure_diagnostics import log_failure_for
+
+            # The sidecar is built from template-context values; a serialization
+            # error can carry them into the log (ADR-038).
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
                 "page-shell sidecar unavailable; object attribute lookups on the shell "
                 "will resolve as empty",
-                exc_info=True,
+                level="warning",
+                traceback=True,
             )
 
     @reconcile_child_render()

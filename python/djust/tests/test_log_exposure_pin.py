@@ -324,6 +324,76 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "presence.py": (
+        {},
+        {
+            ("_broadcast_presence_change", "PresenceMixin._broadcast_presence_change: push_t"): (
+                "channel-layer broadcast"
+            ),
+            ("_refresh_online_count", "PresenceMixin._refresh_online_count: %s"): (
+                "presence count refresh"
+            ),
+            ("_restore_presence", "PresenceMixin._restore_presence: failed to re-re"): (
+                "presence backend restore"
+            ),
+            ("get_presence_key", "Presence key format error: %s. Using unformatted"): (
+                "format error names the missing key, not values"
+            ),
+        },
+    ),
+    "mixins/template.py": (
+        {},
+        {
+            ("get_template", "[LiveView] Template inheritance resolution faile"): (
+                "template inheritance resolution over template files"
+            ),
+        },
+    ),
+    "mixins/notifications.py": (
+        {},
+        {
+            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: cros"): (
+                "PostgreSQL listener and channel names"
+            ),
+            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: fail"): (
+                "PostgreSQL listener and channel names"
+            ),
+            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: fail", 1): (
+                "PostgreSQL listener and channel names"
+            ),
+            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: retr"): (
+                "PostgreSQL listener and channel names"
+            ),
+            ("listen", "listen(%s): failed to start pg listener — %s"): (
+                "PostgreSQL listener and channel names"
+            ),
+        },
+    ),
+    "observability/views.py": (
+        {
+            ("eval_handler", "eval_handler: handler call failed (TypeError) ha"): (
+                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
+            ),
+            ("eval_handler", "eval_handler: handler raised handler=%s"): (
+                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
+            ),
+            ("reset_view_state", "reset_view_state: mount() raised for session %s"): (
+                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
+            ),
+        },
+        {
+            ("eval_handler", "eval_handler: invalid JSON body"): ("request body parse"),
+        },
+    ),
+    "updates.py": (
+        {},
+        {
+            ("check", "update check failed"): ("package update check"),
+            ("refresh", "update check failed"): ("package update check"),
+            ("run", "background update check failed"): ("package update check"),
+            ("save_cache", "update-check cache is not writable"): ("package update check"),
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (

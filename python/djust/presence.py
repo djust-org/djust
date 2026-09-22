@@ -340,7 +340,12 @@ class PresenceMixin:
             try:
                 self.handle_presence_join(presence_data)
             except Exception as e:
-                logger.exception("Error in handle_presence_join: %s", e)
+                from ._exposure_diagnostics import log_failure_for
+
+                # handle_presence_join is application code (ADR-038).
+                log_failure_for(
+                    logger, (self,), e, "Error in handle_presence_join: %s", e, traceback=True
+                )
 
     def _restore_presence(self) -> None:
         """Re-register this view's presence with the process-wide manager.
@@ -396,7 +401,12 @@ class PresenceMixin:
                 try:
                     self.handle_presence_leave(presence_data)
                 except Exception as e:
-                    logger.exception("Error in handle_presence_leave: %s", e)
+                    from ._exposure_diagnostics import log_failure_for
+
+                    # handle_presence_leave is application code (ADR-038).
+                    log_failure_for(
+                        logger, (self,), e, "Error in handle_presence_leave: %s", e, traceback=True
+                    )
 
         self._presence_tracked = False
         self._presence_user_id = None

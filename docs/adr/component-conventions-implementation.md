@@ -270,6 +270,18 @@ beyond this failure path. Separately noted: the thunk renders a
 channel left as is. `live_tags.py` is pinned (4 legacy-gated, 3
 framework-only); the baseline is 189 sites in 66 modules.
 
+Five more modules are pinned. `presence.py`'s `handle_presence_join` and
+`handle_presence_leave` calls are application hooks that logged failures with
+`logger.exception`; reproduced by driving `track_presence`/`untrack_presence`
+on a view (both hooks recorded as run) and fixed with `log_failure_for`.
+`mixins/template.py`'s `arender_chunks` thunk catch and page-shell sidecar
+catch (built from template-context values) are converted without their own
+reproductions. `observability/views.py`'s mount and handler catches follow
+`_mutation_policy_gate`, which refuses nonlegacy views; `mixins/notifications.py`
+and `updates.py` are framework-only. The ratchet flagged the converted
+`mixins/template.py` sites as stale before they were classified — it working
+as intended. The baseline is 167 sites in 61 modules.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.
