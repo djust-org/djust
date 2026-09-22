@@ -265,6 +265,34 @@ Required evidence:
 - Measure serialization/rendering cost and migration effort; no unsupported
   latency, CPU-saving, or "zero leakage" claims.
 
+## Completion decisions (2026-09-22)
+
+The gap analysis for finishing E1–E6 surfaced choices the gates leave to the
+maintainers. Each is adopted below as the working default for the completion
+work, so every slice tests against a stated contract. Each one is open for
+review on the completion PR; changing one means updating its slice, not just
+this table.
+
+| # | Question | Adopted default |
+| --- | --- | --- |
+| D-a | Explicit-view errors under DEBUG on the HTTP/SSE entry points | Generic 500 without values; Django's technical error page is not rendered for a nonlegacy owner. `got_request_exception` still fires, with a value-free exception. |
+| D-b | Service-worker VDOM and shell caches for explicit pages | Not written: explicit pages mark themselves ineligible and the client skips `cacheVdom` and shell capture. |
+| D-c | Presence metadata | Application output under D6 (the app passes it to `track_presence`); the rebroadcast is documented, and `track_presence` stops injecting `username`/`user_id` for explicit views. |
+| D-d | Observability SQL capture | Query parameters are redacted for nonlegacy owners. |
+| D-e | Form input and errors | Not persisted by default; opt-in per field; password-type widgets can never be persisted or appear in debug output. |
+| D-f | `@action` error text | A generic message for explicit views unless the handler raises a declared user-facing exception type. |
+| D-g | Uploads in flight across reconnect | Not preserved; the client re-registers (remount posture). |
+| D-h | Components assigned on the instance | A diagnostic naming the attribute at first explicit render; no automatic discovery. |
+| D-i | Codecs | v1 ships `json-primitives-v1` only. `Decimal`, dates, `UUID` and model references come later; nothing `repr`-based. |
+| D-j | Old or unindexed stored envelopes | Rejected, followed by a remount; session expiry cleans them up. No translation guesses. |
+| D-k | A background result whose authorization was revoked | Dropped; static error and close 4403, as for foreground events. |
+| D-l | Server-originated turns (tick, push, NOTIFY, `url_change`) on explicit views | Persist and refresh the signed snapshot through one shared post-turn commit. |
+| D-m | Lazy, non-sticky and mixed-policy explicit children | Non-sticky explicit children are supported as transient (not persisted) with the identity check. `lazy=True` on an explicit child is refused with a static tag error. Explicit server persistence under a legacy parent stays refused. |
+| D-n | Service-worker state cache lifetime | The worker enforces the snapshot max age on lookup and deletes expired entries; the client clears the state, VDOM and shell caches on identity change or logout. |
+| D-o | Actors under explicit policy | Excluded for v1: `use_actors` combined with `exposure_policy="explicit"` is rejected at configuration time, and the runtime refusals stay as a second line. This amends D6's "actor paths" coverage to "refused". |
+| D-p | Older clients | Explicit views require the client that speaks the `async_complete` batch protocol; mount checks it. |
+| D-q | `DjustLogSanitizerFilter` covers only the `djust` logger (#2947) | Outside ADR-038; tracked in #2947 and not an activation blocker. |
+
 ## Retirement (Step R — delete)
 
 The case for explicit exposure is that it *replaces* heuristic machinery rather

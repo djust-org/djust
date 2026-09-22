@@ -1404,8 +1404,9 @@ merged deletion PR or by a written account of why a named target survived.
   storage implementations, required session/user/tenant/route binding, envelope
   expiry, and a total envelope resource budget. Cookie sessions and unreviewed
   custom backends are rejected. The staged HTTP GET/POST path uses this adapter;
-  shared-runtime HTTP/WebSocket integration is described below. Sticky-child and
-  actor persistence integration remains pending.
+  shared-runtime HTTP/WebSocket integration is described below. Sticky-child
+  persistence was integrated later (*Parent-driven child persistence*); actors
+  are refused for nonlegacy views (*Actor caller inventory*, decision D-o).
 - Debug integration now consumes the explicit projection in observability
   assigns, initial/event debug-panel variables and sizes, runtime no-patch
   context diagnostics, and time-travel recording. Time-travel parameters and
