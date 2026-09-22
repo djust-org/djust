@@ -279,7 +279,9 @@ class SyncManager:
                 except Exception as e:
                     log_failure(logger, e, "Batch sync failed: %s", e, traceback=True)
                     failed_count += len(batch)
-                    errors.append(f"Batch sync error: {str(e)}")
+                    # ADR-038: this list is returned by sync_endpoint_view, which has
+                    # no view owner, so the response names only the exception class.
+                    errors.append(f"Batch sync error: {type(e).__name__}")
 
         duration = time.time() - start_time
 

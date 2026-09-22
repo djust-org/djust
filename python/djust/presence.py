@@ -54,6 +54,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
 
+from ._exposure import uses_legacy_exposure
 from .decorators import event_handler
 from .push import push_to_view
 
@@ -283,6 +284,15 @@ class PresenceMixin:
         """
         Start tracking this user's presence.
 
+        ``meta`` is application output: it is stored in the presence backend,
+        returned to every peer by ``list_presences()`` and, with
+        :class:`LiveCursorMixin`, rebroadcast to the presence group on every
+        cursor move. Put in it only what every peer may see.
+
+        Legacy views also get the authenticated user's ``name`` (username) and
+        ``user_id`` filled in when absent. Under ``exposure_policy="explicit"``
+        (ADR-038 D-c) nothing is added: only the meta you pass is tracked.
+
         Args:
             meta: Metadata to associate with the user (name, color, avatar, etc.)
         """
@@ -308,9 +318,11 @@ class PresenceMixin:
         if meta is None:
             meta = {}
 
-        # Add default metadata
+        # Add default metadata (legacy only; ADR-038 D-c: peers see meta, so
+        # explicit views track exactly what the application passed).
         if (
-            hasattr(self, "request")
+            uses_legacy_exposure(self)
+            and hasattr(self, "request")
             and hasattr(self.request, "user")
             and self.request.user.is_authenticated
         ):
@@ -572,7 +584,12 @@ class LiveCursorMixin(PresenceMixin):
     """
 
     def update_cursor_position(self, x: int, y: int) -> None:
-        """Update cursor position for this user."""
+        """Update cursor position for this user.
+
+        Broadcasts ``{"user_id", "x", "y", "meta"}`` to every peer in the
+        presence group, where ``meta`` is what was passed to
+        ``track_presence`` (application output; see its docstring).
+        """
         if not self._presence_tracked or not self._presence_user_id:
             return
 

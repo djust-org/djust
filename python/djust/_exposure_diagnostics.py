@@ -114,3 +114,16 @@ def log_failure_for(
         for owner in owners:
             restrict_diagnostics(owner)
         log_failure(log, exc, msg, *args, level=level, traceback=traceback)
+
+
+def exception_details_allowed_for(owners: tuple[Any, ...]) -> bool:
+    """Whether exception text may reach a non-log destination for these owners.
+
+    The counterpart of :func:`log_failure_for` for sinks that are not log calls
+    (a client push, a stored error field): any nonlegacy owner, or an enclosing
+    restricted scope, makes the answer False; no owner grants details.
+    """
+    with diagnostic_scope():
+        for owner in owners:
+            restrict_diagnostics(owner)
+        return diagnostics_allowed()

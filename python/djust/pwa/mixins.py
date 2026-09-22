@@ -509,9 +509,27 @@ class SyncMixin:
             from .._exposure_diagnostics import log_failure_for
 
             log_failure_for(logger, (self,), e, "Sync failed: %s", e, traceback=True)
-            self.push_event("offline:sync_error", {"error": str(e)})
+            from .._exposure_diagnostics import exception_details_allowed_for
+
+            # ADR-038: the push frame reaches the client; exception text can
+            # echo queued data, so nonlegacy views get a value-free message.
+            message = str(e) if exception_details_allowed_for((self,)) else "Offline sync failed"
+            self.push_event("offline:sync_error", {"error": message})
         finally:
             self._sync_in_progress = False
+
+    def _sync_failure_reason(self, exc: BaseException) -> str:
+        """The error stored with a failed queued action.
+
+        Legacy views keep ``str(exc)``. For nonlegacy views (ADR-038) the queue
+        stores only the exception class name, since the text can echo the
+        client-queued data or view state.
+        """
+        from .._exposure_diagnostics import exception_details_allowed_for
+
+        if exception_details_allowed_for((self,)):
+            return str(exc)
+        return type(exc).__name__
 
     def _sync_create_actions(self, actions: List[OfflineAction]) -> tuple[int, int]:
         """Sync create actions."""
@@ -549,7 +567,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 
@@ -589,7 +607,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 
@@ -629,7 +647,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 
