@@ -1757,8 +1757,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             has_async = getattr(view, "_async_pending", None) is not None
             await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
-            if has_async:
-                await self._dispatch_async_work()
+            # Unconditional, like the runtime twin (#1887): ``has_async`` reads
+            # only the legacy ``_async_pending`` and drives the loading flag,
+            # while ``start_async`` queues ``_async_tasks`` (#2946). No-op when
+            # nothing is queued.
+            await self._dispatch_async_work()
             return
 
         # Render + diff (mirrors the simpler arm of handle_event).
@@ -1835,8 +1838,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 source="event",
                 ref=event_ref,
             )
-        if has_async:
-            await self._dispatch_async_work()
+        # Unconditional for the same reason as the noop arm above (#2946).
+        await self._dispatch_async_work()
 
     def _attach_debug_payload(
         self,
