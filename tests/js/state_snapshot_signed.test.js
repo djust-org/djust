@@ -77,6 +77,33 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
         expect(forgotten).toEqual(['/orders']);
     });
 
+    // ADR-038 E3: a turn whose explicit save failed withholds its success
+    // frame and sends a state_error that carries a null revocation. An error
+    // may only ever *remove* the primary view's token, never store one (the
+    // { type: 'error' } case below keeps that pinned).
+    it('an error frame null revokes the primary view token', async () => {
+        const { window } = createEnv();
+        const handler = makeHandler(window);
+        window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
+        await handler.handleMessage({
+            type: 'error', code: 'state_error', source: 'event',
+            view: 'app.views.Orders', state_snapshot_signed: null,
+            error: 'State unavailable. Please reload the page.',
+        });
+        expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBeNull();
+    });
+
+    it('an error frame null for another view leaves the primary token', async () => {
+        const { window } = createEnv();
+        const handler = makeHandler(window);
+        window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
+        await handler.handleMessage({
+            type: 'error', code: 'state_error', view: 'app.views.Other',
+            state_snapshot_signed: null, error: 'x',
+        });
+        expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);
+    });
+
     for (const override of [
         { type: 'error' }, { source: 'async' }, { view: 'app.views.Other' },
         { view: '__proto__' }, { state_snapshot_signed: {} },

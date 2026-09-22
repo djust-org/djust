@@ -3612,7 +3612,10 @@ class ViewRuntime:
             from ._exposure import uses_legacy_exposure
 
             if target_view is self.view_instance and not uses_legacy_exposure(target_view):
-                await self._persist_state_after_event(target_view, event_name)
+                # A failed explicit save withholds the success frame (E3); the
+                # child tree is saved on the render/noop branches below.
+                if not await self.commit_explicit_turn(target_view, source="event", children=False):
+                    return
 
         snapshot_fields = await self._explicit_event_snapshot(view)
 
@@ -5146,6 +5149,99 @@ class ViewRuntime:
             logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
         return fields
 
+    async def authorize_explicit_turn(self, view: Any) -> Any:
+        """Fresh authority for an explicit turn with no inbound event request.
+
+        Background completion, ``url_change`` and server-originated consumer
+        turns carry no current POST. Like the child background path, reload
+        the supported server session and Django auth instead of trusting the
+        mount's principal (ADR-038 D-k/D-l), then rerun object permission. The
+        authorized request is stashed where :meth:`commit_explicit_turn` reads
+        it; callers pop it when the turn ends. Raises on any failure — callers
+        deny with :meth:`deny_explicit_turn` and never stringify the exception.
+        """
+        from ._exposure import ExposureError
+        from ._exposure_auth import authorize_event, fresh_socket_request
+        from .auth.core import enforce_object_permission
+
+        binding = self._explicit_mount_binding
+        if view is None or view is not self.view_instance or binding is None:
+            raise ExposureError("Explicit turn has no mounted owner")
+
+        def _authorize() -> Any:
+            request = authorize_event(view, fresh_socket_request(view), binding)
+            enforce_object_permission(view, request)
+            return request
+
+        request = await sync_to_async(_authorize)()
+        # Authorization hooks are application code; their success does not
+        # prove the owner was left in place.
+        if view is not self.view_instance:
+            raise ExposureError("Explicit turn owner replaced during authorization")
+        view._djust_event_request = request
+        return request
+
+    async def deny_explicit_turn(self) -> None:
+        """The foreground event denial, for a turn whose authority was revoked."""
+        self.view_instance = None
+        await self.transport.send_error(
+            "Event authorization failed. Please reload the page.",
+            code="permission_denied",
+        )
+        await self.transport.close(code=4403)
+
+    async def commit_explicit_turn(
+        self,
+        view: Any,
+        *,
+        source: str,
+        children: bool = True,
+        async_batch: Optional[str] = None,
+    ) -> bool:
+        """Persist an authorized explicit turn before any success frame.
+
+        Saves the root's declared server fields (and, unless the caller saves
+        them itself, the child tree) under the turn's authorized request. A
+        failed or timed-out save withholds the success frame: the client gets a
+        static ``state_error`` and the next update is full HTML, the child
+        path's contract (ADR-038 E3, "failed storage without stale delivery").
+        Legacy views return True untouched; their saves stay best-effort.
+        """
+        from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure_sessions import asave_server_state, request_binding
+
+        if uses_legacy_exposure(view):
+            return True
+        extra: Dict[str, Any] = {"source": source}
+        if async_batch:
+            extra["async_batch"] = async_batch
+        view_path = getattr(view, "_djust_mount_view_path", None)
+        if isinstance(view_path, str) and view_path:
+            # The withheld success frame would have refreshed or revoked the
+            # client's signed snapshot; the error revokes it instead, so a
+            # token captured before this turn cannot outlive the failed save.
+            extra["view"] = view_path
+            extra["state_snapshot_signed"] = None
+        try:
+            request = getattr(view, "_djust_event_request", None)
+            if request is None or (
+                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
+            ):
+                raise ExposureError("Explicit persistence requires current authorization")
+            await asyncio.wait_for(
+                asave_server_state(view, request), timeout=EVENT_STATE_SAVE_TIMEOUT_S
+            )
+        except Exception:  # noqa: BLE001 — storage errors can carry server-only values
+            view._force_full_html = True
+            logger.warning("Explicit state save failed; success frame withheld")
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        if children:
+            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+        return True
+
     async def _persist_explicit_children_after_event(
         self, view: Any, *, request: Any = None, async_batch: Optional[str] = None
     ) -> bool:
@@ -5936,6 +6032,11 @@ class ViewRuntime:
         from ._exposure import uses_legacy_exposure
 
         legacy_diagnostics = uses_legacy_exposure(view)
+        if not legacy_diagnostics:
+            await self._execute_explicit_async_task(
+                view, task_name, callback, args, kwargs, event_name
+            )
+            return
 
         try:
             # Dispatch through the ONE shared helper so the sync/async handling
@@ -6020,6 +6121,74 @@ class ViewRuntime:
                         )
                     else:
                         logger.warning("Explicit background result handling failed")
+
+    async def _execute_explicit_async_task(
+        self,
+        view: Any,
+        task_name: str,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
+        event_name: Optional[str],
+    ) -> None:
+        """Run a nonlegacy root's background task under fresh authority.
+
+        The legacy runner trusts the mount-time principal and never saves. Here
+        (ADR-038 E3, D-k/D-l) the callback starts only after a fresh
+        authorization, the result is handled only after another one, declared
+        server state is committed before the result frame, and a revoked or
+        failed turn is dropped with a static error. Nothing here logs or sends
+        exception values; application result handlers still get their own
+        exception object.
+        """
+        from .mixins.async_work import run_async_callback
+
+        async with self._explicit_event_lock, self.transport.event_context(view):
+            try:
+                await self.authorize_explicit_turn(view)
+            except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                if self.view_instance is view:
+                    await self.deny_explicit_turn()
+                return
+            finally:
+                view.__dict__.pop("_djust_event_request", None)
+
+        result = error = None
+        try:
+            result = await run_async_callback(callback, args, kwargs, owner=view)
+        except Exception as exc:  # noqa: BLE001 — only the owning application sees it
+            error = exc
+            logger.warning("Explicit background callback failed")
+
+        if self.view_instance is not view:
+            logger.debug("Explicit background result discarded after owner replacement")
+            return
+
+        async with self._explicit_event_lock, self.transport.event_context(view):
+            try:
+                try:
+                    await self.authorize_explicit_turn(view)
+                except Exception:  # noqa: BLE001
+                    if self.view_instance is view:
+                        await self.deny_explicit_turn()
+                    return
+                handler = getattr(view, "handle_async_result", None)
+                if callable(handler):
+                    try:
+                        await sync_to_async(handler)(task_name, result=result, error=error)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Explicit background result handling failed")
+                        return
+                elif error is not None:
+                    # Legacy parity: an unhandled failure renders nothing.
+                    return
+                if self.view_instance is not view:
+                    return
+                if not await self.commit_explicit_turn(view, source="async"):
+                    return
+                await self._render_async_result(event_name)
+            finally:
+                view.__dict__.pop("_djust_event_request", None)
 
     async def _render_async_result(self, event_name: Optional[str]) -> None:
         """Re-sync + re-render after background work and emit the result frame.

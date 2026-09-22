@@ -199,7 +199,12 @@ function _warnDeadScripts(root) {
 function storeSignedSnapshot(data, primaryViewPath) {
     // Only mounts and successful primary-view event acknowledgements carry
     // navigation state. Child/background/error frames cannot replace it.
-    const eligible = data.type === 'mount' || (
+    // A primary-view error frame may carry a null revocation (a turn whose
+    // explicit save failed withholds its success frame, ADR-038 E3). It can
+    // only remove the cached token, never store one.
+    const revocation = data.type === 'error' && data.view === primaryViewPath &&
+        data.state_snapshot_signed === null;
+    const eligible = revocation || data.type === 'mount' || (
         data.source === 'event' && data.view === primaryViewPath &&
         ['patch', 'html_update', 'noop'].includes(data.type)
     );

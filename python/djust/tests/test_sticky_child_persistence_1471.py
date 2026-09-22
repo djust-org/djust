@@ -859,6 +859,9 @@ def test_the_event_save_is_still_bounded():
         "_persist_state_after_event": 1,
         "_persist_sticky_child_after_event": 1,
         "_persist_explicit_children_after_event": 1,
+        # ADR-038 E3: the explicit root commit shared by foreground events,
+        # root background work and server-originated turns.
+        "commit_explicit_turn": 1,
     }, "Each legacy and explicit child save must retain its exact storage deadline"
 
 

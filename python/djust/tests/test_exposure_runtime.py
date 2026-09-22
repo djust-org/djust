@@ -642,7 +642,15 @@ async def test_event_snapshot_unavailable_explicitly_invalidates_old_token(stage
         await runtime.dispatch_event(
             {"type": "event", "event": "change_navigation", "params": {"mode": mode}}
         )
-    frame = next(frame for frame in transport.sent if frame.get("type") == "noop")
+    if mode == "identity":
+        # The session identity changed inside the handler, so the explicit
+        # save is refused: no success frame, and the state_error carries the
+        # revocation instead (ADR-038 E3).
+        assert not [f for f in transport.sent if f.get("type") in {"noop", "patch", "html_update"}]
+        frame = next(frame for frame in transport.sent if frame.get("type") == "error")
+        assert frame["code"] == "state_error"
+    else:
+        frame = next(frame for frame in transport.sent if frame.get("type") == "noop")
     assert frame["state_snapshot_signed"] is None
     assert frame["view"] == __name__ + ".SnapshotRuntimeView"
     assert "SENTINEL" not in caplog.text
