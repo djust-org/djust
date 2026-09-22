@@ -35,12 +35,25 @@ import logging
 from contextlib import nullcontext
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from .._exposure import ProviderContract
+from .._exposure_providers import provide_context
 from .resolvers import TenantInfo, resolve_tenant
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _tenant_context_name(view_class: Any) -> Any:
+    from ..config import get_djust_config
+
+    return get_djust_config().get("TENANT_CONTEXT_NAME", view_class.tenant_context_name)
+
+
+def _tenant_provider(view_class: type) -> ProviderContract:
+    """ADR-038 E2-1: the configured tenant context key, render-only."""
+    return ProviderContract("djust.tenants", rendered=frozenset({_tenant_context_name(view_class)}))
 
 
 class TenantMixin:
@@ -72,6 +85,8 @@ class TenantMixin:
     # Class-level configuration
     tenant_required: bool = True  # Override per-view if needed
     tenant_context_name: str = "tenant"  # Name in template context
+    # ADR-038 E2-1: the tenant key is a registered, render-only provider.
+    _djust_context_providers = (_tenant_provider,)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -252,7 +267,7 @@ class TenantMixin:
 
         context_name = get_djust_config().get("TENANT_CONTEXT_NAME", self.tenant_context_name)
 
-        context[context_name] = self._tenant
+        provide_context(self, context, "djust.tenants", context_name, self._tenant)
         return context
 
     def get_presence_key(self) -> str:
