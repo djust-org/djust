@@ -203,7 +203,8 @@ under a ratchet (new sites fail; the baseline only shrinks). As of this
 writing the baseline is **empty**: every exception-carrying log call in the
 package is pinned, fixed, or turn-gated. The last five, in the owner-less
 template backend and PWA sync endpoint, were closed by #2951; see the ledger.
-Two consumer sites stay `KNOWN_OPEN` until #2946 makes them reachable. The PWA offline cache was checked and is in-process server
+The two consumer `_run_async_work` sites held `KNOWN_OPEN` behind #2946 are
+converted now that the fix makes them reachable; no pinned site is open. The PWA offline cache was checked and is in-process server
 memory, not a browser-storage sink.
 
 `runtime.py`'s 26 sites (two identical sticky-unmount messages in

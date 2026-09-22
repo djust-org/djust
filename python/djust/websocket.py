@@ -1351,10 +1351,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         except Exception as e:
             error = e
-            logger.exception(
+            self._log_view_hook_failure(
+                view,
+                e,
                 "[djust] Error in start_async callback '%s' on %s",
                 task_name,
                 view.__class__.__name__ if view else "?",
+                traceback=True,
             )
 
             # Teardown identity-guard on the ERROR path too (#1940). A callback
@@ -1439,9 +1442,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 **rendered.send_fields,
                             )
 
-                except Exception:
-                    logger.exception(
-                        "[djust] Error in handle_async_result for task '%s'", task_name
+                except Exception as exc:
+                    self._log_view_hook_failure(
+                        view,
+                        exc,
+                        "[djust] Error in handle_async_result for task '%s'",
+                        task_name,
+                        traceback=True,
                     )
 
     def _next_version(self) -> int:

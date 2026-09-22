@@ -376,6 +376,18 @@ Found reading `pwa/sync.py`, outside ADR-038 (not view state) and added to
 result's `errors`, which `sync_endpoint_view` returns to the client in its JSON
 response.
 
+**#2946 fixed; the log pin has no open sites.** The consumer's
+`_dispatch_single_event` now starts queued background work unconditionally, as
+`ViewRuntime` has since #1887. It's split out as #2952 against `main` for the
+1.2 release and cherry-picked here. That makes the two `_run_async_work` catches
+reachable from the NOTIFY drain. Both now log through `_log_view_hook_failure`
+with the view as owner. The released-event exposure test gains a `spawn` case
+(red with the original catches), and the strict xfail is replaced by
+`test_notify_released_start_async_2946.py`. `KNOWN_OPEN` is empty in both
+consumer and runtime tables, and the package baseline is empty: **the log
+dimension of E1 is closed.** E1 itself stays open for the non-log items in the
+inventory.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.

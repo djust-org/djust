@@ -97,14 +97,7 @@ FRAMEWORK_ONLY = {
     ),
 }
 
-KNOWN_OPEN = {
-    ("_run_async_work", "[djust] Error in start_async callback '%s' on %s"): (
-        "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
-    ),
-    ("_run_async_work", "[djust] Error in handle_async_result for task '%"): (
-        "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
-    ),
-}
+KNOWN_OPEN = {}
 
 
 RUNTIME_LEGACY_GATED = {
