@@ -251,6 +251,25 @@ logged legacy loop; every JIT serializer is reached only from
 called only there; the processor-import catch reports a settings path. The
 baseline is 197 sites in 67 modules.
 
+`templatetags/live_tags.py` repeated the drift pattern. The sticky helper
+`_render_sticky_child_html` already raised a value-free `ExposureError` when an
+explicit child's `get_context_data` failed; its non-sticky twin in
+`live_render` and the lazy renderer `_render_eager` instead logged the
+exception with its traceback **and rendered the child with an empty context**,
+for any policy. Reproduced for the non-sticky path through Django's `Template`
+(the test records that the child's context ran): the explicit child fell back
+silently. Both copies now raise the helper's `ExposureError` for an explicit
+child; legacy children still fall back and log. The lazy copy imports its
+names under aliases, since the enclosing `live_render` binds them only after
+the lazy branch returns. The lazy thunk's outer catch — which also sees
+template errors from an explicit child — logs through `log_failure_for` with
+the child class as owner; the lazy path is converted without its own
+reproduction. Lazy and non-sticky explicit children remain an open E3 area
+beyond this failure path. Separately noted: the thunk renders a
+`PermissionError`'s text into the page by design, a deliberate user-facing
+channel left as is. `live_tags.py` is pinned (4 legacy-gated, 3
+framework-only); the baseline is 189 sites in 66 modules.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.

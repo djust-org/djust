@@ -728,40 +728,6 @@
         "Error rendering {%% %s %%}"
       ]
     ],
-    "templatetags/live_tags.py": [
-      [
-        "_lazy_thunk",
-        "live_render lazy thunk for %s raised"
-      ],
-      [
-        "_render_eager",
-        "live_render lazy: child %s.get_context_data rais"
-      ],
-      [
-        "_render_sticky_child_html",
-        "live_render: child %s.get_context_data raised; r"
-      ],
-      [
-        "_resolve_css_class",
-        "config.get_framework_class lookup failed: %s"
-      ],
-      [
-        "live_render",
-        "live_render: child %s.get_context_data raised; r"
-      ],
-      [
-        "live_render",
-        "live_render: live-instance lookup for sticky %r "
-      ],
-      [
-        "live_render",
-        "live_render: sticky restore for %r failed; mount"
-      ],
-      [
-        "render",
-        "dj_activity: _register_activity failed for %s"
-      ]
-    ],
     "tenants/backends.py": [
       [
         "__init__",

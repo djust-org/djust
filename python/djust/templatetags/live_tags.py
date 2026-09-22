@@ -2007,6 +2007,17 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     try:
                         child_context = dict(get_ctx_fn())
                     except Exception:  # noqa: BLE001
+                        # Aliased so the names stay local to this closure: the
+                        # enclosing live_render imports them only after the
+                        # lazy branch has returned.
+                        from .._exposure import ExposureError as _ExposureError
+                        from .._exposure import uses_legacy_exposure as _uses_legacy
+
+                        if not _uses_legacy(child):
+                            # ADR-038: as in _render_sticky_child_html.
+                            raise _ExposureError(
+                                "Explicit child rendering context unavailable"
+                            ) from None
                         logger.exception(
                             "live_render lazy: child %s.get_context_data raised; "
                             "rendering with empty context",
@@ -2063,7 +2074,18 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 status = "error"
                 body = '<dj-error aria-live="polite">' + escape(str(exc)) + "</dj-error>"
             except Exception as exc:  # noqa: BLE001
-                logger.exception("live_render lazy thunk for %s raised", view_path)
+                from .._exposure_diagnostics import log_failure_for as _log_failure_for
+
+                # The child's template and context are application code; its
+                # class carries the policy (ADR-038).
+                _log_failure_for(
+                    logger,
+                    (child_cls,),
+                    exc,
+                    "live_render lazy thunk for %s raised",
+                    view_path,
+                    traceback=True,
+                )
                 status = "error"
                 body = (
                     '<dj-error aria-live="polite">Lazy child '
@@ -2391,6 +2413,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         try:
             child_context = dict(get_ctx())
         except Exception:  # noqa: BLE001 — fall back to empty context on error
+            if explicit_child:
+                # ADR-038: as in _render_sticky_child_html — no fallback render
+                # and no exception text for an explicit child.
+                raise ExposureError("Explicit child rendering context unavailable") from None
             logger.exception(
                 "live_render: child %s.get_context_data raised; rendering with empty context",
                 child_cls.__name__,
