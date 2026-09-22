@@ -218,6 +218,32 @@ adds no separate exposure.
 
 E1 remains open. The actor caller inventory was then the remaining named E1 task.
 
+## NOTIFY-released activity events — E3 slice
+
+`ActivityMixin._queue_deferred_activity_event` queues an event sent to a
+hidden activity without validation, on the documented contract that the full
+auth stack runs when the event is dispatched. For an explicit view that stack
+includes ADR-038's fresh `authorize_event`. The runtime's own drain satisfies
+it — the runtime authorizes the turn first — but `db_notify` drains through the
+consumer's `_dispatch_single_event`, outside any authorized turn, and that
+dispatcher ran only `_validate_event_security`.
+
+Reproduced over the real consumer (`test_exposure_activity_notify_auth.py`):
+an explicit view queues an event on a hidden activity; a NOTIFY's
+`handle_info` makes the activity visible. With the session intact the event is
+released and dispatched (the control). With the session deleted between queue
+and NOTIFY, the handler **still ran**. The consumer dispatcher now applies the
+runtime's check for nonlegacy targets — `authorize_event` on the transport's
+fresh request against the root's mount binding — with the runtime's
+fail-closed outcome: no dispatch, the static "Event authorization failed"
+error, close 4403. A target without that binding (anything but the mounted
+root) is refused, and later events in the same drain are refused silently.
+The deleted-session case fails against the original consumer and passes after.
+
+This closes one revocation case on one path. E3 remains open: other paths
+that release queued or deferred work outside an authorized turn have not been
+audited the same way.
+
 ## Service-worker state storage — E1 slice
 
 Closes the browser-storage row of [the sink inventory](notes/038-exposure-sink-inventory.md),

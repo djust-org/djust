@@ -1713,6 +1713,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_json(response)
             await self._flush_all_pending()
 
+    async def _authorize_released_explicit_event(self, target_view: Any) -> bool:
+        """Freshly authorize an explicit view's queued event released here (ADR-038).
+
+        The runtime authorizes an explicit event before its turn, so its own
+        activity drain runs already authorized. This consumer drain is reached
+        from ``db_notify`` with no authorized turn, so each released event gets
+        the runtime's check — ``authorize_event`` on a fresh request against the
+        mount binding — and the runtime's fail-closed outcome. Only the mounted
+        root carries that binding; any other nonlegacy target is refused.
+        """
+        if self.view_instance is None:
+            # Already denied (or torn down) earlier in this drain.
+            return False
+        runtime = getattr(self, "_runtime", None)
+        binding = getattr(runtime, "_explicit_mount_binding", None)
+        try:
+            if runtime is None or binding is None or target_view is not runtime.view_instance:
+                raise PermissionError("no mount binding for this target")
+            from ._exposure_auth import authorize_event
+
+            request = await runtime.transport.explicit_event_request(target_view)
+            authorized = await sync_to_async(authorize_event)(target_view, request, binding)
+        except Exception:
+            # No exception text or traceback: auth providers may include
+            # credentials or other internal state in their exceptions.
+            if runtime is not None and runtime.view_instance is target_view:
+                runtime.view_instance = None
+            self.view_instance = None
+            await self.send_error(
+                "Event authorization failed. Please reload the page.", code="permission_denied"
+            )
+            await self.close(code=4403)
+            return False
+        target_view._djust_event_request = authorized
+        return True
+
     async def _dispatch_single_event(
         self,
         target_view: Any,
@@ -1746,6 +1782,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         client in the same round-trip.
         """
         import time
+
+        from ._exposure import uses_legacy_exposure
+
+        # ADR-038: events queued on a hidden activity are validated when they
+        # are dispatched. For an explicit view that includes fresh
+        # authorization, which this drain (run from db_notify, outside any
+        # authorized runtime turn) must apply itself.
+        if not uses_legacy_exposure(target_view):
+            if not await self._authorize_released_explicit_event(target_view):
+                return
 
         # --- security / validation (shared with handle_event) -----------
         handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
