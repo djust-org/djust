@@ -318,6 +318,26 @@ owner that defaults to legacy would grant rather than restrict. They need an
 owner threaded through, which is a design change, not a relabel. The baseline
 is 95 sites in 41 modules.
 
+The remaining 34 baseline modules are pinned as framework-only, each with a
+reason: client-storage bridges, the deploy CLI, audit and check tooling, the
+Django admin integration (outside the LiveView exposure policy), theming and
+PWA endpoints, catalogue/gallery examples that render framework-shipped
+components, cloud-upload plumbing. **Every exception-carrying log call in
+`python/djust` is now classified in the pin, except 14 sites in 7 modules held
+on purpose**: `components/base.py`, `components/suspense.py`,
+`serialization._rehydrate_component` and `session_utils.dom_id_for` (no owner
+reference), `template/rendering.py` (its JIT pair not yet traced to a legacy
+guard), and `pwa/sync.py` / `pwa/utils.py` (below).
+
+**Open E1 question, not verified end to end.** `OfflineMixin.get_cached_or_fetch`
+caches `list(queryset.values())` — every column of the model, with no field
+allowlist, bypassing `serialization.py`'s sensitive-field floor — into
+`OfflineStorage`. Its `IndexedDBStorage` backend describes itself as a
+server-side simulation whose "actual IndexedDB operations happen client-side
+(service worker)". If those bytes reach the browser, this is an unclassified
+browser-storage sink for legacy and explicit views alike. The JS bridge has
+not been traced; the inventory should gain a row once it is.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.

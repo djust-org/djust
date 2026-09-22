@@ -642,6 +642,441 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "__init__.py": (
+        {},
+        {
+            ("_dispatch", "[HotReload] HVR module reload failed"): "dev hot-reload server",
+            (
+                "enable_hot_reload",
+                "[HotReload] Failed to start hot reload server: %",
+            ): "dev hot-reload server",
+            (
+                "on_file_change",
+                "[HotReload] Error broadcasting reload: %s",
+            ): "dev hot-reload server",
+            (
+                "on_file_change",
+                "[HotReload] template-library cache invalidation ",
+            ): "dev hot-reload server",
+        },
+    ),
+    "admin_ext/forms.py": (
+        {},
+        {
+            (
+                "get_field_info",
+                "Failed to get field info for %s",
+            ): "Django admin field metadata; outside the LiveView exposure policy",
+            (
+                "get_field_options",
+                "Failed to get field options for %s",
+            ): "Django admin field metadata; outside the LiveView exposure policy",
+            (
+                "get_field_value",
+                "Failed to get field value for %s",
+            ): "Django admin field metadata; outside the LiveView exposure policy",
+        },
+    ),
+    "admin_ext/options.py": (
+        {},
+        {
+            (
+                "get_field_display_name",
+                "Failed to get verbose name for %s",
+            ): "Django admin field metadata; outside the LiveView exposure policy",
+            (
+                "get_queryset",
+                "Failed to resolve FK for %s",
+            ): "Django admin field metadata; outside the LiveView exposure policy",
+        },
+    ),
+    "admin_ext/progress.py": (
+        {},
+        {
+            (
+                "_run",
+                "admin_action_with_progress: %s failed",
+            ): "Django admin action progress; outside the LiveView exposure policy",
+            (
+                "wrapper",
+                "Failed to pin queryset PKs",
+            ): "Django admin action progress; outside the LiveView exposure policy",
+            (
+                "wrapper",
+                "Failed to reverse changelist URL",
+            ): "Django admin action progress; outside the LiveView exposure policy",
+            (
+                "wrapper",
+                "Failed to reverse djust_progress URL for %s",
+            ): "Django admin action progress; outside the LiveView exposure policy",
+        },
+    ),
+    "admin_ext/sites.py": (
+        {},
+        {
+            ("get_plugin_nav", "Failed to reverse URL for %s"): "admin URL reversal",
+        },
+    ),
+    "admin_ext/views.py": (
+        {},
+        {
+            (
+                "get_context_data",
+                "Failed to build filter for %s",
+            ): "Django admin filter building; outside the LiveView exposure policy",
+        },
+    ),
+    "audit_ast.py": (
+        {},
+        {
+            ("run_ast_audit", "Scanner failed on %s: %s"): "static audit scanner",
+            ("scan_python_source", "Cannot read %s: %s"): "static audit scanner",
+        },
+    ),
+    "audit_live.py": (
+        {},
+        {
+            ("probe_paths", "path probe failed for %s: %s"): "live security-audit probes",
+            ("probe_paths", "path probe failed for %s: %s", 1): "live security-audit probes",
+            (
+                "probe_websocket_origin",
+                "websocket close after CSWSH probe failed: %s",
+            ): "live security-audit probes",
+            (
+                "probe_websocket_origin",
+                "websocket probe rejected at handshake: %s",
+            ): "live security-audit probes",
+        },
+    ),
+    "auth/admin_views.py": (
+        {},
+        {
+            (
+                "_get_providers",
+                "Per-provider active-user stats unavailable: %s",
+            ): "admin OAuth statistics",
+            (
+                "get_context_data",
+                "OAuth stats unavailable (allauth probe failed): ",
+            ): "admin OAuth statistics",
+        },
+    ),
+    "auth/djust_admin.py": (
+        {},
+        {
+            ("get_context", "OAuth provider/user stats unavailable: %s"): "admin OAuth statistics",
+        },
+    ),
+    "backends/redis.py": (
+        {},
+        {
+            (
+                "__init__",
+                "RedisPresenceBackend failed to connect: %s",
+            ): "presence backend connection",
+        },
+    ),
+    "bug_capture_store.py": (
+        {},
+        {
+            (
+                "_assert_server_requires_auth",
+                "RedisSnapshotStore: probe connection close faile",
+            ): "snapshot-store connection probe",
+        },
+    ),
+    "checks/integrations.py": (
+        {},
+        {
+            (
+                "check_admin_widgets",
+                "LiveView import failed; skipping admin widget au",
+            ): "system-check imports",
+            (
+                "check_admin_widgets",
+                "admin_ext not importable; skipping A072/A073",
+            ): "system-check imports",
+        },
+    ),
+    "checks/templates.py": (
+        {},
+        {
+            (
+                "check_undefined_template_vars",
+                "T018: failed to statically check template contex",
+            ): "static template check",
+        },
+    ),
+    "cli.py": (
+        {},
+        {
+            ("cmd_replay", "django.setup() skipped for `djust replay`: %s"): "CLI bootstrap",
+        },
+    ),
+    "components/gallery/registry.py": (
+        {},
+        {
+            (
+                "get_gallery_data",
+                "gallery: discover_component_classes() failed: %s",
+            ): "component gallery discovery",
+            (
+                "get_gallery_data",
+                "gallery: discover_template_tags() failed: %s",
+            ): "component gallery discovery",
+        },
+    ),
+    "components/icons.py": (
+        {},
+        {
+            (
+                "_get_icon_sets",
+                "Custom DJUST_COMPONENTS_ICON_SETS unavailable: %",
+            ): "icon-set settings",
+        },
+    ),
+    "contrib/uploads/gcs.py": (
+        {},
+        {
+            (
+                "abort",
+                "GCSMultipartWriter.abort: DELETE session failed ",
+            ): "cloud upload session cleanup",
+        },
+    ),
+    "contrib/uploads/s3_events.py": (
+        {},
+        {
+            (
+                "_fire_hook",
+                "on_upload_complete hook raised for upload_id=%s ",
+            ): "upload-complete hook; receives upload metadata, never view state",
+        },
+    ),
+    "deploy_cli.py": (
+        {},
+        {
+            (
+                "_create_tarball",
+                "Failed to add %s to tarball: %s",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_create_tarball",
+                "Failed to add %s to tarball: %s",
+                1,
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_decode_id_token_email",
+                "Could not decode id_token email claim: %s",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_ensure_logged_in",
+                "Could not reach /me/: %s — proceeding with saved",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_ensure_project_exists",
+                "project precondition GET failed: %s — proceeding",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_refresh_oauth_token",
+                "refresh_token request failed: %s — skipping refr",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "_run_deploy_doctor",
+                "deploy doctor failed; skipping",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "deploy_dir",
+                "status poll failed; retrying",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+            (
+                "logout",
+                "Logout API call failed (proceeding to remove loc",
+            ): "deploy CLI: HTTP calls and tarball assembly",
+        },
+    ),
+    "observability/dry_run.py": (
+        {},
+        {
+            (
+                "_uninstall",
+                "DryRunContext failed to restore %s.%s: %s",
+            ): "dry-run attribute restore",
+        },
+    ),
+    "pwa/manifest.py": (
+        {},
+        {
+            ("_get_default_config", "Error loading PWA config: %s"): "PWA manifest generation",
+            ("manifest_view", "Error generating manifest: %s"): "PWA manifest generation",
+        },
+    ),
+    "pwa/service_worker.py": (
+        {},
+        {
+            (
+                "_get_default_config",
+                "Error loading service worker config: %s",
+            ): "service-worker script generation",
+            (
+                "service_worker_view",
+                "Error generating service worker: %s",
+            ): "service-worker script generation",
+        },
+    ),
+    "pwa/storage.py": (
+        {},
+        {
+            (
+                "_deserialize",
+                "Failed to deserialize storage data: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "_update_action_status",
+                "Failed to update action status: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "add",
+                "Failed to add action to sync queue: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "cleanup_expired",
+                "IndexedDB cleanup error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "clear",
+                "IndexedDB clear error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "clear",
+                "localStorage clear error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "delete",
+                "IndexedDB delete error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "delete",
+                "localStorage delete error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            ("get", "IndexedDB get error: %s"): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "get",
+                "localStorage get error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "get_pending",
+                "Failed to get pending actions: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "keys",
+                "IndexedDB keys error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "keys",
+                "localStorage keys error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "remove_completed",
+                "Failed to remove completed actions: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "retry_action",
+                "Failed to retry action %s: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            ("set", "IndexedDB set error: %s"): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "set",
+                "localStorage set error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "size",
+                "IndexedDB size error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+            (
+                "size",
+                "localStorage size error: %s",
+            ): "client-storage bridge and sync-queue bookkeeping",
+        },
+    ),
+    "scaffolding/generator.py": (
+        {},
+        {
+            ("_run_cmd", "Command failed: %s\nstdout: %s\nstderr: %s"): "scaffolding subprocess",
+        },
+    ),
+    "template_tags/pwa.py": (
+        {},
+        {
+            (
+                "_render_django_tag",
+                "Error rendering {%% %s %%}",
+            ): "PWA tag rendered with an empty context",
+        },
+    ),
+    "theming/context_processors.py": (
+        {},
+        {
+            (
+                "theme_context",
+                "skipping theme-context cache write on %s request",
+            ): "theme context cache",
+        },
+    ),
+    "theming/gallery/catalogue.py": (
+        {},
+        {
+            (
+                "_render_template_examples",
+                "Could not render template component %s: %s",
+            ): "catalogue renders framework-shipped examples",
+        },
+    ),
+    "theming/gallery/component_registry.py": (
+        {},
+        {
+            (
+                "render_python_component_example",
+                "Could not render component %s: %s",
+            ): "catalogue renders framework-shipped examples",
+        },
+    ),
+    "theming/high_contrast.py": (
+        {},
+        {
+            ("<module>", "  %s: Error - %s"): "accessibility report script",
+        },
+    ),
+    "theming/inspector.py": (
+        {},
+        {
+            ("theme_css_api", "theme inspector API failed"): "theme inspector dev API",
+            ("theme_inspector_api", "theme inspector API failed"): "theme inspector dev API",
+            ("theme_inspector_api", "theme inspector API failed", 1): "theme inspector dev API",
+        },
+    ),
+    "theming/rust_handlers.py": (
+        {},
+        {
+            (
+                "register_with_rust_engine",
+                "Rust extension unavailable; theme tags work via ",
+            ): "theme tag registration",
+        },
+    ),
+    "uploads/storage.py": (
+        {},
+        {
+            ("delete", "Redis delete failed for upload %s: %s"): "upload state store",
+            ("update", "Redis pipeline update failed for upload %s; fall"): "upload state store",
+        },
+    ),
+    "uploads/views.py": (
+        {},
+        {
+            ("get", "UploadStatusView: state store read failed for %s"): "upload status store read",
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (
