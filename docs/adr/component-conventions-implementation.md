@@ -319,6 +319,27 @@ The consumer's `_log_view_hook_failure` now delegates to `log_failure_for`.
 exception log there fails the pin (mutation-checked). Still unpinned:
 `time_travel.py` (10) and `mixins/request.py` (5).
 
+`mixins/request.py` is pinned, and its HTTP-POST event failure was a
+**client-facing** leak: `post` built `f"...: {type(e).__name__}: {str(e)}"`,
+logged it with `exc_info`, and under `DEBUG` returned it with
+`traceback.format_exc()` and the posted `params` in a 500 response. The HTTP
+path serves explicit views, so an explicit view's exception text and traceback
+reached the browser. Reproduced through the real pipeline (`RequestFactory`, a
+DB session, GET then POST) with a legacy control; a nonlegacy view now gets the
+value-free log line and the generic response even under `DEBUG`. The client
+frame scan could not see this — the value flows through a variable into
+`JsonResponse` — which is the indirect-flow limit already recorded.
+
+The first version of that fix added a local
+`from .._exposure import uses_legacy_exposure` inside the `except`, which made
+the name local to all of `post()` and raised `UnboundLocalError` on every POST;
+the broad regression run caught it (24 unrelated failures) before commit. The
+module-level import is used instead.
+
+`_produce` (streamed rendering) is converted to `log_failure_for` without its
+own reproduction: `arender_chunks` renders the view's templates with its
+context. Only `time_travel.py` (10, DEBUG-only) remains unpinned.
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

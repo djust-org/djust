@@ -217,6 +217,20 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "mixins/request.py": (
+        {
+            ("post", "<Name>"): (
+                "legacy branch only: a nonlegacy view returns the generic response first"
+            ),
+        },
+        {
+            ("_inject_debug", "Failed to inject debug info"): "debug payload assembly",
+            ("_watch_disconnect", "is_disconnected() raised; halting watcher"): "ASGI probe",
+            ("get", "Failed to render wrapper_template '%s': %s"): (
+                "its only input is the already-rendered page HTML the client receives"
+            ),
+        },
+    ),
     # assign_async's runners and the SSE deferred flush now log through
     # log_failure_for; nothing raw remains.
     "mixins/async_work.py": (),

@@ -543,8 +543,18 @@ class RequestMixin:
         async def _produce() -> None:
             try:
                 await self.arender_chunks(full_html, emitter)
-            except Exception:  # pragma: no cover — defensive
-                logger.exception("arender_chunks raised; cancelling emitter")
+            except Exception as exc:  # pragma: no cover — defensive
+                from .._exposure_diagnostics import log_failure_for
+
+                # arender_chunks renders the view's templates with its context,
+                # so the exception can carry application values (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "arender_chunks raised; cancelling emitter",
+                    traceback=True,
+                )
                 await emitter.cancel("producer_error")
             finally:
                 await emitter.close()
@@ -1012,6 +1022,22 @@ class RequestMixin:
             import traceback
             from django.conf import settings
 
+            # uses_legacy_exposure is the module-level import; a local import
+            # here would make the name local to all of post().
+            if not uses_legacy_exposure(self):
+                # ADR-038: undeclared state can occur in the exception's message,
+                # its traceback and the posted params, so a nonlegacy view gets
+                # the value-free log line and the generic response even under DEBUG.
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(logger, (self,), e, "HTTP event failed")
+                return JsonResponse(
+                    {
+                        "error": "An error occurred processing your request. Please try again.",
+                        "debug_hint": "Check server logs for details",
+                    },
+                    status=500,
+                )
             error_msg = f"Error in {self.__class__.__name__}"
             if event_name:
                 error_msg += f".{event_name}()"
