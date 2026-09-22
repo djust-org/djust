@@ -309,6 +309,32 @@ def djust_client_config(context: Context) -> Any:
     return _client_config_html(request)
 
 
+def _nonlegacy_rendering_view() -> Any:
+    """ADR-038 E2-2: the explicit view whose template is rendering, or None.
+
+    An explicit render context never carries the raw ``view`` (it is a
+    reserved name), so tags that need the view resolve it from the thread-local
+    that every render path registers (:func:`active_parent_view`). Only a
+    nonlegacy view is returned: legacy renders keep resolving ``view`` from
+    their context exactly as before, and the view is never written back into
+    the context.
+    """
+    from .._exposure import uses_legacy_exposure
+
+    active = get_active_parent_view()
+    if active is None or uses_legacy_exposure(active):
+        return None
+    return active
+
+
+def _form_view(view: Any, method: str) -> Any:
+    """The tag's ``view`` argument, or the explicit rendering view (E2-2)."""
+    if hasattr(view, method):
+        return view
+    active = _nonlegacy_rendering_view()
+    return active if active is not None else view
+
+
 @register.simple_tag
 def live_form(view: Any, **kwargs: Any) -> Any:
     """
@@ -334,6 +360,7 @@ def live_form(view: Any, **kwargs: Any) -> Any:
             <button type="submit">Submit</button>
         </form>
     """
+    view = _form_view(view, "as_live")
     if not hasattr(view, "as_live"):
         return "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
 
@@ -365,6 +392,7 @@ def live_field(view: Any, field_name: str, **kwargs: Any) -> Any:
         {% live_field view "email" %}
         {% live_field view "password" label="Custom Password Label" %}
     """
+    view = _form_view(view, "as_live_field")
     if not hasattr(view, "as_live_field"):
         return "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
 
@@ -388,6 +416,7 @@ def live_errors(view: Any, field_name: str | None = None) -> str:
         {% live_errors view "email" %}
         {% live_errors view %}  <!-- non-field errors -->
     """
+    view = _form_view(view, "get_field_errors" if field_name else "form_errors")
     if field_name:
         if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
@@ -424,6 +453,7 @@ def field_value(view: Any, field_name: str) -> Any:
         {% load live_tags %}
         <input type="text" value="{{ view|field_value:'email' }}">
     """
+    view = _form_view(view, "get_field_value")
     if hasattr(view, "get_field_value"):
         return view.get_field_value(field_name)
     return ""
@@ -445,6 +475,7 @@ def has_errors(view: Any, field_name: str) -> bool:
         {% load live_tags %}
         <input class="{% if view|has_errors:'email' %}is-invalid{% endif %}">
     """
+    view = _form_view(view, "has_field_errors")
     if hasattr(view, "has_field_errors"):
         return bool(view.has_field_errors(field_name))
     return False
@@ -892,6 +923,9 @@ class ColocatedHookNode(Node):
             return self.name
         view = context.get("view")
         if view is None:
+            # ADR-038 E2-2: an explicit context has no raw view.
+            view = _nonlegacy_rendering_view()
+        if view is None:
             return self.name
         try:
             prefix = f"{type(view).__module__}.{type(view).__qualname__}"
@@ -1217,6 +1251,10 @@ class DjActivityNode(Node):
         # ``_register_activity``; guarded for non-LiveView contexts (e.g.
         # unit tests that render the tag against a plain Context).
         view = context.get("view")
+        if view is None:
+            # ADR-038 E2-2: an explicit context has no raw view; without this
+            # the activity was never registered and its events were not gated.
+            view = _nonlegacy_rendering_view()
         if view is not None and hasattr(view, "_register_activity"):
             try:
                 view._register_activity(name, visible=visible, eager=eager)
