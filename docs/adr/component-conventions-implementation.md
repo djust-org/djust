@@ -33,6 +33,11 @@ value-free line from that refusal satisfied the assertion. The test now
 records that the patched render ran and covers only the two policies that can
 reach it; `explicit` was red before the fix and green after. 15 open.
 
+Mount wiring's presence-group setup calls the overridable `get_presence_key`
+and logged its failure with the exception. Reproduced at mount (explicit from
+mount; the test records that the hook ran), fixed with `log_failure` at the
+original WARNING level inside the mount's already-restricted scope. 14 open.
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:

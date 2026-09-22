@@ -839,7 +839,9 @@ class WSConsumerTransport:
                     consumer._presence_group, consumer.channel_name
                 )
             except Exception as e:  # noqa: BLE001
-                logger.warning("Error setting up presence group: %s", e)
+                from ._exposure_diagnostics import log_failure
+
+                log_failure(logger, e, "Error setting up presence group: %s", e, level="warning")
 
         # Join db_notify groups for every channel the view subscribed to via
         # NotificationMixin.listen() (websocket.py:2186-2200). Addressed

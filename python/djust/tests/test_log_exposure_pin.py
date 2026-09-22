@@ -157,7 +157,6 @@ RUNTIME_FRAMEWORK_ONLY = {
 }
 
 RUNTIME_KNOWN_OPEN = {
-    ("on_view_mounted", "Error setting up presence group: %s"): "get_presence_key is overridable",
     ("on_render_emitted", "full-HTML-update signal emit failed"): (
         "Django signal: application receivers' exceptions propagate"
     ),

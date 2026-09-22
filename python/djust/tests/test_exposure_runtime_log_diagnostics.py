@@ -155,3 +155,55 @@ async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+PRESENCE_KEY_CALLS = []
+
+
+class PresenceKeyFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    def get_presence_key(self):
+        PRESENCE_KEY_CALLS.append(True)
+        raise ValueError("PRESENCE_KEY_SENTINEL")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """Mount wiring (``on_view_mounted``) calls the overridable
+    ``get_presence_key`` and logged its failure with the exception."""
+    PRESENCE_KEY_CALLS.clear()
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PresenceKeyFailureView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to(
+                    {"type": "mount", "view": __name__ + ".PresenceKeyFailureView", "url": "/p/"}
+                )
+                await _drain(socket)
+            assert PRESENCE_KEY_CALLS, "get_presence_key never ran; the test would be vacuous"
+            if policy == "legacy":
+                assert "Error setting up presence group: PRESENCE_KEY_SENTINEL" in caplog.text
+            else:
+                assert "PRESENCE_KEY_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

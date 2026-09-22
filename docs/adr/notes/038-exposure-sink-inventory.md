@@ -200,8 +200,9 @@ uses_legacy_exposure(view)` for both async-task catches; `uses_legacy_exposure(c
 for both sticky hooks; the actor refusal for the actor flush; and
 `opt_in and legacy_exposure` for snapshot restore. **7 framework-only**:
 NOTIFY group join, the DJE-053 diagnostic, debug decoration, the observability
-registry, the `sticky_hold` send and two accessibility flushes. **9 open**:
-`get_presence_key` at presence setup; the `full_html_update` Django signal,
+registry, the `sticky_hold` send and two accessibility flushes. **9 open** at pinning, since reduced:
+`get_presence_key` at presence setup (fixed: reproduced at mount, explicit
+from mount, now `log_failure` at WARNING); the `full_html_update` Django signal,
 whose application receivers' exceptions propagate; the WS and SSE event
 re-auth checks; `state_snapshot_signed` emission (its explicit codec branch
 has an inner catch, but that nothing else escapes is unconfirmed); both
