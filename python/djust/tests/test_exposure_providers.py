@@ -515,3 +515,90 @@ def test_explicit_render_context_refuses_every_mutation_of_a_provider_key(
     context["note"] = "ok"
     context.update(other=1)
     assert context.pop("note") == "ok"
+
+
+# ---------------------------------------------------------------------------
+# TenantMixin with djust.tenants.context_processor: both supply ``tenant``.
+# The processor may repeat the provider's own object; any other value is
+# still a collision.
+# ---------------------------------------------------------------------------
+
+
+def identical_tenant_processor(request):
+    """What an explicit view's request carries: the view's own tenant object."""
+    return {"tenant": request.tenant}
+
+
+def other_tenant_processor(request):
+    """An equal-looking but distinct tenant, as a re-resolving processor gives."""
+    return {"tenant": TenantInfo("alpha", name="PROCESSOR_SENTINEL")}
+
+
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+def test_tenant_processor_repeating_the_provider_object(staged, monkeypatch, rf, policy):
+    view = _instance(TenantView, policy, monkeypatch)
+    context = view.get_context_data()
+    request = rf.get("/")
+    request.tenant = view._tenant
+    view._get_context_processors = lambda: []
+    view._get_resolved_processors = lambda paths: [identical_tenant_processor]
+    result = view._apply_context_processors(context, request)
+    assert result["tenant"] is view._tenant
+    if policy == "explicit":
+        assert "tenant" not in view._context_processor_keys
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        lambda view: TenantInfo("alpha", name="TENANT_SENTINEL"),
+        lambda view: "PROCESSOR_SENTINEL",
+        lambda view: None,
+    ],
+    ids=["equal-copy", "other", "none"],
+)
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, policy, supplied):
+    view = _instance(TenantView, policy, monkeypatch)
+    context = view.get_context_data()
+    value = supplied(view)
+    assert value is not view._tenant
+    view._get_context_processors = lambda: []
+    view._get_resolved_processors = lambda paths: [lambda request: {"tenant": value}]
+    if policy == "legacy":
+        # Control: the view's value wins silently and the processor ran.
+        result = view._apply_context_processors(context, rf.get("/"))
+        assert result["tenant"] is view._tenant
+    else:
+        with pytest.raises(ExposureError, match="collision"):
+            view._apply_context_processors(context, rf.get("/"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("processor", ["identical", "other"])
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_tenant_view_with_a_tenant_context_processor(staged, monkeypatch, processor, policy):
+    from django.conf import settings
+
+    templates = [dict(t) for t in settings.TEMPLATES]
+    for template in templates:
+        options = dict(template.get("OPTIONS", {}))
+        options["context_processors"] = [
+            *options.get("context_processors", []),
+            f"{__name__}.{processor}_tenant_processor",
+        ]
+        template["OPTIONS"] = options
+    monkeypatch.setattr(TenantView, "exposure_policy", policy)
+    request = await sync_to_async(make_request)()
+    with override_settings(TEMPLATES=templates):
+        runtime, transport = await _mount(request, TenantView)
+    frames = json.dumps(transport.sent)
+    assert "PROCESSOR_SENTINEL" not in frames
+    if policy == "explicit" and processor == "other":
+        assert not any(frame.get("type") == "mount" for frame in transport.sent)
+        assert any(frame.get("type") == "error" for frame in transport.sent)
+    else:
+        assert not transport.errors, transport.errors
+        mount = next(frame for frame in transport.sent if frame.get("type") == "mount")
+        assert "|provided" in mount["html"]
