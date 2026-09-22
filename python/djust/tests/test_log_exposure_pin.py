@@ -81,7 +81,6 @@ FRAMEWORK_ONLY = {
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
     ("hotreload", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("hotreload", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
-    ("hotreload", "Error generating patches for %s: %s"): "dev-only, file-derived",
     ("handle_live_redirect_mount", "Failed to clean up uploads for old view"): "upload cleanup",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
         "outer catch of the staging block; hooks inside it are legacy-gated"

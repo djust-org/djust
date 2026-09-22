@@ -5033,7 +5033,7 @@ class ViewRuntime:
         await sync_to_async(self._attach_socket_tenant)(request)
         return request
 
-    def _attach_socket_tenant(self, request: Any) -> None:
+    def _attach_socket_tenant(self, request: Any) -> None:  # noqa: dead-method-allowed (passed to sync_to_async)
         """Resolve the tenant for a synthesized socket request, as HTTP does.
 
         ``TenantMiddleware`` sets ``request.tenant`` on every HTTP request when

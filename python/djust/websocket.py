@@ -3379,8 +3379,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
             except Exception as e:
-                # Catch-all for unexpected errors
-                hotreload_logger.exception("Error generating patches for %s: %s", file_path, e)
+                # Catch-all for unexpected errors. The re-render runs the
+                # view's own get_context_data, so its exception can carry
+                # view values: value-free for a nonlegacy view (ADR-038).
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    hotreload_logger,
+                    (self.view_instance,),
+                    e,
+                    "Error generating patches for %s: %s",
+                    file_path,
+                    e,
+                    traceback=True,
+                )
                 # Fallback to full reload on error
                 await self.send_json(
                     {

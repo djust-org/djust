@@ -283,3 +283,49 @@ async def test_start_async_from_a_server_originated_turn_runs(view_class):
             await socket.disconnect()
         if view_class is NotifyWorkView:
             assert ">21<" in await _restored_count(request, NotifyWorkView)
+
+
+class HotReloadFailureView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><span>{{ count }}</span></div>"
+    count = state(0)
+
+    def get_context_data(self, **kwargs):
+        if getattr(self, "_fail_render", False):
+            raise ValueError("HOTRELOAD_RENDER_SENTINEL")
+        return super().get_context_data(count=self.count, **kwargs)
+
+
+class LegacyHotReloadFailureView(HotReloadFailureView):
+    exposure_policy = "legacy"
+
+
+@pytest.mark.parametrize("view_class", [HotReloadFailureView, LegacyHotReloadFailureView])
+async def test_hot_reload_render_failure_is_value_free_for_explicit_views(view_class, caplog):
+    """Dev hot reload re-renders the mounted view, which runs its
+    ``get_context_data``. Its catch-all logged the exception, with the
+    traceback, for any policy; an explicit view's failure must be value-free."""
+    import logging
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **dict(SETTINGS, DEBUG=True)):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, view_class)
+        try:
+            # Fail the hot-reload render from the outside, as a code edit might.
+            view_class._fail_render = True
+            with caplog.at_level(logging.DEBUG):
+                await get_channel_layer().group_send(
+                    "djust_hotreload", {"type": "hotreload", "file": "exposure_hotreload.py"}
+                )
+                for _ in range(60):
+                    if "HOTRELOAD_RENDER_SENTINEL" in caplog.text or "Protected" in caplog.text:
+                        break
+                    await asyncio.sleep(0.05)
+        finally:
+            view_class._fail_render = False
+            await socket.disconnect()
+    if view_class is LegacyHotReloadFailureView:
+        assert "HOTRELOAD_RENDER_SENTINEL" in caplog.text
+    else:
+        assert "HOTRELOAD_RENDER_SENTINEL" not in caplog.text
+        assert "Protected view operation failed" in caplog.text

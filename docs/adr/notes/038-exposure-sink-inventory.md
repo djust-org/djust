@@ -178,8 +178,12 @@ no application hook runs there), `_flush_accessibility` (two sites),
 `disconnect`'s db_notify group leave, waiter cancellation (scheduling only)
 and child unregistration (nonlegacy children disposed, legacy hooks caught
 inside `_unregister_child`),
-`handle_live_redirect_mount`'s upload cleanup, and hot reload (three sites,
-dev-only and file-derived).
+`handle_live_redirect_mount`'s upload cleanup, and hot reload's missing
+template and patch-JSON sites (dev-only and file-derived). Hot reload's
+catch-all was misclassified here: it wraps the view's re-render, which runs
+`get_context_data`, so it leaked the view's exception under DEBUG. The E6
+pre-push run caught it; it now logs through `log_failure_for` with the view
+as owner (`test_exposure_consumer_turns.py::test_hot_reload_render_failure_is_value_free_for_explicit_views`).
 
 **Separate defect found while reproducing `_run_tick`** (not an exposure
 issue, not fixed here): the tick task is created during mount
