@@ -2155,6 +2155,62 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     return verdict
 
 
+def _reconstruct_explicit_page_shell(view: Any, request: Any) -> None:
+    """Rebuild an explicit root's page-shell children on a live mount (E3-6).
+
+    Only views whose page shell comes from ``template_name`` inheritance have
+    children outside ``dj-root``. The full render registers them (restoring
+    their declared server state through the child adapter); the caller's
+    root render then reuses them rather than remounting.
+    """
+    if not getattr(view, "template_name", None) or getattr(view, "template", None):
+        return
+    from ._child_rendering import render_view_full_template
+
+    view.get_template()
+    if getattr(view, "_full_template", None) is None:
+        return
+    render_view_full_template(view, request)
+    view._cached_context = None
+
+
+def _explicit_descendant(root: Any, view_id: Any) -> Any:
+    """Resolve a nested explicit child by ``view_id`` (ADR-038 E3-4).
+
+    Direct children keep their existing lookup. Below them, an explicit root
+    routes to a descendant only through the server-owned registry chain, and
+    only when exactly one owned explicit descendant carries that id; an
+    ambiguous or unknown id is not routed. Legacy roots are unchanged.
+    """
+    from ._exposure import uses_legacy_exposure
+
+    if type(view_id) is not str or uses_legacy_exposure(root):
+        return None
+    matches = []
+    pending = [root]
+    seen: set = set()
+    while pending and len(seen) < 257:
+        parent = pending.pop()
+        if id(parent) in seen:
+            continue
+        seen.add(id(parent))
+        registry = getattr(parent, "_child_views", None)
+        if type(registry) is not dict:
+            continue
+        for slot, child in tuple(registry.items()):
+            if (
+                getattr(child, "_parent_view", None) is not parent
+                or getattr(child, "_view_id", None) != slot
+                or getattr(child, "_djust_child_disposed", False)
+                or uses_legacy_exposure(child)
+            ):
+                continue
+            if parent is not root and slot == view_id:
+                matches.append(child)
+            pending.append(child)
+    return matches[0] if len(matches) == 1 else None
+
+
 class ViewRuntime:
     """Wire-blind runtime for a single mounted LiveView session.
 
@@ -2930,6 +2986,13 @@ class ViewRuntime:
                 # native client can bootstrap its widget tree on connect.
                 from ._child_rendering import render_view_with_diff
 
+                if not uses_legacy_exposure(view_instance):
+                    # ADR-038 E3-6: the page shell stays in the browser across
+                    # a (re)connect, but this is a new root instance. Render the
+                    # full page once, as the HTTP GET does, so explicit
+                    # page-shell children are reconstructed from their stored
+                    # state and registered for routing.
+                    await sync_to_async(_reconstruct_explicit_page_shell)(view_instance, request)
                 html, render_patches, rust_version = await sync_to_async(render_view_with_diff)(
                     view_instance
                 )
@@ -4243,6 +4306,8 @@ class ViewRuntime:
 
         all_children = view._get_all_child_views() if hasattr(view, "_get_all_child_views") else {}
         target_view = all_children.get(view_id)
+        if target_view is None:
+            target_view = _explicit_descendant(view, view_id)
         if target_view is None:
             # Security: don't echo a client-supplied view_id into the
             # user-facing error string. The id is already logged via the
@@ -6000,6 +6065,59 @@ class ViewRuntime:
     # the event turn (both flush start_async + @background callbacks off-thread).
     # ------------------------------------------------------------------ #
 
+    def _dispatch_explicit_child_queues(self, event_name: Optional[str]) -> None:
+        """Run explicit child work queued at mount or by a parent turn (E3-3).
+
+        A routed child event drains its own child's queue. Work a child queued
+        in ``mount()`` (during the parent's render) or that a parent handler
+        queued on a child is otherwise stranded until that child's next routed
+        event. Each owner gets its own batch and the owned, re-authorized
+        completion path of :func:`djust._child_async.dispatch_child_work`; no
+        parent acknowledgement advertises or completes it. Legacy roots and
+        legacy children keep their existing behavior.
+        """
+        from ._async_batch import AsyncBatch
+        from ._child_async import dispatch_child_work
+        from ._exposure import uses_legacy_exposure
+
+        root = self.view_instance
+        if (
+            root is None
+            or uses_legacy_exposure(root)
+            or self._explicit_mount_binding is None
+            or getattr(root, "_djust_child_disposed", False)
+        ):
+            return
+        pending = [root]
+        seen: set = set()
+        owners = []
+        while pending and len(seen) < 257:
+            parent = pending.pop()
+            if id(parent) in seen:
+                continue
+            seen.add(id(parent))
+            registry = getattr(parent, "_child_views", None)
+            if type(registry) is not dict:
+                continue
+            for slot, child in tuple(registry.items()):
+                if (
+                    getattr(child, "_parent_view", None) is not parent
+                    or getattr(child, "_view_id", None) != slot
+                    or getattr(child, "_djust_child_disposed", False)
+                    or uses_legacy_exposure(child)
+                ):
+                    continue
+                owners.append(child)
+                pending.append(child)
+        for child in owners:
+            if not getattr(child, "_async_tasks", None) and not getattr(
+                child, "_async_pending", None
+            ):
+                continue
+            batch = AsyncBatch(child)
+            if batch.token:
+                dispatch_child_work(self, child, event_name, batch)
+
     def _dispatch_async_work(
         self, event_name: Optional[str], batch: Optional["AsyncBatch"] = None
     ) -> None:
@@ -6026,9 +6144,11 @@ class ViewRuntime:
                 await self._execute_async_task(name, callback, args, kwargs, event_name)
 
             batch.dispatch(self.transport, run_captured)
+            self._dispatch_explicit_child_queues(event_name)
             return
         if not view:
             return
+        self._dispatch_explicit_child_queues(event_name)
 
         from .mixins.async_work import track_async_task
 
