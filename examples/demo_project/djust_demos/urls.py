@@ -25,6 +25,9 @@ urlpatterns = [
     path("nav-b/", NavDemoPageBView.as_view(), name="nav-b"),
     # Browser-smoke canary (#1849 / #1848) — mount + inline-in-dj-root script.
     path("browser-smoke/", BrowserSmokeView.as_view(), name="browser-smoke"),
+    # ADR-038 E5 live matrix (tests/playwright/test_exposure_matrix.py).
+    path("exposure/", ExposureMatrixView.as_view(), name="exposure"),
+    path("exposure-legacy/", LegacyExposureMatrixView.as_view(), name="exposure-legacy"),
     # Table-selection canary (#2781) - selectable TableComponent multi-select.
     path("table-select/", TableSelectView.as_view(), name="table-select"),
     path("todo/", TodoView.as_view(), name="todo"),
