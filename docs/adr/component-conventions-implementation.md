@@ -26,6 +26,13 @@ legacy controls passing. Beyond the exception, their `repr(callback)` fallback
 logged a `functools.partial`'s bound arguments; the tests pin both channels.
 16 open.
 
+The consumer's `_flush_pending_layout` twin followed. Its first test run
+passed for `None` and invalid policies before any fix — vacuously: those
+policies fail closed in `get_context_data` before the layout render, and a
+value-free line from that refusal satisfied the assertion. The test now
+records that the patched render ran and covers only the two policies that can
+reach it; `explicit` was red before the fix and green after. 15 open.
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:

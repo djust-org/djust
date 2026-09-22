@@ -818,10 +818,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 layout_path,
             )
             return
-        except Exception:  # noqa: BLE001 — layout errors must not kill the WS
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — layout errors must not kill the WS
+            self._log_view_hook_failure(
+                self.view_instance,
+                exc,
                 "set_layout(%r) — template rendering raised; ignoring swap request",
                 layout_path,
+                traceback=True,
             )
             # In DEBUG, re-raise so programmer errors are visible.
             # TemplateSyntaxError / NoReverseMatch / missing-context-key

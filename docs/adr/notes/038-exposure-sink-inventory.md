@@ -132,6 +132,10 @@ fix for explicit/None/invalid and a legacy control proves the hook ran.
   `_flush_deferred` (via `server_push` with `_skip_render`). Besides the
   exception, their `repr(callback)` fallback logged a `functools.partial`'s bound
   arguments; the value-free line drops both.
+- The consumer's `_flush_pending_layout` twin (via `server_push` with
+  `_skip_render`). Only `legacy` and `explicit` can reach a layout render:
+  `None` and invalid policies fail closed in `get_context_data` first, so the
+  test asserts the render ran instead of trusting a value-free line.
 - Converted in the same function, **not independently reproduced**: the
   `db_notify` outer catch and its deferred-activity flush catch.
 - `_mount_one` (`mount_batch`) leaked to the **client** as well as the log:
@@ -152,8 +156,7 @@ component jump and forward replay (`restore_snapshot`,
 view before any re-render); `disconnect`'s upload cleanup (runs only when
 the view was not disposed as nonlegacy).
 
-**Open — application code, not yet reproduced or fixed:** `_flush_pending_layout`
-(`set_layout` template render); `_run_async_work` (`start_async` callback and
+**Open — application code, not yet reproduced or fixed:** `_run_async_work` (`start_async` callback and
 `handle_async_result`); the consumer's `_dispatch_single_event` (deferred
 activity dispatch, waiter notification, render and strip) — live for explicit
 views because `db_notify` passes the consumer to the activity flush;

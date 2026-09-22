@@ -394,3 +394,73 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class PushLayoutView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>push-layout</div>"
+
+    def handle_swap(self, **kwargs):
+        self.set_layout("exposure_push_layout.html")
+        # Skip the render so the consumer's own _flush_all_pending runs its
+        # _flush_pending_layout twin.
+        self._skip_render = True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+# None and invalid policies cannot reach the layout render: the context build
+# refuses an unknown policy first ("unknown context exposure policy"), so the
+# render the test patches never runs. Those cases would pass vacuously.
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, policy
+):
+    """The consumer's ``_flush_pending_layout`` twin logged a ``set_layout``
+    render failure with ``logger.exception`` (and re-raises under DEBUG, into
+    ``server_push``'s already-protected catch)."""
+    import django.template.loader as loader
+
+    from djust.push import apush_to_view
+
+    rendered = []
+
+    def fail(*args, **kwargs):
+        rendered.append(args[0] if args else None)
+        raise ValueError("PUSH_LAYOUT_SENTINEL")
+
+    monkeypatch.setattr(loader, "render_to_string", fail)
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PushLayoutView, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".PushLayoutView", "url": "/pl/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            monkeypatch.setattr(PushLayoutView, "exposure_policy", policy)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await apush_to_view(__name__ + ".PushLayoutView", handler="handle_swap")
+                await _poll_log(caplog, "template rendering raised", "Protected view operation")
+
+            # Every case must reach the layout render; otherwise a value-free
+            # line from an earlier failure would pass the test vacuously.
+            assert rendered == ["exposure_push_layout.html"], (rendered, caplog.text[-600:])
+            if policy == "legacy":
+                assert "set_layout('exposure_push_layout.html') — template rendering raised" in (
+                    caplog.text
+                )
+                assert "PUSH_LAYOUT_SENTINEL" in caplog.text
+            else:
+                assert "PUSH_LAYOUT_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

@@ -98,7 +98,6 @@ FRAMEWORK_ONLY = {
 }
 
 KNOWN_OPEN = {
-    ("_flush_pending_layout", "set_layout(%r) — template rendering raised; igno"): "layout render",
     ("_run_async_work", "[djust] Error in start_async callback '%s' on %s"): "async callback",
     ("_run_async_work", "[djust] Error in handle_async_result for task '%"): "async result",
     ("_dispatch_single_event", "Deferred-activity event %r on %s raised during d"): (
