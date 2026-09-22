@@ -325,42 +325,6 @@
         "HVR: importlib.reload failed for %s"
       ]
     ],
-    "mixins/context.py": [
-      [
-        "_apply_context_processors",
-        "Failed to apply context processor %s: %s"
-      ],
-      [
-        "_get_resolved_processors",
-        "Failed to import context processor %s: %s"
-      ],
-      [
-        "get_context_data",
-        "Descriptor resolution failed for %s: %s"
-      ],
-      [
-        "get_context_data",
-        "JIT auto-serialization failed: %s"
-      ]
-    ],
-    "mixins/jit.py": [
-      [
-        "_get_template_content",
-        "Could not load template for JIT: %s"
-      ],
-      [
-        "_jit_serialize_model",
-        "JIT serialization failed for %s: %s"
-      ],
-      [
-        "_jit_serialize_queryset",
-        "[JIT ERROR] Serialization failed for '%s': %s\nTr"
-      ],
-      [
-        "replacer",
-        "Failed to read included template %s: %s"
-      ]
-    ],
     "mixins/notifications.py": [
       [
         "_restore_listen_channels",

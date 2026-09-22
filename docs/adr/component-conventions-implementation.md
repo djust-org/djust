@@ -241,6 +241,16 @@ the rest share the shape. Both new tests fail against the original
 its two malformed-JSON catches classified framework-only; the baseline is 205
 sites in 69 modules.
 
+`mixins/context.py` and `mixins/jit.py` are pinned with no code change: all
+eight of their sites are unreachable for a nonlegacy view or framework-only.
+`get_context_data` returns `_get_explicit_context_data` for a nonlegacy view
+before its descriptor-resolution and JIT catches; `_apply_context_processors`
+runs processors in an explicit branch without a catch and returns before the
+logged legacy loop; every JIT serializer is reached only from
+`get_context_data`'s legacy continuation or `_deep_serialize_dict`, itself
+called only there; the processor-import catch reports a settings path. The
+baseline is 197 sites in 67 modules.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.
