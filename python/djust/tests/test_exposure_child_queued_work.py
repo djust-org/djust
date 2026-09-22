@@ -204,3 +204,35 @@ async def test_legacy_child_mount_queue_keeps_its_existing_behavior():
     assert any(
         f.get("type") == "embedded_update" and f.get("source") == "async" for f in transport.sent
     )
+
+
+async def test_consumer_turn_queued_child_work_runs_under_child_owner(monkeypatch):
+    """Server-originated WebSocket turns (tick, server_push, db_notify) drain
+    through the consumer's own ``_dispatch_async_work``, not the runtime's.
+    Explicit child work a parent hook queued there must still be swept to the
+    child's owned path instead of waiting for the child's next routed event."""
+    from djust.websocket import LiveViewConsumer
+
+    runtime, transport, request = await mount()
+    completed = observe_completion(monkeypatch, transport)
+    root = runtime.view_instance
+    child = root._get_child_view("menu")
+
+    def work():
+        child.count = 9
+
+    # What a server_push / handle_info / handle_tick hook on the parent does.
+    child.start_async(work, name="consumer-job")
+    consumer = LiveViewConsumer()
+    consumer.view_instance = root
+    consumer._runtime = runtime
+    await consumer._dispatch_async_work()
+
+    await drain(child)
+    await asyncio.wait_for(completed.wait(), 2)
+    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    assert [(u["view_id"], u["source"]) for u in updates] == [("menu", "async")]
+    assert "Count=9" in updates[0]["html"]
+    assert not transport.errors
+    stored = await sync_to_async(SessionStore(request.session.session_key).load)()
+    assert stored[child_state_key(request.path, ("menu",))]["state"]["values"]["count"] == 9

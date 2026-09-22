@@ -225,3 +225,61 @@ async def test_released_activity_event_and_its_work_are_persisted(event, value):
             await socket.disconnect()
         restored = await _restored_count(request, ActivityTurnView)
         assert f">{value}<" in restored, f"{event} state not persisted: {restored}"
+
+
+class NotifyWorkView(TurnView):
+    count = state(0, persist="server")
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.start_async(self._work)
+
+    def _work(self):
+        RAN.append("work")
+        return 21
+
+    def handle_async_result(self, name, result=None, error=None):
+        if error is None:
+            self.count = result
+
+
+class LegacyNotifyWorkView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root><span>{{ count }}</span></div>"
+    _listen_channels = frozenset({"exposure_turns"})
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.start_async(self._work)
+
+    def _work(self):
+        RAN.append("work")
+        return 21
+
+    def handle_async_result(self, name, result=None, error=None):
+        if error is None:
+            self.count = result
+
+
+@pytest.mark.parametrize("view_class", [NotifyWorkView, LegacyNotifyWorkView])
+async def test_start_async_from_a_server_originated_turn_runs(view_class):
+    """``start_async`` queued in ``handle_info`` (and likewise ``handle_tick`` or
+    a ``server_push`` handler) was never dispatched: those turns do not drain
+    the queue. It now runs and renders, and an explicit root persists it."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, view_class)
+        try:
+            await _notify({})
+            await _wait_for("work")
+            frames, closed = await _collect(socket)
+            assert RAN[:2] == ["notify", "work"], (RAN, frames)
+            results = [f for f in frames if f.get("source") == "async"]
+            assert results and "21" in json.dumps(results), frames
+        finally:
+            await socket.disconnect()
+        if view_class is NotifyWorkView:
+            assert ">21<" in await _restored_count(request, NotifyWorkView)

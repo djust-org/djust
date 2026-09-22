@@ -43,6 +43,7 @@ def _authorized_consumer(view):
         view_instance=view,
         authorize_explicit_turn=AsyncMock(),
         commit_explicit_turn=AsyncMock(return_value=True),
+        _dispatch_explicit_child_queues=lambda event_name: None,
         _parameter_contracts_active=False,
     )
     return host

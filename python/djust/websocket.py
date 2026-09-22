@@ -1149,6 +1149,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             return
 
+        # Explicit child work a server-originated turn's hook queued (tick,
+        # server_push, db_notify) runs under each child's owned, authorized
+        # path, as the runtime does after its own turns (ADR-038 E3-3).
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None and runtime.view_instance is self.view_instance:
+            runtime._dispatch_explicit_child_queues(getattr(self, "_current_event_name", None))
+
         # New format: multiple named tasks
         from .mixins.async_work import track_async_task
 
@@ -4554,6 +4561,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
+            dispatch_work = False
             try:
                 if self.view_instance is not view:
                     return
@@ -4595,6 +4603,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         else:
                             payload = event.get("payload") or {}
                             await sync_to_async(handler_fn)(**payload)
+                dispatch_work = True
 
                 if self.view_instance is not view:
                     return
@@ -4645,6 +4654,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             finally:
                 self._end_explicit_turn(view)
                 self._render_lock.release()
+                # start_async queued by the hook (it was never dispatched).
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work()
 
         except Exception as e:
             self._log_view_hook_failure(view, e, "Error in server_push: %s", e, traceback=True)
@@ -4717,6 +4729,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
+            dispatch_work = False
             try:
                 if self.view_instance is not view:
                     return
@@ -4726,6 +4739,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if handler and callable(handler):
                     try:
                         await sync_to_async(handler)(message)
+                        dispatch_work = True
                     except Exception as exc:  # noqa: BLE001
                         self._log_view_hook_failure(
                             view,
@@ -4793,6 +4807,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             finally:
                 self._end_explicit_turn(view)
                 self._render_lock.release()
+                # start_async queued by the hook (it was never dispatched).
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work()
         except Exception as e:  # noqa: BLE001
             self._log_view_hook_failure(view, e, "Error in db_notify: %s", e, traceback=True)
 
@@ -4916,6 +4933,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return False
 
+        dispatch_work = False
         try:
             if self.view_instance is not view:
                 return False
@@ -4925,6 +4943,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             pre_assigns = _snapshot_assigns(self.view_instance)
 
             await sync_to_async(self.view_instance.handle_tick)()
+            dispatch_work = True
 
             if self.view_instance is not view:
                 return False
@@ -4992,6 +5011,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         finally:
             self._end_explicit_turn(view)
             self._render_lock.release()
+            # start_async queued by handle_tick (it was never dispatched).
+            if dispatch_work and self.view_instance is view:
+                await self._dispatch_async_work()
 
     @classmethod
     async def broadcast_reload(cls, file_path: str) -> None:
