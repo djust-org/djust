@@ -178,7 +178,11 @@ def protected_http_outcome(exc: BaseException) -> str:
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
 
-    if isinstance(exc, (Http404, PermissionDenied)):
+    from ._exposure import ExposureConfigurationError
+
+    # The guard's configuration errors are framework-authored and value-free;
+    # the developer needs them, like Django's own ImproperlyConfigured.
+    if isinstance(exc, (Http404, PermissionDenied, ExposureConfigurationError)):
         return "raise"
     if isinstance(exc, (BadRequest, SuspiciousOperation, MultiPartParserError)):
         return "bad_request"

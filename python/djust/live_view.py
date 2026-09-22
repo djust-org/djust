@@ -629,16 +629,16 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
     def _validate_exposure_configuration(self) -> None:
         """Keep staged explicit runtime paths unavailable until every gate passes."""
-        from django.core.exceptions import ImproperlyConfigured
+        from ._exposure import ExposureConfigurationError
 
         if type(self.exposure_policy) is not str or self.exposure_policy != "legacy":
             if type(self.exposure_policy) is str and self.exposure_policy == "explicit":
-                raise ImproperlyConfigured(
+                raise ExposureConfigurationError(
                     "exposure_policy='explicit' is not yet available. ADR-038's "
                     "persistence and browser-export boundaries are still being implemented; "
                     "this view cannot run with implicit legacy exposure instead."
                 )
-            raise ImproperlyConfigured(
+            raise ExposureConfigurationError(
                 "Invalid exposure_policy. Only 'legacy' is currently supported; "
                 "unknown policies cannot fall back to legacy exposure."
             )
@@ -655,7 +655,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 if isinstance(declaration, StateProperty) and (
                     declaration.exposure.persist is not None or declaration.exposure.client
                 ):
-                    raise ImproperlyConfigured(
+                    raise ExposureConfigurationError(
                         "state() exposure grants require ADR-038's explicit policy, "
                         "which is not yet available. Legacy views cannot honor these grants."
                     )

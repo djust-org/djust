@@ -69,14 +69,14 @@ def test_guard_does_not_evaluate_properties_or_factories():
 
 
 def test_http_view_cannot_render_using_an_unsupported_policy(rf, settings):
-    # The guard still refuses before any render. Under ADR-038 D-a an explicit
-    # class's HTTP failure is a generic 500, never Django's technical page.
+    # The guard refuses before any render. Its errors are framework-authored
+    # and value-free, so they reach the developer through the protected HTTP
+    # entry (ADR-038 D-a protects application failures, not configuration).
     settings.DEBUG = True
     with pytest.raises(ImproperlyConfigured, match="not yet available"):
         ExplicitPolicyView()
-    response = ExplicitPolicyView.as_view()(rf.get("/explicit/"))
-    assert response.status_code == 500
-    assert b"Traceback" not in response.content
+    with pytest.raises(ImproperlyConfigured, match="not yet available"):
+        ExplicitPolicyView.as_view()(rf.get("/explicit/"))
 
 
 @pytest.mark.asyncio

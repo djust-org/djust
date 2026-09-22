@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from django.core.exceptions import ImproperlyConfigured
+
 Destination = Literal["server", "client", "snapshot", "debug"]
 Persistence = Literal["server", "client"] | None
 _DESTINATIONS = ("server", "client", "snapshot", "debug")
@@ -22,6 +24,15 @@ _RESTORABLE = ("server", "snapshot")
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z", re.ASCII)
 _UNSAFE_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 _CODEC_VERSION = "json-primitives-v1"
+
+
+class ExposureConfigurationError(ImproperlyConfigured):
+    """A view's exposure configuration is invalid.
+
+    Raised by the constructor guard. Its messages are framework-authored and
+    carry no view values, so the protected HTTP entry (ADR-038 D-a) lets it
+    reach the developer instead of turning it into a generic 500.
+    """
 
 
 class ExposureError(ValueError):

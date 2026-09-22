@@ -3,6 +3,236 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Server-originated turns: authorization and persistence — E3-1/E3-2 slice
+
+Decisions D-k and D-l. An explicit root's turns that arrive with no inbound
+event request ran with the mount-time principal and never saved declared
+state. That covered root `start_async` work on the runtime, `url_change`, and
+the consumer's own turns: `handle_tick`, `server_push` handlers, `db_notify` →
+`handle_info`, NOTIFY-released activity events and the background work they
+start. A revoked session kept receiving renders, and a reconnect restored
+stale state.
+
+`ViewRuntime` gains the shared pieces, all used by the child path's pattern:
+
+- `authorize_explicit_turn` reloads the supported server session and Django
+  auth (`fresh_socket_request`), runs `authorize_event` against the mount
+  binding and object permission, and re-checks that the owner is unchanged.
+- `deny_explicit_turn` is the foreground denial (static error, close 4403).
+- `commit_explicit_turn` makes a bounded save of the root's declared server
+  fields and, optionally, the child tree, before any success frame.
+
+A failed or timed-out save withholds the success frame and sends a static
+`state_error`. This now applies to foreground events too, which previously
+logged the failure and sent the frame anyway. The error carries a null
+snapshot revocation, and the client removes the primary view's token on it; an
+error frame can only revoke, never store (`tests/js/state_snapshot_signed.test.js`).
+
+Background work authorizes before the callback and again before
+`handle_async_result`, then commits before the result frame. `url_change`
+authorizes inside the tenant context, re-checks object permission against the
+fresh request instead of the mount-time one, and commits before rendering.
+Consumer turns authorize under the render lock, not the explicit event lock,
+because the foreground takes the explicit lock first and the reverse order
+could deadlock. `_render_background` commits, and the released-event path,
+which renders itself, commits the same way. Presence heartbeats and cursor
+moves neither render nor persist and are unchanged: authorizing every cursor
+move would cost a session load per mouse movement for no stored or rendered
+effect.
+
+**Not covered: client snapshot refresh on server-originated frames.** The
+client stores tokens only from mounts and primary-view `source == "event"`
+frames (`storeSignedSnapshot`). Background, tick, push and NOTIFY frames
+therefore persist server state but do not refresh the client's signed
+snapshot. A `persist="client"` field changed by such a turn is refreshed at
+the next foreground event. Until then, back-navigation can offer the earlier
+token. That is a restoration-correctness limit, not an exposure one: the
+stale token can only hold values the client was already granted.
+
+Evidence:
+- `test_exposure_root_background_turns.py` has 6 tests: persistence across
+  reconnect, revocation, failed background and foreground saves, `url_change`
+  persistence, and `url_change` revocation.
+- `test_exposure_consumer_turns.py` has 6 tests over real sockets: NOTIFY,
+  push, tick, and a released event and its background work persisting across
+  reconnect, plus NOTIFY revocation.
+- Every test failed before its fix for the stated reason.
+- The broad exposure, runtime, consumer and child set passed 1,773 tests. The
+  full JS suite passed 2,150. mypy passed 1,067 files.
+
+Existing tests changed with the contract:
+- `test_exposure_consumer_hook_diagnostics.py` flipped views to explicit after
+  a legacy mount. Fresh authorization needs the mount binding, so explicit
+  views now mount explicit, and None/invalid policies (which cannot mount) are
+  now refused before the hook.
+- The task-cancellation tests on unmounted runtimes and consumers grant
+  authority through a stub, since they exercise cancellation, not
+  authorization.
+- The storage-deadline pin gains `commit_explicit_turn`.
+- The snapshot `identity` case now expects the `state_error` revocation
+  instead of a noop.
+
+## Application sinks — E1-2 and decisions D-c, D-d, D-f
+
+Exception text or values reached destinations without passing a log call:
+
+- **PWA.** The `offline:sync_error` push frame and the sync queue's stored
+  `mark_failed` reason both carried `str(exc)`. Nonlegacy views now get a
+  generic push and the exception class name. `SyncManager._perform_sync`
+  returned exception text in the sync endpoint's JSON; it now returns
+  `Batch sync error: <ClassName>` for every caller, which changes legacy output
+  (it is a plain Django endpoint, not view state). The `IndexedDBStorage`
+  docstring now says it is server memory.
+- **Actions (D-f).** A failed `@action` recorded `str(exc)`, which templates
+  render. Nonlegacy views record "Action failed" unless the handler raises the
+  new `djust.decorators.ActionError`.
+- **Presence (D-c).** `track_presence` no longer injects `username`/`user_id`
+  for nonlegacy views. The docstrings state that meta is rebroadcast to peers.
+- **SQL capture (D-d).** Parameters are redacted when the capture's owner is
+  nonlegacy or the diagnostic scope is restricted. The runtime now passes the
+  owner to `capture_for_event`.
+
+The new helper `exception_details_allowed_for(owners)` is the non-log
+counterpart of `log_failure_for`. Each fix failed first with a legacy control:
+`test_exposure_pwa_sync_sinks.py` (5), `test_exposure_action_errors.py` (4),
+`test_exposure_presence_meta.py` (2) and `test_exposure_sql_capture.py` (6).
+`test_exposure_pwa_diagnostics.py` now asserts the class name instead of
+pinning the leak.
+
+Findings recorded, not fixed:
+- SQL capture misses sync handlers entirely: their queries run on a worker
+  thread's connection that has no wrapper.
+- `_sync_create/update/delete_batch` still put `str(e)` into the endpoint's
+  `errors`.
+- Globally registered sync handlers are registered under the bare model name
+  but looked up as `{action_type}_{model_name}`, so they are never called.
+- The presence identity (`str(user.id)`) still reaches peers in the record id
+  and the `cursor_move` `user_id`.
+- SQL text built by interpolation is recorded verbatim.
+
+## Cost measurement and migration inventory — E6-1/E6-2
+
+`tests/benchmarks/test_exposure_cost.py` (benchmark-only) measures legacy
+against explicit for the same view. `docs/adr/notes/038-cost-measurement.md`
+has the numbers, the environment and the variance. Medians at `bc3a3d156`, on
+an M2 Max:
+
+| Path | Explicit vs legacy |
+| --- | --- |
+| WebSocket event | about 2× slower, +3.3 to 3.9 ms (fresh re-authorization plus the declared-state save of about 1.3 to 1.5 ms) |
+| HTTP GET | about 15% slower |
+| WebSocket mount | 11 to 16% faster (unexplained) |
+| Repeated mount without the shared render cache | no measurable loss |
+
+These were measured before the E3 slice, which adds a session load per
+server-originated turn.
+
+`djust_exposure_inventory` (`--view`, `--app`, `--json`) is a static,
+values-redacted inventory. For each view it lists the names legacy mode would
+export and their destinations, with a suggested explicit declaration. It never
+instantiates a view or evaluates a property or factory
+(`test_exposure_inventory_command.py`, 6 tests, which also cross-check a real
+legacy view's `get_context_data`, `get_state` and private state).
+
+Findings recorded, not fixed:
+- A legacy view's `state()` backing slots (`_state_<name>`), `_reactive_state`
+  and `_action_state` are saved in `liveview_<path>__private`.
+- Legacy context includes `LiveView` configuration attributes (`template`,
+  `login_required`, `use_actors`, `sticky`) because the class walk stops at
+  `ContextMixin`.
+- The WebSocket-built request carries no tenant, so explicit mounts fail
+  closed under a header tenant resolver, which matters for E5 settings
+  coverage.
+
+## Service-worker caches — E1-3, E3-8 and decisions D-b, D-n
+
+The worker keeps three caches on disk: the signed-snapshot state cache, the VDOM
+(mount HTML) cache and the page-shell cache. The server now sends three
+value-free signals (`security/service_worker.py`):
+
+- **Eligibility (D-b).** Only a legacy page whose children are all legacy may
+  be cached (`_exposure.service_worker_cache_eligible`). Unreadable children
+  fail closed. Ineligible pages send `X-Djust-SW-Cache: no-store` on the HTTP
+  response, which the worker checks before writing the shell, and
+  `"sw_cache": "no-store"` on the mount frame, which the client checks before
+  `cacheVdom`.
+- **Identity (D-n).** Every mount frame carries `sw_identity`, a 128-bit
+  `salted_hmac` of the session key and the authenticated user id, keyed on
+  `SECRET_KEY`. The client clears all three caches when the marker changes,
+  disappears (logout) or cannot be read. The worker runs VDOM and shell
+  operations through the same ordered queue as state operations, so a clear
+  always lands before the next user's first write.
+- **Lifetime (D-n).** A mount frame carrying a snapshot also carries
+  `state_snapshot_max_age`. The worker rejects older state entries on lookup
+  and deletes them.
+
+State and VDOM entries are now keyed by pathname plus query string (E3-8), so
+`/orders?page=1` and `/orders?page=2` no longer share a token.
+
+Identity clearing and the lifetime check apply to legacy pages too, since D-n
+does not restrict them to explicit views. This addresses the legacy report in
+#2948.
+
+Evidence: `tests/js/exposure_sw_caches.test.js` runs the real client into the
+real worker and asserts the stored bytes (8 cases, 7 red before the fix, with
+an unchanged-identity control). `test_exposure_sw_caches.py` covers the digest,
+the eligibility rule, the header and the mount fields (7 cases).
+
+Finding recorded, not fixed: with a warm shell cache, the worker serves the
+cached shell before any mount frame arrives. The first navigation after an
+identity change can therefore still show the previous user's page chrome;
+closing that needs the worker to check identity without going to the network.
+The browser-level logout test waits for the E5 harness.
+
+## Protected entry points — E1-1 and decision D-a
+
+Five entry points ran explicit-view code with no protected scope, and
+`handle_exception` defaults to allowing details:
+
+- HTTP GET, sync and streaming;
+- the SSE stream GET;
+- SSE navigation replacement;
+- the WebSocket `receive` catch-all, reached by `mount_batch`,
+  `live_redirect_mount`, uploads, presence, `request_html`, time travel and
+  bug-capture sharing;
+- the runtime constructor catch.
+
+Under DEBUG they leaked the exception and, over HTTP, frame locals through
+Django's technical 500 page.
+
+The fixes:
+
+- **HTTP.** `LiveView.as_view` wraps a nonlegacy class's callable in a scope
+  restricted to the class (`_protect_http_entry`). `Http404` and
+  `PermissionDenied` keep Django's handling. `BadRequest`-type exceptions
+  become a plain 400. Everything else becomes the project's `handler500` page,
+  with `got_request_exception` sent while a fresh value-free `ExposureError` is
+  being handled, so error trackers still see an event.
+- **SSE.** The stream GET and navigation replacement own scopes that watch the
+  runtime's view.
+- **WebSocket.** `receive` runs each message under `owned_diagnostic_scope`.
+- **Constructor.** `_instantiate_view` passes
+  `expose_details=uses_legacy_exposure(view_class)`.
+- A legacy class keeps Django's own callable, the same object as before.
+
+The guard's own configuration errors are framework-authored and value-free, so
+they now raise `ExposureConfigurationError` (an `ImproperlyConfigured`
+subclass) and pass through the protected entry. A misconfigured view still
+tells the developer why under DEBUG.
+
+Evidence: `test_exposure_entry_scope_diagnostics.py` has 62 cases under DEBUG,
+covering responses, stream bytes, frames, logs, the traceback ring and the
+`got_request_exception` payload. All 46 nonlegacy cases failed against the base
+commit, and the 16 legacy controls pass on both.
+
+Findings recorded, not fixed:
+- Under DEBUG, an `Http404` message from an explicit view still reaches
+  Django's technical 404 page, though without frame locals.
+- `mixins/request.py:get` logs `wrapper_template` render failures with the
+  exception text.
+- The legacy snapshot-emit branch of `dispatch_mount` calls `logger.exception`
+  directly.
+
 ## Runtime log-exposure pin — E1 slice
 
 The pin, renamed `test_log_exposure_pin.py`, now covers `runtime.py` beside
