@@ -253,6 +253,16 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "api/dispatch.py": (
+        {},
+        {
+            ("dispatch_api", "djust API: malformed JSON body for %s"): "request body parse",
+            (
+                "dispatch_server_function",
+                "djust API: malformed JSON body for %s",
+            ): "request body parse",
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (

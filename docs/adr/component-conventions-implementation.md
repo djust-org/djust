@@ -218,6 +218,35 @@ adds no separate exposure.
 
 E1 remains open. The actor caller inventory was then the remaining named E1 task.
 
+## HTTP API assigns — E1 slice
+
+Working down the ratchet baseline surfaced an automatic sink the inventory
+did not list at all: the ADR-008 HTTP API. `dispatch_api` answers
+`{"result": …, "assigns": …}`. `result` is the handler's own response, outside
+the automatic contract (D6). `assigns` was automatic and had no policy check:
+`_public_assigns_snapshot_diff` returned every public attribute the handler
+changed. Reproduced through `dispatch_api` with an explicit view whose handler
+changed a declared `client=True` field, a declared server-only field and an
+undeclared public attribute: the response carried the **undeclared** attribute
+and omitted the declared client field — the inverse of D1. For a nonlegacy
+view, `assigns` is now the diff of the `client` projection `get_state` uses,
+taken before and after the handler; an unavailable projection yields no
+fields. The inventory gains an HTTP API row.
+
+The module's seven application-code log catches (handler, `server_function`,
+view instantiation, response transform) now use `log_failure_for` — the view,
+or the view class where instantiation failed. The handler case is reproduced;
+the rest share the shape. Both new tests fail against the original
+`dispatch.py`. The module moves from the ratchet baseline into the pin, with
+its two malformed-JSON catches classified framework-only; the baseline is 205
+sites in 69 modules.
+
+A process note: the first conversion added `as exc` to `except` lines by line
+number after an earlier edit had shifted them, producing
+`except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.
+The file was restored from HEAD, the uncommitted assigns fix re-applied, and
+the conversion redone by re-parsing after every edit.
+
 ## Package-wide log ratchet — E1 slice
 
 `time_travel.py` is pinned: 9 legacy-gated sites and 1 framework-only. The

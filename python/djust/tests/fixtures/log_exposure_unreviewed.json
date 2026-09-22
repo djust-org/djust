@@ -73,44 +73,6 @@
         "Failed to build filter for %s"
       ]
     ],
-    "api/dispatch.py": [
-      [
-        "dispatch_api",
-        "djust API handler raised: slug=%s handler=%s"
-      ],
-      [
-        "dispatch_api",
-        "djust API response transform raised: slug=%s han"
-      ],
-      [
-        "dispatch_api",
-        "djust API serialize= misconfigured: slug=%s hand"
-      ],
-      [
-        "dispatch_api",
-        "djust API: malformed JSON body for %s"
-      ],
-      [
-        "dispatch_api",
-        "djust API: view instantiation failed for %s"
-      ],
-      [
-        "dispatch_server_function",
-        "djust API: malformed JSON body for %s"
-      ],
-      [
-        "dispatch_server_function",
-        "djust server_function raised: slug=%s fn=%s"
-      ],
-      [
-        "dispatch_server_function",
-        "djust server_function return value not JSON-seri"
-      ],
-      [
-        "dispatch_server_function",
-        "djust server_function: view init failed for %s"
-      ]
-    ],
     "audit_ast.py": [
       [
         "run_ast_audit",
