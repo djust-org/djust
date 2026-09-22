@@ -2685,14 +2685,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # its owner is the class the batch entry names, resolved by the
             # shared allowlist-first resolver. An unresolvable class, or any
             # nonlegacy owner, keeps both the log and failed[] value-free.
-            from ._exposure import uses_legacy_exposure
             from .security.mount import resolve_view_class
 
             resolution = resolve_view_class(view_path)
+            from ._exposure_diagnostics import diagnostics_policy_allows
+
             legacy = (
                 bool(resolution)
-                and uses_legacy_exposure(resolution.view_class)
-                and uses_legacy_exposure(self.view_instance)
+                and diagnostics_policy_allows(resolution.view_class)
+                and diagnostics_policy_allows(self.view_instance)
             )
             if legacy:
                 logger.exception(
@@ -4508,13 +4509,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 scrub=scrub,
             )
         except (RuntimeError, ValueError) as exc:
-            from ._exposure import ExposureError, uses_legacy_exposure
+            from ._exposure import ExposureError
 
             view = self.view_instance
             # ADR-038: for a nonlegacy owner only framework ExposureError text
             # (value-free by construction) reaches the client; an application
             # ValueError/RuntimeError from the re-render can carry undeclared state.
-            if uses_legacy_exposure(view) or isinstance(exc, ExposureError):
+            from ._exposure_diagnostics import diagnostics_policy_allows
+
+            if diagnostics_policy_allows(view) or isinstance(exc, ExposureError):
                 await self.send_error("bug_capture_share: %s" % exc)
             else:
                 self._log_view_hook_failure(

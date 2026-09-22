@@ -49,9 +49,30 @@ def diagnostic_scope() -> Iterator[None]:
             _details_allowed.set(False)
 
 
+def diagnostics_policy_allows(owner: Any) -> bool:
+    """Whether this owner's failures may carry exception details.
+
+    A legacy owner always may. Under ``DEBUG`` every owner may, explicit ones
+    included: errors then read like Django's own DEBUG output, with the
+    exception, traceback and technical error page (decision D-a, revised
+    2026-09-22). In production a nonlegacy owner's failures are value-free.
+    Debug tooling projections (debug panel, time travel, bug capture) and SQL
+    parameter capture are not error destinations and stay redacted.
+    """
+    if uses_legacy_exposure(owner):
+        return True
+    try:
+        from django.conf import settings
+
+        return getattr(settings, "DEBUG", False) is True
+    except Exception:  # noqa: BLE001 — unreadable settings grant nothing
+        return False
+
+
 def restrict_diagnostics(view: Any) -> None:
-    """A nonlegacy owner makes the current diagnostic scope value-free."""
-    if not uses_legacy_exposure(view):
+    """A nonlegacy owner makes the current diagnostic scope value-free,
+    unless ``DEBUG`` is on (see :func:`diagnostics_policy_allows`)."""
+    if not diagnostics_policy_allows(view):
         _details_allowed.set(False)
 
 

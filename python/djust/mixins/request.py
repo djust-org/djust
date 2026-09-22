@@ -1044,10 +1044,13 @@ class RequestMixin:
 
             # uses_legacy_exposure is the module-level import; a local import
             # here would make the name local to all of post().
-            if not uses_legacy_exposure(self):
+            from .._exposure_diagnostics import diagnostics_policy_allows
+
+            if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
-                # its traceback and the posted params, so a nonlegacy view gets
-                # the value-free log line and the generic response even under DEBUG.
+                # its traceback and the posted params, so in production a
+                # nonlegacy view gets the value-free log line and the generic
+                # response. Under DEBUG it gets Django-like detail (D-a).
                 from .._exposure_diagnostics import log_failure_for
 
                 log_failure_for(logger, (self,), e, "HTTP event failed")

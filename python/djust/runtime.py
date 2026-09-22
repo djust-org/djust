@@ -98,6 +98,13 @@ EVENT_STATE_SAVE_TIMEOUT_S = 0.150
 logger = logging.getLogger(__name__)
 
 
+def _diagnostics_policy_allows(owner: Any) -> bool:
+    """Legacy owner or DEBUG: see ``_exposure_diagnostics.diagnostics_policy_allows``."""
+    from ._exposure_diagnostics import diagnostics_policy_allows
+
+    return diagnostics_policy_allows(owner)
+
+
 def _mount_tenant_scope(method: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
     """Restore mount-local tenant/diagnostic scopes on failure and early return."""
 
@@ -2534,7 +2541,7 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Error initializing {sanitize_for_log(view_path)}",
-                expose_details=uses_legacy_exposure(view_instance),
+                expose_details=_diagnostics_policy_allows(view_instance),
             )
             await self.transport.send(response)
             self.view_instance = None
@@ -2831,7 +2838,7 @@ class ViewRuntime:
                     view_class=view_path,
                     logger=logger,
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
-                    expose_details=uses_legacy_exposure(view_instance),
+                    expose_details=_diagnostics_policy_allows(view_instance),
                 )
                 await self.transport.send(response)
                 return
@@ -2927,7 +2934,7 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
-                expose_details=uses_legacy_exposure(view_instance),
+                expose_details=_diagnostics_policy_allows(view_instance),
             )
             await self.transport.send(response)
             return
@@ -2969,7 +2976,7 @@ class ViewRuntime:
                         view_class=view_path,
                         logger=logger,
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
-                        expose_details=uses_legacy_exposure(view_instance),
+                        expose_details=_diagnostics_policy_allows(view_instance),
                     )
                     await self.transport.send(response)
                     return
@@ -3007,7 +3014,7 @@ class ViewRuntime:
                     view_class=view_path,
                     logger=logger,
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
-                    expose_details=uses_legacy_exposure(view_instance),
+                    expose_details=_diagnostics_policy_allows(view_instance),
                 )
                 await self.transport.send(response)
                 return
@@ -4942,7 +4949,6 @@ class ViewRuntime:
         try:
             return view_class()
         except Exception as exc:
-            from ._exposure import uses_legacy_exposure
 
             # No instance exists yet: the class owns the policy (ADR-038 D-a).
             response = handle_exception(
@@ -4951,7 +4957,7 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Failed to instantiate {view_path}",
-                expose_details=uses_legacy_exposure(view_class),
+                expose_details=_diagnostics_policy_allows(view_class),
             )
             self._instantiate_error_frame = response
             return None
@@ -5102,11 +5108,10 @@ class ViewRuntime:
           aborts on any non-auth-verdict exception during this sequence.
         """
         from .auth import run_pre_mount_auth
-        from ._exposure import uses_legacy_exposure
         from django.core.exceptions import PermissionDenied
 
         auth_view = self.view_instance
-        legacy_diagnostics = uses_legacy_exposure(auth_view)
+        legacy_diagnostics = _diagnostics_policy_allows(auth_view)
         try:
             redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
         except PermissionDenied:
@@ -5126,7 +5131,7 @@ class ViewRuntime:
                 logger=logger,
                 log_message="Error in pre-mount security sequence for %s"
                 % sanitize_for_log(self.view_instance.__class__.__name__),
-                expose_details=legacy_diagnostics and uses_legacy_exposure(auth_view),
+                expose_details=legacy_diagnostics and _diagnostics_policy_allows(auth_view),
             )
             await self.transport.send(response)
             # No close: the WS bespoke path lets a non-auth-verdict exception
@@ -5389,9 +5394,19 @@ class ViewRuntime:
             await asyncio.wait_for(
                 asave_server_state(view, request), timeout=EVENT_STATE_SAVE_TIMEOUT_S
             )
-        except Exception:  # noqa: BLE001 — storage errors can carry server-only values
+        except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
+            from ._exposure_diagnostics import log_failure_for
+
             view._force_full_html = True
-            logger.warning("Explicit state save failed; success frame withheld")
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "Explicit state save failed; success frame withheld: %s",
+                exc,
+                level="warning",
+                traceback=True,
+            )
             await self.transport.send_error(
                 "State unavailable. Please reload the page.", code="state_error", **extra
             )
@@ -6370,8 +6385,19 @@ class ViewRuntime:
         try:
             result = await run_async_callback(callback, args, kwargs, owner=view)
         except Exception as exc:  # noqa: BLE001 — only the owning application sees it
+            from ._exposure_diagnostics import log_failure_for
+
             error = exc
-            logger.warning("Explicit background callback failed")
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "Runtime: error in start_async callback '%s' on %s",
+                task_name,
+                type(view).__name__,
+                level="warning",
+                traceback=True,
+            )
 
         if self.view_instance is not view:
             logger.debug("Explicit background result discarded after owner replacement")
@@ -6389,8 +6415,18 @@ class ViewRuntime:
                 if callable(handler):
                     try:
                         await sync_to_async(handler)(task_name, result=result, error=error)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("Explicit background result handling failed")
+                    except Exception as exc:  # noqa: BLE001
+                        from ._exposure_diagnostics import log_failure_for
+
+                        log_failure_for(
+                            logger,
+                            (view,),
+                            exc,
+                            "Runtime: error in handle_async_result for task '%s'",
+                            task_name,
+                            level="warning",
+                            traceback=True,
+                        )
                         return
                 elif error is not None:
                     # Legacy parity: an unhandled failure renders nothing.
