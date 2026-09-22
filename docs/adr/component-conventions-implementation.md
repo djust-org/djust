@@ -261,6 +261,20 @@ logged through `_log_view_hook_failure`. 4 open (3 consumer, 1 runtime): the two
 `_run_async_work` sites blocked on the dropped-`start_async` defect,
 `handle_bug_capture_share`, and scoped component render.
 
+`handle_bug_capture_share` had two channels. A `ValueError`/`RuntimeError`
+from its re-render went to the **client** as `str(exc)`; anything else went to
+`logger.exception`. Reproduced both over the real consumer (explicit from
+mount; each case records that the render raised). For a nonlegacy owner only
+framework `ExposureError` text — value-free by construction, and a
+`ValueError` subclass — still reaches the client; other exceptions become the
+generic error and log through the helper. One acknowledged trade-off: the
+production-gate `RuntimeError` also becomes generic for explicit views, which
+only fires where bug capture is disabled anyway.
+
+This exposed a gap in the pin: it scans logging calls, not client error frames
+that interpolate an exception (`send_error("…%s" % exc)`). That pattern is not
+yet inventoried. 3 open (2 consumer, 1 runtime).
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

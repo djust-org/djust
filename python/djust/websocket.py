@@ -4380,10 +4380,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 scrub=scrub,
             )
         except (RuntimeError, ValueError) as exc:
-            await self.send_error("bug_capture_share: %s" % exc)
+            from ._exposure import ExposureError, uses_legacy_exposure
+
+            view = self.view_instance
+            # ADR-038: for a nonlegacy owner only framework ExposureError text
+            # (value-free by construction) reaches the client; an application
+            # ValueError/RuntimeError from the re-render can carry undeclared state.
+            if uses_legacy_exposure(view) or isinstance(exc, ExposureError):
+                await self.send_error("bug_capture_share: %s" % exc)
+            else:
+                self._log_view_hook_failure(
+                    view, exc, "bug_capture_share: failed to encode capture", traceback=True
+                )
+                await self.send_error("bug_capture_share: failed to encode capture")
             return
-        except Exception:  # noqa: BLE001 — dev tool, never crash the socket
-            logger.exception("bug_capture_share: failed to encode capture")
+        except Exception as exc:  # noqa: BLE001 — dev tool, never crash the socket
+            self._log_view_hook_failure(
+                self.view_instance,
+                exc,
+                "bug_capture_share: failed to encode capture",
+                traceback=True,
+            )
             await self.send_error("bug_capture_share: failed to encode capture")
             return
 

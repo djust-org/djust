@@ -159,8 +159,11 @@ the view was not disposed as nonlegacy).
 **Open — application code, not yet reproduced or fixed:** `_run_async_work`
 (`start_async` callback and `handle_async_result`), unreachable from the
 NOTIFY drain until its dropped-`start_async` defect is fixed and to be fixed
-with it; and `handle_bug_capture_share`. The pin's `KNOWN_OPEN` tables are the
-authoritative list.
+with it. The pin's `KNOWN_OPEN` tables are the authoritative list.
+
+The pin does not cover client error frames that interpolate an exception
+(`send_error("…%s" % exc)`); `handle_bug_capture_share` did exactly that and is
+fixed, but the pattern has not been inventoried elsewhere.
 
 **Framework-only** (message not derived from application values):
 `_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm

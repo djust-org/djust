@@ -464,3 +464,72 @@ async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class BugShareView(LiveView):
+    exposure_policy = "legacy"
+    time_travel_enabled = True
+    template = "<div dj-root>{{ count }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize(
+    "exc_type,sentinel,channel",
+    [
+        (ValueError, "BUG_SHARE_VALUE_SENTINEL", "client"),
+        (KeyError, "BUG_SHARE_KEY_SENTINEL", "log"),
+    ],
+)
+async def test_bug_capture_share_failure_is_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, policy, exc_type, sentinel, channel
+):
+    """``handle_bug_capture_share`` re-renders the view. A ``ValueError`` or
+    ``RuntimeError`` from that render went to the client as ``str(exc)``; any
+    other exception was logged with its traceback. Framework ``ExposureError``
+    text (value-free by construction) is still passed through."""
+    raised = []
+
+    def failing_context(self, **kwargs):
+        raised.append(True)
+        raise exc_type(sentinel)
+
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(BugShareView, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".BugShareView", "url": "/bs/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            monkeypatch.setattr(BugShareView, "exposure_policy", policy)
+            monkeypatch.setattr(BugShareView, "get_context_data", failing_context)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to({"type": "bug_capture_share"})
+                frame = await socket.receive_json_from(timeout=3)
+            assert raised, "the re-render never ran; the test would be vacuous"
+            assert frame["type"] == "error", frame
+            text = json.dumps(frame) + caplog.text
+            if policy == "legacy":
+                # Unchanged legacy behaviour on the channel each exception used.
+                if channel == "client":
+                    assert sentinel in json.dumps(frame)
+                else:
+                    assert sentinel in caplog.text
+            else:
+                assert sentinel not in text
+                assert frame["error"] == "bug_capture_share: failed to encode capture"
+        finally:
+            await socket.disconnect()

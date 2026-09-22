@@ -104,7 +104,6 @@ KNOWN_OPEN = {
     ("_run_async_work", "[djust] Error in handle_async_result for task '%"): (
         "unreachable from the NOTIFY drain until its has_async drop is fixed; fix both together"
     ),
-    ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
 }
 
 
