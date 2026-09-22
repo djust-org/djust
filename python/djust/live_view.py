@@ -7,6 +7,7 @@ import json
 import logging
 import socket
 import threading
+from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Union, cast
 
 from django.utils.decorators import classonlymethod
@@ -231,6 +232,67 @@ class NonPersistableStateError(TypeError):
     Production never sees this exception — the guard logs a warning and
     skips the attribute instead.
     """
+
+
+def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., Any]:
+    """ADR-038 D-a: a nonlegacy class's HTTP entry fails with a value-free 500.
+
+    The constructor, ``setup``, ``on_mount`` hooks, ``mount``, ``handle_params``,
+    ``get_context_data`` and render all run under Django's view callable with no
+    protected scope, so under ``DEBUG`` Django's technical 500 page would show
+    the exception and its frames' locals. The class owns the policy before an
+    instance exists. A legacy class keeps Django's callable itself, unchanged;
+    a class that became legacy after ``as_view`` re-raises as before.
+    """
+    from asgiref.sync import iscoroutinefunction, markcoroutinefunction
+
+    from ._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(cls):
+        return view
+
+    from ._exposure_diagnostics import (
+        diagnostic_scope,
+        diagnostics_allowed,
+        protected_http_outcome,
+        protected_server_error,
+        restrict_diagnostics,
+    )
+
+    if iscoroutinefunction(view):
+        from asgiref.sync import sync_to_async
+
+        @wraps(view)
+        async def protected_async(request: Any, *args: Any, **kwargs: Any) -> Any:
+            with diagnostic_scope():
+                restrict_diagnostics(cls)
+                try:
+                    return await view(request, *args, **kwargs)
+                except Exception as exc:
+                    outcome = protected_http_outcome(exc)
+                    if diagnostics_allowed() or outcome == "raise":
+                        raise
+                    del exc
+            # Outside the except block: the signal's exception has no context.
+            return await sync_to_async(protected_server_error)(request, logger, outcome)
+
+        markcoroutinefunction(protected_async)
+        return protected_async
+
+    @wraps(view)
+    def protected(request: Any, *args: Any, **kwargs: Any) -> Any:
+        with diagnostic_scope():
+            restrict_diagnostics(cls)
+            try:
+                return view(request, *args, **kwargs)
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
+                    raise
+                del exc
+        return protected_server_error(request, logger, outcome)
+
+    return protected
 
 
 class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
@@ -534,7 +596,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         Django dispatch with zero overhead and no behavior change.
         """
         if not getattr(cls, "streaming_render", False):
-            return cast(Callable[..., Any], super().as_view(**initkwargs))
+            return _protect_http_entry(cls, cast(Callable[..., Any], super().as_view(**initkwargs)))
 
         from asgiref.sync import markcoroutinefunction, sync_to_async
 
@@ -559,7 +621,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # from dispatch — mirrors Django's stock as_view behavior.
         view.__dict__.update(cls.dispatch.__dict__)
         markcoroutinefunction(view)
-        return view
+        return _protect_http_entry(cls, view)
 
     # ============================================================================
     # INITIALIZATION & SETUP

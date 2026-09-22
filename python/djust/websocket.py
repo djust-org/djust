@@ -23,6 +23,7 @@ from .change_detection import (
 from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params, validated_call_arguments
 from .profiler import profiler
+from ._exposure_diagnostics import owned_diagnostic_scope
 from .security import handle_exception, sanitize_for_log
 from .config import config as djust_config
 from .rate_limit import ConnectionRateLimiter, ip_tracker
@@ -2305,10 +2306,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if runtime is not None:
             runtime.view_instance = None
 
+    @owned_diagnostic_scope
     async def receive(
         self, text_data: Optional[str] = None, bytes_data: Optional[bytes] = None
     ) -> None:
-        """Handle incoming WebSocket messages"""
+        """Handle incoming WebSocket messages.
+
+        One protected diagnostic scope per message (ADR-038 D-a): the
+        catch-all below also receives failures from the verbs that bypass
+        ``dispatch_message`` (``request_html``, ``live_redirect_mount``,
+        ``mount_batch``, uploads, presence, time travel, ...), and
+        ``handle_exception`` is value-free there for a nonlegacy owner.
+        """
         logger.debug(
             "[WebSocket] receive called: text_data=%s, bytes_data=%s",
             text_data[:100] if text_data else None,

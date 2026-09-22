@@ -4877,12 +4877,16 @@ class ViewRuntime:
         try:
             return view_class()
         except Exception as exc:
+            from ._exposure import uses_legacy_exposure
+
+            # No instance exists yet: the class owns the policy (ADR-038 D-a).
             response = handle_exception(
                 exc,
                 error_type="mount",
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Failed to instantiate {view_path}",
+                expose_details=uses_legacy_exposure(view_class),
             )
             self._instantiate_error_frame = response
             return None
