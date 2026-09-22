@@ -41,6 +41,14 @@ mount; the test records that the hook ran), fixed with `log_failure` at the
 original WARNING level inside the mount's already-restricted scope. 15 open
 (8 consumer, 7 runtime).
 
+The `full_html_update` Django signal is sent with `send`, so an application
+receiver's exception reaches `on_render_emitted`'s catch, which logged it with
+`exc_info` at DEBUG. Reproduced with a connected receiver that records its call
+(explicit from mount), fixed with `log_failure` at DEBUG inside the render
+turn's restricted scope. The signal's own payload was already safe: its
+`context_snapshot` is the redacted debug projection for explicit views.
+14 open (8 consumer, 6 runtime).
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:

@@ -207,3 +207,69 @@ async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+class FullHtmlView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def refresh(self, **kwargs):
+        self.count += 1
+        self._force_full_html = True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """``on_render_emitted`` sends the ``full_html_update`` Django signal with
+    ``send``, so an application receiver's exception reaches its catch, which
+    logged it with ``exc_info``."""
+    from djust.signals import full_html_update
+
+    received = []
+
+    def receiver(sender, **kwargs):
+        received.append(sender)
+        raise ValueError("SIGNAL_RECEIVER_SENTINEL")
+
+    full_html_update.connect(receiver, weak=False)
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(FullHtmlView, "exposure_policy", policy)
+    try:
+        with override_settings(
+            LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        ):
+            request = await sync_to_async(make_request)()
+            socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+            socket.scope.update(session=request.session, user=request.user, tenant=None)
+            assert (await socket.connect())[0]
+            await socket.receive_json_from(timeout=3)
+            try:
+                await socket.send_json_to(
+                    {"type": "mount", "view": __name__ + ".FullHtmlView", "url": "/f/"}
+                )
+                await _drain(socket)
+                received.clear()
+                caplog.clear()
+                with caplog.at_level(logging.DEBUG):
+                    await socket.send_json_to({"type": "event", "event": "refresh", "params": {}})
+                    await _drain(socket)
+                assert received, "the signal never fired; the test would be vacuous"
+                if policy == "legacy":
+                    assert "full-HTML-update signal emit failed" in caplog.text
+                    assert "SIGNAL_RECEIVER_SENTINEL" in caplog.text
+                else:
+                    assert "SIGNAL_RECEIVER_SENTINEL" not in caplog.text
+                    assert "Protected view operation failed" in caplog.text
+            finally:
+                await socket.disconnect()
+    finally:
+        full_html_update.disconnect(receiver)

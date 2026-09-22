@@ -999,8 +999,14 @@ class WSConsumerTransport:
                     else None
                 ),
             )
-        except Exception:  # noqa: BLE001 — observability signal must never break the turn
-            logger.debug("full-HTML-update signal emit failed", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — observability signal must never break the turn
+            from ._exposure_diagnostics import log_failure
+
+            # full_html_update uses send(), so application receivers'
+            # exceptions arrive here.
+            log_failure(
+                logger, exc, "full-HTML-update signal emit failed", level="debug", traceback=True
+            )
 
     def on_event_frame(
         self,

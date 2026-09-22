@@ -157,9 +157,6 @@ RUNTIME_FRAMEWORK_ONLY = {
 }
 
 RUNTIME_KNOWN_OPEN = {
-    ("on_render_emitted", "full-HTML-update signal emit failed"): (
-        "Django signal: application receivers' exceptions propagate"
-    ),
     ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, WS)"): (
         "re-auth can run application permission code"
     ),
