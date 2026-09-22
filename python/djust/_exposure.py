@@ -99,6 +99,25 @@ def uses_legacy_exposure(view: Any) -> bool:
         return False
 
 
+def service_worker_cache_eligible(view: Any) -> bool:
+    """Whether a page's HTML may be written to the worker's VDOM/shell caches.
+
+    ADR-038 D-b: only a legacy view whose registered children are all legacy
+    is eligible. The rendered HTML includes every child, so one nonlegacy
+    child makes the page ineligible. Unreadable children fail closed.
+    """
+    if not uses_legacy_exposure(view):
+        return False
+    getter = getattr(view, "_get_all_child_views", None)
+    if getter is None:
+        return True
+    try:
+        children = getter()
+        return all(uses_legacy_exposure(child) for child in dict(children).values())
+    except Exception:  # noqa: BLE001 — unknown children cannot prove eligibility
+        return False
+
+
 def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
     """Return bounded explicit debug data, or None only for the legacy policy.
 

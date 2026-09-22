@@ -222,6 +222,23 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
+// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
+// identity marker is compared before anything from this mount is cached, so a
+// changed or vanished identity clears the previous identity's caches first.
+function applyServiceWorkerMountMetadata(data) {
+    if (!data || data.type !== 'mount') return;
+    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+    }
+    try {
+        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
+            window.djust._sw.syncIdentity(data.sw_identity);
+        }
+    } catch (_e) {
+        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -531,6 +548,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        applyServiceWorkerMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -714,10 +732,13 @@ class LiveViewWebSocket {
                     // is present and we actually have HTML from the
                     // server (skipped when the client used pre-rendered
                     // HTTP content).
+                    // ADR-038 D-b: a page the server marks ineligible
+                    // (explicit exposure) is never written to the cache.
+                    // E3-8: keyed by pathname + query.
                     try {
-                        if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                        if (data.sw_cache !== 'no-store' && window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
-                                ? window.location.pathname
+                                ? window.location.pathname + window.location.search
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }

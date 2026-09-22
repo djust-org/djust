@@ -3106,6 +3106,22 @@ class ViewRuntime:
                 sanitize_for_log(view_path),
             )
 
+        # ADR-038 D-b / D-n: value-free service-worker cache signals — an
+        # ineligibility marker for explicit pages, an HMAC identity marker the
+        # client compares to clear caches on identity change or logout, and
+        # the snapshot lifetime when a snapshot is shipped. Never breaks mount.
+        try:
+            from .security.service_worker import mount_frame_metadata
+
+            mount_msg.update(
+                await sync_to_async(mount_frame_metadata)(
+                    view_instance, request, mount_msg.get("state_snapshot_signed")
+                )
+            )
+        except Exception:  # noqa: BLE001 — value-free; fail closed on eligibility
+            logger.warning("Service-worker cache metadata unavailable for mount")
+            mount_msg["sw_cache"] = "no-store"
+
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
         if cache_config:

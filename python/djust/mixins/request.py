@@ -373,9 +373,19 @@ class RequestMixin:
         # Inject LiveView client script
         html = self._inject_client_script(html)
 
+        response: HttpResponse
         if getattr(self, "streaming_render", False):
-            return self._make_streaming_response(html)
-        return HttpResponse(html)
+            response = self._make_streaming_response(html)
+        else:
+            response = HttpResponse(html)
+        # ADR-038 D-b: the service worker must not persist an explicit page's
+        # HTML in its shell cache. Legacy responses are unchanged.
+        from .._exposure import service_worker_cache_eligible
+        from ..security.service_worker import SW_CACHE_HEADER, SW_CACHE_NO_STORE
+
+        if not service_worker_cache_eligible(self):
+            response[SW_CACHE_HEADER] = SW_CACHE_NO_STORE
+        return response
 
     def _make_streaming_response(self, full_html: str) -> StreamingHttpResponse:
         """Return a chunked ``StreamingHttpResponse`` for the initial GET.
