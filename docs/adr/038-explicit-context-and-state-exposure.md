@@ -174,6 +174,26 @@ A legitimate old signature is not permission to populate newly introduced intern
 attributes. Translate a known prior schema explicitly or remount; do not hydrate
 a legacy context dictionary into an explicit-policy view.
 
+Implemented (E2-9, D-i, D-j):
+- `exposure_schema_version = N` on the view class (default 1, a positive `int`,
+  read without evaluating descriptors) is part of the schema digest. Bumping it
+  rejects older envelopes, server and snapshot, and the view remounts.
+- A view may define `migrate_state(self, old_schema, values) -> dict`. It runs
+  only for a server envelope whose recorded contract version is older than the
+  current one, before `prepare_restore`. `old_schema` is that older version and
+  `values` is a detached copy. The result is validated as a fresh current
+  envelope: missing or undeclared keys and non-primitive values are rejected. A
+  raising or invalid hook remounts and logs only the view class and versions.
+  The server envelope format is now 2 and records `schema_version`; format-1
+  envelopes are unindexed and remount. Child state envelopes remount on a
+  version bump; they do not call the hook.
+- `DJUST_SERVER_STATE_MAX_AGE` (seconds, 1 to 86400, default 3600) is the
+  restore lifetime of explicit server-state envelopes, including child state.
+  An invalid value fails closed at runtime and is reported by system check
+  `djust.C018`. It does not change the Django session's own lifetime.
+- The only codec is `json-primitives-v1`. `Decimal`, dates, `UUID`, model
+  instances and other objects are rejected at capture, never stringified.
+
 Store approved identities, not live ORM instances, across persistence boundaries.
 Resolve object references using current server-side query/permission rules.
 Signing establishes origin/integrity, not current permission or data secrecy.

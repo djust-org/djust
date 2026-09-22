@@ -491,6 +491,34 @@ def _check_tenant_strict_mode_disabled(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
+    """C018 — DJUST_SERVER_STATE_MAX_AGE must be an int from 1 to 86400 seconds.
+
+    ADR-038 explicit server-state envelopes use it as their restore lifetime. An
+    invalid value makes every explicit persistence adapter fail closed at
+    runtime, so report it at startup instead. Absent means the 3600 s default.
+    """
+    from django.conf import settings
+
+    if not hasattr(settings, "DJUST_SERVER_STATE_MAX_AGE"):
+        return
+    value = settings.DJUST_SERVER_STATE_MAX_AGE
+    if type(value) is int and 0 < value <= 86400:
+        return
+    errors.append(
+        DjustError(
+            "DJUST_SERVER_STATE_MAX_AGE must be an integer number of seconds from 1 to 86400.",
+            hint=(
+                "It bounds how long an explicit server-state envelope can be restored. "
+                "With an invalid value, explicit views cannot load or save server "
+                "state. Remove the setting to use the default of 3600."
+            ),
+            id="djust.C018",
+            fix_hint="Set `DJUST_SERVER_STATE_MAX_AGE = 3600` (or remove it) in your settings.",
+        )
+    )
+
+
 def _check_unknown_extensions(errors: list) -> None:
     """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
 
@@ -765,6 +793,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)
+
+    # C018 -- DJUST_SERVER_STATE_MAX_AGE out of range (ADR-038 E2-9)
+    _check_server_state_max_age(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

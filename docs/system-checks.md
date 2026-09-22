@@ -22,6 +22,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, or no DjangoTemplates fallback for admin |
+| C018 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -148,6 +149,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: Hardcoded `<script src="...client.js">` tag; djust injects this automatically via middleware
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C012"]`
 - **False positives**: None; the manual tag is always redundant when djust middleware is active
+
+### C018 — Invalid `DJUST_SERVER_STATE_MAX_AGE`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `DJUST_SERVER_STATE_MAX_AGE` is set but is not an `int` from 1 to 86400. The setting is the restore lifetime, in seconds, of ADR-038 explicit server-state envelopes (default 3600). With an invalid value, explicit views fail closed: they cannot load or save server state.
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C018"]` (the runtime still fails closed)
+- **False positives**: None
 
 ---
 
