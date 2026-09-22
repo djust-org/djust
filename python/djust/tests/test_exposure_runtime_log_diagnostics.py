@@ -273,3 +273,69 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
                 await socket.disconnect()
     finally:
         full_html_update.disconnect(receiver)
+
+
+class PersistFailureView(LiveView):
+    exposure_policy = "legacy"
+    # Legacy views persist after an event only with snapshot opt-in.
+    enable_state_snapshot = True
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """``_persist_state_after_event`` logged a failed save with
+    ``logger.exception``. Explicit saves project declared ``persist="server"``
+    values and "storage exceptions propagate" (``_exposure_sessions``), so a
+    storage error can carry server-only data. The trigger is synthetic — the
+    session store's ``aset`` raises after mount — and it is the one write both
+    the legacy and the explicit save paths share."""
+    from django.contrib.sessions.backends.base import SessionBase
+
+    writes = []
+
+    async def failing_aset(self, key, value):
+        writes.append(key)
+        raise ValueError("SESSION_STORE_SENTINEL")
+
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PersistFailureView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".PersistFailureView", "url": "/s/"}
+            )
+            await _drain(socket)
+            monkeypatch.setattr(SessionBase, "aset", failing_aset)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
+                await _drain(socket)
+            assert writes, "the post-event save never reached the store; vacuous"
+            if policy == "legacy":
+                assert "Failed to save LiveView state after runtime event" in caplog.text
+                assert "SESSION_STORE_SENTINEL" in caplog.text
+            else:
+                assert "SESSION_STORE_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

@@ -243,6 +243,15 @@ attribute, and a nonlegacy view's only branch is wrapped in its own value-free
 catch. Nothing application-derived can reach the outer catch for it.
 7 open (4 consumer, 3 runtime).
 
+Both post-event save catches now log through `log_failure`. For an explicit
+view the save projects declared `persist="server"` values and, per
+`_exposure_sessions`, "storage exceptions propagate" — so a storage error could
+carry server-only data straight into `logger.exception`. Reproduced with the
+session store's `aset` failing after mount — synthetic, but the one write the
+legacy and explicit save paths share, and the test records that the save
+reached it. The sticky-child save has the identical shape and is converted
+without its own reproduction. 5 open (4 consumer, 1 runtime).
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

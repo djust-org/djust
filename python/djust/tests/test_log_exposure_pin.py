@@ -164,12 +164,6 @@ RUNTIME_FRAMEWORK_ONLY = {
 }
 
 RUNTIME_KNOWN_OPEN = {
-    ("_persist_state_after_event", "Failed to save LiveView state after runtime even"): (
-        "serializing application values"
-    ),
-    ("_persist_sticky_child_after_event", "Failed to save sticky-child state after runtime "): (
-        "serializing application values"
-    ),
     ("_render_scoped_component", "Scoped render of component %r failed; full rende"): (
         "component templates are application code"
     ),

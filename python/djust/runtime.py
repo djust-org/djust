@@ -4110,10 +4110,17 @@ class ViewRuntime:
                 "backpressure; skipping this event's save. Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
-        except Exception:  # noqa: BLE001 — saves must never break event handling
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — saves must never break event handling
+            from ._exposure_diagnostics import log_failure
+
+            # Explicit saves project persist="server" values and storage
+            # exceptions propagate, so the exception can carry server-only data.
+            log_failure(
+                logger,
+                exc,
                 "Failed to save LiveView state after runtime event %r",
                 sanitize_for_log(event_name or ""),
+                traceback=True,
             )
 
     async def _persist_sticky_child_after_event(
@@ -4156,10 +4163,17 @@ class ViewRuntime:
                 "Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
-        except Exception:  # noqa: BLE001 — saves must never break event handling
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — saves must never break event handling
+            from ._exposure_diagnostics import log_failure
+
+            # Explicit saves project persist="server" values and storage
+            # exceptions propagate, so the exception can carry server-only data.
+            log_failure(
+                logger,
+                exc,
                 "Failed to save sticky-child state after runtime event %r",
                 sanitize_for_log(event_name or ""),
+                traceback=True,
             )
 
     # ------------------------------------------------------------------ #
