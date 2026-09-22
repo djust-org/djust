@@ -103,9 +103,18 @@ def _request_principal(request: Any) -> tuple[str, str]:
             try:
                 from .tenants.resolvers import get_tenant_resolver
 
-                request.tenant = get_tenant_resolver().resolve(request)
+                resolved = get_tenant_resolver().resolve(request)
             except Exception:
                 raise ExposureError("Configured tenant resolution failed") from None
+            # Required tenancy that resolves to nothing is still missing, as
+            # TenantMiddleware treats it (its 404); never "no tenant".
+            tenants = getattr(settings, "DJUST_TENANTS", None) or {}
+            config = getattr(settings, "DJUST_CONFIG", None) or {}
+            if resolved is None and (
+                tenants.get("REQUIRED", False) or config.get("TENANT_REQUIRED", False)
+            ):
+                raise ExposureError("Configured tenant resolution is missing from the request")
+            request.tenant = resolved
             return _request_principal(request)
         tenant_id = "none"
     elif isinstance(tenant, TenantInfo):

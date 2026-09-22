@@ -145,3 +145,15 @@ def test_explicit_http_binding_fails_closed_when_the_resolver_fails(rf, db, monk
     with override_settings(**TENANCY), pytest.raises(ExposureError) as raised:
         request_binding(request)
     assert "RESOLVER_SENTINEL" not in str(raised.value)
+
+
+async def test_required_tenancy_that_resolves_to_nothing_is_refused_on_the_socket():
+    """Required tenancy must not become "no tenant" on a WebSocket mount."""
+    required = dict(TENANCY, DJUST_CONFIG={"TENANT_RESOLVER": "header", "TENANT_REQUIRED": True})
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **required):
+        request = await sync_to_async(make_request)()
+        socket, frame = await _mount(request, TenantSocketView, [])
+        try:
+            assert frame["type"] == "error", frame
+        finally:
+            await socket.disconnect()

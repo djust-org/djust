@@ -5062,9 +5062,18 @@ class ViewRuntime:
         try:
             from .tenants.resolvers import get_tenant_resolver
 
-            request.tenant = get_tenant_resolver().resolve(probe)
+            resolved = get_tenant_resolver().resolve(probe)
         except Exception:  # noqa: BLE001 — unresolved tenancy stays visibly unresolved
             logger.warning("Socket tenant resolution failed")
+            return
+        tenants = getattr(settings, "DJUST_TENANTS", None) or {}
+        if resolved is None and (
+            tenants.get("REQUIRED", False) or config.get("TENANT_REQUIRED", False)
+        ):
+            # Required tenancy that resolves to nothing stays unset, so explicit
+            # binding refuses it instead of reading it as "no tenant".
+            return
+        request.tenant = resolved
 
     async def _check_auth(self, request: Any) -> Optional[bool]:
         """Run the shared pre-mount security sequence. Returns:
