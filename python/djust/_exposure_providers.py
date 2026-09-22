@@ -19,7 +19,13 @@ client, snapshot or debug projection reads the render context.
 from types import FunctionType
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ._exposure import ExposureError, ProviderContract, provider_owners, uses_legacy_exposure
+from ._exposure import (
+    ExposureConfigurationError,
+    ExposureError,
+    ProviderContract,
+    provider_owners,
+    uses_legacy_exposure,
+)
 
 COLLISION = "Explicit context provider collision"
 
@@ -147,12 +153,72 @@ RUST_RENDER_PROVIDER = ProviderContract(
 )
 
 
-def components_provider(view_class: type) -> ProviderContract:
-    """Registered component descriptors, keyed by their attribute names."""
+def registered_components(view_class: type) -> Dict[str, Any]:
+    """The class-level component declarations a view class registers.
+
+    ADR-031 descriptors (``_component_descriptors``, including State-less
+    components) and ADR-034 interactive declarations
+    (``_component_declarations``). Where a subclass replaced one kind with the
+    other under the same name, the effective class attribute wins; a stale
+    entry is left for the caller's declaration check to reject. Reads class
+    dictionaries only: no descriptor or property is evaluated.
+    """
+    from inspect import getattr_static
+
+    from ._component_subscriptions import DECLARATIONS_ATTR
+    from .components.base import LiveComponent
+
     descriptors = getattr(view_class, "_component_descriptors", None) or {}
-    if not isinstance(descriptors, dict):
+    declarations = getattr(view_class, DECLARATIONS_ATTR, None) or {}
+    if type(descriptors) is not dict or type(declarations) is not dict:
         raise ExposureError("Invalid component descriptor registry")
-    return ProviderContract("djust.components", rendered=frozenset(descriptors))
+    merged: Dict[str, Any] = dict(descriptors)
+    for name, declaration in declarations.items():
+        # Only a declaration that is also a component renders.
+        if not isinstance(declaration, LiveComponent):
+            continue
+        if name not in merged or getattr_static(view_class, name, None) is declaration:
+            merged[name] = declaration
+    return merged
+
+
+def components_provider(view_class: type) -> ProviderContract:
+    """Registered component declarations, keyed by their attribute names."""
+    return ProviderContract(
+        "djust.components", rendered=frozenset(registered_components(view_class))
+    )
+
+
+#: Instance attribute naming the keys ``RequestMixin._processor_context``
+#: injected for a nonlegacy view (present only while that context is open).
+PROCESSOR_KEYS_ATTR = "_djust_processor_injected_keys"
+
+
+def instance_assigned_component_error(view: Any) -> Optional[ExposureConfigurationError]:
+    """ADR-038 D-h: a component assigned on the instance is never discovered.
+
+    Returns the configuration error for the first public instance attribute
+    holding a component, or None. Checks types only (``type()``, so a lazy
+    object is not evaluated) and names only the attribute, never a value.
+    """
+    from .components.base import BoundComponent, Component, LiveComponent
+
+    kinds = (Component, LiveComponent, BoundComponent)
+    attrs = vars(view)
+    # The HTTP POST path injects context-processor output as attributes for
+    # the duration of its render; those are the framework's, not the view's.
+    injected = attrs.get(PROCESSOR_KEYS_ATTR) or frozenset()
+    for name, value in attrs.items():
+        if type(name) is not str or name.startswith("_") or name in injected:
+            continue
+        if issubclass(type(value), kinds):
+            label = repr(name) if name.isidentifier() else "a public attribute"
+            return ExposureConfigurationError(
+                f"Component {label} is assigned on the view instance. Explicit views "
+                "render only components declared at class level: declare it in the "
+                "class body instead of assigning it in mount() or a handler."
+            )
+    return None
 
 
 def _action_name(value: Any) -> Optional[str]:

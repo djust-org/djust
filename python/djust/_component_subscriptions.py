@@ -16,6 +16,8 @@ from typing import TypeVar, Union, get_args, get_origin, get_type_hints
 
 F = TypeVar("F")
 _MARKER = "_djust_component_subscriptions"
+#: Class attribute holding the owner's ``{name: ComponentDeclaration}`` registry.
+DECLARATIONS_ATTR = "_component_declarations"
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,15 @@ class ComponentDeclaration:
         if not name.isidentifier() or name.startswith("_"):
             raise TypeError("Component declarations require a public attribute name")
         self._owner, self._name = owner, name
+        # ADR-038 E2-7: record the declaration for the explicit component
+        # provider. A separate registry from LiveComponent's
+        # ``_component_descriptors`` so the legacy paths that read that one
+        # (event fall-through, optimistic rules) see exactly what they did.
+        registry = owner.__dict__.get(DECLARATIONS_ATTR)
+        if registry is None:
+            registry = dict(getattr(owner, DECLARATIONS_ATTR, None) or {})
+            setattr(owner, DECLARATIONS_ATTR, registry)
+        registry[name] = self
 
 
 @dataclass(frozen=True)
