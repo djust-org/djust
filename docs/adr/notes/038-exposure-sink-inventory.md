@@ -112,7 +112,7 @@ exception data — the exception in the arguments, `logger.exception`, or
 wrong set: it missed multi-line calls such as `db_notify` and `_run_tick`.)
 Every site is classified below by function; line numbers drift, names do not.
 
-The classification below is executable: `python/djust/tests/test_consumer_log_exposure_pin.py`
+The classification below is executable: `python/djust/tests/test_log_exposure_pin.py`
 scans `websocket.py` with the same AST rule and requires every site to
 appear in exactly one of its `HELPER`, `LEGACY_GATED`, `FRAMEWORK_ONLY` or
 `KNOWN_OPEN` tables, keyed by function and message literal. A new site
@@ -183,7 +183,23 @@ only `handle_exception` consults `diagnostics_allowed()`. Scanned counts:
 `runtime.py` 26, `time_travel.py` 10, `mixins/request.py` 5,
 `mixins/async_work.py` 4, `mixins/sticky.py` 3, `live_view.py` 2, and one each
 in `sse.py`, `mixins/rust_bridge.py`, `mixins/activity.py` and
-`mixins/waiters.py`. Unclassified; the consumer pin covers `websocket.py` only.
+`mixins/waiters.py`. `runtime.py` is now pinned alongside `websocket.py`;
+the other modules are not yet classified.
+
+`runtime.py`'s 26 sites (two identical sticky-unmount messages in
+`on_mount_render_ready` are keyed separately): **10 legacy-gated**, each by a
+guard read in place — `if diagnostics_allowed()` for the deferred drain,
+deferred dispatch, waiters and time-travel hook; `if legacy_diagnostics and
+uses_legacy_exposure(view)` for both async-task catches; `uses_legacy_exposure(child)`
+for both sticky hooks; the actor refusal for the actor flush; and
+`opt_in and legacy_exposure` for snapshot restore. **7 framework-only**:
+NOTIFY group join, the DJE-053 diagnostic, debug decoration, the observability
+registry, the `sticky_hold` send and two accessibility flushes. **9 open**:
+`get_presence_key` at presence setup; the `full_html_update` Django signal,
+whose application receivers' exceptions propagate; the WS and SSE event
+re-auth checks; `state_snapshot_signed` emission (its explicit codec branch
+has an inner catch, but that nothing else escapes is unconfirmed); both
+post-event state saves; scoped component render; deferred callbacks.
 
 Fixed: `ViewRuntime._flush_pending_layout` now logs through
 `_exposure_diagnostics.log_failure` (reproduced, explicit from mount). Already

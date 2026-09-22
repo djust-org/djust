@@ -3,6 +3,22 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Runtime log-exposure pin — E1 slice
+
+The pin, renamed `test_log_exposure_pin.py`, now covers `runtime.py` beside
+`websocket.py`. Each of `runtime.py`'s 26 sites was classified by reading its
+guard in place, not by proximity: 10 legacy-gated, 7 framework-only, 9 open
+(listed in the inventory). Reintroducing the original `set_layout` log call
+fails the pin naming the runtime site.
+
+Classifying `runtime.py` exposed a blind spot in the pin's key. Two sites in
+`on_mount_render_ready` log the identical message, so a (function, message)
+key collapsed them into one entry — and they are guarded differently, one by
+an `elif` condition and one inline. An unguarded duplicate would have been
+invisible. Repeated keys now carry an ordinal in source order, pinned by a
+scanner self-test. The consumer had no such duplicates. Across both modules,
+18 application-code sites remain open.
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:
@@ -39,7 +55,7 @@ not be shown.
 
 Fixing leak sites one at a time is a denylist: the next `logger.exception`
 added to consumer code reopens the risk silently — the omission problem
-ADR-038 cites against ADR-012. `test_consumer_log_exposure_pin.py` turns the
+ADR-038 cites against ADR-012. `test_log_exposure_pin.py` turns the
 inventory's classification into a structural pin. It scans `websocket.py` for
 every logging call that carries exception data and requires each to appear in
 exactly one table — `HELPER`, `LEGACY_GATED` (guard read), `FRAMEWORK_ONLY` or

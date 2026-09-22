@@ -1,10 +1,11 @@
 """Structural pin: every exception-carrying log call in the WebSocket consumer
-is classified (ADR-038 E1).
+and the view runtime is classified (ADR-038 E1).
 
 ``handle_exception`` refuses to stringify an exception for a nonlegacy owner,
 because undeclared state can occur in its message and traceback. A raw
-``logger`` call does not consult that policy, so each one in ``websocket.py``
-that carries exception data — the exception in its arguments,
+``logger`` call does not consult that policy — a runtime turn's diagnostic
+scope does not change that — so each one in ``websocket.py`` and
+``runtime.py`` that carries exception data — the exception in its arguments,
 ``logger.exception``, or ``exc_info`` — must be one of:
 
 - ``HELPER``: a raw call that is itself the policy gate (none today: the
@@ -14,8 +15,10 @@ that carries exception data — the exception in its arguments,
 - ``KNOWN_OPEN``: application code, not yet fixed. This list may only shrink.
 
 A new site fails this test until it is classified. The usual fix is to log
-through ``self._log_view_hook_failure(view, exc, msg, *args, level=...,
-traceback=...)``, which keeps legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
+through ``_exposure_diagnostics.log_failure(logger, exc, msg, *args, level=...,
+traceback=...)`` inside a runtime turn, or the consumer's
+``self._log_view_hook_failure(view, exc, ...)`` outside one; both keep the
+legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
 the first 48 characters of the message literal, so line drift does not matter.
 The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
 """
@@ -23,7 +26,9 @@ The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
 import ast
 import pathlib
 
-WEBSOCKET = pathlib.Path(__file__).resolve().parents[1] / "websocket.py"
+import pytest
+
+PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
 HELPER: dict = {}
 
@@ -107,6 +112,85 @@ KNOWN_OPEN = {
     ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
 }
 
+
+RUNTIME_LEGACY_GATED = {
+    ("_flush_deferred_activity_events", "dj_activity: runtime deferred-event flush raised"): (
+        "inside `if diagnostics_allowed()` after restricting to both owners"
+    ),
+    ("_dispatch_single_event", "Runtime deferred-activity event %r on %s raised "): (
+        "inside `if diagnostics_allowed()` after restricting to the target view"
+    ),
+    ("_notify_waiters_safely", "<Name>"): (
+        "inside `if diagnostics_allowed()` after restricting to both owners"
+    ),
+    ("_push_tt_event", "Runtime: time_travel on_event_recorded hook fail"): (
+        "inside `if diagnostics_allowed()` after restricting to both owners"
+    ),
+    ("_execute_async_task", "Runtime: error in start_async callback '%s' on %"): (
+        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
+    ),
+    ("_execute_async_task", "Runtime: error in handle_async_result for task '"): (
+        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
+    ),
+    ("on_mount_render_ready", "sticky child _on_sticky_unmount raised"): (
+        "inside `elif ... and uses_legacy_exposure(child)` (reattach collision)"
+    ),
+    ("on_mount_render_ready", "sticky child _on_sticky_unmount raised", 1): (
+        "inside `if uses_legacy_exposure(child)`"
+    ),
+    ("dispatch_actor_event", "dj_activity: deferred-event flush raised (actor "): (
+        "actor events are refused for nonlegacy views before this transport hook"
+    ),
+    ("dispatch_mount", "state_snapshot _restore_snapshot failed for %s; "): (
+        "restore runs only when `opt_in and legacy_exposure`"
+    ),
+}
+
+RUNTIME_FRAMEWORK_ONLY = {
+    ("on_view_mounted", "Error joining db_notify group for %s: %s"): "channel-layer group_add",
+    ("on_render_emitted", "DJE-053 diagnostic emit failed"): "diagnostic formatting",
+    ("on_event_frame", "on_event_frame debug decoration failed"): (
+        "debug payload built from the redacted debug projection"
+    ),
+    ("on_view_instantiated", "Failed to register view in observability registr"): "registry",
+    ("on_mount_render_ready", "failed to emit sticky_hold frame before mount"): "frame send",
+    ("_flush_accessibility", "Failed to flush accessibility announcements"): "frame send",
+    ("_flush_accessibility", "Failed to flush focus command"): "frame send",
+}
+
+RUNTIME_KNOWN_OPEN = {
+    ("on_view_mounted", "Error setting up presence group: %s"): "get_presence_key is overridable",
+    ("on_render_emitted", "full-HTML-update signal emit failed"): (
+        "Django signal: application receivers' exceptions propagate"
+    ),
+    ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, WS)"): (
+        "re-auth can run application permission code"
+    ),
+    ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, SSE"): (
+        "re-auth can run application permission code"
+    ),
+    ("dispatch_mount", "Failed to emit state_snapshot_signed for %s; pro"): (
+        "explicit codec branch has its own inner catch; confirm nothing escapes"
+    ),
+    ("_persist_state_after_event", "Failed to save LiveView state after runtime even"): (
+        "serializing application values"
+    ),
+    ("_persist_sticky_child_after_event", "Failed to save sticky-child state after runtime "): (
+        "serializing application values"
+    ),
+    ("_render_scoped_component", "Scoped render of component %r failed; full rende"): (
+        "component templates are application code"
+    ),
+    ("_flush_deferred", "[djust runtime] Deferred callback %s on %s raise"): (
+        "deferred callbacks are application code"
+    ),
+}
+
+PINNED = {
+    "websocket.py": (HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
+    "runtime.py": (RUNTIME_LEGACY_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
+}
+
 _LEVELS = {"debug", "info", "warning", "error", "exception", "critical"}
 
 
@@ -129,7 +213,7 @@ def _exception_carrying_log_sites(source: str) -> set:
                 names.add(node.name)
         return names
 
-    sites = set()
+    found = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
@@ -160,31 +244,42 @@ def _exception_carrying_log_sites(source: str) -> set:
             if isinstance(first, ast.Constant) and isinstance(first.value, str)
             else f"<{type(first).__name__}>"
         )
-        sites.add((enclosing_function(node), message))
+        found.append((node.lineno, enclosing_function(node), message))
+    # A repeated (function, message) pair would otherwise collapse into one
+    # key and hide an unguarded duplicate; the second and later occurrences,
+    # in source order, carry an ordinal.
+    sites: set = set()
+    seen: dict = {}
+    for _lineno, function, message in sorted(found):
+        ordinal = seen.get((function, message), 0)
+        seen[(function, message)] = ordinal + 1
+        sites.add((function, message) if ordinal == 0 else (function, message, ordinal))
     return sites
 
 
-def test_classification_tables_do_not_overlap():
-    tables = [HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN]
-    seen = set()
-    for table in tables:
+@pytest.mark.parametrize("module", sorted(PINNED))
+def test_classification_tables_do_not_overlap(module):
+    seen: set = set()
+    for table in PINNED[module]:
         assert not (seen & table.keys()), seen & table.keys()
         seen |= table.keys()
 
 
-def test_every_exception_carrying_consumer_log_call_is_classified():
-    found = _exception_carrying_log_sites(WEBSOCKET.read_text())
-    declared = HELPER.keys() | LEGACY_GATED.keys() | FRAMEWORK_ONLY.keys() | KNOWN_OPEN.keys()
-    unclassified = sorted(found - declared)
-    stale = sorted(declared - found)
+@pytest.mark.parametrize("module", sorted(PINNED))
+def test_every_exception_carrying_log_call_is_classified(module):
+    found = _exception_carrying_log_sites((PACKAGE / module).read_text())
+    declared: set = set().union(*(table.keys() for table in PINNED[module]))
+    unclassified = sorted(found - declared, key=str)
+    stale = sorted(declared - found, key=str)
     assert not unclassified, (
-        "New exception-carrying log call(s) in websocket.py. Log through "
-        "self._log_view_hook_failure(view, exc, msg, *args, level=..., traceback=...) or "
-        f"classify with a reason: {unclassified}"
+        f"New exception-carrying log call(s) in {module}. Log through "
+        "_exposure_diagnostics.log_failure (or the consumer's "
+        "_log_view_hook_failure), or classify with a reason: "
+        f"{unclassified}"
     )
     assert not stale, (
-        "Classified site(s) no longer found — remove them (a fixed KNOWN_OPEN "
-        f"entry should be deleted, not moved): {stale}"
+        f"Classified site(s) no longer found in {module} — remove them (a fixed "
+        f"KNOWN_OPEN entry should be deleted, not moved): {stale}"
     )
 
 
@@ -207,3 +302,20 @@ def f(self):
         ("f", "trace"),
         ("f", "info"),
     }
+
+
+def test_scanner_keeps_repeated_messages_apart():
+    # Two identical messages in one function must stay two sites, so one
+    # guarded and one unguarded occurrence cannot hide behind a single key.
+    sample = """
+def f(self):
+    try:
+        pass
+    except Exception:
+        logger.exception("same")
+    try:
+        pass
+    except Exception:
+        logger.exception("same")
+"""
+    assert _exception_carrying_log_sites(sample) == {("f", "same"), ("f", "same", 1)}
