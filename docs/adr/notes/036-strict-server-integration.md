@@ -3,7 +3,7 @@
 Status: server implementation on the component-conventions branch, not full
 ADR-036 acceptance or a recommendation to migrate an application globally yet.
 The [strict core](036-strict-contract-core.md) defines supported input types and
-bounds; [the ledger](component-conventions-implementation.md) tracks remaining
+bounds; [the ledger](../component-conventions-implementation.md) tracks remaining
 P1–P3, component, form, documentation and exposure gates.
 
 ## Policy and invocation

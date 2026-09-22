@@ -213,7 +213,7 @@ gets class-construction and Django system-check diagnostics.
 The exact decorator typing must be proven with a small prototype before accepting
 this ADR. A pleasing syntax without working negative type tests is not sufficient.
 
-The [C1 typing proof](034-typing-proof.md) first passed with an isolated descriptor
+The [C1 typing proof](notes/034-typing-proof.md) first passed with an isolated descriptor
 and now passes against the real staged bindings. Mypy follows Django's installed
 source declarations, and the LiveView stub includes its real constructor; both
 checkers reject all twenty-one negative locations without a new dependency. C1 and

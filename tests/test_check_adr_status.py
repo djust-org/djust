@@ -224,6 +224,38 @@ class TestCheckADRStatus:
             assert "WARNING" in out
             assert "ADR-028" in out
 
+    def test_duplicate_adr_number_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            body = """
+                # ADR-030: x
+
+                **Status**: Proposed
+                """
+            _write_adr(d, "030-decision.md", body)
+            _write_adr(d, "030-evidence.md", body)
+            code, out = _run(d)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "ADR-030" in out
+            assert "number used by 2 files" in out
+
+    def test_notes_subdirectory_is_not_scanned(self):
+        # Supporting notes that share their ADR's number live in notes/,
+        # which the non-recursive scan must not count as a collision.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            body = """
+                # ADR-031: x
+
+                **Status**: Proposed
+                """
+            _write_adr(d, "031-decision.md", body)
+            (d / "notes").mkdir()
+            _write_adr(d / "notes", "031-evidence.md", body)
+            code, out = _run(d)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "1 ADRs scanned" in out
+
     def test_empty_adr_dir(self):
         """Empty temp dir → exit 0, 0 ADRs scanned."""
         with tempfile.TemporaryDirectory() as tmp:

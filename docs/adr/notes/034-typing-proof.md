@@ -2,14 +2,14 @@
 
 Status: concrete binding staged; real-view typing proof passes. C1 and ADR-034
 remain incomplete. Release unassigned.
-This supplements [ADR-034](034-component-scoped-events-and-bindings.md), not a
+This supplements [ADR-034](../034-component-scoped-events-and-bindings.md), not a
 new public API or acceptance decision.
 
 ## Readiness audit
 
 The roadmap's active component-conventions block delegates to the implementation
 ledger. D1/D2 require a typing proof before production binding is chosen. The
-[executable proof](../../tests/typing_component_bindings/README.md) now targets
+[executable proof](../../../tests/typing_component_bindings/README.md) now targets
 the real private dropdown and LiveView, replacing the isolated prototype.
 That transition initially exposed inherited `Any` from Django's unstubbed View
 in mypy. The supported proof configuration now follows Django source declarations,

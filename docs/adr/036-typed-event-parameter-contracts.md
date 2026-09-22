@@ -27,7 +27,7 @@ type hints and converts several parameter types. The proposal closes concrete
 gaps and makes the same rules govern browser, HTTP, component, tooling, and docs.
 The server-side configuration and decorator argument are now staged on this
 implementation branch; strict browser collection and full acceptance remain
-incomplete. See [server integration evidence](036-strict-server-integration.md).
+incomplete. See [server integration evidence](notes/036-strict-server-integration.md).
 
 ## Evidence and current behavior
 

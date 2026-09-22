@@ -1,7 +1,7 @@
 # ADR-036 strict parameter core: staged implementation
 
 This is implementation evidence for P1, not a completed strict-policy guide.
-[`ParameterContract`](../../python/djust/_parameter_contract.py) is internal.
+[`ParameterContract`](../../../python/djust/_parameter_contract.py) is internal.
 The initial core was disconnected from dispatch; the subsequent
 [server integration](036-strict-server-integration.md) adds opt-in server policy
 resolution and invocation. Legacy remains the default. Browser collection and
@@ -63,7 +63,7 @@ than depend on accepting a `QueryDict` or another container subclass directly.
 
 ## Evidence and remaining work
 
-[`test_parameter_contract.py`](../../python/djust/tests/test_parameter_contract.py)
+[`test_parameter_contract.py`](../../../python/djust/tests/test_parameter_contract.py)
 has 144 cases covering conversion, all boolean spellings, disabled conversion,
 signature binding and actual Python invocation, metadata/default redaction,
 unsupported declarations, hostile conversion methods, bounds and cycles.
@@ -86,4 +86,4 @@ the complete type/coercion matrix, trusted source injection, open form/upload
 payloads and actual DOM/wire parsing, including wire-type/collision conflicts.
 P3 must execute public examples and the complete transport matrix. No browser,
 website, cross-worker or exposure-activation claim is made by these core tests. See the
-[implementation ledger](component-conventions-implementation.md).
+[implementation ledger](../component-conventions-implementation.md).

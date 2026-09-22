@@ -204,7 +204,7 @@ temporary process; it is not evidence for production exposure activation.
 
 ## Exposure sink inventory and root diagnostics — E1 slice
 
-[The sink inventory](038-exposure-sink-inventory.md) maps current context,
+[The sink inventory](notes/038-exposure-sink-inventory.md) maps current context,
 rendering, persistence, snapshot/storage, actor and diagnostic destinations to
 their producers, existing tests and remaining closure work. It is deliberately
 not marked exhaustive; backend callers and full destination sentinels are open.
@@ -438,10 +438,10 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   freeze the valid/invalid conversion matrix, including optional/collection and
   unsupported types, resource limits, duplicate/extra/missing values and
   framework-versus-application arguments.
-  The staged [strict core](036-strict-contract-core.md) now provides shared
+  The staged [strict core](notes/036-strict-contract-core.md) now provides shared
   binding/conversion/metadata with 144 core regression cases. The focused strict
   and legacy/security set passes 377 tests. The subsequent
-  [server integration](036-strict-server-integration.md) adds opt-in policy
+  [server integration](notes/036-strict-server-integration.md) adds opt-in policy
   resolution, canonical metadata and bound-call invocation through Python and
   Rust actor paths. Complete registration/check coverage, trusted argument
   separation and client/transport acceptance remain open; legacy is the default.
@@ -458,7 +458,7 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
   unchanged legacy behavior. Invalid input must never invoke application code.
-  The [staged client collector](036-strict-client-collection.md) now rejects
+  The [staged client collector](notes/036-strict-client-collection.md) now rejects
   malformed typed literals, normalized collisions, unsafe numeric values and
   reserved routing keys, and returns bounded detached JSON snapshots. Its 57
   parser tests pass; independent review verified the serialization-hook fix.
@@ -467,7 +467,7 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   integration remain open. Legacy bindings are unchanged.
   Three final unchanged-code JavaScript runs each passed 2,093 tests in 190
   files; 91 client-asset tests and zero-warning bundle ESLint also passed.
-  Subsequent [owner-addressed mount manifests](036-owner-contract-manifests.md)
+  Subsequent [owner-addressed mount manifests](notes/036-owner-contract-manifests.md)
   now reach actual WS (including actors) and SSE clients. Public contracts are
   separated by transport, mount path and registered owner address, not merged
   by handler name. Focused server coverage passes 61 cases; the browser-bundle
@@ -613,7 +613,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   renames, misspellings, wrong sources and async callbacks. Route only through
   registered identities; reject direct client invocation of subscriptions and
   unknown targets without a view-handler fallback.
-  The [initial isolated proof](034-typing-proof.md) passed both type checkers;
+  The [initial isolated proof](notes/034-typing-proof.md) passed both type checkers;
   current fixtures exercise the real staged framework classes instead.
   Production now compiles private subscription declarations at LiveView class
   construction, revalidates inheritance/replacements, rejects duplicate/foreign
