@@ -334,3 +334,63 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(monkeypatch,
                 assert "Protected view operation failed" in caplog.text
         finally:
             await socket.disconnect()
+
+
+def _fail_pushed_deferred(arg):
+    raise ValueError("PUSH_DEFER_EXC_SENTINEL")
+
+
+class PushDeferView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>push-defer</div>"
+
+    def handle_later(self, **kwargs):
+        import functools
+
+        self.defer(functools.partial(_fail_pushed_deferred, "PUSH_DEFER_ARG_SENTINEL"))
+        # Skip the render so server_push drains through the consumer's own
+        # _flush_all_pending, which calls the consumer's _flush_deferred.
+        self._skip_render = True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
+async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, policy
+):
+    """The consumer's ``_flush_deferred`` twin runs on its own flush paths
+    (``server_push``, tick, ``db_notify``) and logged failures with the
+    exception, traceback and ``repr(callback)``."""
+    from djust.push import apush_to_view
+
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PushDeferView, "exposure_policy", "legacy")
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".PushDeferView", "url": "/pd/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            monkeypatch.setattr(PushDeferView, "exposure_policy", policy)
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await apush_to_view(__name__ + ".PushDeferView", handler="handle_later")
+                await _poll_log(caplog, "Deferred callback", "Protected view operation failed")
+
+            if policy == "legacy":
+                assert "PUSH_DEFER_EXC_SENTINEL" in caplog.text
+                assert "PUSH_DEFER_ARG_SENTINEL" in caplog.text
+            else:
+                assert "PUSH_DEFER_EXC_SENTINEL" not in caplog.text
+                assert "PUSH_DEFER_ARG_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

@@ -19,6 +19,13 @@ invisible. Repeated keys now carry an ordinal in source order, pinned by a
 scanner self-test. The consumer had no such duplicates. Across both modules,
 18 application-code sites remain open.
 
+The two deferred-callback twins followed — `ViewRuntime._flush_deferred` and the
+consumer's copy, reached through `server_push` with `_skip_render`. Each
+reproduced (runtime: explicit from mount; consumer: explicit/None/invalid) with
+legacy controls passing. Beyond the exception, their `repr(callback)` fallback
+logged a `functools.partial`'s bound arguments; the tests pin both channels.
+16 open.
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:

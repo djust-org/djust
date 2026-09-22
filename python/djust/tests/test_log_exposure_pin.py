@@ -99,7 +99,6 @@ FRAMEWORK_ONLY = {
 
 KNOWN_OPEN = {
     ("_flush_pending_layout", "set_layout(%r) — template rendering raised; igno"): "layout render",
-    ("_flush_deferred", "[djust] Deferred callback %s on %s raised; conti"): "deferred callback",
     ("_run_async_work", "[djust] Error in start_async callback '%s' on %s"): "async callback",
     ("_run_async_work", "[djust] Error in handle_async_result for task '%"): "async result",
     ("_dispatch_single_event", "Deferred-activity event %r on %s raised during d"): (
@@ -180,9 +179,6 @@ RUNTIME_KNOWN_OPEN = {
     ),
     ("_render_scoped_component", "Scoped render of component %r failed; full rende"): (
         "component templates are application code"
-    ),
-    ("_flush_deferred", "[djust runtime] Deferred callback %s on %s raise"): (
-        "deferred callbacks are application code"
     ),
 }
 

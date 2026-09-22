@@ -5647,12 +5647,17 @@ class ViewRuntime:
                 result = callback(*args, **kwargs)
                 if inspect.iscoroutine(result):
                     await result
-            except Exception:
-                logger.warning(
+            except Exception as exc:
+                from ._exposure_diagnostics import log_failure
+
+                log_failure(
+                    logger,
+                    exc,
                     "[djust runtime] Deferred callback %s on %s raised; continuing",
                     getattr(callback, "__qualname__", repr(callback)),
                     view.__class__.__name__,
-                    exc_info=True,
+                    level="warning",
+                    traceback=True,
                 )
 
     # ------------------------------------------------------------------ #

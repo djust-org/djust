@@ -887,12 +887,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # detection used elsewhere (e.g. async event handlers).
                 if inspect.iscoroutine(result):
                     await result
-            except Exception:
-                logger.warning(
+            except Exception as exc:
+                view = self.view_instance
+                self._log_view_hook_failure(
+                    view,
+                    exc,
                     "[djust] Deferred callback %s on %s raised; continuing to next",
                     getattr(callback, "__qualname__", repr(callback)),
-                    self.view_instance.__class__.__name__,
-                    exc_info=True,
+                    view.__class__.__name__,
+                    level="warning",
+                    traceback=True,
                 )
 
     async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:

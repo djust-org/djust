@@ -94,3 +94,64 @@ async def test_layout_render_failure_log_is_value_free_for_explicit_views(
                 assert "LAYOUT_RENDER_SENTINEL" not in json.dumps(frames)
         finally:
             await socket.disconnect()
+
+
+def _fail_deferred(arg):
+    raise ValueError("DEFER_EXC_SENTINEL")
+
+
+class DeferFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def later(self, **kwargs):
+        import functools
+
+        # A partial has no __qualname__, so the log's repr(callback)
+        # fallback carries its bound argument — a second value channel.
+        self.defer(functools.partial(_fail_deferred, "DEFER_ARG_SENTINEL"))
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
+    monkeypatch, caplog, policy
+):
+    """``ViewRuntime._flush_deferred`` runs ``self.defer(...)`` callables and
+    logged a failure with the exception, its traceback and ``repr(callback)``."""
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(DeferFailureView, "exposure_policy", policy)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            await socket.send_json_to(
+                {"type": "mount", "view": __name__ + ".DeferFailureView", "url": "/d/"}
+            )
+            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to({"type": "event", "event": "later", "params": {}})
+                await _drain(socket)
+
+            if policy == "legacy":
+                assert "Deferred callback" in caplog.text
+                assert "DEFER_EXC_SENTINEL" in caplog.text
+                assert "DEFER_ARG_SENTINEL" in caplog.text
+            else:
+                assert "DEFER_EXC_SENTINEL" not in caplog.text
+                assert "DEFER_ARG_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

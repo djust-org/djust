@@ -128,6 +128,10 @@ fix for explicit/None/invalid and a legacy control proves the hook ran.
   (via `apush_to_view`), `_run_tick` (`handle_tick`), `db_notify`'s
   `handle_info` catch (via the NOTIFY channel group), and `disconnect`'s
   `untrack_presence` cleanup.
+- Both deferred-callback twins: `ViewRuntime._flush_deferred` and the consumer's
+  `_flush_deferred` (via `server_push` with `_skip_render`). Besides the
+  exception, their `repr(callback)` fallback logged a `functools.partial`'s bound
+  arguments; the value-free line drops both.
 - Converted in the same function, **not independently reproduced**: the
   `db_notify` outer catch and its deferred-activity flush catch.
 - `_mount_one` (`mount_batch`) leaked to the **client** as well as the log:
@@ -149,8 +153,7 @@ view before any re-render); `disconnect`'s upload cleanup (runs only when
 the view was not disposed as nonlegacy).
 
 **Open — application code, not yet reproduced or fixed:** `_flush_pending_layout`
-(`set_layout` template render); `_flush_deferred` (deferred callbacks,
-`exc_info`); `_run_async_work` (`start_async` callback and
+(`set_layout` template render); `_run_async_work` (`start_async` callback and
 `handle_async_result`); the consumer's `_dispatch_single_event` (deferred
 activity dispatch, waiter notification, render and strip) — live for explicit
 views because `db_notify` passes the consumer to the activity flush;
@@ -199,7 +202,7 @@ registry, the `sticky_hold` send and two accessibility flushes. **9 open**:
 whose application receivers' exceptions propagate; the WS and SSE event
 re-auth checks; `state_snapshot_signed` emission (its explicit codec branch
 has an inner catch, but that nothing else escapes is unconfirmed); both
-post-event state saves; scoped component render; deferred callbacks.
+post-event state saves; scoped component render.
 
 Fixed: `ViewRuntime._flush_pending_layout` now logs through
 `_exposure_diagnostics.log_failure` (reproduced, explicit from mount). Already
