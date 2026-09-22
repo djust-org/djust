@@ -1,18 +1,6 @@
 {
   "_comment": "ADR-038 E1 ratchet: exception-carrying log calls not yet classified. Generated from test_log_exposure_pin's scanner. May only shrink: classify a module into PINNED or fix its sites, then remove it here. A new site anywhere else fails the pin.",
   "modules": {
-    "components/base.py": [
-      [
-        "_validate_component_inputs",
-        "Component %s assign validation failed: %s"
-      ]
-    ],
-    "components/suspense.py": [
-      [
-        "_render_fallback",
-        "dj_suspense: failed to render fallback template "
-      ]
-    ],
     "pwa/sync.py": [
       [
         "_perform_sync",
@@ -25,18 +13,6 @@
       [
         "sync_endpoint_view",
         "Sync endpoint error: %s"
-      ]
-    ],
-    "serialization.py": [
-      [
-        "_rehydrate_component",
-        "state round trip: %s(**state) refused the saved "
-      ]
-    ],
-    "session_utils.py": [
-      [
-        "dom_id_for",
-        "Stream %r custom dom_id= factory raised on %r; f"
       ]
     ],
     "template/rendering.py": [

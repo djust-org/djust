@@ -324,17 +324,24 @@ class Stream:
             # catch the drift.
             try:
                 return f"{self.name}-{self.dom_id_fn(item_or_id)}"
-            except Exception:
+            except Exception as exc:
                 if not allow_factory_fallback:
                     raise
+                from ._exposure_diagnostics import log_failure
+
                 # Never swallowed — logged with the traceback, then handled.
-                logger.warning(
+                # The line quotes the row itself, so it is value-free inside a
+                # nonlegacy view's turn.
+                log_failure(
+                    logger,
+                    exc,
                     "Stream %r custom dom_id= factory raised on %r; falling back to "
                     "the default id resolution, which will NOT match the row that "
                     "was inserted. The argument must be an item the factory accepts.",
                     self.name,
                     item_or_id,
-                    exc_info=True,
+                    level="warning",
+                    traceback=True,
                 )
                 return f"{self.name}-{Stream.resolve_id(item_or_id)}"
 

@@ -1102,6 +1102,15 @@ MIXIN_TABLES = {
             ): "server-side offline-state utilities with fixed merge strategies; the cache is in-process server memory",
         },
     ),
+    "serialization.py": (
+        {},
+        {
+            (
+                "_rehydrate_component",
+                "state round trip: %s(**state) refused the saved ",
+            ): "value-free: logs the class path, the saved kwarg names and the exception type only",
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (

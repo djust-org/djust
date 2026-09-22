@@ -343,6 +343,19 @@ application conflict resolvers with no view owner, and `template/rendering.py`
 is djust's Django template backend, which JIT-serializes whatever context its
 caller supplies and has no LiveView owner reference.
 
+**Value-quoting catches outside any view helper.** `LiveComponent`
+assign validation, the `dj_suspense` fallback and the stream `dom_id=`
+factory fallback logged the offending value, template error or row repr.
+They carry no owner reference but run inside a view's turn, so they now use
+the turn-gated `log_failure` (`test_exposure_value_log_diagnostics.py`, red on
+the old code for all three explicit cases). `serialization._rehydrate_component`
+was already value-free (class path, kwarg names, exception type) and is pinned
+framework-only. The unreviewed baseline is down to 5 sites in two modules,
+both owner-less by construction: `pwa/sync.py` (application conflict
+resolvers, the sync endpoint) and `template/rendering.py` (the Django template
+backend's JIT serializer). Closing those needs an owner channel, not a log
+edit — a decision, not a mechanical fix.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.
