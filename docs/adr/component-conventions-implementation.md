@@ -3,6 +3,82 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Child lifecycle closure — E3-3 to E3-7 and decision D-m
+
+- **E3-3, queued child work.** `start_async` queued in an explicit child's
+  `mount()`, or queued on a child by a parent handler, was *delayed*: it ran
+  under the child's next routed event, or never if none came.
+  `ViewRuntime._dispatch_explicit_child_queues` now sweeps the owned explicit
+  tree after the mount frame and after every parent turn. Each child's work
+  runs through `_child_async.dispatch_child_work`, with its own batch and
+  re-authorization. The consumer's `_dispatch_async_work` calls the same sweep,
+  which covers tick, push and NOTIFY turns.
+  (`test_exposure_child_queued_work.py`, 5 tests.)
+- **E3-4, descendant routing.** Only the root's direct children were routable,
+  so any grandchild event got "Embedded view not found". Under an explicit root,
+  `_explicit_descendant` now routes through the server-owned registry, and only
+  when exactly one owned explicit descendant has that id. Ambiguous or unknown
+  ids are refused. Same-type siblings and a grandchild keep separate events,
+  saves, background results and storage keys.
+  (`test_exposure_child_routing.py`, 5 tests.)
+- **E3-5 / D-m, transient and lazy children.**
+  - A non-sticky explicit child is transient: its identity is recorded and
+    checked, it has no adapter and is never persisted, and it renders without a
+    raw `view` in its context.
+  - A non-sticky child that declares persisted fields is refused.
+  - `lazy=True` on an explicit child raises a fixed-text `TemplateSyntaxError`
+    before any child, context or placeholder is built.
+  - Explicit server persistence under a legacy parent is refused through the
+    tag.
+  - (`test_exposure_child_transient.py`, 12 tests.)
+- **E3-6, shell reconstruction.** Page-shell children outside `dj-root` were
+  never rebuilt on any WebSocket mount, so their stored state was unreachable.
+  Explicit `template_name` roots now render the full page once before the
+  fragment, the same order the HTTP GET uses. That costs one more full render
+  per explicit mount. (`test_exposure_child_reconnect.py`, 2 tests over the real
+  consumer.)
+- **E3-7, removal and re-addition.** A slot removed and then added again gets a
+  fresh mount, the pruned envelope is not resurrected, and the disposed instance
+  cannot re-register. No bug was found; the tests were mutation-checked against
+  disabled prune disposal. (`test_exposure_child_readd.py`, 3 tests.)
+
+Findings recorded, not fixed:
+- Work a child's own handler queues on a sibling or descendant is not swept.
+- View ids are flat on the client, so two same-type sticky children at
+  different depths share an id; the server refuses to route it, but there is no
+  render-time duplicate check.
+
+## Server-originated turns dispatch their queued work (#2955)
+
+`_tick_once`, `server_push` and `db_notify` never called
+`_dispatch_async_work`, so `start_async` queued in `handle_tick`, a push handler
+or `handle_info` was stranded under both policies. It is the #2946 class of
+bug, on the other turns. Each turn now dispatches once its hook succeeds, and a
+denied or failed turn dispatches nothing.
+(`test_exposure_consumer_turns.py::test_start_async_from_a_server_originated_turn_runs`,
+legacy and explicit, red without the fix.)
+
+## Change detection and invalidation — E2-8
+
+Invalidation under explicit already matches legacy, so this slice added no
+code fix:
+- `_snapshot_assigns` keeps its full `__dict__` walk as the conservative
+  fallback. It only decides whether a turn renders, and is never stored or
+  sent.
+- `_sync_state_to_rust` compares every context key against the previous render,
+  so derived keys reach Rust even though explicit changed keys are storage
+  names.
+- `set_changed_keys()`, in both forms, is documented as the explicit-mode
+  invalidation API.
+
+`test_exposure_invalidation.py` (22 tests) pins derived, opaque and
+provider-tracked re-renders, both hatch forms, no-op parity (`["noop"]` under
+both policies), identical frames across a six-turn sequence, and Django/Rust
+child render equality. Seven deliberate breaks each failed their tests.
+
+Finding filed as #2956: `is_dirty` and `changed_fields` never see `state()`
+fields, because `_dirty_fingerprint` skips `_state_*` slots.
+
 ## Provider manifest and view-dependent tags — E2-0, E2-1, E2-2
 
 **The manifest.** `ProviderContract` (`_exposure.py`) is an immutable record of
