@@ -17,26 +17,29 @@ key collapsed them into one entry — and they are guarded differently, one by
 an `elif` condition and one inline. An unguarded duplicate would have been
 invisible. Repeated keys now carry an ordinal in source order, pinned by a
 scanner self-test. The consumer had no such duplicates. Across both modules,
-18 application-code sites remain open.
+19 application-code sites remain open (10 consumer, 9 runtime). *(This slice
+first said 18 — a hand sum that dropped one; the counts below are corrected
+from the pin tables.)*
 
 The two deferred-callback twins followed — `ViewRuntime._flush_deferred` and the
 consumer's copy, reached through `server_push` with `_skip_render`. Each
 reproduced (runtime: explicit from mount; consumer: explicit/None/invalid) with
 legacy controls passing. Beyond the exception, their `repr(callback)` fallback
 logged a `functools.partial`'s bound arguments; the tests pin both channels.
-16 open.
+17 open.
 
 The consumer's `_flush_pending_layout` twin followed. Its first test run
 passed for `None` and invalid policies before any fix — vacuously: those
 policies fail closed in `get_context_data` before the layout render, and a
 value-free line from that refusal satisfied the assertion. The test now
 records that the patched render ran and covers only the two policies that can
-reach it; `explicit` was red before the fix and green after. 15 open.
+reach it; `explicit` was red before the fix and green after. 16 open.
 
 Mount wiring's presence-group setup calls the overridable `get_presence_key`
 and logged its failure with the exception. Reproduced at mount (explicit from
 mount; the test records that the hook ran), fixed with `log_failure` at the
-original WARNING level inside the mount's already-restricted scope. 14 open.
+original WARNING level inside the mount's already-restricted scope. 15 open
+(8 consumer, 7 runtime).
 
 ## Shared log_failure primitive and runtime layout — E1 slice
 
