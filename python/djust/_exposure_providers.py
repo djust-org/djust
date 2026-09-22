@@ -141,6 +141,9 @@ def require_no_provider_keys(
 
 STREAMS_PROVIDER = ProviderContract("djust.streams", rendered=frozenset({"streams"}))
 
+#: ``UploadMixin``'s render-only projection of ``get_upload_state()`` (E2-6).
+UPLOADS_PROVIDER = ProviderContract("djust.uploads", rendered=frozenset({"uploads"}))
+
 #: Keys ``_sync_state_to_rust`` adds for the Rust renderer when absent.
 RUST_RENDER_PROVIDER = ProviderContract(
     "djust.rust_render", rendered=frozenset({"csrf_token", "DATE_FORMAT", "TIME_FORMAT"})

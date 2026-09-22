@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Type
 
+from .._exposure_providers import UPLOADS_PROVIDER
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -1250,6 +1252,33 @@ class UploadManager:
             pass  # Directory not empty, leave it
 
 
+#: Entry fields the explicit ``uploads`` provider renders (ADR-038 E2-6).
+#:
+#: * ``writer_result`` is excluded: it is whatever a custom writer's
+#:   ``close()`` returned (an object-store key, URL or response), a
+#:   server-side value no template needs by default. An application that
+#:   wants to show it passes it deliberately from ``get_uploads()``.
+#: * The raw ``client_name`` is excluded: it is the attacker-controlled
+#:   original filename, directory components and control characters
+#:   included. Templates get ``safe_client_name``, the same sanitized
+#:   basename ``UploadEntry.safe_client_name`` gives storage code, which is
+#:   enough to label a progress row.
+_RENDERED_ENTRY_FIELDS = (
+    "ref",
+    "client_type",
+    "client_size",
+    "progress",
+    "complete",
+    "error",
+)
+
+
+def _render_upload_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    rendered = {key: entry[key] for key in _RENDERED_ENTRY_FIELDS}
+    rendered["safe_client_name"] = _safe_basename(entry["client_name"] or "")
+    return rendered
+
+
 # ============================================================================
 # UploadMixin — mix into LiveView classes
 # ============================================================================
@@ -1285,6 +1314,10 @@ class UploadMixin:
     # decide how defensively to replay — unknown / older versions fall
     # back to the "bare-minimum replay" path. See ADR-009.
     _upload_configs_version: int = 1
+    # ADR-038 E2-6: under the explicit policy, ``uploads`` is a registered,
+    # render-only provider key (see ``_get_upload_context``). Legacy views
+    # have no ``uploads`` context, exactly as before.
+    _djust_context_providers = (UPLOADS_PROVIDER,)
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
@@ -1485,10 +1518,29 @@ class UploadMixin:
         return []
 
     def _get_upload_context(self) -> Dict[str, Any]:
-        """Get upload state for template context."""
-        if self._upload_manager:
-            return {"uploads": self._upload_manager.get_upload_state()}
-        return {}
+        """Render-only upload state for an explicit view's template context.
+
+        ADR-038 E2-6: the explicit render context calls this for the
+        registered ``djust.uploads`` provider; legacy views never render an
+        ``uploads`` key. The value is ``get_upload_state()`` with each entry
+        projected through :func:`_render_upload_entry`, which drops
+        ``writer_result`` and the raw ``client_name``. Nothing here is
+        persisted, sent as client state or exported to debug tools, and under
+        decision D-g entries in flight do not survive a reconnect.
+        """
+        if not self._upload_manager:
+            return {}
+        state = self._upload_manager.get_upload_state()
+        return {
+            "uploads": {
+                name: {
+                    "config": dict(info["config"]),
+                    "entries": [_render_upload_entry(entry) for entry in info["entries"]],
+                    "errors": list(info["errors"]),
+                }
+                for name, info in state.items()
+            }
+        }
 
     def _cleanup_uploads(self) -> None:
         """Clean up all uploads. Called on disconnect."""

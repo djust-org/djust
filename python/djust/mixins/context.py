@@ -489,7 +489,7 @@ class ContextMixin:
         from inspect import getattr_static
 
         from .._exposure import ExposureError
-        from .._exposure_providers import STREAMS_PROVIDER, new_render_context
+        from .._exposure_providers import STREAMS_PROVIDER, UPLOADS_PROVIDER, new_render_context
         from ..components.base import LiveComponent
 
         policy = getattr(self, "exposure_policy", None)
@@ -555,6 +555,13 @@ class ContextMixin:
             streams = get_streams()
             if streams:
                 context._provide(STREAMS_PROVIDER.name, "streams", streams)
+        # ADR-038 E2-6: UploadMixin's render projection. Resolved here rather
+        # than in a mixin get_context_data so both documented MRO orders
+        # (``UploadMixin, LiveView`` and ``LiveView, UploadMixin``) render it.
+        get_uploads = getattr(self, "_get_upload_context", None)
+        if callable(get_uploads):
+            for name, value in get_uploads().items():
+                context._provide(UPLOADS_PROVIDER.name, name, value)
 
         self._explicit_context_provider_keys = context.provider_keys()
         context.update(kwargs)
@@ -672,8 +679,12 @@ class ContextMixin:
                     supplied = processor(request)
                     if not supplied:
                         continue
-                    if reserved.intersection(supplied):
-                        raise ExposureError("Context processor reserved provider collision")
+                    for key in reserved.intersection(supplied):
+                        # A processor may repeat the very object the provider
+                        # supplied (djust.tenants.context_processor next to
+                        # TenantMixin); any other value is a collision.
+                        if key not in result or supplied[key] is not result[key]:
+                            raise ExposureError("Context processor reserved provider collision")
                     for key, value in supplied.items():
                         if key not in result:
                             result[key] = value
