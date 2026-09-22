@@ -21,6 +21,15 @@ now routed through the helper); the upload cleanup is legacy-gated; the
 NOTIFY group leave, waiter cancellation and child unregistration are
 framework-only. `KNOWN_OPEN` is down to 11.
 
+`_mount_one` followed, and it leaked to the client as well as the log: under
+`DEBUG`, a nonlegacy view's `str(exc)` reached the batch's `failed[]` entry.
+Its owner is the class the entry names, resolved by `resolve_view_class` and
+fail-closed if unresolvable. `KNOWN_OPEN` is down to 10. This fix exposed a
+limit of the pin: the site survives inside the legacy branch with the same key,
+so the pin still passed with it listed as open. The pin catches unclassified
+and stale sites, not mislabelled ones; moving an entry between tables remains a
+reviewed edit.
+
 Mutation-checked three ways: reverting the cursor fix fails the pin naming
 the reintroduced site; renaming a message fails it as unclassified; fixing an
 open site without deleting its entry fails it as stale. A self-test pins the

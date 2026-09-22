@@ -57,6 +57,9 @@ LEGACY_GATED = {
     ("disconnect", "Error cleaning up uploads: %s"): (
         "runs only when not explicit_disposed; a nonlegacy view is disposed instead"
     ),
+    ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
+        "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
+    ),
 }
 
 FRAMEWORK_ONLY = {
@@ -101,7 +104,6 @@ KNOWN_OPEN = {
     ("_dispatch_single_event", "Waiter notification for deferred %r failed: %s"): "waiter",
     ("_dispatch_single_event", "Deferred-activity render failed for %s"): "activity render",
     ("_dispatch_single_event", "Deferred-activity HTML strip/extract failed for "): "activity",
-    ("_mount_one", "mount_batch: _mount_one raised for view %s"): "mount_batch escape",
     ("_maybe_push_tt_event", "time_travel: failed to push event frame"): "not yet verified",
     ("handle_bug_capture_share", "bug_capture_share: failed to encode capture"): "debug tool",
 }

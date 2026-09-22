@@ -7,6 +7,7 @@ log the exception. For a nonlegacy view that is the same leak ``handle_exception
 refuses: undeclared state can occur in an exception's message.
 """
 
+import json
 import logging
 
 import pytest
@@ -156,7 +157,7 @@ class NotifyFailureView(LiveView):
     template = "<div dj-root>notify</div>"
     # Class-level so the consumer joins the NOTIFY group at wiring time, which
     # reads it before mount(); listen() itself needs a PostgreSQL backend.
-    _listen_channels = {"exposure_hooks"}
+    _listen_channels = frozenset({"exposure_hooks"})
 
     def handle_info(self, message):
         raise ValueError("NOTIFY_HOOK_SENTINEL")
@@ -269,3 +270,64 @@ async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_v
     else:
         assert "UNTRACK_HOOK_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text
+
+
+class BatchFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root>batch</div>"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
+async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(monkeypatch, caplog, policy):
+    """``_mount_one`` is the batch's last line of defense for anything that
+    escapes ``handle_mount``. It logged the exception with its traceback and,
+    under DEBUG, sent ``str(exc)`` to the client in ``failed[]``. The trigger is
+    synthetic — ``handle_mount`` is stubbed to raise — because the catch exists
+    for whatever escapes, not for one known path. The owner is the class the
+    batch entry names, resolved by the shared allowlist-first resolver."""
+    monkeypatch.setattr(BatchFailureView, "exposure_policy", policy)
+
+    async def escape(self, data, **kwargs):
+        raise ValueError("MOUNT_BATCH_SENTINEL")
+
+    monkeypatch.setattr(LiveViewConsumer, "handle_mount", escape)
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+    ):
+        request = await sync_to_async(make_request)()
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=request.session, user=request.user, tenant=None)
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        try:
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                await socket.send_json_to(
+                    {
+                        "type": "mount_batch",
+                        "views": [
+                            {
+                                "view": __name__ + ".BatchFailureView",
+                                "url": "/b/",
+                                "target_id": "t1",
+                            }
+                        ],
+                    }
+                )
+                frame = await socket.receive_json_from(timeout=3)
+            assert frame["type"] == "mount_batch", frame
+            [failed] = frame["failed"]
+            if policy == "legacy":
+                # Unchanged legacy behaviour: DEBUG detail to the client, traceback in the log.
+                assert "MOUNT_BATCH_SENTINEL" in failed["error"]
+                assert "mount_batch: _mount_one raised for view" in caplog.text
+                assert "MOUNT_BATCH_SENTINEL" in caplog.text
+            else:
+                assert failed["error"] == "mount failed"
+                assert "MOUNT_BATCH_SENTINEL" not in json.dumps(frame)
+                assert "MOUNT_BATCH_SENTINEL" not in caplog.text
+                assert "Protected view operation failed" in caplog.text
+        finally:
+            await socket.disconnect()

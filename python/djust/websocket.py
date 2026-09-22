@@ -2511,17 +2511,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as exc:  # noqa: BLE001 — isolate per-view failures
             self.send_json = orig_send_json  # type: ignore[assignment]
             self._mounting_in_batch = False
-            logger.exception(
-                "mount_batch: _mount_one raised for view %s",
-                sanitize_for_log(view_path),
+            # ADR-038: the failed view may never have become view_instance, so
+            # its owner is the class the batch entry names, resolved by the
+            # shared allowlist-first resolver. An unresolvable class, or any
+            # nonlegacy owner, keeps both the log and failed[] value-free.
+            from ._exposure import uses_legacy_exposure
+            from .security.mount import resolve_view_class
+
+            resolution = resolve_view_class(view_path)
+            legacy = (
+                bool(resolution)
+                and uses_legacy_exposure(resolution.view_class)
+                and uses_legacy_exposure(self.view_instance)
             )
+            if legacy:
+                logger.exception(
+                    "mount_batch: _mount_one raised for view %s",
+                    sanitize_for_log(view_path),
+                )
+            else:
+                logger.error("Protected view operation failed")
             from django.conf import settings as _settings
 
             # Fix #12 — do not leak exception text in production. In
-            # DEBUG mode we still expose a truncated string to help
-            # diagnose template / auth errors.
+            # DEBUG mode a legacy owner still gets a truncated string to help
+            # diagnose template / auth errors; a nonlegacy owner never does.
             safe_err = "mount failed"
-            if getattr(_settings, "DEBUG", False):
+            if legacy and getattr(_settings, "DEBUG", False):
                 safe_err = str(exc)[:200]
             return False, {"target_id": target_id, "view": view_path}, safe_err, None, []
         finally:

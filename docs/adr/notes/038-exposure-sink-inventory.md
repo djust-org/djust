@@ -130,6 +130,13 @@ fix for explicit/None/invalid and a legacy control proves the hook ran.
   `untrack_presence` cleanup.
 - Converted in the same function, **not independently reproduced**: the
   `db_notify` outer catch and its deferred-activity flush catch.
+- `_mount_one` (`mount_batch`) leaked to the **client** as well as the log:
+  under DEBUG it put `str(exc)` in the batch's `failed[]` entry. The failed view
+  may never have become `view_instance`, so the owner is the class the batch
+  entry names, resolved by the shared allowlist-first `resolve_view_class`; an
+  unresolvable class fails closed. Its trigger is synthetic (`handle_mount`
+  stubbed to raise), since the catch is the batch's last line of defense for
+  whatever escapes rather than for one known path.
 
 **Legacy-gated — verified by reading the guard:** sticky `_on_sticky_unmount`
 in `disconnect` and `handle_live_redirect_mount` (nonlegacy children go to
@@ -147,7 +154,7 @@ the view was not disposed as nonlegacy).
 `handle_async_result`); the consumer's `_dispatch_single_event` (deferred
 activity dispatch, waiter notification, render and strip) — live for explicit
 views because `db_notify` passes the consumer to the activity flush;
-`_mount_one` (`mount_batch` escapes); `_maybe_push_tt_event`;
+`_maybe_push_tt_event`;
 and `handle_bug_capture_share`.
 
 **Framework-only** (message not derived from application values):
