@@ -243,7 +243,11 @@ class OfflineMixin:
             return data
 
         except Exception as e:
-            logger.error("Failed to fetch data for key %s: %s", key, e, exc_info=True)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger, (self,), e, "Failed to fetch data for key %s: %s", key, e, traceback=True
+            )
             # Fall back to cache if available
             fallback = self.storage.get(key)
             return cast(List[Dict], fallback) if fallback else []
@@ -502,7 +506,9 @@ class SyncMixin:
             logger.info("Sync complete: %d processed, %d failed", total_processed, total_failed)
 
         except Exception as e:
-            logger.error("Sync failed: %s", e, exc_info=True)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (self,), e, "Sync failed: %s", e, traceback=True)
             self.push_event("offline:sync_error", {"error": str(e)})
         finally:
             self._sync_in_progress = False
@@ -532,7 +538,17 @@ class SyncMixin:
 
             except Exception as e:
                 failed += 1
-                logger.error("Error syncing create action %s: %s", action.id, e, exc_info=True)
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
+                    "Error syncing create action %s: %s",
+                    action.id,
+                    e,
+                    traceback=True,
+                )
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -562,7 +578,17 @@ class SyncMixin:
 
             except Exception as e:
                 failed += 1
-                logger.error("Error syncing update action %s: %s", action.id, e, exc_info=True)
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
+                    "Error syncing update action %s: %s",
+                    action.id,
+                    e,
+                    traceback=True,
+                )
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -592,7 +618,17 @@ class SyncMixin:
 
             except Exception as e:
                 failed += 1
-                logger.error("Error syncing delete action %s: %s", action.id, e, exc_info=True)
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
+                    "Error syncing delete action %s: %s",
+                    action.id,
+                    e,
+                    traceback=True,
+                )
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -616,7 +652,9 @@ class SyncMixin:
             return True
 
         except Exception as e:
-            logger.error("Default create sync failed: %s", e)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (self,), e, "Default create sync failed: %s", e)
             return False
 
     def _default_update_sync(self, action: OfflineAction) -> bool:
@@ -646,7 +684,9 @@ class SyncMixin:
             logger.error("Object not found for update: %s", action.id)
             return False
         except Exception as e:
-            logger.error("Default update sync failed: %s", e)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (self,), e, "Default update sync failed: %s", e)
             return False
 
     def _default_delete_sync(self, action: OfflineAction) -> bool:
@@ -665,5 +705,7 @@ class SyncMixin:
             logger.warning("Object already deleted: %s", action.id)
             return True  # Consider this successful
         except Exception as e:
-            logger.error("Default delete sync failed: %s", e)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (self,), e, "Default delete sync failed: %s", e)
             return False

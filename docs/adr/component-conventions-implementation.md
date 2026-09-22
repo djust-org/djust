@@ -282,6 +282,23 @@ and `updates.py` are framework-only. The ratchet flagged the converted
 `mixins/template.py` sites as stale before they were classified — it working
 as intended. The baseline is 167 sites in 61 modules.
 
+Upload modules are classified (the `UploadWriter` catches wrap application
+writer code that receives upload bytes and metadata, never view state — a
+judgment recorded in the pin), and a further batch is pinned.
+`pwa/mixins.py`'s eight offline-sync catches ran application
+`sync_create/update/delete_<model>` handlers over client-queued data and logged
+the exception text, which can echo that data; reproduced through
+`_sync_create_actions` (red against the original) and converted with a
+reusable converter that re-parses after each edit. `state_backends/redis.py`'s
+(de)serialize catches handle the legacy view cache that explicit initialization
+bypasses; its other catches, `template_tags/__init__.py`, `db/notifications.py`
+and the component gallery are framework-only.
+
+Recorded, not fixed: the PWA sync failure branch also persists `str(exc)` into
+the offline sync queue (`mark_failed`) for any policy — a storage destination,
+not a log, pinned by the test's assertion so a change is visible. The baseline
+is 116 sites in 54 modules.
+
 A process note: the first conversion added `as exc` to `except` lines by line
 number after an earlier edit had shifted them, producing
 `except PermissionDenied as exc as exc:`. `mypy` caught it before any test ran.

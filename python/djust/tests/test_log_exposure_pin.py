@@ -443,6 +443,116 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "pwa/mixins.py": (),
+    "template_tags/__init__.py": (
+        {},
+        {
+            ("_install_i18n_hooks", "Could not import the #2558 i18n hooks: %s"): (
+                "tag handler registration and imports"
+            ),
+            ("_install_library_loader", "Could not import the library loader: %s"): (
+                "tag handler registration and imports"
+            ),
+            ("_register_builtins", "Could not import built-in handlers: %s"): (
+                "tag handler registration and imports"
+            ),
+            ("decorator", "Could not register assign tag handler '%s': Rust"): (
+                "tag handler registration and imports"
+            ),
+            ("decorator", "Could not register tag handler '%s': Rust extens"): (
+                "tag handler registration and imports"
+            ),
+            ("decorator", "Failed to register assign tag handler '%s': %s"): (
+                "tag handler registration and imports"
+            ),
+            ("decorator", "Failed to register tag handler '%s': %s"): (
+                "tag handler registration and imports"
+            ),
+            ("reregister_builtins", "Could not re-register built-in tag handler '%s':"): (
+                "tag handler registration and imports"
+            ),
+        },
+    ),
+    "db/notifications.py": (
+        {},
+        {
+            ("_run", "pg listener connect failed: %s — retrying in 1s"): (
+                "PostgreSQL listener lifecycle"
+            ),
+            ("_run", "pg listener connection close failed"): ("PostgreSQL listener lifecycle"),
+            ("_run", "pg listener disabled (permanent failure): %s — f"): (
+                "PostgreSQL listener lifecycle"
+            ),
+            ("_run", "pg listener lost connection: %s — reconnecting i"): (
+                "PostgreSQL listener lifecycle"
+            ),
+            ("areset_for_tests", "areset_for_tests: awaited task raised"): (
+                "PostgreSQL listener lifecycle"
+            ),
+            ("reset_for_tests", "reset_for_tests: task cancel raised"): (
+                "PostgreSQL listener lifecycle"
+            ),
+        },
+    ),
+    "components/gallery/views.py": (
+        {},
+        {
+            ("_get_theme_css", "component gallery could not generate theme CSS f"): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_get_theme_options", "component gallery could not enumerate theme opti"): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_project_theme_defaults", "component gallery could not resolve the project "): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_render_component_cards", "gallery class render failed for variant %s"): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_render_component_cards", "gallery template render failed for variant %s"): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_render_head", "Optional djust_theming base CSS link unavailable"): (
+                "component gallery renders framework-shipped examples"
+            ),
+            ("_render_head", "Theming asset version unavailable, linking style"): (
+                "component gallery renders framework-shipped examples"
+            ),
+        },
+    ),
+    "state_backends/redis.py": (
+        {
+            ("get", "Failed to deserialize from Redis key '%s': %s"): (
+                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+            ),
+            ("set", "Failed to serialize to Redis key '%s': %s"): (
+                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+            ),
+        },
+        {
+            ("__init__", "Failed to connect to Redis: %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("_compress", "Compression failed, storing uncompressed: %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("_decompress", "Decompression failed: %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("delete_all", "delete_all failed for prefix %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("get_memory_stats", "Failed to get Redis memory stats: %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("get_stats", "Failed to get Redis stats: %s"): (
+                "Redis connection, compression and stats"
+            ),
+            ("health_check", "Redis health check failed: %s"): (
+                "Redis connection, compression and stats"
+            ),
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (

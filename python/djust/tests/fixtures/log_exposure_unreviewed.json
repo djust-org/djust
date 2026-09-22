@@ -178,36 +178,6 @@
         "gallery: discover_template_tags() failed: %s"
       ]
     ],
-    "components/gallery/views.py": [
-      [
-        "_get_theme_css",
-        "component gallery could not generate theme CSS f"
-      ],
-      [
-        "_get_theme_options",
-        "component gallery could not enumerate theme opti"
-      ],
-      [
-        "_project_theme_defaults",
-        "component gallery could not resolve the project "
-      ],
-      [
-        "_render_component_cards",
-        "gallery class render failed for variant %s"
-      ],
-      [
-        "_render_component_cards",
-        "gallery template render failed for variant %s"
-      ],
-      [
-        "_render_head",
-        "Optional djust_theming base CSS link unavailable"
-      ],
-      [
-        "_render_head",
-        "Theming asset version unavailable, linking style"
-      ]
-    ],
     "components/icons.py": [
       [
         "_get_icon_sets",
@@ -240,32 +210,6 @@
       [
         "_on_save",
         "notify_on_save: failed to emit NOTIFY for %s pk="
-      ]
-    ],
-    "db/notifications.py": [
-      [
-        "_run",
-        "pg listener connect failed: %s — retrying in 1s"
-      ],
-      [
-        "_run",
-        "pg listener connection close failed"
-      ],
-      [
-        "_run",
-        "pg listener disabled (permanent failure): %s — f"
-      ],
-      [
-        "_run",
-        "pg listener lost connection: %s — reconnecting i"
-      ],
-      [
-        "areset_for_tests",
-        "areset_for_tests: awaited task raised"
-      ],
-      [
-        "reset_for_tests",
-        "reset_for_tests: task cancel raised"
       ]
     ],
     "decorators.py": [
@@ -339,40 +283,6 @@
       [
         "manifest_view",
         "Error generating manifest: %s"
-      ]
-    ],
-    "pwa/mixins.py": [
-      [
-        "_default_create_sync",
-        "Default create sync failed: %s"
-      ],
-      [
-        "_default_delete_sync",
-        "Default delete sync failed: %s"
-      ],
-      [
-        "_default_update_sync",
-        "Default update sync failed: %s"
-      ],
-      [
-        "_process_sync_queue",
-        "Sync failed: %s"
-      ],
-      [
-        "_sync_create_actions",
-        "Error syncing create action %s: %s"
-      ],
-      [
-        "_sync_delete_actions",
-        "Error syncing delete action %s: %s"
-      ],
-      [
-        "_sync_update_actions",
-        "Error syncing update action %s: %s"
-      ],
-      [
-        "get_cached_or_fetch",
-        "Failed to fetch data for key %s: %s"
       ]
     ],
     "pwa/service_worker.py": [
@@ -549,44 +459,6 @@
         "InMemory health check failed: %s"
       ]
     ],
-    "state_backends/redis.py": [
-      [
-        "__init__",
-        "Failed to connect to Redis: %s"
-      ],
-      [
-        "_compress",
-        "Compression failed, storing uncompressed: %s"
-      ],
-      [
-        "_decompress",
-        "Decompression failed: %s"
-      ],
-      [
-        "delete_all",
-        "delete_all failed for prefix %s"
-      ],
-      [
-        "get",
-        "Failed to deserialize from Redis key '%s': %s"
-      ],
-      [
-        "get_memory_stats",
-        "Failed to get Redis memory stats: %s"
-      ],
-      [
-        "get_stats",
-        "Failed to get Redis stats: %s"
-      ],
-      [
-        "health_check",
-        "Redis health check failed: %s"
-      ],
-      [
-        "set",
-        "Failed to serialize to Redis key '%s': %s"
-      ]
-    ],
     "template/rendering.py": [
       [
         "_jit_serialize_model",
@@ -605,40 +477,6 @@
       [
         "bridge_library_filters",
         "Failed to bridge custom filter '%s' to Rust regi"
-      ]
-    ],
-    "template_tags/__init__.py": [
-      [
-        "_install_i18n_hooks",
-        "Could not import the #2558 i18n hooks: %s"
-      ],
-      [
-        "_install_library_loader",
-        "Could not import the library loader: %s"
-      ],
-      [
-        "_register_builtins",
-        "Could not import built-in handlers: %s"
-      ],
-      [
-        "decorator",
-        "Could not register assign tag handler '%s': Rust"
-      ],
-      [
-        "decorator",
-        "Could not register tag handler '%s': Rust extens"
-      ],
-      [
-        "decorator",
-        "Failed to register assign tag handler '%s': %s"
-      ],
-      [
-        "decorator",
-        "Failed to register tag handler '%s': %s"
-      ],
-      [
-        "reregister_builtins",
-        "Could not re-register built-in tag handler '%s':"
       ]
     ],
     "template_tags/pwa.py": [
