@@ -120,15 +120,25 @@ class RequestMixin:
         perms, messages) is available during template rendering. Cleanup is
         guaranteed via the context manager pattern. (#717)
         """
+        from .._exposure import uses_legacy_exposure
+        from .._exposure_providers import PROCESSOR_KEYS_ATTR
+
         processor_output = self._apply_context_processors({}, request)
         injected_keys = []
         for key, value in processor_output.items():
             if not hasattr(self, key):
                 injected_keys.append(key)
                 setattr(self, key, value)
+        legacy = uses_legacy_exposure(self)
+        if not legacy:
+            # ADR-038 D-h: these attributes are framework-injected, not
+            # instance-assigned components the application must declare.
+            self.__dict__[PROCESSOR_KEYS_ATTR] = frozenset(injected_keys)
         try:
             yield processor_output
         finally:
+            if not legacy:
+                self.__dict__.pop(PROCESSOR_KEYS_ATTR, None)
             for key in injected_keys:
                 try:
                     delattr(self, key)

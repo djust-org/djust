@@ -4,7 +4,7 @@ import pytest
 from django.template import Context, Engine
 
 from djust import LiveView
-from djust._exposure import ExposureError
+from djust._exposure import ExposureConfigurationError, ExposureError
 from djust.decorators import action, state
 
 
@@ -150,7 +150,13 @@ def test_registered_components_are_bound_per_view_and_not_discovered_from_attrs(
     for instance in (first, second):
         instance._components = {}
         instance._streams = {}
-        instance.unregistered = Toggle()
+    # D-h: an instance-assigned component is never discovered; it is a
+    # configuration error at the first explicit render, naming the attribute.
+    stray = object.__new__(Page)
+    stray._components, stray._streams = {}, {}
+    stray.unregistered = Toggle()
+    with pytest.raises(ExposureConfigurationError, match="'unregistered'"):
+        stray.get_context_data()
     first_context = first.get_context_data()
     second_context = second.get_context_data()
     assert set(first_context) == {"menu"}

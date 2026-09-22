@@ -489,7 +489,13 @@ class ContextMixin:
         from inspect import getattr_static
 
         from .._exposure import ExposureError
-        from .._exposure_providers import STREAMS_PROVIDER, UPLOADS_PROVIDER, new_render_context
+        from .._exposure_providers import (
+            STREAMS_PROVIDER,
+            UPLOADS_PROVIDER,
+            instance_assigned_component_error,
+            new_render_context,
+            registered_components,
+        )
         from ..components.base import LiveComponent
 
         policy = getattr(self, "exposure_policy", None)
@@ -530,11 +536,17 @@ class ContextMixin:
         if callable(clear_providers):
             clear_providers()
 
+        # D-h: a component assigned on the instance is never discovered; say
+        # so at the first explicit render instead of rendering nothing.
+        misplaced = instance_assigned_component_error(self)
+        if misplaced is not None:
+            raise misplaced
+
         # The descriptor registry is a framework declaration manifest, not an
         # attribute discovery mechanism. Reject stale/shadowed entries BEFORE
-        # evaluating their descriptor (especially a property shadow).
-        descriptors = getattr(type(self), "_component_descriptors", {})
-        for name, declaration in descriptors.items():
+        # evaluating their descriptor (especially a property shadow). Each
+        # declaration's ``__get__`` returns this view's own binding (E2-7).
+        for name, declaration in registered_components(type(self)).items():
             if name in ("view", "streams"):
                 raise ExposureError("Component context provider uses a reserved name")
             if (
