@@ -204,7 +204,7 @@ registry, the `sticky_hold` send and two accessibility flushes. **9 open** at pi
 `get_presence_key` at presence setup (fixed: reproduced at mount, explicit
 from mount, now `log_failure` at WARNING); the `full_html_update` Django signal
 (fixed: receivers' exceptions arrive via `send`; `log_failure` at DEBUG); the WS and SSE event
-re-auth checks; `state_snapshot_signed` emission (its explicit codec branch
+re-auth checks (reclassified legacy-gated: only legacy views are re-checked); `state_snapshot_signed` emission (its explicit codec branch
 has an inner catch, but that nothing else escapes is unconfirmed); both
 post-event state saves; scoped component render.
 

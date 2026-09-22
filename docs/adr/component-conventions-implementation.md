@@ -49,6 +49,13 @@ turn's restricted scope. The signal's own payload was already safe: its
 `context_snapshot` is the redacted debug projection for explicit views.
 14 open (8 consumer, 6 runtime).
 
+The WS and SSE `recheck_event_auth` catches are reclassified legacy-gated, not
+fixed: the method's sole production caller, `_dispatch_event`, invokes it only
+when `uses_legacy_exposure(view)`; explicit views take fresh event
+authorization instead. (Separately noted: the re-check fails open — any error
+returns `True` and the event proceeds. That is a deliberate defense-in-depth
+choice for legacy views, outside this slice.) 12 open (8 consumer, 4 runtime).
+
 ## Shared log_failure primitive and runtime layout — E1 slice
 
 Scanning beyond the consumer refuted the pin slice's claim about `runtime.py`:
