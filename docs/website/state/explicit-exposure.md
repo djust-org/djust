@@ -91,9 +91,12 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
 - **A failed state save is reported, not hidden.** The client gets a
   `state_error` instead of an update, and its back-navigation snapshot is
   revoked.
-- **Errors carry no values.** Under `DEBUG`, an explicit view's failure gives a
-  generic 500 page or error frame, and the logs get a static line. Configuration
-  errors, such as an invalid `exposure_policy`, still show their message.
+- **Errors follow Django.** With `DEBUG = True`, an explicit view's failure
+  shows its exception and traceback, as Django's development output does: the
+  technical 500 page, detailed error frames and dev overlay, and full log lines.
+  With `DEBUG = False` it is value-free: a generic 500 page or error frame and
+  a static log line. The debug panel, time travel and bug capture always show
+  redacted values.
 - **Service-worker caches.** Explicit pages are never written to the worker's
   page-shell or VDOM caches. The caches are cleared when the logged-in identity
   changes.

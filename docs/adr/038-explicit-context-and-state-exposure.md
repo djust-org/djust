@@ -224,8 +224,11 @@ maintaining independent lists of safe names. Cover HTTP, WebSocket, actor paths,
 reconnect, live navigation, components, generated client metadata, service-worker
 snapshots, time-travel, and debug tooling.
 
-Debugging is not an exception: server-only fields default to names/types or
-redacted values. Enabling DEBUG must not make their values browser-visible.
+Debugging tooling is not an exception: the debug panel, time-travel and
+bug-capture projections show server-only fields as names/types or redacted
+values in every mode. Error reporting follows Django instead (decision D-a,
+revised): under DEBUG a failure shows its exception and traceback, as Django's
+own development output does; in production it is value-free.
 Explicit application API responses and push messages still need their own review;
 this is not a general data-loss-prevention system.
 
@@ -295,7 +298,7 @@ this table.
 
 | # | Question | Adopted default |
 | --- | --- | --- |
-| D-a | Explicit-view errors under DEBUG on the HTTP/SSE entry points | Generic 500 without values; Django's technical error page is not rendered for a nonlegacy owner. `got_request_exception` still fires, with a value-free exception. |
+| D-a | Explicit-view errors under DEBUG | **Revised by the maintainer, 2026-09-22.** Under `DEBUG`, errors read like Django's: the technical 500 page, detailed WebSocket/SSE error frames and dev overlay, full logs with tracebacks and the traceback ring. In production (`DEBUG = False`) they are value-free: a generic 500 and error frame, a static log line, and `got_request_exception` sent with a value-free exception. Debug tooling projections and SQL parameter capture stay redacted in both modes. The first default (value-free even under DEBUG) was replaced. |
 | D-b | Service-worker VDOM and shell caches for explicit pages | Not written: explicit pages mark themselves ineligible and the client skips `cacheVdom` and shell capture. |
 | D-c | Presence metadata | Application output under D6 (the app passes it to `track_presence`); the rebroadcast is documented, and `track_presence` stops injecting `username`/`user_id` for explicit views. |
 | D-d | Observability SQL capture | Query parameters are redacted for nonlegacy owners. |

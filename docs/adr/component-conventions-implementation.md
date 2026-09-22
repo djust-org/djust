@@ -3,6 +3,27 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## D-a revised: Django-like error detail under DEBUG
+
+The maintainer revised decision D-a on 2026-09-22. Under `DEBUG`, an explicit
+view's errors now read like Django's everywhere: the technical 500 page,
+detailed WebSocket and SSE error frames and dev overlay, full log lines with
+tracebacks, and the traceback ring. In production they stay value-free.
+
+One rule drives every gate: `_exposure_diagnostics.diagnostics_policy_allows(owner)`,
+which is true for a legacy owner or when `settings.DEBUG` is on. It feeds
+`restrict_diagnostics` (and so every `log_failure`/`log_failure_for`, the
+protected HTTP entry and inherited scopes), the runtime's `expose_details`
+callers, the `mount_batch`, `bug_capture_share` and HTTP POST gates, and the
+explicit background and save-failure logs.
+
+Debug tooling projections (debug panel, time travel, bug capture) and SQL
+parameter capture are not error destinations and keep their redaction. ADR-038
+D6's wording changes to match.
+
+The diagnostics suites now assert the value-free contract under
+`DEBUG = False`, with `DEBUG = True` cases asserting that the details appear.
+
 ## ADR-038 activation review — E6-5
 
 This is the review E6 requires before the guard is removed. It covers every
@@ -474,6 +495,10 @@ Five entry points ran explicit-view code with no protected scope, and
 
 Under DEBUG they leaked the exception and, over HTTP, frame locals through
 Django's technical 500 page.
+
+*Superseded for `DEBUG = True` by "D-a revised" above: these entry points now
+show Django-like detail under DEBUG. What follows remains the production
+(`DEBUG = False`) behaviour.*
 
 The fixes:
 
