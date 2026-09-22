@@ -347,6 +347,17 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so the pre/post skip still
     fires — the render-forcing mechanism is the ``_force_full_html`` flag that
     ``set_changed_keys()`` sets.
+
+    ADR-038 E2-8: explicit views are walked the same way, deliberately. This
+    snapshot only decides WHETHER a turn renders; it is never persisted or
+    sent, so walking undeclared attributes discloses nothing. Narrowing it to
+    declared ``state()`` fields would drop updates: ``get_context_data`` may
+    read any plain attribute (an opaque dependency), and a provider's
+    ``ProviderContract.tracked`` keys are ordinary view attributes. The keys
+    reported are storage names (``_state_count``), not context keys;
+    ``_sync_state_to_rust`` maps a change onto the rendered keys by comparing
+    every context value against the previous render, not by name.
+    ``test_exposure_invalidation.py`` pins both halves.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user

@@ -611,6 +611,13 @@ class RustBridgeMixin:
                 Omit entirely (``None``) for the zero-arg force-render form above
                 — a DB/external-only change with no changed public attr.
 
+        This is also the invalidation API for ``exposure_policy = "explicit"``
+        views (ADR-038 D3), with the same behaviour: explicit context derived
+        from declared ``state()`` fields or plain attributes re-renders on its
+        own, and this call covers what no snapshot can see (an attribute write
+        on an opaque object, a DB/external change). A named key may be the
+        public field name; either form forces the full render.
+
         Note:
             Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
             PyO3 partial-sync primitive `_sync_state_to_rust` drives internally)
@@ -875,6 +882,13 @@ class RustBridgeMixin:
                     # we need to detect derived values (e.g. `products` from
                     # `self._products_cache`, or `completed_count` computed
                     # from `self.todos`).
+                    #
+                    # ADR-038 E2-8: for explicit views this loop is the whole
+                    # bridge. Their changed keys are storage attributes
+                    # (`_state_count`, `wizard_step_index`) that never match
+                    # a context key (`doubled`, a provider's `current_step`),
+                    # so every rendered key reaches Rust through this
+                    # comparison, not through the name match above.
                     #
                     # Containers (dict, list, tuple) compare by STRUCTURAL
                     # fingerprint (#2664), not id() and not ``==`` against a
