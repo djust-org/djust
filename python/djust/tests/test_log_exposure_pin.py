@@ -394,6 +394,55 @@ MIXIN_TABLES = {
             ("save_cache", "update-check cache is not writable"): ("package update check"),
         },
     ),
+    "uploads/__init__.py": (
+        {},
+        {
+            ("_add_chunk_via_writer", "UploadWriter instantiation failed for upload %s:"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+            ("_add_chunk_via_writer", "UploadWriter.open() raised for upload %s: %s"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+            ("_add_chunk_via_writer", "UploadWriter.write_chunk() raised for upload %s:"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+            ("_finalize_writer", "UploadWriter.close() raised for upload %s: %s"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+            ("_finalize_writer", "UploadWriter.close() return not JSON-serializabl"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+            ("_restore_upload_configs", "UploadMixin._restore_upload_configs: fallback al"): (
+                "restores saved upload slot configuration"
+            ),
+            ("_restore_upload_configs", "UploadMixin._restore_upload_configs: saved confi"): (
+                "restores saved upload slot configuration"
+            ),
+            ("_safe_abort_writer", "UploadWriter.abort() raised for upload %s"): (
+                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
+            ),
+        },
+    ),
+    "uploads/resumable.py": (
+        {},
+        {
+            ("__init__", "ResumableUploadWriter: state store %s is unavail"): (
+                "resumable-upload state store"
+            ),
+            ("_delete_state_entry", "ResumableUploadWriter: state delete failed for %"): (
+                "resumable-upload state store"
+            ),
+            ("_persist_chunk_progress", "ResumableUploadWriter: chunk state update failed"): (
+                "resumable-upload state store"
+            ),
+            ("_persist_initial_state", "ResumableUploadWriter: state store write failed "): (
+                "resumable-upload state store"
+            ),
+            ("resolve_resume_request", "resolve_resume_request: state store read failed "): (
+                "resumable-upload state store"
+            ),
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (

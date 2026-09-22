@@ -718,62 +718,6 @@
         "Tutorial run failed at step %s: %s"
       ]
     ],
-    "uploads/__init__.py": [
-      [
-        "_add_chunk_via_writer",
-        "UploadWriter instantiation failed for upload %s:"
-      ],
-      [
-        "_add_chunk_via_writer",
-        "UploadWriter.open() raised for upload %s: %s"
-      ],
-      [
-        "_add_chunk_via_writer",
-        "UploadWriter.write_chunk() raised for upload %s:"
-      ],
-      [
-        "_finalize_writer",
-        "UploadWriter.close() raised for upload %s: %s"
-      ],
-      [
-        "_finalize_writer",
-        "UploadWriter.close() return not JSON-serializabl"
-      ],
-      [
-        "_restore_upload_configs",
-        "UploadMixin._restore_upload_configs: fallback al"
-      ],
-      [
-        "_restore_upload_configs",
-        "UploadMixin._restore_upload_configs: saved confi"
-      ],
-      [
-        "_safe_abort_writer",
-        "UploadWriter.abort() raised for upload %s"
-      ]
-    ],
-    "uploads/resumable.py": [
-      [
-        "__init__",
-        "ResumableUploadWriter: state store %s is unavail"
-      ],
-      [
-        "_delete_state_entry",
-        "ResumableUploadWriter: state delete failed for %"
-      ],
-      [
-        "_persist_chunk_progress",
-        "ResumableUploadWriter: chunk state update failed"
-      ],
-      [
-        "_persist_initial_state",
-        "ResumableUploadWriter: state store write failed "
-      ],
-      [
-        "resolve_resume_request",
-        "resolve_resume_request: state store read failed "
-      ]
-    ],
     "uploads/storage.py": [
       [
         "delete",
