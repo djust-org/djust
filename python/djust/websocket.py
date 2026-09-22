@@ -3629,19 +3629,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             self._log_view_hook_failure("Error handling cursor move", view, e)
 
-    def _log_view_hook_failure(self, message: str, view: Any, exc: BaseException) -> None:
+    def _log_view_hook_failure(
+        self, message: str, view: Any, exc: BaseException, *, traceback: bool = False
+    ) -> None:
         """Log a failed application hook, value-free for a nonlegacy owner (ADR-038).
 
         An exception raised by application code can carry undeclared state in
-        its message, so a nonlegacy view gets the same value-free line
-        ``handle_exception`` uses. Both the view the hook ran on and the current
-        owner are checked at the logging boundary: either may restrict, neither
-        grants.
+        its message and traceback, so a nonlegacy view gets the same value-free
+        line ``handle_exception`` uses. Both the view the hook ran on and the
+        current owner are checked at the logging boundary: either may restrict,
+        neither grants. ``traceback=True`` keeps a legacy ``logger.exception``
+        site's output unchanged.
         """
         from ._exposure import uses_legacy_exposure
 
         if uses_legacy_exposure(view) and uses_legacy_exposure(self.view_instance):
-            logger.error("%s: %s", message, exc)
+            logger.error("%s: %s", message, exc, exc_info=exc if traceback else None)
         else:
             logger.error("Protected view operation failed")
 
@@ -4449,7 +4452,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._render_lock.release()
 
         except Exception as e:
-            logger.exception("Error in server_push: %s", e)
+            self._log_view_hook_failure("Error in server_push", view, e, traceback=True)
 
     async def client_push_event(self, event: Dict[str, Any]) -> None:
         """

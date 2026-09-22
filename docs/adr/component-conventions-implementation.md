@@ -16,6 +16,12 @@ and the current owner at the logging boundary and emits the value-free line
 for nonlegacy owners. All 8 cases pass; the 82 existing presence, cursor and
 heartbeat tests are unchanged; mypy is clean.
 
+`server_push` is fixed the same way: it runs an application handler from the
+channel layer, and its `logger.exception` wrote the message and traceback.
+Reproduced through `apush_to_view` (3 failing cases); the helper's
+`traceback=True` keeps legacy output — message and traceback — unchanged, which
+the legacy control asserts. The 89 existing push and broadcast tests pass.
+
 The same pattern is wider. The consumer has 44 exception-logging sites that
 bypass `handle_exception`; about twenty wrap application code — embedded child
 and layout renders, deferred and async callbacks, sticky unmount hooks,

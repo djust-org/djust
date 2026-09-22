@@ -118,6 +118,12 @@ either restricts, neither grants — and emits the value-free line
 `handle_exception` uses. Legacy logging is byte-identical; a legacy control
 proves the hook ran. `test_exposure_consumer_hook_diagnostics.py` pins it.
 
+`server_push` followed: it runs an application handler delivered over the
+channel layer (Celery, management commands) and its `logger.exception` wrote
+the message and traceback. Reproduced through `apush_to_view` (3 failing
+cases), now logged through the same helper with `traceback=True`, which keeps
+the legacy message and traceback unchanged — asserted by the legacy control.
+
 **Open — the same class, wrapping application code** (websocket.py lines at
 this commit): embedded child render (:554); `set_layout` template render
 (:822); deferred callbacks (:895); `start_async` and `handle_async_result`
@@ -125,7 +131,7 @@ this commit): embedded child render (:554); `set_layout` template render
 (:1772, :1784, :1844, :1887); disconnect cleanups (:2071–:2129); sticky
 `_on_sticky_unmount` hooks (:2147, :3369, :3376, :3505); `mount_batch` escapes
 (:2513); time-travel push, jump, component jump and replay (:3876, :4012,
-:4102, :4186, :4207); `bug_capture_share` (:4268); `server_push` (:4434).
+:4102, :4186, :4207); `bug_capture_share` (:4268).
 Each needs a reproduction and the same boundary check; a `logger.exception`
 site needs a nonlegacy branch without `exc_info`.
 
