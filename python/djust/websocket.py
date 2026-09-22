@@ -1225,6 +1225,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.debug("Async task %s was cancelled, skipping execution", task_name)
                 return
 
+        # A nonlegacy root's callback starts only under current authority.
+        if not await self._authorize_explicit_consumer_turn(view):
+            return
+        self._end_explicit_turn(view)
+
         result = None
         error = None
 
@@ -1280,6 +1285,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
                 if self.view_instance is not view:
+                    return
+                if not await self._authorize_explicit_consumer_turn(view):
                     return
                 # Call handle_async_result if defined (success path) — INSIDE
                 # the lock (#2840): a handler that mutates view state (the
@@ -1403,6 +1410,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # is why an async render must not be slow.
                     async with self._render_lock:
                         if self.view_instance is not view:
+                            return
+                        if not await self._authorize_explicit_consumer_turn(view):
                             return
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=error
@@ -1756,6 +1765,44 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         target_view._djust_event_request = authorized
         return True
 
+    async def _authorize_explicit_consumer_turn(self, view: Any) -> bool:
+        """Fresh authority for a server-originated turn on a nonlegacy root.
+
+        Tick, server_push, db_notify and NOTIFY-drained background work carry
+        no inbound event request. Like the runtime's background turns (ADR-038
+        D-l), each is authorized against a freshly loaded session before the
+        application hook runs; :meth:`_render_background` then commits declared
+        state before the frame. A revoked turn gets the foreground denial.
+        Legacy views pass through unchanged. The caller pops the stashed
+        request with :meth:`_end_explicit_turn` when the turn ends.
+        """
+        from ._exposure import uses_legacy_exposure
+
+        if uses_legacy_exposure(view):
+            return True
+        runtime = getattr(self, "_runtime", None)
+        try:
+            if runtime is None:
+                raise PermissionError("no runtime owns this view")
+            await runtime.authorize_explicit_turn(view)
+            return True
+        except Exception:  # noqa: BLE001 — auth providers may carry credentials
+            if runtime is not None and runtime.view_instance is view:
+                runtime.view_instance = None
+            if self.view_instance is view:
+                self.view_instance = None
+            await self.send_error(
+                "Event authorization failed. Please reload the page.", code="permission_denied"
+            )
+            await self.close(code=4403)
+            return False
+
+    @staticmethod
+    def _end_explicit_turn(view: Any) -> None:
+        """Drop a turn's authorized request so no later turn can reuse it."""
+        if view is not None:
+            view.__dict__.pop("_djust_event_request", None)
+
     async def _dispatch_single_event(
         self,
         target_view: Any,
@@ -1879,6 +1926,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+
+        # The released event was authorized at entry; a nonlegacy root's
+        # declared state is committed before its frame (ADR-038 E3).
+        if not uses_legacy_exposure(view):
+            runtime = getattr(self, "_runtime", None)
+            try:
+                committed = skip_render or (
+                    runtime is not None and await runtime.commit_explicit_turn(view, source="event")
+                )
+            finally:
+                self._end_explicit_turn(view)
+            if not committed:
+                return
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -4488,6 +4548,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 if self.view_instance is not view:
                     return
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
                 # Apply state updates before handler call so the handler can read
                 # the new values. _sync_state_to_rust runs after both to push the
                 # final Python state to Rust for rendering.
@@ -4572,6 +4634,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         **rendered.send_fields,
                     )
             finally:
+                self._end_explicit_turn(view)
                 self._render_lock.release()
 
         except Exception as e:
@@ -4648,6 +4711,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 if self.view_instance is not view:
                     return
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
@@ -4717,15 +4782,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             traceback=True,
                         )
             finally:
+                self._end_explicit_turn(view)
                 self._render_lock.release()
         except Exception as e:  # noqa: BLE001
             self._log_view_hook_failure(view, e, "Error in db_notify: %s", e, traceback=True)
 
     async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
-        """Capture one background render under the caller's existing render lock."""
+        """Capture one background render under the caller's existing render lock.
+
+        A nonlegacy root's turn was authorized at its start; its declared state
+        is committed here, before the frame, and a failed save withholds the
+        render (ADR-038 E3). Time-travel callers never reach this for them.
+        """
         if self.view_instance is not view:
             return None
         runtime = getattr(self, "_runtime", None)
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(view):
+            try:
+                committed = runtime is not None and await runtime.commit_explicit_turn(
+                    view, source="async"
+                )
+            finally:
+                self._end_explicit_turn(view)
+            if not committed or self.view_instance is not view:
+                return None
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -4828,6 +4910,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             if self.view_instance is not view:
                 return False
+            if not await self._authorize_explicit_consumer_turn(view):
+                return False
             # Snapshot state before tick to detect changes
             pre_assigns = _snapshot_assigns(self.view_instance)
 
@@ -4897,6 +4981,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return True
         finally:
+            self._end_explicit_turn(view)
             self._render_lock.release()
 
     @classmethod

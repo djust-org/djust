@@ -28,6 +28,26 @@ def _authorized_runtime(view):
     return host
 
 
+def _authorized_consumer(view):
+    """A bare consumer whose runtime grants an explicit root authority.
+
+    Same reason as :func:`_authorized_runtime`: these tests are about task
+    cancellation, and the consumer's server-originated turns authorize through
+    its runtime (test_exposure_consumer_turns.py covers that).
+    """
+    from djust.websocket import LiveViewConsumer
+
+    host = LiveViewConsumer()
+    host.view_instance = view
+    host._runtime = SimpleNamespace(
+        view_instance=view,
+        authorize_explicit_turn=AsyncMock(),
+        commit_explicit_turn=AsyncMock(return_value=True),
+        _parameter_contracts_active=False,
+    )
+    return host
+
+
 class LifecycleView(LiveView):
     exposure_policy = "explicit"
 
@@ -77,7 +97,6 @@ def test_unregister_clears_nested_ownership_and_pending_work():
 @pytest.mark.parametrize("from_thread", [False, True])
 async def test_cancel_all_stops_running_coroutine_and_drops_queued_work(transport, from_thread):
     from asgiref.sync import sync_to_async
-    from djust.websocket import LiveViewConsumer
 
     view = LifecycleView()
     entered, stopped = asyncio.Event(), asyncio.Event()
@@ -94,8 +113,7 @@ async def test_cancel_all_stops_running_coroutine_and_drops_queued_work(transpor
         host = _authorized_runtime(view)
         host._dispatch_async_work("start")
     else:
-        host = LiveViewConsumer()
-        host.view_instance = view
+        host = _authorized_consumer(view)
         await host._dispatch_async_work()
     await asyncio.wait_for(entered.wait(), 1)
     handles = tuple(getattr(view, "_async_task_handles", ()))
@@ -431,7 +449,6 @@ async def test_real_sse_navigation_disposes_old_registered_subtree(settings):
 @pytest.mark.parametrize("transport", ["runtime", "websocket"])
 @pytest.mark.parametrize("raises", [False, True])
 async def test_swallowed_cancellation_cannot_deliver_result_or_error(transport, raises, caplog):
-    from djust.websocket import LiveViewConsumer
 
     view = LifecycleView()
     entered = asyncio.Event()
@@ -452,8 +469,7 @@ async def test_swallowed_cancellation_cannot_deliver_result_or_error(transport, 
         host = _authorized_runtime(view)
         host._dispatch_async_work("start")
     else:
-        host = LiveViewConsumer()
-        host.view_instance = view
+        host = _authorized_consumer(view)
         await host._dispatch_async_work()
     handles = tuple(view._async_task_handles)
     try:

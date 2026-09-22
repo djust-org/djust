@@ -103,6 +103,7 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
     from djust.push import apush_to_view
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PushFailureView, "exposure_policy", _mount_policy(policy))
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
@@ -122,9 +123,13 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await apush_to_view(__name__ + ".PushFailureView", handler="handle_push")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
                 for _ in range(60):
                     text = caplog.text
                     if "PUSH_HOOK_SENTINEL" in text or "Protected view operation failed" in text:
+                        break
+                    if policy in (None, "invalid"):
                         break
                     await asyncio.sleep(0.05)
 
@@ -132,9 +137,12 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
                 # Unchanged legacy output: message and traceback.
                 assert "Error in server_push: PUSH_HOOK_SENTINEL" in caplog.text
                 assert "Traceback (most recent call last)" in caplog.text
-            else:
+            elif policy == "explicit":
                 assert "PUSH_HOOK_SENTINEL" not in caplog.text
                 assert "Protected view operation failed" in caplog.text
+            else:
+                # Refused before the hook: nothing from it can reach the log.
+                assert "PUSH_HOOK_SENTINEL" not in caplog.text
         finally:
             await socket.disconnect()
 
@@ -161,6 +169,27 @@ class NotifyFailureView(LiveView):
 
     def handle_info(self, message):
         raise ValueError("NOTIFY_HOOK_SENTINEL")
+
+
+def _mount_policy(policy):
+    """The policy a server-originated-turn test mounts under.
+
+    Those turns are authorized fresh against the mount binding (ADR-038 D-l),
+    so an explicit view must be explicit from mount for its hook to run at all.
+    ``None`` and invalid policies cannot mount; they mount legacy and flip
+    afterwards, and the turn is then refused before the hook runs.
+    """
+    return "explicit" if policy == "explicit" else "legacy"
+
+
+async def _expect_denial(socket):
+    """A refused server-originated turn gets the foreground denial."""
+    for _ in range(20):
+        out = await socket.receive_output(timeout=3)
+        if out["type"] == "websocket.close":
+            assert out["code"] == 4403, out
+            return
+    raise AssertionError("the turn was not denied")
 
 
 async def _poll_log(caplog, *needles, attempts=80):
@@ -192,8 +221,8 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
         else "db_notify: handle_info raised on NotifyFailureView: NOTIFY_HOOK_SENTINEL"
     )
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    # Hold the policy at legacy through mount; flip it before the hook can run.
-    monkeypatch.setattr(view_cls, "exposure_policy", "legacy")
+    # Explicit from mount; None/invalid flip after a legacy mount.
+    monkeypatch.setattr(view_cls, "exposure_policy", _mount_policy(policy))
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
@@ -216,14 +245,20 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
                         "djust_db_notify_exposure_hooks",
                         {"type": "db_notify", "channel": "exposure_hooks", "payload": {}},
                     )
-                await _poll_log(caplog, sentinel, "Protected view operation failed")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
+                else:
+                    await _poll_log(caplog, sentinel, "Protected view operation failed")
 
             if policy == "legacy":
                 assert expected_legacy in caplog.text
                 assert "Traceback (most recent call last)" in caplog.text
-            else:
+            elif policy == "explicit":
                 assert sentinel not in caplog.text
                 assert "Protected view operation failed" in caplog.text
+            else:
+                # Refused before the hook: nothing from it can reach the log.
+                assert sentinel not in caplog.text
         finally:
             await socket.disconnect()
 
@@ -365,7 +400,7 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
     from djust.push import apush_to_view
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PushDeferView, "exposure_policy", "legacy")
+    monkeypatch.setattr(PushDeferView, "exposure_policy", _mount_policy(policy))
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
@@ -383,11 +418,18 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await apush_to_view(__name__ + ".PushDeferView", handler="handle_later")
-                await _poll_log(caplog, "Deferred callback", "Protected view operation failed")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
+                else:
+                    await _poll_log(caplog, "Deferred callback", "Protected view operation failed")
 
             if policy == "legacy":
                 assert "PUSH_DEFER_EXC_SENTINEL" in caplog.text
                 assert "PUSH_DEFER_ARG_SENTINEL" in caplog.text
+            elif policy in (None, "invalid"):
+                # Refused before the handler queued anything.
+                assert "PUSH_DEFER_EXC_SENTINEL" not in caplog.text
+                assert "PUSH_DEFER_ARG_SENTINEL" not in caplog.text
             else:
                 assert "PUSH_DEFER_EXC_SENTINEL" not in caplog.text
                 assert "PUSH_DEFER_ARG_SENTINEL" not in caplog.text
@@ -431,7 +473,7 @@ async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
 
     monkeypatch.setattr(loader, "render_to_string", fail)
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PushLayoutView, "exposure_policy", "legacy")
+    monkeypatch.setattr(PushLayoutView, "exposure_policy", _mount_policy(policy))
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
