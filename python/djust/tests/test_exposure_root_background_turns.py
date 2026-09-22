@@ -186,3 +186,50 @@ async def test_failed_foreground_save_withholds_the_success_frame(monkeypatch, c
     assert error["view"] == __name__ + ".BackgroundView"
     assert "STORE_SENTINEL" not in json.dumps(transport.sent)
     assert "STORE_SENTINEL" not in caplog.text
+
+
+PARAMS_SEEN = []
+
+
+class UrlView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><span>{{ page }}</span></div>"
+    page = state(1, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(page=self.page, **kwargs)
+
+    def handle_params(self, params, uri):
+        PARAMS_SEEN.append(params)
+        if "page" in params:
+            self.page = int(params["page"])
+
+
+async def test_url_change_is_persisted_for_reconnect():
+    PARAMS_SEEN.clear()
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, UrlView)
+    PARAMS_SEEN.clear()
+    await runtime.dispatch_url_change({"type": "url_change", "params": {"page": "7"}, "uri": "/"})
+    assert PARAMS_SEEN == [{"page": "7"}]
+    assert [f["type"] for f in transport.sent[-1:]] != ["error"], transport.sent
+
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    restored, _ = await mount(fresh, UrlView)
+    assert restored.view_instance.page == 7, "url_change mutation was not persisted"
+
+
+async def test_url_change_requires_current_authorization():
+    PARAMS_SEEN.clear()
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, UrlView)
+    PARAMS_SEEN.clear()
+    sent_before = len(transport.sent)
+    await sync_to_async(request.session.delete)()
+    await runtime.dispatch_url_change({"type": "url_change", "params": {"page": "7"}, "uri": "/"})
+
+    assert PARAMS_SEEN == [], "handle_params ran without current authorization"
+    late = transport.sent[sent_before:]
+    assert not [f for f in late if f.get("type") in {"patch", "html_update"}], late
+    assert [f.get("code") for f in late if f.get("type") == "error"] == ["permission_denied"]
+    assert transport.closed_with == 4403

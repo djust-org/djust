@@ -4687,12 +4687,29 @@ class ViewRuntime:
         # background results. Otherwise their HTML and owner contracts can
         # describe different turns. Navigation may replace the owner while
         # this task waits for the borrowed transport lock.
-        async with self.transport.event_context(view):
+        from ._exposure import uses_legacy_exposure
+
+        # An explicit route change mutates declared state with no inbound event
+        # request: authorize it fresh, like background turns (ADR-038 D-l).
+        explicit = not uses_legacy_exposure(view)
+        explicit_lock = self._explicit_event_lock if explicit else contextlib.nullcontext()
+        async with explicit_lock, self.transport.event_context(view):
             if self.view_instance is not view:
                 await self.transport.send_error("View changed. Please reload the page.")
                 return
             with _tenant_context(getattr(view, "_tenant", None)):
-                await self._dispatch_url_change_inner(data)
+                if explicit:
+                    try:
+                        await self.authorize_explicit_turn(view)
+                    except Exception:  # noqa: BLE001 — no auth provider values
+                        if self.view_instance is view:
+                            await self.deny_explicit_turn()
+                        return
+                try:
+                    await self._dispatch_url_change_inner(data)
+                finally:
+                    if explicit:
+                        view.__dict__.pop("_djust_event_request", None)
 
     async def _dispatch_url_change_inner(self, data: Dict[str, Any]) -> None:
         """URL-change body (see :meth:`dispatch_url_change` for the tenant wrapper)."""
@@ -4714,14 +4731,26 @@ class ViewRuntime:
 
             from .auth.core import enforce_object_permission
 
+            # An explicit turn re-checks against its freshly authorized request,
+            # never the mount-time one.
+            permission_request = getattr(
+                self.view_instance,
+                "_djust_event_request",
+                getattr(self.view_instance, "request", None),
+            )
             try:
                 await sync_to_async(enforce_object_permission)(
-                    self.view_instance, getattr(self.view_instance, "request", None)
+                    self.view_instance, permission_request
                 )
             except PermissionDenied:
                 await self.transport.send_error(
                     "Access denied for this object.", code="permission_denied"
                 )
+                return
+
+            # Declared server state changed by handle_params is saved before
+            # the render frame; a failed save withholds it (ADR-038 E3).
+            if not await self.commit_explicit_turn(self.view_instance, source="url_change"):
                 return
 
             if hasattr(self.view_instance, "_sync_state_to_rust"):
