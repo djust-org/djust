@@ -3,6 +3,26 @@
 This is an implementation ledger, not acceptance of the complete proposals.
 The ADRs remain Proposed until their transport and security gates pass.
 
+## Service-worker state storage — E1 slice
+
+Closes the browser-storage row of [the sink inventory](notes/038-exposure-sink-inventory.md),
+which the previous E1 slice named as next. The writer and reader chains are
+cited there. The destination is CacheStorage, persisted to disk.
+
+`tests/js/exposure_sw_state_storage.test.js` joins the real client bundle to the
+real service worker through the actual `postMessage` bridge and asserts on the
+bytes CacheStorage holds, with sentinels in every frame field outside the
+token: only the signed token persists, verbatim, in a fixed four-key envelope;
+child-view, background and error frames cannot reach storage; a `null`
+revocation deletes the entry. Each of the three tests was mutation-checked —
+persisting the whole frame, removing the eligibility gate, and disabling the
+worker's forget each fail exactly their own test.
+
+Three findings are recorded, not fixed: no at-rest TTL on state entries and no
+logout/identity clearing (both **E5**, decided before **E6**), and pathname-only
+keys that collapse query strings (**E3**). E1 remains open; the actor and
+legacy/Rust backend caller inventories are the remaining E1 closure tasks.
+
 ## Root and deferred background acknowledgements — E4 slice
 
 Root event dispatch and deferred redispatch now capture named and legacy

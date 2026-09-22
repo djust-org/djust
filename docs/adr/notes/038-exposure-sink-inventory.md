@@ -14,7 +14,7 @@ an implemented projection is not proof that every caller uses it.
 | Direct client state | live_view.py: get_state | test_exposure_state_apis.py asserts client grants and sentinel absence at returned values, including failed/unknown policies. |
 | Raw client snapshot state | live_view.py: _capture_snapshot_state | Same direct API suite; only snapshot grants. Raw private/component export and unverified restore are rejected. |
 | Signed browser snapshot | _exposure_snapshots.py: ClientSnapshot.capture/restore; runtime mount/event frames | test_exposure_snapshots.py and test_exposure_sse_navigation.py. Browser storage delivery and cross-worker/failure matrix remain E5. |
-| Browser service-worker storage | static/djust/src/46-state-snapshot.js | Carries the signed server blob. Must audit all writer/reader paths and actual stored bytes, not merely token generation. |
+| Browser service-worker storage | Writer: 03-websocket.js storeSignedSnapshot (WS :529, SSE 03b-sse.js:196) → 46-state-snapshot.js _serializeCurrentState → 33-sw-registration.js captureState/forgetState → service-worker.js putWithLRU into CacheStorage `djust-state-cache-v1`. Reader: 18-navigation.js lookupStateForUrl → STATE_SNAPSHOT_LOOKUP. | Classified. tests/js/exposure_sw_state_storage.test.js runs the real client into the real worker and asserts the persisted bytes: only the signed token, verbatim, in a fixed {url, view_slug, state_json, ts} envelope; ineligible child/background/error frames cannot reach storage; a null revocation deletes the entry. Each assertion is mutation-checked. At-rest lifetime and logout residue remain open; see *Service-worker state storage finding*. |
 | Declared server session state | _exposure_sessions.py: ServerStateSession.save/asave/load/aload | test_exposure_sessions.py covers bound envelopes and backend capability checks. Do not equate this adapter with every state_backend caller. |
 | Legacy/Rust state backends | state_backend.py and state_backends/{base,memory,redis}.py | The three automatic Python backend.set calls are in RustBridgeMixin._initialize_rust_view. Explicit initialization bypasses backend resolution/read/write. Actor integration remains open; this is not cross-worker acceptance. |
 | Root WS/SSE foreground frames | runtime.py: dispatch_mount, _dispatch_event, _dispatch_single_event, _render_and_send | Staged runtime/HTTP/SSE tests exist; full destinations and debug/provider matrix still open. |
@@ -71,6 +71,33 @@ support or a decision to remove actors from ADR-038's acceptance scope.
 The renderer-policy marker is initialized with framework attributes, before
 the private-state classification snapshot, so legacy user-private persistence
 cannot accidentally carry it. A regression exercises that classification.
+
+## Service-worker state storage finding
+
+The destination is **CacheStorage**, which the browser persists to disk across
+tab closes and restarts — not the worker's in-memory reconnect buffer. What is
+persisted is exactly the server's signed token plus a fixed envelope, and only
+from eligible frames; `tests/js/exposure_sw_state_storage.test.js` pins all
+three properties at the stored bytes. Signing gives integrity, lifetime and
+binding, not confidentiality, so the token's granted fields are readable at
+rest. Three findings follow; none is fixed in this slice.
+
+1. **No at-rest lifetime.** `lookupCached(STATE_CACHE, …)` returns an entry
+   without checking `ts`; the VDOM cache has a TTL, the state cache has only
+   the 50-entry LRU (`STATE_MAX_ENTRIES`). The server rejects an expired token
+   on restore, but its readable bytes remain on disk. Belongs to **E5**
+   (expired restores) and must be decided before **E6** activation.
+2. **No logout or identity-change clearing.** The worker handles
+   `DJUST_CLEAR_STATE_CACHE`, but no client or server code sends it. After
+   logout, the prior identity's token stays in CacheStorage. Binding stops a
+   cross-identity *restore*; nothing stops the next user of the same browser
+   profile reading the granted fields. Belongs to **E5** (cross-identity) and
+   **E6**.
+3. **Keyed by pathname only.** Capture keys on `window.location.pathname`
+   (`18-navigation.js:213`) and lookup on `url.pathname` (`:452`), so
+   `/orders?page=1` and `/orders?page=2` share one entry and back-navigation
+   can offer the wrong query's token. A restoration-correctness question, not
+   an exposure one; belongs to **E3**.
 
 ## Mount diagnostic finding
 
