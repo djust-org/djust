@@ -6,14 +6,170 @@ enabling real-time validation, error display, and reactive form handling.
 """
 
 import logging
-from typing import Dict, Any, Optional, Type, List, cast
+import math
+from typing import Dict, Any, FrozenSet, Optional, Type, List, cast
 from django import forms
 from django.core.exceptions import ValidationError
 
 from ._deprecation import warn_deprecated
+from ._exposure import ExposureConfigurationError, ExposureError, ProviderContract
+from ._exposure_providers import provide_context_items
+from ._state import StateProperty
 from .decorators import event_handler
 
 logger = logging.getLogger(__name__)
+
+#: ADR-038 E2-3: the form keys an explicit view renders. Render-only: the
+#: provider persists and discloses nothing (``persisted``/``client`` empty).
+#: ``model_pk``/``model_label`` are deliberately absent; see
+#: ``FormMixin._ensure_model_instance``.
+FORM_PROVIDER = ProviderContract(
+    "djust.forms",
+    rendered=frozenset(
+        {
+            "form_data",
+            "form_choices",
+            "form_errors",
+            "field_errors",
+            "is_valid",
+            "success_message",
+            "error_message",
+        }
+    ),
+    tracked=frozenset({"form_data", "form_errors", "field_errors", "is_valid"}),
+)
+
+#: Replacement for an error message that would echo a sensitive field's value.
+_REDACTED_FORM_ERROR = "Invalid value."
+
+
+def is_sensitive_form_field(name: str, field: forms.Field) -> bool:
+    """Whether a form field's value may never be persisted, rendered or debugged.
+
+    ADR-038 D-e: a ``PasswordInput`` widget (or subclass), or a field name in the
+    serialization floor (``password``, ``is_superuser``, ``is_staff``) unioned
+    with ``settings.DJUST_SENSITIVE_FIELDS``.
+    """
+    from .serialization import _resolve_sensitive_fields
+
+    return isinstance(field.widget, forms.PasswordInput) or name in _resolve_sensitive_fields()
+
+
+def _is_persistable_input(value: Any) -> bool:
+    """JSON primitives only (D-i); anything else resets on reconnect."""
+    if value is None or type(value) in (str, bool, int):
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is list:
+        return all(type(item) is str for item in value)
+    return False
+
+
+class PersistedFormInput(StateProperty[Dict[str, Any]]):
+    """Server-persisted input for named, non-sensitive form fields (ADR-038 D-e).
+
+    Declare with :func:`persisted_form_input`. The field is an ordinary
+    ``state(persist="server")`` declaration in the view's exposure contract,
+    but its value is a projection of ``form_data`` rather than stored state:
+    reading it selects the declared fields from ``form_data`` (JSON primitives
+    only), and restoring it merges those fields back into ``form_data`` after
+    ``mount()``. Nothing else of the form is persisted.
+    """
+
+    def __init__(self, field_names: FrozenSet[str]) -> None:
+        super().__init__(default_factory=dict, persist="server")
+        self.field_names = field_names
+
+    def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
+        if obj is None:
+            return self
+        data = obj.__dict__.get("form_data")
+        if type(data) is not dict:
+            return {}
+        form = obj.__dict__.get("_form_instance")
+        fields = getattr(form, "fields", None) or {}
+        selected: Dict[str, Any] = {}
+        for name in sorted(self.field_names):
+            if name not in data or not _is_persistable_input(data[name]):
+                continue
+            field = fields.get(name)
+            # Defence in depth: configuration already refuses sensitive fields.
+            if field is not None and is_sensitive_form_field(name, field):
+                continue
+            selected[name] = data[name]
+        return selected
+
+    def __set__(self, obj: Any, value: Dict[str, Any]) -> None:
+        if (
+            type(value) is not dict
+            or not set(value) <= self.field_names
+            or not all(_is_persistable_input(item) for item in value.values())
+        ):
+            raise ExposureError("Persisted form input does not match its declaration")
+        data = obj.__dict__.get("form_data")
+        if type(data) is not dict:
+            data = {}
+            obj.form_data = data
+        data.update(value)
+
+
+def persisted_form_input(*field_names: str) -> Any:
+    """Opt named form fields into server persistence under the explicit policy.
+
+    ADR-038 D-e: form input and errors are not persisted by default. Declare
+    ``form_input = persisted_form_input("name", "email")`` on a ``FormMixin``
+    view to restore those fields' input across reconnect and HTTP POST;
+    every other field, all errors and ``is_valid`` reset to their mount
+    values. A field with a ``PasswordInput`` widget or a sensitive name can
+    never be listed: that is an ``ExposureConfigurationError`` when the class
+    is defined (static ``form_class``) or mounted (``get_form_class()``).
+    Like any ``state()`` grant, it requires ``exposure_policy = "explicit"``.
+    """
+    names = frozenset(field_names)
+    if not names or any(type(name) is not str or not name for name in field_names):
+        raise ExposureConfigurationError("persisted_form_input() requires form field names")
+    return PersistedFormInput(names)
+
+
+def _persisted_form_inputs(view_class: type) -> List[PersistedFormInput]:
+    """Declarations visible on the class, read from class dictionaries only."""
+    found: List[PersistedFormInput] = []
+    seen: set = set()
+    for owner in view_class.__mro__:
+        for name, declaration in vars(owner).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            if isinstance(declaration, PersistedFormInput):
+                found.append(declaration)
+    return found
+
+
+def _check_persisted_form_input(view_class: type, form_class: Optional[Type[forms.Form]]) -> None:
+    """Refuse an opt-in that names a sensitive, unknown or reserved field."""
+    declarations = _persisted_form_inputs(view_class)
+    if not declarations:
+        return
+    for declaration in declarations:
+        if declaration.public_name in FormMixin._djust_injects_context:
+            raise ExposureConfigurationError(
+                "persisted_form_input() cannot be assigned to a FormMixin context name"
+            )
+    if form_class is None:
+        return
+    fields = form_class.base_fields
+    for declaration in declarations:
+        for name in declaration.field_names:
+            field = fields.get(name)
+            if field is None:
+                raise ExposureConfigurationError(
+                    "persisted_form_input() names a field the form does not define"
+                )
+            if is_sensitive_form_field(name, field):
+                raise ExposureConfigurationError(
+                    "persisted_form_input() cannot persist a password or sensitive form field"
+                )
 
 
 class FormMixin:
@@ -84,6 +240,78 @@ class FormMixin:
         }
     )
 
+    # ADR-038 E2-3: under the explicit policy the form keys are a registered,
+    # render-only provider (see FORM_PROVIDER and get_context_data).
+    _djust_context_providers = (FORM_PROVIDER,)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Configuration-time refusal of a sensitive persistence opt-in (D-e).
+        # A dynamic get_form_class() is checked again at mount.
+        _check_persisted_form_input(cls, cls.__dict__.get("form_class") or cls.form_class)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Provide the form's keys to explicit templates; legacy is unchanged."""
+        context: Dict[str, Any] = super().get_context_data(**kwargs)  # type: ignore[misc]  # mixin: LiveView provides get_context_data()
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            provide_context_items(self, context, FORM_PROVIDER.name, self._explicit_form_context())
+        return context
+
+    def _sensitive_form_field_names(self) -> FrozenSet[str]:
+        form = self._form_instance
+        if form is None and self.get_form_class():
+            form = self.form_instance
+        if form is None:
+            return frozenset()
+        return frozenset(
+            name for name, field in form.fields.items() if is_sensitive_form_field(name, field)
+        )
+
+    def _explicit_form_context(self) -> Dict[str, Any]:
+        """Render values with sensitive fields' input blanked (ADR-038 D-e).
+
+        A sensitive field renders as empty, like Django's ``PasswordInput``
+        (``render_value=False``); an error message that contains a sensitive
+        field's value is replaced by a generic one. Errors themselves render.
+        """
+        form_data: Dict[str, Any] = dict(getattr(self, "form_data", None) or {})
+        sensitive = self._sensitive_form_field_names()
+        secrets: List[str] = []
+        for name in sensitive:
+            value = form_data.get(name)
+            items = value if isinstance(value, (list, tuple)) else [value]
+            secrets.extend(str(item) for item in items if item not in (None, ""))
+            if name in form_data:
+                form_data[name] = ""
+
+        def scrub(messages: Any) -> List[str]:
+            texts = [str(message) for message in messages]
+            return [
+                _REDACTED_FORM_ERROR if any(secret in text for secret in secrets) else text
+                for text in texts
+            ]
+
+        field_errors = {
+            name: scrub(errors)
+            for name, errors in (getattr(self, "field_errors", None) or {}).items()
+        }
+        form_errors = getattr(self, "form_errors", None) or {}
+        if isinstance(form_errors, dict):
+            form_errors = {name: scrub(errors) for name, errors in form_errors.items()}
+        else:
+            form_errors = scrub(form_errors)
+        return {
+            "form_data": form_data,
+            "form_choices": dict(getattr(self, "form_choices", None) or {}),
+            "form_errors": form_errors,
+            "field_errors": field_errors,
+            "is_valid": bool(getattr(self, "is_valid", False)),
+            "success_message": getattr(self, "success_message", ""),
+            "error_message": getattr(self, "error_message", ""),
+        }
+
     def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialize form on view mount"""
         super().mount(request, **kwargs)  # type: ignore[misc]  # mixin: LiveView provides mount()
@@ -128,6 +356,10 @@ class FormMixin:
                 # Expose serializable choices for template iteration
                 if hasattr(field, "choices"):
                     self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
+            # ADR-038 D-e: refuse a sensitive opt-in for a dynamic form class.
+            _check_persisted_form_input(type(self), type(form))
+        elif _persisted_form_inputs(type(self)):
+            raise ExposureConfigurationError("persisted_form_input() requires a form class")
 
         self.form_errors = {}
         self.field_errors = {}
@@ -221,10 +453,22 @@ class FormMixin:
         self._form_instance = value
 
     def _ensure_model_instance(self) -> None:
-        """Re-hydrate _model_instance from stored PK if lost after WS serialization."""
+        """Re-hydrate _model_instance from stored PK if lost after WS serialization.
+
+        Legacy only. Under ADR-038's explicit policy ``model_pk`` is neither
+        persisted nor rendered, and a raw primary key is never re-resolved with
+        an unscoped ``objects.get``: every restore (reconnect, HTTP POST) runs
+        ``mount()`` first, which must establish ``_model_instance`` through the
+        view's own authorized lookup. ADR-035's managed-object identity is the
+        eventual owner of a persisted model reference.
+        """
         if self._model_instance is not None:
             return
         if not getattr(self, "model_pk", None):
+            return
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
             return
         try:
             from django.apps import apps
