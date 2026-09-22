@@ -236,6 +236,13 @@ strict-xfail test pins it; fixing the drop will fail that marker. Until then
 the consumer's two `_run_async_work` log sites are unreachable from this drain
 and stay open, to be fixed with it. 8 open (4 consumer, 4 runtime).
 
+`dispatch_mount`'s `state_snapshot_signed` catch is reclassified legacy-gated,
+now confirmed rather than inferred: before the branches only a settings read
+runs, the legacy branch tests `legacy_exposure` before touching any view
+attribute, and a nonlegacy view's only branch is wrapped in its own value-free
+catch. Nothing application-derived can reach the outer catch for it.
+7 open (4 consumer, 3 runtime).
+
 ## NOTIFY-released activity events — E3 slice
 
 `ActivityMixin._queue_deferred_activity_event` queues an event sent to a

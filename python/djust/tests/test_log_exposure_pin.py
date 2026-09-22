@@ -146,6 +146,9 @@ RUNTIME_LEGACY_GATED = {
     ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, SSE"): (
         "its sole caller, _dispatch_event, runs it only when uses_legacy_exposure(view)"
     ),
+    ("dispatch_mount", "Failed to emit state_snapshot_signed for %s; pro"): (
+        "a nonlegacy view reaches only the explicit branch, wrapped in its own value-free catch"
+    ),
 }
 
 RUNTIME_FRAMEWORK_ONLY = {
@@ -161,9 +164,6 @@ RUNTIME_FRAMEWORK_ONLY = {
 }
 
 RUNTIME_KNOWN_OPEN = {
-    ("dispatch_mount", "Failed to emit state_snapshot_signed for %s; pro"): (
-        "explicit codec branch has its own inner catch; confirm nothing escapes"
-    ),
     ("_persist_state_after_event", "Failed to save LiveView state after runtime even"): (
         "serializing application values"
     ),
