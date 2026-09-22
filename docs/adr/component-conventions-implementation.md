@@ -218,6 +218,40 @@ adds no separate exposure.
 
 E1 remains open. The actor caller inventory was then the remaining named E1 task.
 
+## Package-wide log ratchet — E1 slice
+
+`time_travel.py` is pinned: 9 legacy-gated sites and 1 framework-only. The
+three capture catches are unreachable for nonlegacy views because
+`explicit_debug_projection` is non-`None` for every nonlegacy policy — invalid
+and unknown policies return a value-free placeholder — so those views never
+reach `_capture_snapshot_state`; the six restore/replay catches follow a guard
+that returns `False` for nonlegacy views.
+
+**Correction.** Earlier slices put the remaining unpinned surface at "~28
+sites". That counted a hand-picked module list. A scan of every non-test module
+under `python/djust` finds 286 exception-carrying log calls in 79 modules: 72
+are in the ten pinned modules, and **214 in 70 modules are unclassified**, among
+them `mixins/context.py`, `mixins/jit.py`, `api/dispatch.py` and
+`templatetags/live_tags.py`, which handle view values directly.
+
+Rather than leave those uncounted, they are frozen in a generated baseline
+(`tests/fixtures/log_exposure_unreviewed.json`) under a ratchet, as ADR-023 did
+for strict typing: a new exception-carrying log call anywhere outside the
+pinned modules fails the pin, and a baselined site that disappears must be
+deleted from the file, so it only shrinks. Mutation-checked both ways. E1
+remains open: the 214 are unreviewed, not safe.
+
+**Separate finding, outside ADR-038 (recorded, not fixed).**
+`DjustLogSanitizerFilter`, the CWE-117 log-injection safety net that
+`DjustConfig.ready()` installs, is attached to the `djust` *logger*. Python
+applies logger filters only to records logged on that logger itself, not to
+records from child loggers such as `djust.websocket` or `djust.runtime`, where
+nearly all framework logging happens. Verified: a CRLF argument was sanitized
+through `djust` and passed through raw from `djust.websocket`. Its docstring
+promises every framework message is sanitized; only explicit per-call
+`sanitize_for_log(...)` actually is. The fix needs a design choice (djust does
+not own the application's handlers), so it is left for the maintainer.
+
 ## NOTIFY-released event diagnostics and a dropped start_async — E1 slice
 
 Once a released event passes fresh authorization, the consumer's

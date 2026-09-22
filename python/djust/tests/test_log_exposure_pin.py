@@ -217,6 +217,42 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "time_travel.py": (
+        {
+            ("record_event_end", "time_travel: _capture_snapshot_state failed (aft"): (
+                "nonlegacy or non-restorable records return early with the debug projection"
+            ),
+            ("record_event_end", "time_travel: error coercion failed"): (
+                "nonlegacy or non-restorable records return early with the debug projection"
+            ),
+            ("record_event_start", "time_travel: _capture_snapshot_state failed (bef"): (
+                "explicit_debug_projection is non-None for every nonlegacy policy, so they never reach the capture"
+            ),
+            ("replay_event", "time_travel: dry replay handler %s raised"): (
+                "returns False for a nonlegacy view before replaying"
+            ),
+            ("replay_event", "time_travel: replay handler %s raised"): (
+                "returns False for a nonlegacy view before replaying"
+            ),
+            ("restore_component_snapshot", "time_travel: component restore failed for id=%s "): (
+                "returns False for a nonlegacy view before restoring"
+            ),
+            ("restore_snapshot", "time_travel: component restore failed for id=%s "): (
+                "returns False for a nonlegacy view before restoring"
+            ),
+            ("restore_snapshot", "time_travel: ghost-attr cleanup failed for key=%"): (
+                "returns False for a nonlegacy view before restoring"
+            ),
+            ("restore_snapshot", "time_travel: restore failed for key=%s"): (
+                "returns False for a nonlegacy view before restoring"
+            ),
+        },
+        {
+            ("next_branch_id", "time_travel: failed to increment branch counter"): (
+                "branch counter"
+            ),
+        },
+    ),
     "mixins/request.py": (
         {
             ("post", "<Name>"): (
@@ -456,3 +492,52 @@ async def f(self):
         await self.send_error("generic")
 """
     assert _exception_interpolating_client_frames(sample) == {("f", "send_error")}
+
+
+# --------------------------------------------------------------------------
+# Package-wide ratchet. Modules outside PINNED hold exception-carrying log
+# calls nobody has classified yet; they are frozen in a generated baseline so a
+# NEW site anywhere in the package fails, and the baseline can only shrink.
+# --------------------------------------------------------------------------
+
+UNREVIEWED = PACKAGE / "tests" / "fixtures" / "log_exposure_unreviewed.json"
+
+
+def _package_modules():
+    for path in sorted(PACKAGE.rglob("*.py")):
+        rel = path.relative_to(PACKAGE).as_posix()
+        if rel.startswith("tests/") or "/tests/" in rel or "/migrations/" in rel:
+            continue
+        yield rel, path
+
+
+def test_package_wide_ratchet_every_site_is_pinned_or_baselined():
+    import json
+
+    baseline = {
+        module: {tuple(key) for key in keys}
+        for module, keys in json.loads(UNREVIEWED.read_text())["modules"].items()
+    }
+    both = sorted(set(baseline) & set(PINNED))
+    assert not both, f"A module is either pinned or baselined, not both: {both}"
+
+    new, stale = [], []
+    seen = set()
+    for rel, path in _package_modules():
+        if rel in PINNED:
+            continue
+        seen.add(rel)
+        found = _exception_carrying_log_sites(path.read_text())
+        allowed = baseline.get(rel, set())
+        new += [(rel, *key) for key in sorted(found - allowed, key=str)]
+        stale += [(rel, *key) for key in sorted(allowed - found, key=str)]
+    stale += [(module, "<module no longer exists>") for module in sorted(set(baseline) - seen)]
+    assert not new, (
+        "New exception-carrying log call(s) outside the pinned modules. Log "
+        "through _exposure_diagnostics.log_failure / log_failure_for, or pin the "
+        f"module with a classification: {new}"
+    )
+    assert not stale, (
+        "Baselined site(s) no longer found. Remove them from "
+        f"{UNREVIEWED.name}; the baseline only shrinks: {stale}"
+    )

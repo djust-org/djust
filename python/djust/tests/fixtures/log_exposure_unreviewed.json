@@ -1,0 +1,1007 @@
+{
+  "_comment": "ADR-038 E1 ratchet: exception-carrying log calls not yet classified. Generated from test_log_exposure_pin's scanner. May only shrink: classify a module into PINNED or fix its sites, then remove it here. A new site anywhere else fails the pin.",
+  "modules": {
+    "__init__.py": [
+      [
+        "_dispatch",
+        "[HotReload] HVR module reload failed"
+      ],
+      [
+        "enable_hot_reload",
+        "[HotReload] Failed to start hot reload server: %"
+      ],
+      [
+        "on_file_change",
+        "[HotReload] Error broadcasting reload: %s"
+      ],
+      [
+        "on_file_change",
+        "[HotReload] template-library cache invalidation "
+      ]
+    ],
+    "admin_ext/forms.py": [
+      [
+        "get_field_info",
+        "Failed to get field info for %s"
+      ],
+      [
+        "get_field_options",
+        "Failed to get field options for %s"
+      ],
+      [
+        "get_field_value",
+        "Failed to get field value for %s"
+      ]
+    ],
+    "admin_ext/options.py": [
+      [
+        "get_field_display_name",
+        "Failed to get verbose name for %s"
+      ],
+      [
+        "get_queryset",
+        "Failed to resolve FK for %s"
+      ]
+    ],
+    "admin_ext/progress.py": [
+      [
+        "_run",
+        "admin_action_with_progress: %s failed"
+      ],
+      [
+        "wrapper",
+        "Failed to pin queryset PKs"
+      ],
+      [
+        "wrapper",
+        "Failed to reverse changelist URL"
+      ],
+      [
+        "wrapper",
+        "Failed to reverse djust_progress URL for %s"
+      ]
+    ],
+    "admin_ext/sites.py": [
+      [
+        "get_plugin_nav",
+        "Failed to reverse URL for %s"
+      ]
+    ],
+    "admin_ext/views.py": [
+      [
+        "get_context_data",
+        "Failed to build filter for %s"
+      ]
+    ],
+    "api/dispatch.py": [
+      [
+        "dispatch_api",
+        "djust API handler raised: slug=%s handler=%s"
+      ],
+      [
+        "dispatch_api",
+        "djust API response transform raised: slug=%s han"
+      ],
+      [
+        "dispatch_api",
+        "djust API serialize= misconfigured: slug=%s hand"
+      ],
+      [
+        "dispatch_api",
+        "djust API: malformed JSON body for %s"
+      ],
+      [
+        "dispatch_api",
+        "djust API: view instantiation failed for %s"
+      ],
+      [
+        "dispatch_server_function",
+        "djust API: malformed JSON body for %s"
+      ],
+      [
+        "dispatch_server_function",
+        "djust server_function raised: slug=%s fn=%s"
+      ],
+      [
+        "dispatch_server_function",
+        "djust server_function return value not JSON-seri"
+      ],
+      [
+        "dispatch_server_function",
+        "djust server_function: view init failed for %s"
+      ]
+    ],
+    "audit_ast.py": [
+      [
+        "run_ast_audit",
+        "Scanner failed on %s: %s"
+      ],
+      [
+        "scan_python_source",
+        "Cannot read %s: %s"
+      ]
+    ],
+    "audit_live.py": [
+      [
+        "probe_paths",
+        "path probe failed for %s: %s",
+        1
+      ],
+      [
+        "probe_paths",
+        "path probe failed for %s: %s"
+      ],
+      [
+        "probe_websocket_origin",
+        "websocket close after CSWSH probe failed: %s"
+      ],
+      [
+        "probe_websocket_origin",
+        "websocket probe rejected at handshake: %s"
+      ]
+    ],
+    "auth/admin_views.py": [
+      [
+        "_get_providers",
+        "Per-provider active-user stats unavailable: %s"
+      ],
+      [
+        "get_context_data",
+        "OAuth stats unavailable (allauth probe failed): "
+      ]
+    ],
+    "auth/core.py": [
+      [
+        "_check_django_access_mixins",
+        "check_view_auth: could not restore .request on %"
+      ],
+      [
+        "enforce_object_permission",
+        "Object-permission check raised a non-PermissionD"
+      ]
+    ],
+    "auth/djust_admin.py": [
+      [
+        "get_context",
+        "OAuth provider/user stats unavailable: %s"
+      ]
+    ],
+    "backends/redis.py": [
+      [
+        "__init__",
+        "RedisPresenceBackend failed to connect: %s"
+      ]
+    ],
+    "bug_capture_store.py": [
+      [
+        "_assert_server_requires_auth",
+        "RedisSnapshotStore: probe connection close faile"
+      ]
+    ],
+    "checks/integrations.py": [
+      [
+        "check_admin_widgets",
+        "LiveView import failed; skipping admin widget au"
+      ],
+      [
+        "check_admin_widgets",
+        "admin_ext not importable; skipping A072/A073"
+      ]
+    ],
+    "checks/templates.py": [
+      [
+        "check_undefined_template_vars",
+        "T018: failed to statically check template contex"
+      ]
+    ],
+    "cli.py": [
+      [
+        "cmd_replay",
+        "django.setup() skipped for `djust replay`: %s"
+      ]
+    ],
+    "components/base.py": [
+      [
+        "_validate_component_inputs",
+        "Component %s assign validation failed: %s"
+      ]
+    ],
+    "components/gallery/registry.py": [
+      [
+        "get_gallery_data",
+        "gallery: discover_component_classes() failed: %s"
+      ],
+      [
+        "get_gallery_data",
+        "gallery: discover_template_tags() failed: %s"
+      ]
+    ],
+    "components/gallery/views.py": [
+      [
+        "_get_theme_css",
+        "component gallery could not generate theme CSS f"
+      ],
+      [
+        "_get_theme_options",
+        "component gallery could not enumerate theme opti"
+      ],
+      [
+        "_project_theme_defaults",
+        "component gallery could not resolve the project "
+      ],
+      [
+        "_render_component_cards",
+        "gallery class render failed for variant %s"
+      ],
+      [
+        "_render_component_cards",
+        "gallery template render failed for variant %s"
+      ],
+      [
+        "_render_head",
+        "Optional djust_theming base CSS link unavailable"
+      ],
+      [
+        "_render_head",
+        "Theming asset version unavailable, linking style"
+      ]
+    ],
+    "components/icons.py": [
+      [
+        "_get_icon_sets",
+        "Custom DJUST_COMPONENTS_ICON_SETS unavailable: %"
+      ]
+    ],
+    "components/suspense.py": [
+      [
+        "_render_fallback",
+        "dj_suspense: failed to render fallback template "
+      ]
+    ],
+    "contrib/uploads/gcs.py": [
+      [
+        "abort",
+        "GCSMultipartWriter.abort: DELETE session failed "
+      ]
+    ],
+    "contrib/uploads/s3_events.py": [
+      [
+        "_fire_hook",
+        "on_upload_complete hook raised for upload_id=%s "
+      ]
+    ],
+    "db/decorators.py": [
+      [
+        "_on_delete",
+        "notify_on_save: failed to emit NOTIFY for %s pk="
+      ],
+      [
+        "_on_save",
+        "notify_on_save: failed to emit NOTIFY for %s pk="
+      ]
+    ],
+    "db/notifications.py": [
+      [
+        "_run",
+        "pg listener connect failed: %s — retrying in 1s"
+      ],
+      [
+        "_run",
+        "pg listener connection close failed"
+      ],
+      [
+        "_run",
+        "pg listener disabled (permanent failure): %s — f"
+      ],
+      [
+        "_run",
+        "pg listener lost connection: %s — reconnecting i"
+      ],
+      [
+        "areset_for_tests",
+        "areset_for_tests: awaited task raised"
+      ],
+      [
+        "reset_for_tests",
+        "reset_for_tests: task cancel raised"
+      ]
+    ],
+    "decorators.py": [
+      [
+        "action_wrapper",
+        "@action %s raised %s; recorded in _action_state["
+      ]
+    ],
+    "deploy_cli.py": [
+      [
+        "_create_tarball",
+        "Failed to add %s to tarball: %s",
+        1
+      ],
+      [
+        "_create_tarball",
+        "Failed to add %s to tarball: %s"
+      ],
+      [
+        "_decode_id_token_email",
+        "Could not decode id_token email claim: %s"
+      ],
+      [
+        "_ensure_logged_in",
+        "Could not reach /me/: %s — proceeding with saved"
+      ],
+      [
+        "_ensure_project_exists",
+        "project precondition GET failed: %s — proceeding"
+      ],
+      [
+        "_refresh_oauth_token",
+        "refresh_token request failed: %s — skipping refr"
+      ],
+      [
+        "_run_deploy_doctor",
+        "deploy doctor failed; skipping"
+      ],
+      [
+        "deploy_dir",
+        "status poll failed; retrying"
+      ],
+      [
+        "logout",
+        "Logout API call failed (proceeding to remove loc"
+      ]
+    ],
+    "forms.py": [
+      [
+        "_ensure_model_instance",
+        "Failed to re-hydrate model instance (label=%s, p"
+      ]
+    ],
+    "hot_view_replacement.py": [
+      [
+        "reload_module_if_liveview",
+        "HVR: importlib.reload failed for %s"
+      ]
+    ],
+    "mixins/context.py": [
+      [
+        "_apply_context_processors",
+        "Failed to apply context processor %s: %s"
+      ],
+      [
+        "_get_resolved_processors",
+        "Failed to import context processor %s: %s"
+      ],
+      [
+        "get_context_data",
+        "Descriptor resolution failed for %s: %s"
+      ],
+      [
+        "get_context_data",
+        "JIT auto-serialization failed: %s"
+      ]
+    ],
+    "mixins/jit.py": [
+      [
+        "_get_template_content",
+        "Could not load template for JIT: %s"
+      ],
+      [
+        "_jit_serialize_model",
+        "JIT serialization failed for %s: %s"
+      ],
+      [
+        "_jit_serialize_queryset",
+        "[JIT ERROR] Serialization failed for '%s': %s\nTr"
+      ],
+      [
+        "replacer",
+        "Failed to read included template %s: %s"
+      ]
+    ],
+    "mixins/notifications.py": [
+      [
+        "_restore_listen_channels",
+        "NotificationMixin._restore_listen_channels: cros"
+      ],
+      [
+        "_restore_listen_channels",
+        "NotificationMixin._restore_listen_channels: fail",
+        1
+      ],
+      [
+        "_restore_listen_channels",
+        "NotificationMixin._restore_listen_channels: fail"
+      ],
+      [
+        "_restore_listen_channels",
+        "NotificationMixin._restore_listen_channels: retr"
+      ],
+      [
+        "listen",
+        "listen(%s): failed to start pg listener — %s"
+      ]
+    ],
+    "mixins/template.py": [
+      [
+        "_set_shell_sidecar",
+        "page-shell sidecar unavailable; object attribute"
+      ],
+      [
+        "arender_chunks",
+        "arender_chunks: lazy thunk raised for view_id=%s"
+      ],
+      [
+        "get_template",
+        "[LiveView] Template inheritance resolution faile"
+      ]
+    ],
+    "observability/dry_run.py": [
+      [
+        "_uninstall",
+        "DryRunContext failed to restore %s.%s: %s"
+      ]
+    ],
+    "observability/views.py": [
+      [
+        "eval_handler",
+        "eval_handler: handler call failed (TypeError) ha"
+      ],
+      [
+        "eval_handler",
+        "eval_handler: handler raised handler=%s"
+      ],
+      [
+        "eval_handler",
+        "eval_handler: invalid JSON body"
+      ],
+      [
+        "reset_view_state",
+        "reset_view_state: mount() raised for session %s"
+      ]
+    ],
+    "presence.py": [
+      [
+        "_broadcast_presence_change",
+        "PresenceMixin._broadcast_presence_change: push_t"
+      ],
+      [
+        "_refresh_online_count",
+        "PresenceMixin._refresh_online_count: %s"
+      ],
+      [
+        "_restore_presence",
+        "PresenceMixin._restore_presence: failed to re-re"
+      ],
+      [
+        "get_presence_key",
+        "Presence key format error: %s. Using unformatted"
+      ],
+      [
+        "track_presence",
+        "Error in handle_presence_join: %s"
+      ],
+      [
+        "untrack_presence",
+        "Error in handle_presence_leave: %s"
+      ]
+    ],
+    "pwa/manifest.py": [
+      [
+        "_get_default_config",
+        "Error loading PWA config: %s"
+      ],
+      [
+        "manifest_view",
+        "Error generating manifest: %s"
+      ]
+    ],
+    "pwa/mixins.py": [
+      [
+        "_default_create_sync",
+        "Default create sync failed: %s"
+      ],
+      [
+        "_default_delete_sync",
+        "Default delete sync failed: %s"
+      ],
+      [
+        "_default_update_sync",
+        "Default update sync failed: %s"
+      ],
+      [
+        "_process_sync_queue",
+        "Sync failed: %s"
+      ],
+      [
+        "_sync_create_actions",
+        "Error syncing create action %s: %s"
+      ],
+      [
+        "_sync_delete_actions",
+        "Error syncing delete action %s: %s"
+      ],
+      [
+        "_sync_update_actions",
+        "Error syncing update action %s: %s"
+      ],
+      [
+        "get_cached_or_fetch",
+        "Failed to fetch data for key %s: %s"
+      ]
+    ],
+    "pwa/service_worker.py": [
+      [
+        "_get_default_config",
+        "Error loading service worker config: %s"
+      ],
+      [
+        "service_worker_view",
+        "Error generating service worker: %s"
+      ]
+    ],
+    "pwa/storage.py": [
+      [
+        "_deserialize",
+        "Failed to deserialize storage data: %s"
+      ],
+      [
+        "_update_action_status",
+        "Failed to update action status: %s"
+      ],
+      [
+        "add",
+        "Failed to add action to sync queue: %s"
+      ],
+      [
+        "cleanup_expired",
+        "IndexedDB cleanup error: %s"
+      ],
+      [
+        "clear",
+        "IndexedDB clear error: %s"
+      ],
+      [
+        "clear",
+        "localStorage clear error: %s"
+      ],
+      [
+        "delete",
+        "IndexedDB delete error: %s"
+      ],
+      [
+        "delete",
+        "localStorage delete error: %s"
+      ],
+      [
+        "get",
+        "IndexedDB get error: %s"
+      ],
+      [
+        "get",
+        "localStorage get error: %s"
+      ],
+      [
+        "get_pending",
+        "Failed to get pending actions: %s"
+      ],
+      [
+        "keys",
+        "IndexedDB keys error: %s"
+      ],
+      [
+        "keys",
+        "localStorage keys error: %s"
+      ],
+      [
+        "remove_completed",
+        "Failed to remove completed actions: %s"
+      ],
+      [
+        "retry_action",
+        "Failed to retry action %s: %s"
+      ],
+      [
+        "set",
+        "IndexedDB set error: %s"
+      ],
+      [
+        "set",
+        "localStorage set error: %s"
+      ],
+      [
+        "size",
+        "IndexedDB size error: %s"
+      ],
+      [
+        "size",
+        "localStorage size error: %s"
+      ]
+    ],
+    "pwa/sync.py": [
+      [
+        "_perform_sync",
+        "Batch sync failed: %s"
+      ],
+      [
+        "resolve_conflict",
+        "Custom resolver failed for %s: %s"
+      ],
+      [
+        "sync_endpoint_view",
+        "Sync endpoint error: %s"
+      ]
+    ],
+    "pwa/utils.py": [
+      [
+        "cleanup_old_data",
+        "Cleanup failed: %s"
+      ],
+      [
+        "cleanup_old_data",
+        "Error checking key %s during cleanup: %s"
+      ],
+      [
+        "compress_state",
+        "Failed to compress state: %s"
+      ],
+      [
+        "decompress_state",
+        "Failed to decompress state: %s"
+      ],
+      [
+        "merge_offline_changes",
+        "Merge failed: %s"
+      ]
+    ],
+    "scaffolding/generator.py": [
+      [
+        "_run_cmd",
+        "Command failed: %s\nstdout: %s\nstderr: %s"
+      ]
+    ],
+    "security/error_handling.py": [
+      [
+        "handle_exception",
+        "%s%s: %s: %s",
+        1
+      ],
+      [
+        "handle_exception",
+        "%s%s: %s: %s",
+        2
+      ],
+      [
+        "handle_exception",
+        "%s%s: %s: %s"
+      ]
+    ],
+    "serialization.py": [
+      [
+        "_rehydrate_component",
+        "state round trip: %s(**state) refused the saved "
+      ]
+    ],
+    "session_utils.py": [
+      [
+        "dom_id_for",
+        "Stream %r custom dom_id= factory raised on %r; f"
+      ]
+    ],
+    "simple_live_view.py": [
+      [
+        "render_template",
+        "[SimpleLiveView] template render failed"
+      ]
+    ],
+    "state_backends/memory.py": [
+      [
+        "get",
+        "InMemoryStateBackend.get: serialize/deserialize "
+      ],
+      [
+        "health_check",
+        "InMemory health check failed: %s"
+      ]
+    ],
+    "state_backends/redis.py": [
+      [
+        "__init__",
+        "Failed to connect to Redis: %s"
+      ],
+      [
+        "_compress",
+        "Compression failed, storing uncompressed: %s"
+      ],
+      [
+        "_decompress",
+        "Decompression failed: %s"
+      ],
+      [
+        "delete_all",
+        "delete_all failed for prefix %s"
+      ],
+      [
+        "get",
+        "Failed to deserialize from Redis key '%s': %s"
+      ],
+      [
+        "get_memory_stats",
+        "Failed to get Redis memory stats: %s"
+      ],
+      [
+        "get_stats",
+        "Failed to get Redis stats: %s"
+      ],
+      [
+        "health_check",
+        "Redis health check failed: %s"
+      ],
+      [
+        "set",
+        "Failed to serialize to Redis key '%s': %s"
+      ]
+    ],
+    "template/rendering.py": [
+      [
+        "_jit_serialize_model",
+        "Model serialization failed for '%s': %s"
+      ],
+      [
+        "_jit_serialize_queryset",
+        "[JIT] Serialization failed for '%s': %s"
+      ]
+    ],
+    "template_filters.py": [
+      [
+        "_ensure_custom_filters_bridged",
+        "Failed to bridge Django custom filters to Rust t"
+      ],
+      [
+        "bridge_library_filters",
+        "Failed to bridge custom filter '%s' to Rust regi"
+      ]
+    ],
+    "template_tags/__init__.py": [
+      [
+        "_install_i18n_hooks",
+        "Could not import the #2558 i18n hooks: %s"
+      ],
+      [
+        "_install_library_loader",
+        "Could not import the library loader: %s"
+      ],
+      [
+        "_register_builtins",
+        "Could not import built-in handlers: %s"
+      ],
+      [
+        "decorator",
+        "Could not register assign tag handler '%s': Rust"
+      ],
+      [
+        "decorator",
+        "Could not register tag handler '%s': Rust extens"
+      ],
+      [
+        "decorator",
+        "Failed to register assign tag handler '%s': %s"
+      ],
+      [
+        "decorator",
+        "Failed to register tag handler '%s': %s"
+      ],
+      [
+        "reregister_builtins",
+        "Could not re-register built-in tag handler '%s':"
+      ]
+    ],
+    "template_tags/pwa.py": [
+      [
+        "_render_django_tag",
+        "Error rendering {%% %s %%}"
+      ]
+    ],
+    "templatetags/live_tags.py": [
+      [
+        "_lazy_thunk",
+        "live_render lazy thunk for %s raised"
+      ],
+      [
+        "_render_eager",
+        "live_render lazy: child %s.get_context_data rais"
+      ],
+      [
+        "_render_sticky_child_html",
+        "live_render: child %s.get_context_data raised; r"
+      ],
+      [
+        "_resolve_css_class",
+        "config.get_framework_class lookup failed: %s"
+      ],
+      [
+        "live_render",
+        "live_render: child %s.get_context_data raised; r"
+      ],
+      [
+        "live_render",
+        "live_render: live-instance lookup for sticky %r "
+      ],
+      [
+        "live_render",
+        "live_render: sticky restore for %r failed; mount"
+      ],
+      [
+        "render",
+        "dj_activity: _register_activity failed for %s"
+      ]
+    ],
+    "tenants/backends.py": [
+      [
+        "__init__",
+        "TenantAwareRedisBackend failed to connect: %s"
+      ]
+    ],
+    "tenants/resolvers.py": [
+      [
+        "_get_resolver",
+        "Failed to import custom tenant resolver %s: %s"
+      ]
+    ],
+    "theming/context_processors.py": [
+      [
+        "theme_context",
+        "skipping theme-context cache write on %s request"
+      ]
+    ],
+    "theming/gallery/catalogue.py": [
+      [
+        "_render_template_examples",
+        "Could not render template component %s: %s"
+      ]
+    ],
+    "theming/gallery/component_registry.py": [
+      [
+        "render_python_component_example",
+        "Could not render component %s: %s"
+      ]
+    ],
+    "theming/high_contrast.py": [
+      [
+        "<module>",
+        "  %s: Error - %s"
+      ]
+    ],
+    "theming/inspector.py": [
+      [
+        "theme_css_api",
+        "theme inspector API failed"
+      ],
+      [
+        "theme_inspector_api",
+        "theme inspector API failed",
+        1
+      ],
+      [
+        "theme_inspector_api",
+        "theme inspector API failed"
+      ]
+    ],
+    "theming/rust_handlers.py": [
+      [
+        "register_with_rust_engine",
+        "Rust extension unavailable; theme tags work via "
+      ]
+    ],
+    "tutorials/mixin.py": [
+      [
+        "_cleanup_active_step",
+        "Tutorial cleanup push failed: %s"
+      ],
+      [
+        "start_tutorial",
+        "Tutorial hide push failed: %s"
+      ],
+      [
+        "start_tutorial",
+        "Tutorial run failed at step %s: %s"
+      ]
+    ],
+    "updates.py": [
+      [
+        "check",
+        "update check failed"
+      ],
+      [
+        "refresh",
+        "update check failed"
+      ],
+      [
+        "run",
+        "background update check failed"
+      ],
+      [
+        "save_cache",
+        "update-check cache is not writable"
+      ]
+    ],
+    "uploads/__init__.py": [
+      [
+        "_add_chunk_via_writer",
+        "UploadWriter instantiation failed for upload %s:"
+      ],
+      [
+        "_add_chunk_via_writer",
+        "UploadWriter.open() raised for upload %s: %s"
+      ],
+      [
+        "_add_chunk_via_writer",
+        "UploadWriter.write_chunk() raised for upload %s:"
+      ],
+      [
+        "_finalize_writer",
+        "UploadWriter.close() raised for upload %s: %s"
+      ],
+      [
+        "_finalize_writer",
+        "UploadWriter.close() return not JSON-serializabl"
+      ],
+      [
+        "_restore_upload_configs",
+        "UploadMixin._restore_upload_configs: fallback al"
+      ],
+      [
+        "_restore_upload_configs",
+        "UploadMixin._restore_upload_configs: saved confi"
+      ],
+      [
+        "_safe_abort_writer",
+        "UploadWriter.abort() raised for upload %s"
+      ]
+    ],
+    "uploads/resumable.py": [
+      [
+        "__init__",
+        "ResumableUploadWriter: state store %s is unavail"
+      ],
+      [
+        "_delete_state_entry",
+        "ResumableUploadWriter: state delete failed for %"
+      ],
+      [
+        "_persist_chunk_progress",
+        "ResumableUploadWriter: chunk state update failed"
+      ],
+      [
+        "_persist_initial_state",
+        "ResumableUploadWriter: state store write failed "
+      ],
+      [
+        "resolve_resume_request",
+        "resolve_resume_request: state store read failed "
+      ]
+    ],
+    "uploads/storage.py": [
+      [
+        "delete",
+        "Redis delete failed for upload %s: %s"
+      ],
+      [
+        "update",
+        "Redis pipeline update failed for upload %s; fall"
+      ]
+    ],
+    "uploads/views.py": [
+      [
+        "get",
+        "UploadStatusView: state store read failed for %s"
+      ]
+    ],
+    "websocket_utils.py": [
+      [
+        "_validate_event_security",
+        "Object-permission check raised non-PermissionDen"
+      ]
+    ]
+  }
+}

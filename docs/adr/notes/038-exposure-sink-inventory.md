@@ -195,8 +195,10 @@ only `handle_exception` consults `diagnostics_allowed()`. Scanned counts:
 in `sse.py`, `mixins/rust_bridge.py`, `mixins/activity.py` and
 `mixins/waiters.py`. Pinned now: `websocket.py`, `runtime.py`, `live_view.py`,
 `sse.py`, and the `sticky`, `rust_bridge`, `activity`, `waiters` and
-`async_work` and `request` mixins. Not yet classified: `time_travel.py`
-(DEBUG-only).
+`async_work` and `request` mixins, and `time_travel.py`. Package-wide there
+are 286 exception-carrying log calls in 79 modules; the 214 in the other 70
+modules are unclassified and frozen in `tests/fixtures/log_exposure_unreviewed.json`
+under a ratchet (new sites fail; the baseline only shrinks).
 
 `runtime.py`'s 26 sites (two identical sticky-unmount messages in
 `on_mount_render_ready` are keyed separately): **10 legacy-gated**, each by a
