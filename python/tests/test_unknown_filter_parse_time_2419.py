@@ -206,7 +206,19 @@ class TestARegisteredCustomFilterStillCompiles:
         def _shout(value):  # pragma: no cover - trivial
             return f"{value}!"
 
+        from django.template import engines
+
         engine = DjangoTemplate("").engine
+        # Premise (#2991): the bridge walks ``engines.all()``, and this test
+        # adds the library to ``Engine.get_default()``. Those are one engine
+        # unless an earlier test reset ``engines`` by hand without clearing
+        # the lru-cached ``Engine.get_default`` — name that, rather than
+        # letting it read as "the bridge did not forward it".
+        assert any(getattr(backend, "engine", None) is engine for backend in engines.all()), (
+            "premise: Engine.get_default() is not an engine in engines.all() — an earlier "
+            "test reset django.template.engines without Engine.get_default.cache_clear() "
+            "(use override_settings(TEMPLATES=...) instead)"
+        )
         engine.template_libraries["cf_2419_lib"] = library
         try:
             bootstrap_django_filters()
