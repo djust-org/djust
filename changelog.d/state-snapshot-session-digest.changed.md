@@ -1,0 +1,1 @@
+- **Back-navigation state snapshots are bound to a keyed digest of the session key instead of the key itself.** Snapshots issued by earlier versions fail verification once, and the view mounts fresh.

@@ -1,0 +1,1 @@
+- **Resumable uploads record the session that started them.** Resume over WebSocket and the HTTP upload-status endpoint answer only that session; the status endpoint previously returned 404 even to the owner. Uploads started before the upgrade, or whose session key changed (for example at login), restart from the beginning.

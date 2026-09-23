@@ -1,0 +1,1 @@
+- **A LiveView joins its channel groups (view, presence, db_notify) only after its permission checks and on_mount hooks pass.** A refused mount, including one inside `mount_batch`, leaves every group, and presence and client-push messages are no longer delivered to a connection with no mounted view. `check_permissions` and on_mount hooks now run before `on_view_mounted`.
