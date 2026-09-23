@@ -94,7 +94,12 @@ back-navigation.
 
 - **Destinations checked:** HTML, every received frame, the flow's decoded
   session row and the server log.
-- **Result:** passed on two local workers against this branch.
+- **Result:** passed on two local workers against this branch, in both error
+  modes (D-a revised): with `DJUST_DEMO_DEBUG=0` for production, and the demo
+  default under DEBUG, with `DJUST_DEMO_LOG_CONSOLE=1` so the server log is
+  observed. Under DEBUG the explicit error frame must carry the detail; in
+  production it must reach no frame, page or log. The undeclared and private
+  sentinels never appear in either mode.
 - **Controls:** the legacy twin's DEBUG frame carries the error sentinel (the
   harness control), and declaring the undeclared sentinel as persisted state
   fails the stored-session assertion on both transports.
