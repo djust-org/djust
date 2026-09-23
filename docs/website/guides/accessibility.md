@@ -44,8 +44,6 @@ arbitrary app — that depends on *your* content, copy, and design choices, whic
 djust does not control. See [Known limitations](#known-limitations--not-yet-covered)
 for the framework-side gaps that are explicitly deferred.
 
-This is **unit 4 of the v1.0.0 (Release Readiness) milestone**.
-
 ## Built-in component ARIA
 
 The component library ships with ARIA markup on its interactive and feedback
@@ -62,20 +60,22 @@ component emits as of 1.0 — these are *guarantees*, each backed by a test in
 | **`{% alert %}`** | Container gets `role="alert"` for `error`/`danger`/`warning` types (assertive) or `role="status"` for `info`/`success` (polite); the type icon is `aria-hidden="true"`; the dismiss button carries `aria-label="Dismiss"`. |
 | **`{% pagination %}`** | The `<nav>` carries `aria-label="Pagination"`; the active page button gets `aria-current="page"`; every page button gets an `aria-label="Page N"`; the prev/next arrow buttons get `aria-label="Previous page"`/`"Next page"`; the ellipsis is `aria-hidden="true"`. |
 | **`{% data_table %}`** | Already well-instrumented (`role="grid"`, `aria-sort`, `aria-busy`, `aria-label` on search/checkboxes). New in 1.0: sortable column headers are keyboard-focusable (`tabindex="0"`) so a keyboard user can reach the sort affordance; the sort-direction glyph is wrapped in a decorative `<span aria-hidden="true">`. |
-| **`{% toast %}`** | Each toast carries `role="alert"` + `aria-live="assertive"` for `error` toasts, or `role="status"` + `aria-live="polite"` otherwise, so screen readers announce it without a focus change; the type icon is `aria-hidden="true"`; the dismiss button carries `aria-label="Dismiss"`. |
+| **`{% toast_container toasts %}`** | Renders a stack from a list of dicts with `id`/`type`/`message` keys. Each toast carries `role="alert"` + `aria-live="assertive"` for `error` toasts, or `role="status"` + `aria-live="polite"` otherwise, so screen readers announce it without a focus change; the type icon is `aria-hidden="true"`; the dismiss button carries `aria-label="Dismiss"`. |
 
 A note on `id` collisions: `modal`, `tabs`, and `accordion` derive their ARIA
 pairing `id`s from the `id` kwarg the tags already accept (defaulting to
 `"modal"`, `"tabs"`, `"accordion"`). If you place **two** unnamed instances of
 the same component on one page, give each a distinct `id=` — the same
-pre-existing limitation that the plain `id` attribute has always had.
+pre-existing limitation that the plain `id` attribute has always had. A modal
+renders only while its `open` value is truthy; with `open` falsy (or omitted)
+the tag outputs nothing.
 
 ```html
-{% modal id="confirm-delete" title="Delete this record?" %}
+{% modal id="confirm-delete" title="Delete this record?" open=show_delete close_event="close_delete" %}
   This cannot be undone.
 {% endmodal %}
 
-{% modal id="confirm-publish" title="Publish now?" %}
+{% modal id="confirm-publish" title="Publish now?" open=show_publish close_event="close_publish" %}
   Your post will go live immediately.
 {% endmodal %}
 ```
@@ -283,8 +283,10 @@ While a `role="dialog"` modal is on the page:
 
 ### `{% tabs %}` — arrow-key roving navigation
 
-A `role="tablist"` uses **roving `tabindex`**: exactly one tab is in the page
-tab order at a time.
+Once you use the arrow keys, a `role="tablist"` behaves as a **roving
+`tabindex`** widget: the focused tab is `tabindex="0"` and the others are
+`-1`. On first render (and after a server re-render replaces the buttons),
+every tab button is in the natural Tab order.
 
 - **ArrowRight / ArrowLeft** move focus to the next / previous tab and wrap
   around at the ends.
@@ -358,7 +360,7 @@ from djust.theming.accessibility import (
 )
 
 # Validate one theme combination
-report = validate_accessibility(design_system="...", color_preset="...")
+report = validate_accessibility(design_system_name="...", color_preset_name="...")
 print(report.overall_score)       # 0–100
 print(report.contrast_results)    # per-pair ContrastResult (ratio, AA/AAA)
 print(report.issues)              # human-readable problems found
