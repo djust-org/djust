@@ -1,4 +1,11 @@
-"""Foreground and deferred failures cannot grant exception exposure."""
+"""Foreground and deferred failures cannot grant exception exposure.
+
+Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
+nonlegacy owner's event failure is value-free in the log, the error frame and
+the traceback ring, and a policy change during the turn cannot grant details.
+Under ``DEBUG=True`` every owner's failure reads like Django's DEBUG output,
+exactly as a legacy owner's does.
+"""
 
 import json
 from collections import deque
@@ -97,28 +104,40 @@ async def test_event_failure_destinations(monkeypatch, caplog, debug, stage, rou
             await runtime._render_and_send(event_name="explode", force_html=True, event_ref=17)
     assert view._rendered_failure if route == "direct_render" else view._called
     legacy = initial == final == "legacy"
-    assert ("EVENT_DIAGNOSTIC_SENTINEL" in caplog.text) == legacy
+    # The sentinel is raised by the handler, or by the render if it runs. A
+    # legacy->explicit switch in the handler fails the explicit state save
+    # (fresh authorization) before the render, so that failure never exists.
+    raised = stage == "handler" or view._rendered_failure
+    save_first = (stage, route, initial, final) == ("render", "foreground", "legacy", "explicit")
+    assert raised == (stage != "opaque" and not save_first), "the sentinel site was not reached"
+    # Details are allowed for a legacy owner, and for every owner under DEBUG.
+    allowed = (legacy or debug) and raised
+    assert ("EVENT_DIAGNOSTIC_SENTINEL" in caplog.text) == allowed
     has_error_frame = route != "deferred" or stage not in {"handler", "opaque"}
     if has_error_frame:
         assert any(frame.get("type") == "error" for frame in transport.sent)
     assert ("EVENT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (
-        legacy and debug and has_error_frame
+        allowed and debug and has_error_frame
     )
     assert ("EVENT_DIAGNOSTIC_SENTINEL" in json.dumps(tracebacks.get_recent_tracebacks(50))) == (
-        legacy and has_error_frame
+        allowed and has_error_frame
     )
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("route", ["foreground", "deferred"])
 @pytest.mark.parametrize(
     "initial,final", [("explicit", "explicit"), ("explicit", "legacy"), ("legacy", "explicit")]
 )
 async def test_protected_handler_exception_is_not_stringified(
-    monkeypatch, caplog, debug, route, initial, final
+    monkeypatch, caplog, route, initial, final
 ):
+    """In production a protected failure is never stringified. Under DEBUG the
+    owner is allowed details (D-a, revised), so the exception is formatted like
+    a legacy owner's; that path is pinned by ``test_event_failure_destinations``
+    with a printable exception, since this one raises on ``str()``."""
+    debug = False
     await test_event_failure_destinations(
         monkeypatch, caplog, debug, "opaque", route, initial, final
     )

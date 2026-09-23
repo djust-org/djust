@@ -6,6 +6,11 @@ raw ``logger`` call does not consult ``diagnostics_allowed()`` — only
 ``_exposure_diagnostics.log_failure``. Views are explicit from mount: flipping
 the policy mid-session fails fresh event authorization first, which would never
 reach the site under test.
+
+Contract (ADR-038 D-a, revised 2026-09-22): under ``DEBUG=False`` an explicit
+view's failure logs value-free (``Protected view operation failed``). Under
+``DEBUG=True`` it logs like Django and like a legacy view: exception text and
+traceback. Each site is pinned in both modes against a legacy control.
 """
 
 import json
@@ -54,8 +59,8 @@ async def test_layout_render_failure_log_is_value_free_for_explicit_views(
 ):
     """``ViewRuntime._flush_pending_layout`` renders the layout an event asked for
     with ``set_layout`` and logged a failure with ``logger.exception``. Under
-    DEBUG it also re-raises; the runtime's protected catch already keeps an
-    explicit view's client frame generic, which this test also pins."""
+    DEBUG it also re-raises. In production the runtime's protected catch keeps
+    an explicit view's client frame generic, which this test also pins."""
     import django.template.loader as loader
 
     def fail(*args, **kwargs):
@@ -82,8 +87,10 @@ async def test_layout_render_failure_log_is_value_free_for_explicit_views(
                 await socket.send_json_to({"type": "event", "event": "swap", "params": {}})
                 frames = await _drain(socket)
 
-            if policy == "legacy":
-                # Control: the layout path ran and legacy logging is unchanged.
+            if policy == "legacy" or debug:
+                assert "Traceback" in caplog.text
+                # Control: the layout path ran and legacy logging is unchanged;
+                # under DEBUG an explicit view logs the same detail (D-a).
                 assert "set_layout('exposure_layout.html') — template rendering raised" in (
                     caplog.text
                 )
@@ -119,16 +126,17 @@ class DeferFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``ViewRuntime._flush_deferred`` runs ``self.defer(...)`` callables and
     logged a failure with the exception, its traceback and ``repr(callback)``."""
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(DeferFailureView, "exposure_policy", policy)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -145,7 +153,8 @@ async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
                 await socket.send_json_to({"type": "event", "event": "later", "params": {}})
                 await _drain(socket)
 
-            if policy == "legacy":
+            if policy == "legacy" or debug:
+                assert "Traceback" in caplog.text
                 assert "Deferred callback" in caplog.text
                 assert "DEFER_EXC_SENTINEL" in caplog.text
                 assert "DEFER_ARG_SENTINEL" in caplog.text
@@ -175,9 +184,10 @@ class PresenceKeyFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """Mount wiring (``on_view_mounted``) calls the overridable
     ``get_presence_key`` and logged its failure with the exception."""
@@ -185,7 +195,7 @@ async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(PresenceKeyFailureView, "exposure_policy", policy)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -200,7 +210,7 @@ async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
                 )
                 await _drain(socket)
             assert PRESENCE_KEY_CALLS, "get_presence_key never ran; the test would be vacuous"
-            if policy == "legacy":
+            if policy == "legacy" or debug:
                 assert "Error setting up presence group: PRESENCE_KEY_SENTINEL" in caplog.text
             else:
                 assert "PRESENCE_KEY_SENTINEL" not in caplog.text
@@ -225,9 +235,10 @@ class FullHtmlView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``on_render_emitted`` sends the ``full_html_update`` Django signal with
     ``send``, so an application receiver's exception reaches its catch, which
@@ -245,7 +256,7 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
     monkeypatch.setattr(FullHtmlView, "exposure_policy", policy)
     try:
         with override_settings(
-            LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+            LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
         ):
             request = await sync_to_async(make_request)()
             socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -263,7 +274,8 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
                     await socket.send_json_to({"type": "event", "event": "refresh", "params": {}})
                     await _drain(socket)
                 assert received, "the signal never fired; the test would be vacuous"
-                if policy == "legacy":
+                if policy == "legacy" or debug:
+                    assert "Traceback" in caplog.text
                     assert "full-HTML-update signal emit failed" in caplog.text
                     assert "SIGNAL_RECEIVER_SENTINEL" in caplog.text
                 else:
@@ -292,9 +304,10 @@ class PersistFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``_persist_state_after_event`` logged a failed save with
     ``logger.exception``. Explicit saves project declared ``persist="server"``
@@ -313,7 +326,7 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(PersistFailureView, "exposure_policy", policy)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -331,7 +344,8 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
                 await _drain(socket)
             assert writes, "the post-event save never reached the store; vacuous"
-            if policy == "legacy":
+            if policy == "legacy" or debug:
+                assert "Traceback" in caplog.text
                 assert "Failed to save LiveView state after runtime event" in caplog.text
                 assert "SESSION_STORE_SENTINEL" in caplog.text
             else:
@@ -358,12 +372,16 @@ class TimeTravelPushView(LiveView):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_time_travel_push_failure_is_value_free_for_explicit_views(
+async def test_time_travel_push_failure_logs_detail_under_debug_for_every_policy(
     monkeypatch, caplog, policy
 ):
-    """The consumer's ``_maybe_push_tt_event`` (DEBUG-only) logged a failed push
-    with ``logger.exception``. Synthetic trigger: the recorded snapshot's
-    ``to_dict`` raises; the test records that it was reached."""
+    """The consumer's ``_maybe_push_tt_event`` logs a failed push with
+    ``logger.exception``. The push runs only under ``DEBUG``, so this log line
+    exists only there, and there an explicit view's failure logs its detail like
+    a legacy view's (ADR-038 D-a, revised). The time-travel frame's projected
+    state is a separate, still-redacted destination; this pins only the failure
+    log. Synthetic trigger: the recorded snapshot's ``to_dict`` raises; the test
+    records that it was reached."""
     from djust.time_travel import EventSnapshot
 
     calls = []
@@ -393,12 +411,10 @@ async def test_time_travel_push_failure_is_value_free_for_explicit_views(
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
                 await _drain(socket)
             assert calls, "the time-travel push never ran; the test would be vacuous"
-            if policy == "legacy":
-                assert "time_travel: failed to push event frame" in caplog.text
-                assert "TT_PUSH_SENTINEL" in caplog.text
-            else:
-                assert "TT_PUSH_SENTINEL" not in caplog.text
-                assert "Protected view operation failed" in caplog.text
+            assert "time_travel: failed to push event frame" in caplog.text
+            assert "TT_PUSH_SENTINEL" in caplog.text
+            assert "Traceback" in caplog.text
+            assert "Protected view operation failed" not in caplog.text
         finally:
             await socket.disconnect()
 
@@ -473,9 +489,10 @@ class AssignAsyncView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``assign_async``'s runners log a failed loader's exception text. They run
     as background tasks, and ``_execute_async_task`` opens no diagnostic scope,
@@ -486,7 +503,7 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(AssignAsyncView, "exposure_policy", policy)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -509,7 +526,7 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
                         break
                     await asyncio.sleep(0.05)
             assert LOADER_CALLS, "the loader never ran; the test would be vacuous"
-            if policy == "legacy":
+            if policy == "legacy" or debug:
                 assert "assign_async loader for data raised: ASSIGN_ASYNC_SENTINEL" in caplog.text
             else:
                 assert "ASSIGN_ASYNC_SENTINEL" not in caplog.text
@@ -519,8 +536,11 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_sse_deferred_callback_failure_is_value_free_for_explicit_views(caplog, policy):
+async def test_sse_deferred_callback_failure_is_value_free_for_explicit_views(
+    caplog, debug, policy
+):
     """The third ``_flush_deferred`` twin, ``sse._flush_deferred_to_sse``, logged
     the exception, traceback and ``repr(callback)``. Driven directly: it is a
     module function over a view, and the view is the only owner it has."""
@@ -534,9 +554,10 @@ async def test_sse_deferred_callback_failure_is_value_free_for_explicit_views(ca
 
     callbacks = [(functools.partial(fail, "SSE_DEFER_ARG_SENTINEL"), (), {})]
     view = SimpleNamespace(exposure_policy=policy, _drain_deferred=lambda: list(callbacks))
-    with caplog.at_level(logging.DEBUG):
+    with override_settings(DEBUG=debug), caplog.at_level(logging.DEBUG):
         await _flush_deferred_to_sse(view)
-    if policy == "legacy":
+    if policy == "legacy" or debug:
+        assert "Traceback" in caplog.text
         assert "SSE_DEFER_EXC_SENTINEL" in caplog.text
         assert "SSE_DEFER_ARG_SENTINEL" in caplog.text
     else:

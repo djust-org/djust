@@ -300,14 +300,19 @@ class LegacyHotReloadFailureView(HotReloadFailureView):
     exposure_policy = "legacy"
 
 
+@pytest.mark.parametrize("debug", [True, False])
 @pytest.mark.parametrize("view_class", [HotReloadFailureView, LegacyHotReloadFailureView])
-async def test_hot_reload_render_failure_is_value_free_for_explicit_views(view_class, caplog):
+async def test_hot_reload_render_failure_is_value_free_for_explicit_views(
+    view_class, debug, caplog
+):
     """Dev hot reload re-renders the mounted view, which runs its
     ``get_context_data``. Its catch-all logged the exception, with the
-    traceback, for any policy; an explicit view's failure must be value-free."""
+    traceback, for any policy. Under ``DEBUG=False`` an explicit view's failure
+    must be value-free; under ``DEBUG=True`` it logs like a legacy view's
+    (ADR-038 D-a, revised 2026-09-22)."""
     import logging
 
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **dict(SETTINGS, DEBUG=True)):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **dict(SETTINGS, DEBUG=debug)):
         request = await sync_to_async(make_request)()
         socket, _ = await _connect(request, view_class)
         try:
@@ -324,8 +329,10 @@ async def test_hot_reload_render_failure_is_value_free_for_explicit_views(view_c
         finally:
             view_class._fail_render = False
             await socket.disconnect()
-    if view_class is LegacyHotReloadFailureView:
+    if view_class is LegacyHotReloadFailureView or debug:
         assert "HOTRELOAD_RENDER_SENTINEL" in caplog.text
+        assert "Traceback" in caplog.text
+        assert "Protected view operation failed" not in caplog.text
     else:
         assert "HOTRELOAD_RENDER_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text
