@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-23
+
+The first stable release of the 1.2 line. The code is identical to 1.2.0rc11; see the `1.2.0rc1` to `1.2.0rc11` sections below for every change since 1.1, including the behaviour changes listed under rc11. 1.1.4 carries the same fixes for the 1.1 line.
+
+### Security
+
+- **Fixes for the following advisories** (all fixed in 1.2.0 and 1.1.4; details in each advisory):
+  - [GHSA-fccp-5h88-g34j](https://github.com/djust-org/djust/security/advisories/GHSA-fccp-5h88-g34j): DataTable sort and filter accepted undeclared column lookups.
+  - [GHSA-jv2m-fcq9-94xf](https://github.com/djust-org/djust/security/advisories/GHSA-jv2m-fcq9-94xf): djust admin create, update and delete did not enforce the `DjustModelAdmin` permission hooks.
+  - [GHSA-c44q-w252-mr67](https://github.com/djust-org/djust/security/advisories/GHSA-c44q-w252-mr67): the observability endpoints' local-only check could be satisfied through a same-host reverse proxy.
+  - [GHSA-hc2m-gvfj-x6r3](https://github.com/djust-org/djust/security/advisories/GHSA-hc2m-gvfj-x6r3) and [GHSA-r372-rrpw-5cgj](https://github.com/djust-org/djust/security/advisories/GHSA-r372-rrpw-5cgj): built-in components rendered values without HTML escaping.
+  - [GHSA-j23m-jxwp-m3vq](https://github.com/djust-org/djust/security/advisories/GHSA-j23m-jxwp-m3vq): an unvalidated theme-pack cookie reached `{% theme_css_link %}` unencoded.
+  - [GHSA-6q7c-hvpc-ff2q](https://github.com/djust-org/djust/security/advisories/GHSA-6q7c-hvpc-ff2q): a refused batched mount stayed subscribed to the view's presence group.
+  - [GHSA-5ffg-p52h-v2ph](https://github.com/djust-org/djust/security/advisories/GHSA-5ffg-p52h-v2ph): state snapshots carried the raw session key.
+  - [GHSA-74vj-mpp4-45cg](https://github.com/djust-org/djust/security/advisories/GHSA-74vj-mpp4-45cg): a reused sticky `live_render` child skipped re-authorization.
+  - [GHSA-7fcf-23mf-rhhm](https://github.com/djust-org/djust/security/advisories/GHSA-7fcf-23mf-rhhm): the WebSocket `upload_resume` ownership check never applied.
+  - [GHSA-p9vp-rh5f-2cvq](https://github.com/djust-org/djust/security/advisories/GHSA-p9vp-rh5f-2cvq): custom filters declared `is_safe=True` rendered unsafe input unescaped (fixed in 1.2.0rc2; 1.1.4 backports it).
+
 ## [1.2.0rc11] - 2026-09-23
 
 ### Changed
