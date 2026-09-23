@@ -237,3 +237,30 @@ async def test_legacy_descendant_routing_is_unchanged():
     await send(runtime, "poke", "legacy-leaf")
     assert not getattr(leaf, "poked", False)
     assert transport.errors[-1]["error"] == "Embedded view not found"
+
+
+async def test_work_a_child_queues_on_its_sibling_runs(monkeypatch):
+    """A routed child event drains its own child's queue; work its handler
+    queued on another explicit child (a sibling here) must not wait for that
+    child's next event. The whole owned tree is swept after child events, as
+    after parent turns (E3-3)."""
+
+    @event_handler()
+    def kick_sibling(self):
+        sibling = self._parent_view._get_child_view("b")
+
+        def work():
+            sibling.count = 77
+
+        sibling.start_async(work, name="sibling-job")
+
+    monkeypatch.setattr(Box, "kick_sibling", kick_sibling, raising=False)
+    runtime, transport, request = await mount(view_class=Root)
+    root, a, b, middle, leaf = tree(runtime)
+    await send(runtime, "kick_sibling", "a")
+    handles = tuple(getattr(b, "_async_task_handles", ()))
+    assert handles, "work queued on the sibling was not dispatched"
+    await asyncio.wait_for(asyncio.gather(*handles), 3)
+    assert not transport.errors, transport.errors
+    assert b.count == 77 and a.count == 1
+    assert [f["view_id"] for f in transport.sent if f.get("source") == "async"] == ["b"]

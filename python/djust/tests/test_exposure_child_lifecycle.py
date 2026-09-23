@@ -25,6 +25,8 @@ def _authorized_runtime(view):
     host.view_instance = view
     host.authorize_explicit_turn = AsyncMock()
     host.commit_explicit_turn = AsyncMock(return_value=True)
+    # An unmounted view has no mount path to sign a snapshot for.
+    host._explicit_event_snapshot = AsyncMock(return_value={})
     return host
 
 

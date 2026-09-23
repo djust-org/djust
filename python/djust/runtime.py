@@ -4503,6 +4503,10 @@ class ViewRuntime:
 
             assert child_batch is not None
             dispatch_child_work(self, target_view, event_name, child_batch)
+            # Work the handler queued on another explicit child (a sibling or
+            # descendant) runs under that child's owner too, not at its next
+            # event (ADR-038 E3-3, decided 2026-09-22).
+            self._dispatch_explicit_child_queues(event_name)
         else:
             from ._child_async import dispatch_legacy_child_work
 
