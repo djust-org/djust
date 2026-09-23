@@ -10,13 +10,11 @@
  * strips attributes it did not render).
  */
 (function () {
-  "use strict";
-
   if (window.__djOtpInputBound) return;
   window.__djOtpInputBound = true;
 
   function parts(digit) {
-    var root = digit.closest(".otp-input");
+    const root = digit.closest(".otp-input");
     if (!root) return null;
     return {
       boxes: Array.prototype.slice.call(root.querySelectorAll(".otp-digit")),
@@ -26,7 +24,7 @@
 
   function commit(p) {
     if (!p.hidden) return;
-    var code = p.boxes
+    const code = p.boxes
       .map(function (b) {
         return b.value;
       })
@@ -38,8 +36,8 @@
   }
 
   function fill(p, start, text) {
-    var chars = text.replace(/\D/g, "").split("");
-    var i = start;
+    const chars = text.replace(/\D/g, "").split("");
+    let i = start;
     while (chars.length && i < p.boxes.length) {
       p.boxes[i].value = chars.shift();
       i += 1;
@@ -49,21 +47,21 @@
   }
 
   document.addEventListener("input", function (e) {
-    var digit = e.target;
+    const digit = e.target;
     if (!digit.classList || !digit.classList.contains("otp-digit")) return;
-    var p = parts(digit);
+    const p = parts(digit);
     if (!p) return;
-    var value = digit.value;
+    const value = digit.value;
     digit.value = "";
     fill(p, p.boxes.indexOf(digit), value);
   });
 
   document.addEventListener("keydown", function (e) {
-    var digit = e.target;
+    const digit = e.target;
     if (!digit.classList || !digit.classList.contains("otp-digit")) return;
-    var p = parts(digit);
+    const p = parts(digit);
     if (!p) return;
-    var i = p.boxes.indexOf(digit);
+    const i = p.boxes.indexOf(digit);
     if (e.key === "Backspace" && !digit.value && i > 0) {
       p.boxes[i - 1].value = "";
       p.boxes[i - 1].focus();
@@ -76,12 +74,12 @@
   });
 
   document.addEventListener("paste", function (e) {
-    var digit = e.target;
+    const digit = e.target;
     if (!digit.classList || !digit.classList.contains("otp-digit")) return;
-    var p = parts(digit);
+    const p = parts(digit);
     if (!p) return;
     e.preventDefault();
-    var text = (e.clipboardData || window.clipboardData).getData("text");
+    const text = (e.clipboardData || window.clipboardData).getData("text");
     fill(p, p.boxes.indexOf(digit), text);
   });
 })();
