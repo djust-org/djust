@@ -396,6 +396,27 @@ def _make_descriptor_handler(descriptor_cls: Any):
     return event_handler(handler)
 
 
+def readable_annotation(annotation: Any) -> str:
+    """A parameter's annotation as a reader writes it, the way the docs site's
+    generator prints it: `<class 'str'>` is `str`, `typing.` goes, and an
+    outermost `Optional[X]` is `X | None`."""
+    import re
+
+    text = str(annotation or "—")
+    if text.startswith("<class '") and text.endswith("'>"):
+        return text[8:-2]
+    text = re.sub(r"ForwardRef\('([^']*)'\)", r"\1", text)
+    text = text.replace("typing.", "").replace("NoneType", "None")
+    if text.startswith("Optional[") and text.endswith("]"):
+        inner, depth = text[len("Optional[") : -1], 0
+        for char in inner:
+            depth += {"[": 1, "]": -1}.get(char, 0)
+            if depth < 0:  # `Optional[a] | Optional[b]`: not one outer Optional
+                return text
+        return f"{inner} | None"
+    return text
+
+
 def render_preview_examples(
     component_name: str, component_type: str, examples: list, values: Dict[str, Any]
 ) -> list[Dict[str, Any]]:
@@ -410,7 +431,8 @@ def render_preview_examples(
     markup: `accordion_toggle` sets `active`, `active` lands in the kwargs,
     and the re-render carries the open item. Returns `[{"html", "kwargs",
     "kwargs_display"}]` for both component kinds, so the page has one preview
-    mechanism rather than two.
+    mechanism rather than two; the first also carries `"feedback"` (the
+    "Your view received" note) when the last event moved nothing visible.
 
     Template components go through their **tag**, not their template — those
     are different programs (`catalogue._render_template_examples`).
@@ -460,9 +482,11 @@ def _render_with_preview_feedback(
         return [{"html": note, "kwargs": {}, "kwargs_display": ""} for _ in examples or [None]]
     rendered = _render_preview_examples(component_name, component_type, examples, values)
     if received and rendered:
+        # Beside the preview, not in it: an overlay previewed open (export
+        # dialog, sheet, lightbox) takes `.dc-preview` as its containing
+        # block, and a note inside it sat under the overlay's backdrop.
         first = dict(rendered[0])
-        first["html"] = (
-            f"{first['html']}"
+        first["feedback"] = (
             f'<p class="dc-preview-feedback">Your view received <code>{escape(received)}</code>'
             " — what happens next is its handler's to decide.</p>"
         )
@@ -1127,11 +1151,6 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             for p in ctx.get("required_context") or []
         ] + [[p["name"], p["type"], "", default_of(p)] for p in ctx.get("optional_context") or []]
 
-        def type_name(annotation: Any) -> str:
-            # `<class 'float'>` is the repr of a type, not a type name.
-            text = str(annotation or "—")
-            return text[8:-2] if text.startswith("<class '") and text.endswith("'>") else text
-
         from .catalogue import _PUSH_EVENT_PARAMS
 
         # A form-field component declares `name` itself — the HTML field name
@@ -1144,7 +1163,23 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         )
 
         def param_type(p: Any) -> str:
-            text = type_name(p.get("annotation"))
+            if p.get("kind") == "VAR_KEYWORD":
+                # Not a parameter called `kwargs`: what `Component.__init__`
+                # does with the keywords the class does not name. `id=` is
+                # the instance's `.id`; no shipped component's markup renders
+                # it, so "the element id" would be untrue.
+                identity = (
+                    ""
+                    if declares_name
+                    else "`name=` identifies the instance in the events it sends, "
+                )
+                return (
+                    f"— passed to `Component.__init__`: {identity}`id=` sets `component.id`, "
+                    "and any other keyword is kept as state"
+                )
+            if p.get("kind") == "VAR_POSITIONAL":
+                return "—"
+            text = readable_annotation(p.get("annotation"))
             if p["name"] in _PUSH_EVENT_PARAMS:
                 # Server -> client: the name your view pushes to the component.
                 return f"{text} — the event your server pushes to it"
@@ -1156,8 +1191,16 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
                 return f"{text} — renames the event; identity is `name`"
             return text
 
+        def param_name(p: Any) -> str:
+            stars = {"VAR_KEYWORD": "**", "VAR_POSITIONAL": "*"}.get(p.get("kind", ""), "")
+            return stars + p["name"]
+
         params_rows = [
-            [p["name"], param_type(p), str(p.get("default", ""))]
+            [
+                param_name(p),
+                param_type(p),
+                "—" if str(p.get("kind", "")).startswith("VAR_") else str(p.get("default", "")),
+            ]
             for p in ctx.get("python_params") or []
         ]
         a11y_rows = [

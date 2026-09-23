@@ -359,10 +359,10 @@ class TestPreviewFeedback:
         from djust.theming.gallery.live_views import render_preview_examples
 
         state = self._values_after("approval_gate", "approve")
-        html = render_preview_examples("approval_gate", "python", state.examples, state.values)[0][
-            "html"
+        note = render_preview_examples("approval_gate", "python", state.examples, state.values)[0][
+            "feedback"
         ]
-        assert "Your view received <code>approve</code>" in html
+        assert "Your view received <code>approve</code>" in note
 
     @pytest.mark.parametrize(
         "name,event",
@@ -464,3 +464,90 @@ class TestOverlayPanelsDoNotSwallowClicks:
         ).render(Context({}))
         assert "stopPropagation" not in html
         assert '<div class="dj-scrim" dj-click="close_modal"' in html
+
+
+class TestParametersTableReadsLikeTheSignature:
+    """The Parameters table printed `typing.Optional[list]` and a row
+    `kwargs | typing.Any | —`, which reads as a parameter called `kwargs`."""
+
+    def _rows(self, name):
+        return {row[0]: row for row in _detail(name).get_context_data()["params_rows"]}
+
+    def test_types_are_readable(self):
+        rows = self._rows("sortable_list")
+        assert rows["items"][1] == "list | None"
+        assert rows["handle"][1] == "bool"
+        assert not [r for r in rows.values() if "typing." in r[1]]
+
+    def test_only_the_outermost_optional_becomes_none(self):
+        from djust.theming.gallery.live_views import readable_annotation
+
+        assert (
+            readable_annotation("typing.Optional[typing.Dict[str, typing.Optional[str]]]")
+            == "Dict[str, Optional[str]] | None"
+        )
+        assert readable_annotation("typing.Optional[list]") == "list | None"
+        assert readable_annotation("<class 'str'>") == "str"
+        assert readable_annotation("typing.Union[str, ForwardRef('datetime'), NoneType]") == (
+            "Union[str, datetime, None]"
+        )
+
+    def test_var_keyword_is_described_not_typed(self):
+        rows = self._rows("sortable_list")
+        assert "kwargs" not in rows
+        _name, note, default = rows["**kwargs"]
+        assert default == "—"
+        assert note.startswith("—") and "typing" not in note
+        assert "Component.__init__" in note
+        assert "`name=`" in note and "`id=`" in note and "state" in note
+
+    def test_name_is_no_identity_where_the_component_declares_it(self):
+        # SignaturePad's `name` is the form field; `name=` never reaches **kwargs.
+        note = self._rows("signature_pad")["**kwargs"][1]
+        assert "`name=`" not in note and "`id=`" in note
+
+
+class TestPreviewFeedbackIsOutsideTheOverlay:
+    """An overlay previewed open makes `.dc-preview` its containing block, so a
+    note inside it rendered under the overlay's backdrop."""
+
+    @staticmethod
+    def _note_inside_preview(html: str) -> bool:
+        from html.parser import HTMLParser
+
+        class Walk(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.depth, self.preview_at, self.inside = 0, [], None
+
+            def handle_starttag(self, tag, attrs):
+                if tag != "div" and tag != "p":
+                    return
+                self.depth += 1
+                classes = (dict(attrs).get("class") or "").split()
+                if "dc-preview" in classes:
+                    self.preview_at.append(self.depth)
+                if "dc-preview-feedback" in classes and self.inside is None:
+                    self.inside = bool(self.preview_at)
+
+            def handle_endtag(self, tag):
+                if tag != "div" and tag != "p":
+                    return
+                if self.preview_at and self.preview_at[-1] == self.depth:
+                    self.preview_at.pop()
+                self.depth -= 1
+
+        w = Walk()
+        w.feed(html)
+        assert w.inside is not None, "no feedback note rendered"
+        return w.inside
+
+    @pytest.mark.parametrize(
+        "name,event", [("export_dialog", "export"), ("approval_gate", "approve")]
+    )
+    def test_the_received_note_follows_the_preview_box(self, name, event):
+        view = _detail(name)
+        getattr(view.preview, event)()
+        html = str(view.preview.render())
+        assert f"Your view received <code>{event}</code>" in html
+        assert not self._note_inside_preview(html)

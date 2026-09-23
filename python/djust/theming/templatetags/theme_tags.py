@@ -620,11 +620,13 @@ _PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="
     {% endfor %}
   </div>
   <div class="dc-preview">{{ playground_html|safe }}</div>
+  {{ playground_feedback|safe }}
   {{ playground_code_html }}
   {% else %}
     {% for ex in examples_html %}
     <div class="dc-example">
       <div class="dc-preview">{{ ex.html|safe }}</div>
+      {{ ex.feedback|safe }}
       {% if ex.kwargs_display %}<details class="dc-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
     </div>
     {% empty %}
@@ -693,6 +695,7 @@ def component_preview(
 
     options: list = []
     playground_html = ""
+    playground_feedback = ""
     playground_call = ""
     more_examples: list = []
     if examples:
@@ -713,6 +716,7 @@ def component_preview(
             chosen = {**base, **playground}
             shown = render_preview_examples(component_name, component_type, [chosen], {})
             playground_html = shown[0]["html"] if shown else ""
+            playground_feedback = shown[0].get("feedback", "") if shown else ""
             playground_call = (
                 f"{component_name}("
                 + ", ".join(
@@ -752,6 +756,7 @@ def component_preview(
                     "examples_html": rendered,
                     "options": options,
                     "playground_html": playground_html,
+                    "playground_feedback": playground_feedback,
                     "playground_call": playground_call,
                     # The Python component, not the ``{% code_snippet %}`` tag:
                     # the Rust engine renders the tag natively without the
