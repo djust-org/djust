@@ -258,3 +258,19 @@ class TestClientNeedsAreStated:
         body = client.get("/theme/components/countdown/").content.decode()
         assert 'djust_components/countdown.js" defer></script>' in body
         assert "Needs its script on the page" in body
+
+
+class TestParameterNotesAreTrue:
+    def _types(self, name):
+        view = _detail(name)
+        ctx = view.get_context_data()
+        return {row[0]: row[1] for row in ctx["params_rows"]}
+
+    def test_identity_note_only_where_name_is_the_identity(self):
+        assert "identity is `name`" in self._types("rating")["event"]
+        # SignaturePad declares `name` (the form field), so it is no identity.
+        assert "identity is `name`" not in self._types("signature_pad")["save_event"]
+
+    def test_a_push_event_is_not_described_as_one_the_view_receives(self):
+        note = self._types("conversation_thread")["stream_event"]
+        assert "pushes" in note and "renames" not in note

@@ -1024,11 +1024,27 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             text = str(annotation or "—")
             return text[8:-2] if text.startswith("<class '") and text.endswith("'>") else text
 
+        from .catalogue import _PUSH_EVENT_PARAMS
+
+        # A form-field component declares `name` itself — the HTML field name
+        # — and the base class then does not stamp it as the instance
+        # identity (`Component.__init__`), so the identity clause is false
+        # there.
+        declares_name = any(
+            p.get("name") == "name" and not str(p.get("kind", "")).startswith("VAR_")
+            for p in ctx.get("python_params") or []
+        )
+
         def param_type(p: Any) -> str:
             text = type_name(p.get("annotation"))
+            if p["name"] in _PUSH_EVENT_PARAMS:
+                # Server -> client: the name your view pushes to the component.
+                return f"{text} — the event your server pushes to it"
             # ADR-033 D5: `event=` renames the verb; which instance spoke is
             # `name`, carried on every trigger as `dj-value-name`.
             if p["name"] == "event" or p["name"].endswith("_event"):
+                if declares_name:
+                    return f"{text} — renames the event"
                 return f"{text} — renames the event; identity is `name`"
             return text
 
