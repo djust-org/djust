@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-23
+
+The first stable release of the 1.2 line. The code is identical to 1.2.0rc11; see the `1.2.0rc1` to `1.2.0rc11` sections below for every change since 1.1, including the behaviour changes listed under rc11. 1.1.4 carries the same fixes for the 1.1 line.
+
+### Security
+
+- **This release and 1.1.4 include fixes for the following advisories**; see each advisory for details:
+  - [GHSA-fccp-5h88-g34j](https://github.com/djust-org/djust/security/advisories/GHSA-fccp-5h88-g34j) (DataTable)
+  - [GHSA-jv2m-fcq9-94xf](https://github.com/djust-org/djust/security/advisories/GHSA-jv2m-fcq9-94xf) (admin_ext)
+  - [GHSA-c44q-w252-mr67](https://github.com/djust-org/djust/security/advisories/GHSA-c44q-w252-mr67) (observability)
+  - [GHSA-hc2m-gvfj-x6r3](https://github.com/djust-org/djust/security/advisories/GHSA-hc2m-gvfj-x6r3) and [GHSA-r372-rrpw-5cgj](https://github.com/djust-org/djust/security/advisories/GHSA-r372-rrpw-5cgj) (components)
+  - [GHSA-j23m-jxwp-m3vq](https://github.com/djust-org/djust/security/advisories/GHSA-j23m-jxwp-m3vq) (theming)
+  - [GHSA-6q7c-hvpc-ff2q](https://github.com/djust-org/djust/security/advisories/GHSA-6q7c-hvpc-ff2q) (presence)
+  - [GHSA-5ffg-p52h-v2ph](https://github.com/djust-org/djust/security/advisories/GHSA-5ffg-p52h-v2ph) (state snapshots)
+  - [GHSA-74vj-mpp4-45cg](https://github.com/djust-org/djust/security/advisories/GHSA-74vj-mpp4-45cg) (sticky live_render)
+  - [GHSA-7fcf-23mf-rhhm](https://github.com/djust-org/djust/security/advisories/GHSA-7fcf-23mf-rhhm) (uploads)
+  - [GHSA-p9vp-rh5f-2cvq](https://github.com/djust-org/djust/security/advisories/GHSA-p9vp-rh5f-2cvq) (template filters; fixed in 1.2.0rc2, backported in 1.1.4)
+
 ## [1.2.0rc11] - 2026-09-23
 
 ### Changed
