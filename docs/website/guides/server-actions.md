@@ -33,7 +33,8 @@ from djust import LiveView, action
 
 
 class TodoView(LiveView):
-    todos = state(default_factory=list)
+    def mount(self, request, **kwargs):
+        self.todos = []
 
     @action
     def create_todo(self, title: str = "", **kwargs):
@@ -51,10 +52,14 @@ across the handler's lifecycle:
 |---|---|
 | Before handler runs | `{pending: True,  error: None, result: None}` |
 | On `return value` | `{pending: False, error: None, result: value}` |
-| On `raise exc` (re-raised) | `{pending: False, error: "<message>", result: None}` |
+| On `raise exc` (caught and logged, not re-raised; the view re-renders) | `{pending: False, error: "<message>", result: None}` |
 
 Every action's state is then injected into the template context
-**under its method name**, so you can read it directly:
+**under its method name**, so you can read it directly. Note that
+`pending: True` only exists while the handler body runs: the render after a
+synchronous handler always sees `pending: False`, so `.pending` is visible only
+to renders that happen during async / `start_async` work. For in-flight UI on a
+form submit, use `dj-form-pending` (below).
 
 ```django
 {% if create_todo.pending %}
@@ -85,9 +90,10 @@ def create_todo(self, **kwargs): ...
 def create_todo(self, **kwargs): ...
 ```
 
-The optional `description=` is metadata — surfaced via
-`is_action(func)` for tooling that introspects the view (e.g. the
-djust MCP server).
+The optional `description=` is metadata for tooling that introspects
+the view (e.g. the djust MCP server). It is stored in the handler's
+`_djust_decorators["event_handler"]["description"]`; `is_action(func)` only
+tells you whether a function is an action.
 
 ### Retry semantics
 
@@ -118,7 +124,7 @@ in-flight:
 
     <button type="submit">
         <span dj-form-pending="hide">Add</span>
-        <span dj-form-pending="show">Saving…</span>
+        <span dj-form-pending="show" hidden>Saving…</span>
     </button>
 
     <button type="button" dj-form-pending="disabled" dj-click="cancel">
@@ -132,7 +138,7 @@ Three modes:
 | Mode | Behavior |
 |---|---|
 | `dj-form-pending="hide"` | Element is hidden via the `hidden` attribute while pending. Use for an idle label that disappears during submit. |
-| `dj-form-pending="show"` | Element is hidden by default, visible while pending. Use for a spinner or "Saving…" text. |
+| `dj-form-pending="show"` | Visible while pending, hidden again afterwards. djust does not hide it before the first submit, so add `hidden` in your markup (`<span dj-form-pending="show" hidden>`). Use for a spinner or "Saving…" text. |
 | `dj-form-pending="disabled"` | `disabled = true` while pending; original `disabled` state restored on resolve. User-disabled elements stay disabled (the helper tracks pre-pending state in `data-djust-form-pending-was-disabled`). |
 
 Unknown modes are silently ignored — forward-compatible if more
@@ -181,7 +187,8 @@ handler:
 
 ```python
 class TodoView(LiveView):
-    todos = state(default_factory=list)
+    def mount(self, request, **kwargs):
+        self.todos = []
 
     @action
     def create_todo(self, title: str = "", **kwargs):
@@ -198,7 +205,7 @@ class TodoView(LiveView):
 
     <button type="submit">
         <span dj-form-pending="hide">Add</span>
-        <span dj-form-pending="show">Saving…</span>
+        <span dj-form-pending="show" hidden>Saving…</span>
     </button>
 
     {# Post-completion state — read after the handler returns. #}
@@ -241,9 +248,9 @@ Total client JS authored: zero. Total server state code: zero.
 
 ## Tests
 
-`@action` is covered by **18 regression tests** in
-`tests/test_action_decorator.py`. `dj-form-pending` is covered by
-**8 JSDOM tests** in `tests/js/dj-form-pending.test.js` covering
+`@action` is covered by regression tests in
+`python/djust/tests/test_action_decorator.py`. `dj-form-pending` is covered by
+JSDOM tests in `tests/js/dj-form-pending.test.js` covering
 `data-djust-form-pending` toggle, mode handling, user-disabled
 preservation, scope isolation, error-path cleanup, and forward-
 compat for unknown modes.
