@@ -132,8 +132,9 @@ class ModalNode(template.Node):
         title_id = f"{modal_id}-title"
         labelledby = f' aria-labelledby="{title_id}"' if title else ""
 
-        return mark_safe(f"""<div class="dj-modal-backdrop" dj-click="{e_close_event}"{cid_attr}>
-  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby} onclick="event.stopPropagation()">
+        return mark_safe(f"""<div class="dj-modal-backdrop">
+  <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
+  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby}>
     <div class="dj-modal__header">
       <h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>
       <button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>
@@ -8163,8 +8164,9 @@ class BottomSheetNode(template.Node):
             title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>'
 
         return mark_safe(
-            f'<div class="dj-bottom-sheet__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-bottom-sheet__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"
@@ -8964,8 +8966,9 @@ class ExportDialogNode(template.Node):
         )
 
         return mark_safe(
-            f'<div class="dj-export-dialog__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-export-dialog__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-export-dialog__header">'
             f"<h3>{e_title}</h3>"
             f'<button class="dj-export-dialog__close" dj-click="{e_close}">&times;</button></div>'

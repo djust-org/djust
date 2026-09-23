@@ -115,8 +115,9 @@ class ModalHandler:
             "xl": "modal-xl",
         }.get(str(size), "modal-md")
         return _safe(
-            f'<div class="modal-overlay {size_class}" dj-click="{close_event}">'
-            f'<div class="modal-content" onclick="event.stopPropagation()">'
+            f'<div class="modal-overlay {size_class}">'
+            f'<div class="dj-scrim" dj-click="{close_event}"></div>'
+            f'<div class="modal-content">'
             f'<div class="modal-header">'
             f'<h3 class="modal-title">{title}</h3>'
             f'<button class="modal-close" dj-click="{close_event}">&times;</button>'
@@ -4163,10 +4164,11 @@ class ConfirmDialogHandler:
         extra_cls = f" {custom_class}" if custom_class else ""
 
         return _safe(
-            f'<div class="dj-confirm-dialog-backdrop" dj-click="{cancel_event}">'
+            f'<div class="dj-confirm-dialog-backdrop">'
+            f'<div class="dj-scrim" dj-click="{cancel_event}"></div>'
             f'<div class="dj-confirm-dialog{variant_cls}{extra_cls}" '
             f'role="alertdialog" aria-modal="true" aria-labelledby="{title_id}" '
-            f'aria-describedby="{msg_id}" onclick="event.stopPropagation()">'
+            f'aria-describedby="{msg_id}">'
             f'<div class="dj-confirm-dialog__header">'
             f'<h3 class="dj-confirm-dialog__title" id="{title_id}">{title}</h3>'
             f'<button class="dj-confirm-dialog__close" dj-click="{cancel_event}" '
@@ -6457,8 +6459,9 @@ class BottomSheetHandler:
         title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>' if title else ""
 
         return _safe(
-            f'<div class="dj-bottom-sheet__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-bottom-sheet__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">{title_html}'
             f'<button class="dj-bottom-sheet__close" dj-click="{e_close}">&times;</button></div>'
@@ -6952,8 +6955,9 @@ class ExportDialogHandler:
             )
 
         return _safe(
-            f'<div class="dj-export-dialog__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-export-dialog__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-export-dialog__header"><h3>{e_title}</h3>'
             f'<button class="dj-export-dialog__close" dj-click="{e_close}">&times;</button></div>'
             f'<div class="dj-export-dialog__body">'

@@ -396,3 +396,71 @@ class TestPreviewFeedback:
         from djust.theming.gallery.component_registry import component_client
 
         assert component_client("otp_input")["script"] == "djust_components/otp-input.js"
+
+
+class TestOverlayPanelsDoNotSwallowClicks:
+    """djust delegates clicks from the root. A panel with
+    `onclick="event.stopPropagation()"` (there to stop inside clicks from
+    reaching a backdrop's close) swallowed every dj-click inside it: the
+    close ×, Export, Cancel. The close now rides a scrim behind the panel."""
+
+    def test_no_shipped_python_or_template_source_stops_propagation_inline(self):
+        from pathlib import Path
+
+        import djust
+
+        root = Path(djust.__file__).parent
+        offenders = [
+            str(p.relative_to(root))
+            for p in list((root / "components").rglob("*.py")) + list(root.rglob("*.html"))
+            if "tests" not in p.parts
+            and 'onclick="event.stopPropagation()"' in p.read_text(errors="ignore")
+        ]
+        assert not offenders, offenders
+
+    @pytest.mark.parametrize(
+        "cls,kwargs,close",
+        [
+            ("ExportDialog", {"open": True, "formats": ["csv"]}, "close_export"),
+            ("BottomSheet", {"open": True, "title": "t"}, "close_sheet"),
+        ],
+    )
+    def test_the_close_target_is_not_an_ancestor_of_the_panel(self, cls, kwargs, close):
+        from html.parser import HTMLParser
+
+        import djust.components as components
+
+        html = str(getattr(components, cls)(**kwargs).render())
+
+        class Walk(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack, self.buttons_under_close = [], 0
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == "button" and any(
+                    close == s.get("dj-click") for s in self.stack[: -0 or None]
+                ):
+                    self.buttons_under_close += 1
+                if tag not in ("input", "br", "img"):
+                    self.stack.append(a)
+
+            def handle_endtag(self, tag):
+                if self.stack:
+                    self.stack.pop()
+
+        w = Walk()
+        w.feed(html)
+        assert 'class="dj-scrim"' in html
+        assert w.buttons_under_close == 0
+
+    def test_the_modal_tag_closes_from_its_scrim(self):
+        from django.template import Context, Template
+
+        html = Template(
+            '{% load djust_components %}{% modal title="T" open=True close_event="close_modal" %}'
+            '<button dj-click="save">Save</button>{% endmodal %}'
+        ).render(Context({}))
+        assert "stopPropagation" not in html
+        assert '<div class="dj-scrim" dj-click="close_modal"' in html

@@ -497,10 +497,11 @@ class ConfirmDialogNode(template.Node):
         extra_cls = f" {e_custom_class}" if custom_class else ""
 
         return mark_safe(
-            f'<div class="dj-confirm-dialog-backdrop" dj-click="{e_cancel_event}">'
+            f'<div class="dj-confirm-dialog-backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_cancel_event}"></div>'
             f'<div class="dj-confirm-dialog{variant_cls}{extra_cls}" '
             f'role="alertdialog" aria-modal="true" aria-labelledby="{title_id}" '
-            f'aria-describedby="{msg_id}" onclick="event.stopPropagation()">'
+            f'aria-describedby="{msg_id}">'
             f'<div class="dj-confirm-dialog__header">'
             f'<h3 class="dj-confirm-dialog__title" id="{title_id}">{e_title}</h3>'
             f'<button class="dj-confirm-dialog__close" dj-click="{e_cancel_event}" '

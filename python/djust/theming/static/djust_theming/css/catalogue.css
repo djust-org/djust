@@ -151,6 +151,15 @@ body.dc-body {
 .dc-preview--empty { color: hsl(var(--muted-foreground)); font-size: 0.875rem; }
 /* "Dismissed — Show again" / "Your view received `x`": the preview's answer to
    an event the component itself has no state for. */
+/* An overlay previewed OPEN (sheet, dialog, lightbox, palette) is
+   position: fixed. Without its own containing block it was sized by the
+   Preview card, spilled over the usage sample below and hid its own close
+   button. The preview becomes the containing block, with room for it. */
+.dc-preview:has(.dj-export-dialog__backdrop, .dj-bottom-sheet__backdrop, .dj-lightbox,
+    .palette-overlay[data-open="true"], .sheet-overlay[data-open="true"]) {
+  transform: translateZ(0); min-height: 30rem; overflow: hidden;
+}
+.dc-preview .dj-export-dialog, .dc-preview .dj-bottom-sheet { max-height: calc(100% - 2rem); overflow-y: auto; }
 .dc-preview-feedback { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
   font-size: 0.8125rem; color: hsl(var(--muted-foreground)); margin: 0; flex-basis: 100%; }
 .dc-preview-feedback code { font-family: ui-monospace, monospace; font-size: 0.75rem; }
