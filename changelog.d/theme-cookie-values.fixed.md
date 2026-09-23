@@ -1,1 +1,0 @@
-- **Theme cookies that name an unregistered pack or an invalid layout fall back to the defaults, and `{% theme_css_link %}` URL-encodes its query.** An unknown pack now resolves to the session pack, then the configured default. Layout names must match `[A-Za-z0-9_-]{1,64}`.

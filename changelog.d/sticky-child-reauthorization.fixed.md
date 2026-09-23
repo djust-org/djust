@@ -1,1 +1,0 @@
-- **A reused sticky `{% live_render %}` child re-runs its view and object permission checks on every parent render**, and `live_redirect` carry-over re-checks object permissions too. A child the user may no longer see is unmounted and the render fails the same way a fresh mount would.
