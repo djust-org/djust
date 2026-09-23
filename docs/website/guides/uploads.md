@@ -24,6 +24,8 @@ djust provides chunked binary file uploads over WebSocket, with client-side prev
 ### 1. Configure Uploads in Your View
 
 ```python
+from uuid import uuid4
+
 from djust import LiveView
 from djust.uploads import UploadMixin
 from djust.decorators import event_handler
@@ -43,11 +45,15 @@ class ProfileView(UploadMixin, LiveView):
     @event_handler()
     def save_avatar(self, **kwargs):
         for entry in self.consume_uploaded_entries('avatar'):
+            # safe_client_name, never client_name: see the note below.
             path = default_storage.save(
-                f'avatars/{entry.client_name}', entry.file
+                f'avatars/{uuid4().hex}/{entry.safe_client_name}', entry.file
             )
             self.avatar_url = default_storage.url(path)
 ```
+
+> **Security: build storage paths from `entry.safe_client_name`, never `entry.client_name`.**
+> `client_name` is the raw filename the browser sent and is attacker-controlled. A name like `../../x` raises `SuspiciousFileOperation` on `FileSystemStorage` and is a valid key on object stores (S3, GCS, Azure), where it can overwrite or misplace other objects (CWE-22 / CWE-73). `safe_client_name` is a basename with directory components, control bytes and `..`/dotfile tricks removed. Two users can still upload the same name, and some stores (S3 with django-storages' default settings, for example) overwrite an existing key, so the examples also add a server-generated `uuid4()` directory. Use `client_name` only for display, through normal auto-escaping.
 
 ### 2. Add Upload Elements to Your Template
 
@@ -100,7 +106,8 @@ self.allow_upload('documents', accept='.pdf,.docx',
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `client_name` | `str` | Original filename |
+| `client_name` | `str` | Original filename as sent by the client (untrusted; display only) |
+| `safe_client_name` | `str` | Path-safe basename of `client_name`; use this for storage paths and keys |
 | `client_type` | `str` | MIME type |
 | `client_size` | `int` | Expected file size in bytes |
 | `data` | `bytes` | Complete file content |
@@ -146,7 +153,7 @@ class GalleryView(UploadMixin, LiveView):
     def upload_photos(self, **kwargs):
         for entry in self.consume_uploaded_entries('photos'):
             path = default_storage.save(
-                f'gallery/{entry.client_name}', entry.file
+                f'gallery/{uuid4().hex}/{entry.safe_client_name}', entry.file
             )
             self.images.append({
                 'url': default_storage.url(path),
@@ -238,6 +245,7 @@ import boto3
 from pathlib import Path
 from uuid import uuid4
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.uploads import UploadMixin, BufferedUploadWriter
 
 class S3MultipartWriter(BufferedUploadWriter):
@@ -301,7 +309,8 @@ class UploadView(LiveView, UploadMixin):
             accept=".jpg,.png,.mp4",
         )
 
-    def save_uploads(self):
+    @event_handler()
+    def save_uploads(self, **kwargs):
         for entry in self.consume_uploaded_entries("asset"):
             # entry.writer_result is whatever on_complete() returned
             url = entry.writer_result["url"]
@@ -368,16 +377,21 @@ Re-run the webhook delivery. The log will show the key that failed to match and 
 
 Network hiccups, backgrounded mobile tabs, and brief WebSocket disconnects should not kill a long upload. Resumable uploads persist chunk-level state server-side so the transfer picks up where it left off on reconnect.
 
+> **Known issue (1.2.0rc10, not yet filed):** when a WebSocket disconnects, djust aborts every in-flight upload writer, `ResumableUploadWriter` included, and the wrapper's `abort()` deletes the upload's state entry (and aborts the inner writer, e.g. the S3 multipart upload). A resume after a dropped connection therefore gets `not_found` and the client starts over from byte 0. The protocol below describes the intended behaviour; don't rely on resume across a WebSocket drop at this version.
+
 ### How it works
 
-Add `resumable=True` to any `allow_upload()` slot. When a client uploads with this flag set and the WebSocket drops mid-transfer, the browser automatically sends an `upload_resume` message on reconnect with the last confirmed byte offset. djust resumes the transfer from that offset — no re-sending of already-received chunks.
+Add `resumable=True` to an `allow_upload()` slot whose writer is a `ResumableUploadWriter` (see [ResumableUploadWriter](#resumableuploadwriter)). When the WebSocket drops mid-transfer, the browser sends an `upload_resume` message with the upload's `ref` on reconnect. The server replies with the bytes and chunk indices it has already received, and the client continues from there — no re-sending of already-received chunks.
 
 The state survives **WS reconnects on the same server process**. A server restart wipes in-memory state (see [State stores](#state-stores) for cross-process persistence).
 
 ### Enable it
 
 ```python
-from djust.uploads import UploadMixin
+from djust.uploads import UploadMixin, ResumableUploadWriter
+
+# MyWriter is any UploadWriter / BufferedUploadWriter subclass.
+ResumableMyWriter = ResumableUploadWriter.with_inner(MyWriter)
 
 class VideoUploadView(UploadMixin, LiveView):
     template_name = 'video_upload.html'
@@ -387,11 +401,12 @@ class VideoUploadView(UploadMixin, LiveView):
             'video',
             accept='.mp4,.mov,.webm',
             max_file_size=500_000_000,  # 500 MB
+            writer=ResumableMyWriter,
             resumable=True,
         )
 ```
 
-That's all that's needed for the basic path. The client-side `dj-upload` directive handles the resume protocol automatically.
+The client-side `dj-upload` directive handles the resume protocol automatically. Server-side chunk state is recorded only by a `ResumableUploadWriter`: with `resumable=True` and no such writer, nothing is persisted, the server answers the resume request with `not_found`, and the client starts over from byte 0.
 
 ### State stores
 
@@ -399,131 +414,102 @@ By default, chunk receipts are held in process memory (`InMemoryUploadState`). T
 
 #### RedisUploadState
 
-```python
-# settings.py
-DJUST = {
-    'upload_state_store': 'djust.uploads.stores.RedisUploadState',
-    'upload_state_redis_url': 'redis://localhost:6379/0',
-    # Optional: TTL for upload state records (default: 1 hour)
-    'upload_state_ttl': 3600,
-}
+There are no settings for the store. Construct `RedisUploadState` with a Redis client and install it as the process-wide default with `set_default_store()`, typically once in `AppConfig.ready()`:
 
-# views.py — pass store config to the slot
-self.allow_upload(
-    'video',
-    resumable=True,
-    resumable_store='redis',       # selects the configured store
-    resumable_store_options={
-        'redis_url': 'redis://localhost:6379/0',
-        'ttl': 3600,
-    },
-)
+```python
+# apps.py
+import redis
+from django.apps import AppConfig
+from djust.uploads.storage import RedisUploadState, set_default_store
+
+class MyAppConfig(AppConfig):
+    name = "myapp"
+
+    def ready(self):
+        set_default_store(
+            RedisUploadState(redis.Redis.from_url("redis://localhost:6379/0"))
+        )
 ```
 
-The store is instantiated lazily on first use. djust reads `DJUST['upload_state_store']` as the global default and `resumable_store` per-slot to override it.
+`ResumableUploadWriter` uses the default store unless you bind one explicitly: `ResumableUploadWriter.with_inner(MyWriter, state_store=my_store, ttl_hours=48)`. State entries expire after 24 hours by default (`DEFAULT_TTL_SECONDS`).
 
 #### Custom store
 
-Implement the store protocol:
+Implement the `UploadStateStore` protocol. It is **synchronous**: callers invoke the methods directly, so `async def` methods would return un-awaited coroutines.
 
 ```python
-from djust.uploads.storage import UploadStateStore
+from djust.uploads.storage import set_default_store
 
-class MyUploadStateStore(UploadStateStore):
-    async def get_offset(self, upload_id: str) -> int | None:
-        # Return byte offset, or None if upload_id not found
+class MyUploadStateStore:
+    def get(self, upload_id: str) -> dict | None:
+        # Return the state dict, or None if absent.
         ...
 
-    async def set_offset(self, upload_id: str, offset: int) -> None:
-        # Persist chunk offset
+    def set(self, upload_id: str, state: dict, ttl: int) -> None:
+        # Overwrite the entry and (re)set its expiry to ttl seconds.
+        # Raise UploadStateTooLarge if the JSON-encoded state exceeds
+        # MAX_STATE_SIZE_BYTES (16 KB).
         ...
 
-    async def clear_offset(self, upload_id: str) -> None:
-        # Called on completion or explicit cancel
+    def update(self, upload_id: str, partial: dict) -> dict | None:
+        # Merge partial into the existing entry and return it; return None
+        # (and do nothing) if the entry doesn't exist. Keep the old TTL.
         ...
+
+    def delete(self, upload_id: str) -> None:
+        # Remove the entry; no-op if absent.
+        ...
+
+set_default_store(MyUploadStateStore())
 ```
 
-Stores are sync or async — djust handles both transparently.
+Implementations must be thread-safe: chunks of one upload can arrive on different worker threads. `set_default_store()` raises `TypeError` for an object that doesn't satisfy the protocol.
 
 ### ResumableUploadWriter
 
-For large files that also use a custom destination (S3, GCS, Azure Blob), combine `ResumableUploadWriter` with the state store:
+For large files that also use a custom destination (S3, GCS, Azure Blob), wrap your writer with `ResumableUploadWriter.with_inner()`. Don't subclass `ResumableUploadWriter` directly or combine it with another writer by multiple inheritance: a class without a bound inner writer raises `RuntimeError` on the first chunk.
 
 <!-- doc-snippet-check: skip -->
 ```python
-from djust.uploads import ResumableUploadWriter, BufferedUploadWriter
-import boto3
+from djust.uploads import ResumableUploadWriter
 
-class ResumableS3Writer(ResumableUploadWriter, BufferedUploadWriter):
-    """S3 MPU writer that cooperates with the resumable upload state."""
+# S3MultipartWriter is the BufferedUploadWriter subclass from the
+# "S3 multipart upload" section above; it needs no changes.
+ResumableS3Writer = ResumableUploadWriter.with_inner(S3MultipartWriter, ttl_hours=24)
 
-    def open(self):
-        self._s3 = boto3.client("s3")
-        self._key = f"uploads/{self.upload_id}"
-        self._mpu = self._s3.create_multipart_upload(
-            Bucket="my-bucket",
-            Key=self._key,
-            ContentType=self.content_type,
+class VideoUploadView(UploadMixin, LiveView):
+    def mount(self, request, **kwargs):
+        self.allow_upload(
+            "asset",
+            writer=ResumableS3Writer,
+            resumable=True,
+            max_file_size=500_000_000,
         )
-        self._parts = []
-        self._received_bytes = 0
-
-    def write_chunk(self, chunk: bytes):
-        self._received_bytes += len(chunk)
-        # BufferedUploadWriter.flush() calls on_part() at the 5 MB boundary
-
-    def on_part(self, part: bytes, part_num: int) -> None:
-        resp = self._s3.upload_part(
-            Bucket="my-bucket",
-            Key=self._key,
-            UploadId=self._mpu["UploadId"],
-            PartNumber=part_num,
-            Body=part,
-        )
-        self._parts.append({"ETag": resp["ETag"], "PartNumber": part_num})
-
-    def close(self):
-        self._s3.complete_multipart_upload(
-            Bucket="my-bucket",
-            Key=self._key,
-            UploadId=self._mpu["UploadId"],
-            MultipartUpload={"Parts": self._parts},
-        )
-        return {"url": f"https://my-bucket.s3.amazonaws.com/{self._key}"}
-
-    def abort(self, error):
-        mpu = getattr(self, "_mpu", None)
-        if mpu:
-            self._s3.abort_multipart_upload(
-                Bucket="my-bucket",
-                Key=self._key,
-                UploadId=mpu["UploadId"],
-            )
 ```
 
-The `ResumableUploadWriter` base class adds the state-store integration: on each `write_chunk`, it also records the cumulative byte count. If the upload is interrupted and resumes, `open()` is called again with `upload_id` set and can skip the already-confirmed bytes.
+The wrapper delegates `open()`, `write_chunk()`, `close()` and `abort()` to the inner writer and adds the state-store integration: it forwards each new chunk to the inner writer and, once that succeeds, records the chunk index in the store. Chunks already recorded are skipped when a resumed upload replays them, so the inner writer does no offset handling of its own. It deletes the state entry on `close()` or `abort()`. If the store is unreachable when the writer is created, it logs a warning and the upload continues without resume support.
 
 ### Failure-mode matrix
 
 | Failure | With `resumable=True` | Without |
 |---------|----------------------|---------|
-| WS drops, reconnects < TTL | Resumes from last chunk | Upload aborted |
-| Browser tab backgrounded (mobile) | Resumes on foreground | Upload aborted |
+| WS drops, reconnects < TTL | Intended: resumes from last chunk. At rc10: restarts from byte 0 (see the known issue above) | Upload aborted |
+| Browser tab backgrounded (mobile) | Intended: resumes on foreground. At rc10: restarts from byte 0 if the WebSocket dropped | Upload aborted |
 | Server process restart (in-memory store) | Upload aborted | Upload aborted |
-| Server restart (Redis store) | Resumes from last chunk | Upload aborted |
+| Server restart (Redis store) | Intended: resumes from last chunk. At rc10: a graceful shutdown runs the same disconnect abort, so expect a restart from byte 0 | Upload aborted |
 | Client closes tab | Upload aborted | Upload aborted |
-| Second tab tries to resume same upload | Rejected with error | n/a |
+| Second tab tries to resume same upload | Resume refused (`locked`); that tab starts a fresh upload | n/a |
 
 ### Client-side behavior
 
 The browser client automatically:
 
-1. Caches `upload_id` + last confirmed offset in `IndexedDB`
-2. On WS reconnect, sends `upload_resume {upload_id, offset}`
-3. Receives `upload_resume_ack {accepted: true, offset}` and continues from that byte
-4. If the server rejects the resume (state expired, slot full), falls back to starting over from byte 0
+1. Records the upload's `ref` in `IndexedDB`, keyed by a file hint (name + size + lastModified). If IndexedDB is unavailable, it keeps the record in memory, so resume works within the same page load only.
+2. On WS reconnect, sends `upload_resume {ref}`
+3. Receives `upload_resumed {status, bytes_received, chunks_received}` and, when `status` is `"resumed"`, continues past the chunks the server already has
+4. If the server answers `not_found` (state expired, or a different session) or `locked` (another session is resuming the same upload), falls back to starting over from byte 0
 
-The `djust:upload:progress` event fires with `status: "resuming"` during the protocol handshake.
+There is no separate progress status for the handshake: `djust:upload:progress` keeps reporting `uploading` / `complete` (and `error` / `cancelled`).
 
 ## Best Practices
 
