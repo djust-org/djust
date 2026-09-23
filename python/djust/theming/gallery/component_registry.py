@@ -1008,10 +1008,11 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         # The healthy state first, then the fallback a failure shows; its Retry
         # clears the error, as a host's handler would after reloading.
+        # `content` is escaped text, not HTML (unlike `loading_overlay`'s).
         "error_boundary": [
-            {"content": '<p style="margin:0">The chart rendered normally.</p>'},
+            {"content": "The chart rendered normally."},
             {
-                "content": '<p style="margin:0">The chart rendered normally.</p>',
+                "content": "The chart rendered normally.",
                 "error": "TimeoutError",
                 "fallback": "The chart could not load.",
                 "retry_event": "retry_load",
