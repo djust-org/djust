@@ -601,6 +601,9 @@ jobs:
   exposure-matrix:
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      # Route djust's logs to the server log so the matrix can check it.
+      DJUST_DEMO_LOG_CONSOLE: "1"
     steps:
       - uses: actions/checkout@v7
       - name: Set up Playwright server

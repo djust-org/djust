@@ -14,11 +14,14 @@ browser and the server expose:
 - the stored Django session rows, decoded;
 - the server log, when ``E5_SERVER_LOG`` points at it.
 
-The explicit view must leak none of ``E5_UNDECLARED_SENTINEL`` (an ordinary
-attribute), ``E5_PRIVATE_SENTINEL`` (an underscore attribute) and
-``E5_ERROR_SENTINEL`` (a DEBUG handler failure). The legacy twin is the
-harness control: under DEBUG its error frame carries ``E5_ERROR_SENTINEL``,
-proving the harness sees what it looks for.
+The explicit view must never leak ``E5_UNDECLARED_SENTINEL`` (an ordinary
+attribute) or ``E5_PRIVATE_SENTINEL`` (an underscore attribute), in either
+mode. ``E5_ERROR_SENTINEL`` (a handler failure) follows Django (ADR-038 D-a):
+under DEBUG the explicit view's error frame must carry it, in production it
+must reach no frame, page or log. Run the server with ``DJUST_DEMO_DEBUG=0``
+and this script with ``E5_DEBUG=0`` for the production contract. The legacy
+twin is the control in each mode: its DEBUG error frame, or its production
+log, carries the error sentinel.
 
 Standalone, like the other scripts here: exits 0 on success and non-zero with
 the list of failures. Environment:
@@ -27,7 +30,8 @@ the list of failures. Environment:
 - ``E5_SECOND`` (default ``http://localhost:8003``): a second process on the
   same database and SECRET_KEY, for cross-worker restore. Reported as not run
   when unreachable.
-- ``E5_SERVER_LOG``: the demo server's log file, checked for sentinels.
+- ``E5_SERVER_LOG``: the demo server's log file, checked for sentinels. Start
+  the server with ``DJUST_DEMO_LOG_CONSOLE=1`` so djust's logs reach it.
 - ``E5_DEMO_DIR`` (default ``examples/demo_project``): used to decode the
   session store through Django.
 """
@@ -45,7 +49,12 @@ SECOND = os.environ.get("E5_SECOND", "http://localhost:8003")
 SERVER_LOG = os.environ.get("E5_SERVER_LOG")
 DEMO_DIR = os.environ.get("E5_DEMO_DIR", "examples/demo_project")
 
-SENTINELS = ("E5_UNDECLARED_SENTINEL", "E5_PRIVATE_SENTINEL", "E5_ERROR_SENTINEL")
+# Never reach any destination, in either mode.
+SENTINELS = ("E5_UNDECLARED_SENTINEL", "E5_PRIVATE_SENTINEL")
+ERROR_SENTINEL = "E5_ERROR_SENTINEL"
+# The server's mode (E5_DEBUG=0 when it runs with DJUST_DEMO_DEBUG=0). Errors
+# follow Django (ADR-038 D-a): detail under DEBUG, value-free in production.
+DEBUG = os.environ.get("E5_DEBUG", "1") != "0"
 
 # Records every SSE event djust listens to, without replacing its listeners.
 SSE_CAPTURE = """
@@ -204,8 +213,10 @@ async def run_flow(browser, transport, policy, failures, notes):
     all_frames = "\n".join(await received())
     html = await page.content()
     if policy == "legacy":
-        # Harness control: legacy DEBUG error detail reaches the client.
-        if "E5_ERROR_SENTINEL" not in all_frames:
+        # Harness control: under DEBUG the legacy error frame carries the
+        # detail, proving the frame capture sees it (in production the log
+        # control below does the same).
+        if DEBUG and ERROR_SENTINEL not in all_frames:
             failures.append(f"{label}: control failed, legacy DEBUG error frame lacks the sentinel")
     else:
         for sentinel in SENTINELS:
@@ -213,6 +224,13 @@ async def run_flow(browser, transport, policy, failures, notes):
                 failures.append(f"{label}: {sentinel} in page HTML")
             if sentinel in all_frames:
                 failures.append(f"{label}: {sentinel} in received frames")
+        if DEBUG and ERROR_SENTINEL not in all_frames:
+            failures.append(f"{label}: DEBUG error frame lacks the Django-like detail (D-a)")
+        if not DEBUG:
+            if ERROR_SENTINEL in all_frames:
+                failures.append(f"{label}: production error frame carries the exception text")
+            if ERROR_SENTINEL in html:
+                failures.append(f"{label}: production page HTML carries the exception text")
 
         if transport == "websocket":
             # Reconnect: declared server state survives, nothing else does.
@@ -276,8 +294,15 @@ async def run_flow(browser, transport, policy, failures, notes):
             for sentinel in SENTINELS:
                 if sentinel in logged:
                     failures.append(f"{label}: {sentinel} in the server log")
+            if not DEBUG and ERROR_SENTINEL in logged:
+                failures.append(f"{label}: production log carries the exception text")
         else:
             notes.append(f"{label}: server log NOT CHECKED (E5_SERVER_LOG unset)")
+
+    if policy == "legacy" and not DEBUG and SERVER_LOG:
+        # Harness control for production mode: legacy logs the detail.
+        if ERROR_SENTINEL not in log_tail(start):
+            failures.append(f"{label}: control failed, legacy production log lacks the detail")
 
     await context.close()
 

@@ -8,8 +8,9 @@ the explicit policy, while the legacy twin shows the harness can see them.
 - ``E5_UNDECLARED_SENTINEL``: an ordinary attribute. Never context, never
   persisted, never sent.
 - ``E5_PRIVATE_SENTINEL``: an underscore attribute. Same.
-- ``E5_ERROR_SENTINEL``: raised by a handler under DEBUG. The explicit view's
-  error frame and log must not carry it; the legacy twin's DEBUG frame does.
+- ``E5_ERROR_SENTINEL``: raised by a handler. Errors follow Django (ADR-038
+  D-a): under DEBUG every view's error frame carries it; in production the
+  explicit view's frame and log do not.
 """
 
 from djust import LiveView
@@ -58,7 +59,7 @@ class ExposureMatrixView(LiveView):
 
     @event_handler()
     def boom(self):
-        raise ValueError("E5_ERROR_SENTINEL " + self.secret_note)
+        raise ValueError("E5_ERROR_SENTINEL")
 
 
 class LegacyExposureMatrixView(LiveView):
@@ -95,4 +96,4 @@ class LegacyExposureMatrixView(LiveView):
 
     @event_handler()
     def boom(self):
-        raise ValueError("E5_ERROR_SENTINEL " + self.secret_note)
+        raise ValueError("E5_ERROR_SENTINEL")
