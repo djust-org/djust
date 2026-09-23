@@ -72,7 +72,7 @@ impl RustRange {
         // Label
         if let Some(ref label) = self.label {
             html.push_str("\n    <label for=\"");
-            html.push_str(&self.id);
+            html.push_str(&html_escape(&self.id));
             html.push_str("\" class=\"form-label\">");
             html.push_str(&html_escape(label));
 
@@ -90,10 +90,10 @@ impl RustRange {
         html.push_str("\n    <input type=\"range\"");
         html.push_str("\n           class=\"form-range\"");
         html.push_str("\n           id=\"");
-        html.push_str(&self.id);
+        html.push_str(&html_escape(&self.id));
         html.push('"');
         html.push_str("\n           name=\"");
-        html.push_str(&self.name);
+        html.push_str(&html_escape(&self.name));
         html.push('"');
         html.push_str("\n           value=\"");
         html.push_str(&format_number(self.value));
@@ -325,5 +325,52 @@ mod tests {
         assert_eq!(format_number(0.5), "0.5");
         assert_eq!(format_number(100.0), "100");
         assert_eq!(format_number(0.0), "0");
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn id_and_name_are_html_escaped() {
+        let r = RustRange::new(
+            "n\" onmouseover=\"y".to_string(),
+            Some("i\"><img src=x>".to_string()),
+            Some("L".to_string()),
+            5.0,
+            0.0,
+            10.0,
+            1.0,
+            false,
+            None,
+            false,
+        );
+        let html = r.render();
+        assert!(!html.contains("n\" onmouseover"));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("name=\"n&quot; onmouseover=&quot;y\""));
+        assert!(html.contains("id=\"i&quot;&gt;&lt;img src=x&gt;\""));
+        assert!(html.contains("for=\"i&quot;&gt;&lt;img src=x&gt;\""));
+    }
+
+    #[test]
+    fn plain_id_output_unchanged() {
+        let r = RustRange::new(
+            "volume".to_string(),
+            None,
+            Some("Vol".to_string()),
+            5.0,
+            0.0,
+            10.0,
+            1.0,
+            false,
+            None,
+            false,
+        );
+        let html = r.render();
+        assert!(html.contains("<label for=\"volume\" class=\"form-label\">Vol</label>"));
+        assert!(html.contains("id=\"volume\""));
+        assert!(html.contains("name=\"volume\""));
     }
 }

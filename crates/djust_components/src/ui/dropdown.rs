@@ -8,7 +8,7 @@ A dropdown/select component with:
 - Disabled state
 */
 
-use crate::html::element;
+use crate::html::{element, html_escape};
 use crate::{Component, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
@@ -161,7 +161,7 @@ impl Dropdown {
                 .unwrap_or_else(|| "Select...".to_string())
         };
 
-        let button_html = dropdown_btn.child(&label).build();
+        let button_html = dropdown_btn.text(&label).build();
 
         // Dropdown menu
         let mut menu_items = Vec::new();
@@ -176,7 +176,7 @@ impl Dropdown {
                 .classes(item_classes)
                 .attr("href", "#")
                 .attr("data-value", &item.value)
-                .child(&item.label)
+                .text(&item.label)
                 .build();
             menu_items.push(item_html);
         }
@@ -264,7 +264,8 @@ impl Dropdown {
 
         let button_html = button
             .child(format!(
-                r#"{label}<svg class="w-4 h-4 ml-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>"#
+                r#"{}<svg class="w-4 h-4 ml-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>"#,
+                html_escape(&label)
             ))
             .build();
 
@@ -287,7 +288,7 @@ impl Dropdown {
                 .classes(item_classes)
                 .attr("href", "#")
                 .attr("data-value", &item.value)
-                .child(&item.label)
+                .text(&item.label)
                 .build();
             menu_items.push(item_html);
         }
@@ -359,7 +360,7 @@ impl Dropdown {
                 .unwrap_or_else(|| "Select...".to_string())
         };
 
-        let button_html = button.child(&label).build();
+        let button_html = button.text(&label).build();
 
         let mut menu_items = Vec::new();
         for item in &self.items {
@@ -373,7 +374,7 @@ impl Dropdown {
                 .classes(item_classes)
                 .attr("href", "#")
                 .attr("data-value", &item.value)
-                .child(&item.label)
+                .text(&item.label)
                 .build();
             menu_items.push(item_html);
         }
@@ -485,5 +486,50 @@ mod tests {
             .disabled(true);
         let html = dropdown.render(Framework::Bootstrap5).unwrap();
         assert!(html.contains("disabled"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    const FWS: [Framework; 3] = [Framework::Bootstrap5, Framework::Tailwind, Framework::Plain];
+
+    #[test]
+    fn labels_and_placeholder_are_html_escaped() {
+        for fw in FWS {
+            let html = Dropdown::new("d")
+                .placeholder("<b>pick</b>")
+                .item("<img src=x onerror=alert(1)>", "v\" onmouseover=\"y")
+                .render(fw)
+                .unwrap();
+            assert!(!html.contains("<img"), "{fw:?}");
+            assert!(!html.contains("<b>"), "{fw:?}");
+            assert!(!html.contains("v\" onmouseover"), "{fw:?}");
+            assert!(
+                html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{fw:?}"
+            );
+            assert!(html.contains("&lt;b&gt;pick&lt;/b&gt;"), "{fw:?}");
+
+            let selected = Dropdown::new("d")
+                .item("<img src=x>", "v")
+                .selected("v")
+                .render(fw)
+                .unwrap();
+            assert!(!selected.contains("<img"), "{fw:?}");
+        }
+    }
+
+    #[test]
+    fn plain_label_output_unchanged() {
+        let html = Dropdown::new("d")
+            .item("Option 1", "o1")
+            .render(Framework::Bootstrap5)
+            .unwrap();
+        assert!(
+            html.contains(r##"<a class="dropdown-item" href="#" data-value="o1">Option 1</a>"##)
+        );
+        assert!(html.contains(">Select...</button>"));
     }
 }

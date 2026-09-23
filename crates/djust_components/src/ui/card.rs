@@ -136,7 +136,7 @@ impl Card {
                 CardVariant::Default => vec!["card-header"],
             };
 
-            parts.push(element("div").classes(header_classes).child(header).build());
+            parts.push(element("div").classes(header_classes).text(header).build());
         }
 
         // Body
@@ -196,7 +196,7 @@ impl Card {
                 CardVariant::Dark => vec!["px-6", "py-4", "bg-gray-800", "text-white"],
             };
 
-            parts.push(element("div").classes(header_classes).child(header).build());
+            parts.push(element("div").classes(header_classes).text(header).build());
         }
 
         // Body
@@ -251,7 +251,7 @@ impl Card {
 
         // Header
         if let Some(ref header) = self.header {
-            parts.push(element("div").class("card-header").child(header).build());
+            parts.push(element("div").class("card-header").text(header).build());
         }
 
         // Body
@@ -342,5 +342,41 @@ mod tests {
 
         let html = card.render(Framework::Bootstrap5).unwrap();
         assert!(html.contains("border-primary"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    const FWS: [Framework; 3] = [Framework::Bootstrap5, Framework::Tailwind, Framework::Plain];
+
+    #[test]
+    fn header_is_html_escaped() {
+        for fw in FWS {
+            let html = Card::new("Body")
+                .header("<img src=x onerror=alert(1)>")
+                .render(fw)
+                .unwrap();
+            assert!(!html.contains("<img"), "{fw:?}");
+            assert!(
+                html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{fw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_and_footer_keep_markup() {
+        for fw in FWS {
+            let html = Card::new("<b>ok</b>")
+                .header("Head")
+                .footer("<i>f</i>")
+                .render(fw)
+                .unwrap();
+            assert!(html.contains("<b>ok</b>"), "{fw:?}");
+            assert!(html.contains("<i>f</i>"), "{fw:?}");
+            assert!(html.contains(">Head</div>"), "{fw:?}");
+        }
     }
 }
