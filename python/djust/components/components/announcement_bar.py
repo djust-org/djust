@@ -1,6 +1,7 @@
 """AnnouncementBar component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -49,7 +50,7 @@ class AnnouncementBar(Component):
             close_html = f'<button class="dj-announcement-bar__close" dj-click="{e_dismiss}">&times;</button>'
         return (
             f'<div class="{cls}" role="banner">'
-            f'<div class="dj-announcement-bar__content">{self.content}</div>'
+            f'<div class="dj-announcement-bar__content">{conditional_escape(self.content)}</div>'
             f"{close_html}"
             f"</div>"
         )

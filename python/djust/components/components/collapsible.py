@@ -1,6 +1,7 @@
 """Collapsible component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -51,6 +52,6 @@ class Collapsible(Component):
             f'<span class="collapsible-label">{e_trigger}</span>'
             f'<span class="collapsible-icon">&#9662;</span>'
             f"</button>"
-            f'<div class="collapsible-content">{self.content}</div>'
+            f'<div class="collapsible-content">{conditional_escape(self.content)}</div>'
             f"</div>"
         )

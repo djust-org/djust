@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class ActivityFeed(Component):
@@ -84,7 +85,7 @@ class ActivityFeed(Component):
             action = html.escape(str(event.get("action", "")))
             target = html.escape(str(event.get("target", "")))
             time = html.escape(str(event.get("time", "")))
-            avatar_src = html.escape(str(event.get("avatar", "")))
+            avatar_src = url_attr(event.get("avatar", ""), image=True)
             icon = html.escape(str(event.get("icon", "")))
 
             initials = (

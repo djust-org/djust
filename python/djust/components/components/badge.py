@@ -3,6 +3,7 @@
 import html
 from typing import Any, Dict, Optional
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -160,11 +161,11 @@ class Badge(Component):
 
         # Add variant class
         if self.variant != "default":
-            classes.append(f"dj-badge-{self.variant}")
+            classes.append(f"dj-badge-{conditional_escape(self.variant)}")
 
         # Add size class
         if self.size != "md":
-            classes.append(f"dj-badge-{self.size}")
+            classes.append(f"dj-badge-{conditional_escape(self.size)}")
 
         # Add custom classes
         if self.custom_class:

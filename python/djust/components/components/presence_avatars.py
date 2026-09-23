@@ -1,6 +1,7 @@
 """Presence Avatars component for stacked online user avatars with overflow count."""
 
 import html
+from djust.components.utils import url_attr
 from typing import Any, List, Optional, Union
 
 from djust import Component
@@ -82,7 +83,7 @@ class PresenceAvatars(Component):
                 status = "online"
 
             e_name = html.escape(str(name))
-            e_src = html.escape(str(src))
+            e_src = url_attr(src, image=True) if src else ""
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = html.escape("".join(w[0].upper() for w in str(name).split()[:2] if w)) or "?"
             z = len(visible) - i

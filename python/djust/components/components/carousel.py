@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import url_attr
 from typing import Any, Optional
 
 
@@ -55,11 +56,11 @@ class Carousel(Component):
         dots = ""
         for i, img in enumerate(images):
             if isinstance(img, dict):
-                src = html.escape(str(img.get("src", "")))
+                src = url_attr(img.get("src", ""), image=True)
                 alt = html.escape(str(img.get("alt", f"Slide {i + 1}")))
                 caption = img.get("caption", "")
             else:
-                src = html.escape(str(img))
+                src = url_attr(img, image=True)
                 alt = f"Slide {i + 1}"
                 caption = ""
             active_cls = " carousel-slide-active" if i == self.active else ""

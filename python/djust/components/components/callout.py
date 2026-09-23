@@ -1,6 +1,7 @@
 """Callout component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -56,6 +57,6 @@ class Callout(Component):
             f"{icon_html}"
             f'<div class="dj-callout__body">'
             f"{title_html}"
-            f'<div class="dj-callout__content">{self.content}</div>'
+            f'<div class="dj-callout__content">{conditional_escape(self.content)}</div>'
             f"</div></div>"
         )

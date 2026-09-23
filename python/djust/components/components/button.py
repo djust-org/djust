@@ -3,6 +3,7 @@
 import html
 from typing import Any, Dict, Optional
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -131,11 +132,11 @@ class Button(Component):
 
         # Add variant class
         if self.variant != "primary":
-            classes.append(f"dj-btn-{self.variant}")
+            classes.append(f"dj-btn-{conditional_escape(self.variant)}")
 
         # Add size class
         if self.size != "md":
-            classes.append(f"dj-btn-{self.size}")
+            classes.append(f"dj-btn-{conditional_escape(self.size)}")
 
         # Add state classes
         if self.loading:
@@ -148,7 +149,7 @@ class Button(Component):
         class_str = " ".join(classes)
 
         # Build attributes
-        attrs = [f'class="{class_str}"', f'type="{self.type}"']
+        attrs = [f'class="{class_str}"', f'type="{conditional_escape(self.type)}"']
 
         # Disable button if disabled or loading
         if self.disabled or self.loading:
@@ -177,14 +178,18 @@ class Button(Component):
 
         # Icon (left position)
         if self.icon and self.icon_position == "left":
-            content_parts.append(f'<span class="dj-btn-icon dj-btn-icon-left">{self.icon}</span>')
+            content_parts.append(
+                f'<span class="dj-btn-icon dj-btn-icon-left">{conditional_escape(self.icon)}</span>'
+            )
 
         # Label
         content_parts.append(f'<span class="dj-btn-label">{html.escape(self.label)}</span>')
 
         # Icon (right position)
         if self.icon and self.icon_position == "right":
-            content_parts.append(f'<span class="dj-btn-icon dj-btn-icon-right">{self.icon}</span>')
+            content_parts.append(
+                f'<span class="dj-btn-icon dj-btn-icon-right">{conditional_escape(self.icon)}</span>'
+            )
 
         content = "".join(content_parts)
 

@@ -1,6 +1,7 @@
 """Notification Badge component for count indicators on icons/buttons."""
 
 import html
+from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any
@@ -71,7 +72,10 @@ class NotificationBadge(Component):
 
     def _render_custom(self) -> str:
         """Render the notification badge HTML."""
-        classes = ["dj-notification-badge", f"dj-notification-badge--{self.size}"]
+        classes = [
+            "dj-notification-badge",
+            f"dj-notification-badge--{conditional_escape(self.size)}",
+        ]
 
         if self.pulse:
             classes.append("dj-notification-badge--pulse")

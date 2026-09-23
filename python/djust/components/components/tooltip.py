@@ -1,6 +1,7 @@
 """Tooltip component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -41,7 +42,7 @@ class Tooltip(Component):
         e_text = html.escape(self.text)
         return (
             f'<span class="{cls}">'
-            f"{self.content}"
+            f"{conditional_escape(self.content)}"
             f'<span class="dj-tooltip__text">{e_text}</span>'
             f"</span>"
         )
