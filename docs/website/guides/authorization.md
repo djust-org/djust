@@ -41,9 +41,9 @@ djust calls the layers in order. The first denial wins; subsequent layers don't 
 
 | Layer | What | When |
 |---|---|---|
-| 1. `login_required` | Is user authenticated? | At WS connect |
-| 2. `permission_required` | Does user have Django role permission? | At WS connect |
-| 3. `check_permissions(request)` | Custom hook for arbitrary logic (not object-aware) | At WS connect |
+| 1. `login_required` | Is user authenticated? | Before `mount()` (HTTP GET and WS mount) |
+| 2. `permission_required` | Does user have Django role permission? | Before `mount()` (HTTP GET and WS mount) |
+| 3. `check_permissions(request)` | Custom hook for arbitrary logic (not object-aware) | Before `mount()` (HTTP GET and WS mount) |
 | 4. `has_object_permission(request, obj)` | Per-object access (NEW in v0.9.5) | At mount AND every event |
 
 Layers 1-3 run **before** `mount()` (in `check_view_auth`). Layer 4 runs **after** `mount()` because `get_object()` typically reads a URL kwarg the user populates inside `mount()` (e.g., `self.document_id = document_id`).
@@ -86,12 +86,12 @@ Both flows produce the same external behavior.
 
 ## The cache: `self._object`
 
-After a successful `has_object_permission` check, the framework caches the result of `get_object()` as `self._object`. Reuse it from event handlers and `get_context_data` rather than re-querying:
+After each successful `has_object_permission` check, the framework stores the result of `get_object()` as `self._object`. Because the check runs at mount and before every event, `self._object` is always the object that was just fetched and verified. Reuse it from event handlers and `get_context_data` rather than re-querying:
 
 ```python
 @event_handler()
 def add_comment(self, body=""):
-    # Don't re-fetch; use the cached, permission-verified object.
+    # Don't re-fetch; use the permission-verified object.
     Comment.objects.create(document=self._object, body=body)
 ```
 
@@ -99,19 +99,18 @@ def add_comment(self, body=""):
 
 ## Cache invalidation
 
-If a handler mutates ownership-determining state (e.g., reassigning the FK that determines access), call `self._invalidate_object_cache()` so the next event re-fetches:
+Access is re-checked with a fresh `get_object()` on every event, so ownership changes take effect on the next event automatically; a stale `self._object` never grants access.
+
+`self._invalidate_object_cache()` only clears `self._object` to `None`. The render that follows the handler then sees `None`, not the old object. If the same turn's render needs the updated object, assign it yourself:
 
 ```python
 @event_handler()
 def reassign_owner(self, owner_id: int = 0):
     self._object.owner_id = owner_id
     self._object.save()
-    self._invalidate_object_cache()  # next event re-runs get_object()
+    # Refresh for this turn's render; the next event re-fetches anyway.
+    self._object = Document.objects.get(pk=self.document_id)
 ```
-
-Without this, a cached `self._object` would let the formerly-authorized user retain access until the WS reconnects.
-
-Note: `_invalidate_object_cache()` only affects FUTURE events. The render that includes the mutation (the response that ships immediately after the handler returns) still sees the OLD `self._object` because the mutation happened mid-handler. If you need the next render to reflect the new ownership, set `self._object = self._object` after `_invalidate_object_cache()` to force a fresh fetch — or just refresh the FK directly without invalidation.
 
 ## Wire-protocol error frames
 
@@ -203,7 +202,7 @@ class DocumentDetailView(LiveView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["document"] = self._object  # cached by the framework
+        ctx["document"] = self._object  # set by the framework after each check
         return ctx
 
     @event_handler()
@@ -247,45 +246,64 @@ class DocumentDetailView(LiveView):
 The lifecycle is opt-in: views that don't override `get_object()` see ZERO overhead — `_has_custom_get_object()` short-circuits before any work. For overriding views:
 
 - **Mount**: one `get_object()` call (your typical FK lookup) + one `has_object_permission()` call.
-- **Per event**: one cached attribute read (`self._object`) + one `has_object_permission()` call. NO extra DB query when the cache is warm.
-- **After `_invalidate_object_cache()`**: next event re-runs `get_object()` (one DB query) + `has_object_permission()`.
+- **Per event**: one `get_object()` call (typically one DB query) + one `has_object_permission()` call. `self._object` is refreshed on each successful check, so handlers can use it without re-querying.
 
-Keep `get_object()` minimal — just the FK lookup. Expensive I/O in this method becomes per-mount overhead.
+Keep `get_object()` minimal — just the FK lookup. Expensive I/O in this method becomes per-mount and per-event overhead.
 
 ## Testing the per-event check (the WS-communicator pattern)
 
 Unit tests of `check_object_permission(view, request)` cover mount-time enforcement. For the per-event re-execution path, tests must connect to the WS as an authenticated user and exchange real frames:
 
+Illustrative sketch (not run by the test suite):
+
 ```python
 # Replace `application`, `user_a`, `user_b`, `document` with your test
 # fixtures. `application` is your project's ASGI application (typically
-# from your project's asgi.py or testing harness).
+# from your project's asgi.py or testing harness), and "/ws/live/" is the
+# path your routing serves the djust consumer on.
 from channels.testing import WebsocketCommunicator
 import pytest
+
+
+async def drain(communicator):
+    """Discard queued frames (connect ack, mount response, ...)."""
+    while not await communicator.receive_nothing(timeout=0.2):
+        await communicator.receive_json_from()
+
 
 @pytest.mark.asyncio
 async def test_per_event_denies_after_ownership_change(user_a, user_b, document, application):
     """Per-event object-permission re-runs after the owner FK changes
     mid-session, denying the formerly-authorized user."""
     # Connect as user A who owns document 1.
-    communicator = WebsocketCommunicator(application, "/ws/documents/1/")
+    communicator = WebsocketCommunicator(application, "/ws/live/")
     communicator.scope["user"] = user_a
     connected, _ = await communicator.connect()
     assert connected
 
     # Mount succeeds (user A owns the doc).
-    await communicator.send_json_to({"type": "mount", "kwargs": {"document_id": 1}})
+    await communicator.send_json_to({
+        "type": "mount",
+        "view": "myapp.views.DocumentDetailView",
+        "params": {"document_id": 1},
+    })
+    await drain(communicator)
 
     # Reassign ownership to user B mid-session.
     document.owner_id = user_b.pk
     document.save()
 
     # User A sends a write event.
-    await communicator.send_json_to({"type": "event", "name": "add_comment", "args": {"body": "x"}})
+    await communicator.send_json_to({
+        "type": "event",
+        "event": "add_comment",
+        "params": {"body": "x"},
+    })
 
     # Per-event check fires; denial frame returned, WS stays open.
     response = await communicator.receive_json_from()
-    assert response == {"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}
+    assert response["type"] == "error"
+    assert response["code"] == "permission_denied"
 ```
 
 This pattern (real WS communicator + state mutation between mount and event) is the empirical proof that the per-event check fires correctly. Use it for any LiveView feature whose contract depends on between-frame state. (#1377, v0.9.5-1c retro.)
