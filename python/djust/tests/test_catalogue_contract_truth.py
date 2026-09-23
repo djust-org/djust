@@ -296,3 +296,13 @@ def test_an_accent_background_always_carries_the_accent_foreground():
                 if "--accent-foreground" not in body:
                     offenders.append(f"{css.name}: {block.strip()[:90]}")
     assert not offenders, "\n".join(offenders)
+
+
+def test_a_descriptor_preview_starts_in_the_state_its_example_documents():
+    from djust.theming.gallery.live_views import render_preview_examples
+
+    view = _detail("accordion")
+    state = view.preview.state
+    assert state.values.get("active") == "1"
+    html = render_preview_examples("accordion", "python", state.examples, state.values)[0]["html"]
+    assert "dj-accordion-item--open" in html

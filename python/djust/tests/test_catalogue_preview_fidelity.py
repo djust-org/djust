@@ -534,8 +534,13 @@ class TestPreviewOwnsTheDescriptorState:
     def test_the_descriptor_fields_seed_the_preview_values(self):
         from djust.components.descriptors import Accordion
 
-        values = self._view("accordion").preview.state.values
-        assert values == dict(Accordion.State())
+        view = self._view("accordion")
+        values = view.preview.state.values
+        # The descriptor's fields, each at the example's value where the
+        # example documents one (it opens item "1"), else the State default.
+        example = view.preview.state.examples[0]
+        assert set(values) == set(dict(Accordion.State()))
+        assert values == {k: example.get(k, v) for k, v in dict(Accordion.State()).items()}
         assert "active" in values
 
     def test_a_descriptor_event_moves_the_values_and_the_render(self):

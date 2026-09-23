@@ -863,6 +863,12 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # them from `examples[0]` would make the whole page show it repeated.
         descriptor_cls = _INTERACTIVE.get(component_name)
         values = dict(descriptor_cls.State()) if descriptor_cls is not None else {}
+        # ...but a descriptor default must not override what the example
+        # itself documents: `accordion`'s example opens item "1", and the
+        # State's `active=""` rendered it closed while its Arguments read
+        # `active=''` — the page contradicting the registry's example.
+        if values and examples:
+            values = {key: examples[0].get(key, value) for key, value in values.items()}
         preview = self.preview
         preview.state.component_name = component_name
         preview.state.component_type = component_type
