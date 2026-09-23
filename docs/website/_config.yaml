@@ -87,17 +87,17 @@ navigation:
         level: intermediate
       - title: Tutorial
         slug: state-tutorial
-        file: ../../state-management/STATE_MANAGEMENT_TUTORIAL.md
+        file: ../state-management/STATE_MANAGEMENT_TUTORIAL.md
         order: 2
         level: intermediate
       - title: Patterns
         slug: state-patterns
-        file: ../../state-management/STATE_MANAGEMENT_PATTERNS.md
+        file: ../state-management/STATE_MANAGEMENT_PATTERNS.md
         order: 3
         level: intermediate
       - title: Examples
         slug: state-examples
-        file: ../../state-management/STATE_MANAGEMENT_EXAMPLES.md
+        file: ../state-management/STATE_MANAGEMENT_EXAMPLES.md
         order: 4
         level: intermediate
 
