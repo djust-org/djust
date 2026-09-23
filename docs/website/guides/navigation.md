@@ -245,7 +245,7 @@ LIVEVIEW_CONFIG = {"auto_navigate": False}
 > On djust **1.0.x** this was opt-in (`auto_navigate` defaulted to `False`); set
 > it to `True` there to get the same behavior.
 
-`{% djust_client_config %}` emits a small flag and the
+While it is on, `{% djust_client_config %}` emits a small flag and the
 client intercepts in-app navigations automatically. It is deliberately
 conservative — a link **falls through to a normal browser navigation** (no
 interception) whenever any of these hold:
@@ -269,9 +269,10 @@ Opt a single link out with `data-no-navigate`:
 <a href="/reports/" data-no-navigate>Force a full reload</a>
 ```
 
-`auto_navigate` is opt-in and should soak in your app before you rely on it; it
-changes the behavior of *every* in-app link, so the opt-out matrix above is the
-contract. `dj-navigate` remains the explicit, always-on way to mark a single SPA link.
+`auto_navigate` is on by default and changes the behavior of *every* in-app
+link, so the fall-through list above is the contract. Opt out with
+`LIVEVIEW_CONFIG = {"auto_navigate": False}`. `dj-navigate` remains the
+explicit, per-link form.
 
 ## Example: Search with URL State
 

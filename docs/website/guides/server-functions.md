@@ -85,8 +85,9 @@ def my_fn(self, arg1: int = 0, **kwargs) -> dict:
     ...
 ```
 
-- **No arguments today.** (`@server_function` and `@server_function()`
-  are both accepted for consistency with Python decorator conventions.)
+- **Optional arguments:** `description=` (overrides the docstring) and
+  `coerce_types=True`. Both `@server_function` and
+  `@server_function(...)` are accepted.
 - The method gets a `_djust_decorators["server_function"]` metadata
   entry — this is what the dispatcher looks up.
 - **Dual-decoration raises `TypeError` at import time.** Stacking
@@ -168,10 +169,9 @@ which echoes `expected` / `provided` / `type_errors`).
 | `unknown_view`           | 404    | `view_slug` doesn't match any registered `api_name`                   |
 | `unknown_function`       | 404    | Method `function_name` doesn't exist on the view                      |
 | `not_a_server_function`  | 404    | Method exists but wasn't decorated with `@server_function`            |
-| `unauthenticated`        | 401    | `request.user` is anonymous (session cookie missing / expired)        |
-| `login_required`         | 401    | View-level auth (`login_required` / view `@permission_required`) denied |
+| `login_required`         | 401    | The view requires login (`login_required` / view `permission_required`) and the user is anonymous |
 | `csrf_failed`            | 403    | Django CSRF middleware rejected the request                           |
-| `permission_denied`      | 403    | Handler-level `@permission_required` denied, OR `PermissionDenied` raised inside the function |
+| `permission_denied`      | 403    | View-level `permission_required` denied for a signed-in user, handler-level `@permission_required` denied, OR `PermissionDenied` raised in `mount()` or inside the function |
 | `invalid_json`           | 400    | Body isn't valid UTF-8 JSON or isn't a top-level object               |
 | `invalid_body`           | 400    | Body is valid JSON but doesn't match the `{"params": {...}}` shape   |
 | `invalid_params`         | 400    | Missing required params, extra params, or type-coercion failed       |
@@ -183,8 +183,12 @@ which echoes `expected` / `provided` / `type_errors`).
 
 ## Security
 
-- **Authenticated by default.** Anonymous callers get 401 immediately —
-  there is no way to expose a server function to anonymous users.
+- **Server functions follow the view's own auth — they are NOT
+  authenticated by default.** If the view sets neither `login_required`
+  nor `permission_required`, anonymous callers can invoke its server
+  functions. To require authentication, set `login_required = True` or
+  `permission_required` on the view (example below the list).
+  Handler-level `@permission_required` also denies anonymous callers.
 - **CSRF always required.** No auth-class CSRF-exempt opt-out like
   ADR-008 offers for S2S callers. Server functions are same-origin,
   period.
@@ -193,10 +197,25 @@ which echoes `expected` / `provided` / `type_errors`).
   `check_view_auth()` before the function is dispatched.
 - **Handler-level `@permission_required` is honored** via
   `check_handler_permission()`. Stack it below `@server_function`.
-- **Rate-limit bucket is shared with ADR-008 dispatch.** The process-
-  level `_rate_buckets` `OrderedDict` is the same structure; the key
-  is `(caller, function_name)` where `caller` is `user:<pk>` when
-  authenticated. The same LRU cap and eviction rules apply.
+- **One `@rate_limit` budget per caller per handler,** shared across
+  WS, SSE and the HTTP API. The caller key is `user:<pk>`, then
+  `session:<key>`, then `ip:<client ip>`.
+
+Requiring authentication for a view's server functions:
+
+```python
+from djust import LiveView
+from djust.decorators import server_function
+
+
+class InboxView(LiveView):
+    login_required = True                     # anonymous callers → 401
+    # or: permission_required = "inbox.view_message"
+
+    @server_function
+    def unread_count(self, **kwargs) -> int:
+        return Message.objects.filter(to=self.request.user, read=False).count()
+```
 
 ---
 
@@ -228,8 +247,8 @@ work out of the box:
 - `datetime.date`, `datetime.datetime`, `datetime.time` — ISO 8601
 - `decimal.Decimal` — as a string (preserves precision)
 - `uuid.UUID` — as a string
-- Django `Model` instances implementing `__json__()` (convention —
-  DjangoJSONEncoder picks it up)
+
+Model instances are not serializable — return a dict.
 
 Anything that isn't serializable → 500 `function_error`. The
 `TypeError` is logged server-side with the view slug + function name;
@@ -269,8 +288,9 @@ def get_product(self, id: int) -> dict:
   `@event_handler` — you want the re-render.
 - **External / AI-agent callers.** No OpenAPI schema is generated. Use
   `@event_handler(expose_api=True)` for those.
-- **Unauthenticated public endpoints.** Server functions require a
-  session cookie. Use a Django view.
+- **Public endpoints for non-browser callers.** Server functions need
+  a CSRF token, so they only suit same-origin browser calls. Use a
+  Django view or `@event_handler(expose_api=True)`.
 
 ---
 
@@ -283,7 +303,7 @@ def get_product(self, id: int) -> dict:
 | Re-render           | No                     | Yes (VDOM diff)       | Yes (VDOM diff + assigns diff)    |
 | Response envelope   | `{"result": ...}`      | Patches over the wire | `{"result": ..., "assigns": {...}}` |
 | OpenAPI             | No                     | No                    | Yes                               |
-| Anonymous callers   | No (401)               | No (WS auth)          | Configurable via auth class       |
+| Anonymous callers   | Only if the view allows them (`login_required` / `permission_required` → 401) | Only if the view allows them | Configurable via auth class       |
 | CSRF                | Required               | WS origin check       | Configurable (auth class)         |
 | Batching            | No (one call per fetch) | No                   | No                                |
 | `api_response` / `serialize=` hooks | No       | N/A                   | Yes                               |
@@ -312,7 +332,7 @@ The tag emits `<meta name="djust-api-prefix" content="...">`. The
 content is resolved via Django's `reverse()`, so it honors
 `FORCE_SCRIPT_NAME` **and** any custom `api_patterns(prefix=...)` mount.
 
-Three rules apply, each with an asserting test (Action Tracker #124):
+These rules apply, each with an asserting test (Action Tracker #124):
 
 - **Default-mounted deployment** — the tag emits `content="/djust/api/"`.
   (`test_tag_emits_meta_with_default_prefix`)

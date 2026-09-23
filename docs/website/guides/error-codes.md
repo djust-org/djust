@@ -9,7 +9,7 @@ description: "Every diagnostic code djust emits, with its cause and fix."
 
 # Error Code Reference
 
-djust uses structured error codes to help you diagnose problems quickly. This guide covers every error code, what causes it, and how to fix it.
+djust uses structured error codes to help you diagnose problems quickly. This guide covers every diagnostic code djust emits as of 1.2.0rc10, what causes it, and how to fix it.
 
 ---
 
@@ -17,12 +17,17 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 
 | Prefix | Category | When Checked |
 |--------|----------|--------------|
-| C0xx | Configuration | `manage.py check --tag djust` (startup) |
+| C0xx, C3xx–C5xx | Configuration (C3xx: VDOM cache, C4xx: Hot View Replacement, C5xx: time travel) | `manage.py check --tag djust` (startup) |
 | V0xx | Validation | `manage.py check --tag djust` (startup) |
 | S0xx | Security | `manage.py check --tag djust` (startup) |
 | T0xx | Templates | `manage.py check --tag djust` (startup) |
 | Q0xx | Code Quality | `manage.py check --tag djust` (startup) |
 | A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
+| D0xx | Database notifications | `manage.py check --tag djust` (startup) |
+| U0xx | Update notice | `manage.py check --tag djust` (startup, DEBUG only) |
+| Y0xx | Accessibility | `manage.py check --tag djust` (startup) |
+| `djust.audio.*` | Audio | `manage.py check --tag djust` (startup) |
+| `djust_theming.*` | Theming | `manage.py check` (startup, `compatibility` tag) |
 | P0xx | Permissions Document | `manage.py djust_audit --permissions permissions.yaml` |
 | L0xx | Live Runtime Probe | `manage.py djust_audit --live <url>` |
 | X0xx | AST Anti-Pattern Scanner | `manage.py djust_audit --ast` |
@@ -100,13 +105,13 @@ CHANNEL_LAYERS = {
 
 ### C003: daphne ordering in INSTALLED_APPS
 
-**Severity**: Warning (wrong order) / Info (missing)
+**Severity**: Warning (wrong order) / Info (no ASGI server installed)
 
-**What causes it**: `daphne` is listed after `django.contrib.staticfiles` in `INSTALLED_APPS`, or is missing entirely.
+**What causes it**: Either `daphne` is listed after `django.contrib.staticfiles` in `INSTALLED_APPS` (Warning), or `daphne` is not in `INSTALLED_APPS` and none of daphne, uvicorn or hypercorn is importable (Info: "No ASGI server detected (daphne, uvicorn, or hypercorn)."). Projects that use uvicorn or hypercorn without daphne are not flagged.
 
-**What you see**: `manage.py runserver` starts the WSGI server instead of the ASGI server, so WebSockets do not work in development.
+**What you see**: With the wrong order, `manage.py runserver` starts the WSGI server instead of the ASGI server, so WebSockets do not work in development.
 
-**Fix**:
+**Fix**: For the Info case, install an ASGI server; `pip install 'uvicorn[standard]'` is recommended. For the ordering case:
 
 ```python
 # settings.py
@@ -196,7 +201,7 @@ tailwindcss -i static/css/input.css -o static/css/output.css --minify
 python manage.py djust_setup_css tailwind
 ```
 
-In development, djust falls back to the Tailwind CDN automatically.
+In development, pages render without Tailwind utilities until you compile the CSS; `djust_setup_css tailwind --watch` keeps it rebuilt as you edit.
 
 ---
 
@@ -209,6 +214,116 @@ In development, djust falls back to the Tailwind CDN automatically.
 **What you see**: Double-loading of client JavaScript, which can cause race conditions and duplicate WebSocket connections.
 
 **Fix**: Remove the manual `<script>` tag. djust handles script injection automatically.
+
+---
+
+### C013: Stale collectstatic copy of client.min.js
+
+**Severity**: Warning
+
+**What causes it**: `STATIC_ROOT` is set and `STATIC_ROOT/djust/client.min.js` exists, but its content differs from the copy bundled with the installed djust package. Message: "Stale collectstatic copy of client.min.js detected at ... The wheel-bundled copy is different — your browser will load outdated client code."
+
+**Fix**: Run `python manage.py collectstatic --clear --noinput`, then hard-reload the browser. If you serve `client.min.js` from a CDN or a custom build, suppress with `DJUST_CONFIG = {"suppress_checks": ["C013"]}`.
+
+---
+
+### C014: django-tenants under ASGI without TENANT_LIMIT_SET_CALLS
+
+**Severity**: Warning
+
+**What causes it**: django-tenants is configured (`django_tenants` in `INSTALLED_APPS` or `TENANT_MODEL` set), `ASGI_APPLICATION` is set, and `TENANT_LIMIT_SET_CALLS` is unset or `False`. Every WebSocket event then emits a redundant `SET search_path`, which can exhaust the Postgres connection pool under LiveView load. The message also notes that django-tenants is deprecated as a multi-tenancy strategy for djust apps.
+
+**Fix**: Migrate to djust's built-in row-level multi-tenancy (`djust.tenants`); see [Multi-Tenant](multi-tenant.md) and [Migrating from django-tenants](migrating-from-django-tenants.md). As a stopgap, set `TENANT_LIMIT_SET_CALLS = True`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C014"]}`.
+
+---
+
+### C015: Invalid or unknown DJUST_CONFIG['extensions'] adapter
+
+**Severity**: Error
+
+**What causes it**: `DJUST_CONFIG['extensions']` is not a list ("DJUST_CONFIG['extensions'] must be a list of adapter names, got ..."), or it names an adapter djust doesn't know ("DJUST_CONFIG['extensions'] lists unknown adapter '...'. It will be ignored -- no script is injected and the adapter's hook never mounts.").
+
+**Fix**: Use a list of known adapter names, e.g. `DJUST_CONFIG = {"extensions": ["chart"]}`. The check's hint lists the available adapters.
+
+---
+
+### C016: TEMPLATES backend order
+
+**Severity**: Warning
+
+**What causes it**: Either a `DjangoTemplates` backend is listed before `DjustTemplateBackend` ("every template the Django engine can find is rendered by Django and never reaches djust"), or there is a `DjustTemplateBackend` entry but no `DjangoTemplates` entry after it ("the admin / admindocs templates cannot render").
+
+**Fix**: Put the `DjustTemplateBackend` entry first, and add a `django.template.backends.django.DjangoTemplates` entry after it as the fallback for admin and contrib templates (the shape `djust new --with-db` emits). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C016"]}`.
+
+---
+
+### C301: Invalid VDOM cache TTL
+
+**Severity**: Error
+
+**What causes it**: `DJUST_VDOM_CACHE_TTL_SECONDS` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_ttl_seconds"]`) is not a positive integer. Message: "DJUST_VDOM_CACHE_TTL_SECONDS must be a positive integer." A TTL <= 0 disables expiry, so the service worker could serve indefinitely stale HTML on back-navigation.
+
+**Fix**: Set a positive number of seconds (the default is 1800).
+
+---
+
+### C302: Invalid VDOM cache size
+
+**Severity**: Error
+
+**What causes it**: `DJUST_VDOM_CACHE_MAX_ENTRIES` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_max_entries"]`) is below 1. Message: "DJUST_VDOM_CACHE_MAX_ENTRIES must be >= 1." A max of 0 evicts every entry on insertion and silently disables the cache.
+
+**Fix**: Set it to 1 or more (the default is 50).
+
+---
+
+### C303: VDOM cache disabled
+
+**Severity**: Info
+
+**What causes it**: `DJUST_VDOM_CACHE_ENABLED` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_enabled"]`) is `False`. Message: "DJUST_VDOM_CACHE_ENABLED is False; VDOM cache disabled." Back-navigation falls through to a fresh mount and render instead of an instant paint.
+
+**Fix**: Nothing is broken. Re-enable the cache, or suppress with `DJUST_CONFIG = {"suppress_checks": ["C303"]}`.
+
+---
+
+### C304: State snapshot with PII-like attribute names
+
+**Severity**: Warning
+
+**What causes it**: A LiveView sets `enable_state_snapshot = True` and declares public class attributes or annotations whose names look sensitive (matching `password`, `token`, `secret`, `api_key`, `pii`, `ssn`, `credit_card`, `bearer`, `private_key`, `auth_header`, `sensitive` or `credential`). Message: "<view>: enable_state_snapshot=True with PII-like attribute names: ...". State snapshots are cached client-side by the service worker, so these values would be stored in browser cache storage.
+
+**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view.
+
+---
+
+### C401: Hot View Replacement without watchdog
+
+**Severity**: Warning (DEBUG only)
+
+**What causes it**: Hot View Replacement and hot reload are enabled (the defaults), but the `watchdog` package is not installed. Message: "Hot View Replacement is enabled but watchdog is not installed." Code changes won't hot-swap live view instances.
+
+**Fix**: `pip install watchdog`, or disable HVR. See [Hot View Replacement](hot-view-replacement.md).
+
+---
+
+### C501: Time-travel debugging enabled globally
+
+**Severity**: Info (DEBUG only)
+
+**What causes it**: `LIVEVIEW_CONFIG['time_travel_enabled']` is `True`. Message: "Time-travel debugging is enabled globally (LIVEVIEW_CONFIG['time_travel_enabled']=True)." This is a discoverability notice; individual views still need `time_travel_enabled = True` to allocate a buffer.
+
+**Fix**: None needed. See [Time-Travel Debugging](time-travel-debugging.md).
+
+---
+
+### C502: Invalid time_travel_max_events
+
+**Severity**: Error (DEBUG only)
+
+**What causes it**: `time_travel_max_events` in the djust config is not a positive integer. Message: "time_travel_max_events must be a positive integer (got ...)." The time-travel ring buffer raises `ValueError` on a non-positive cap, which breaks `LiveView.__init__` for any view with `time_travel_enabled = True`.
+
+**Fix**: Set a positive integer (the default is 100).
 
 ---
 
@@ -231,7 +346,7 @@ class MyView(LiveView):
 
 ```python
 class BaseLiveView(LiveView):
-    abstract = True   # skips V001/V005 for this class (not inherited)
+    abstract = True   # skips all per-class V0xx/Q0xx checks for this class (not inherited)
     login_required = True
 ```
 
@@ -332,11 +447,11 @@ LIVEVIEW_ALLOWED_MODULES = [
 
 Or remove `LIVEVIEW_ALLOWED_MODULES` entirely to allow all modules.
 
-**Abstract base classes**: mark abstract base views with `abstract = True` to skip V005 for that specific class:
+**Abstract base classes**: mark abstract base views with `abstract = True` to skip V005 (and every other per-class V0xx/Q0xx check) for that specific class:
 
 ```python
 class BaseLiveView(LiveView):
-    abstract = True   # skips V001/V005 for this class
+    abstract = True   # skips all per-class V0xx/Q0xx checks for this class
 ```
 
 **Global suppression**: `DJUST_CONFIG = {"suppress_checks": ["V005"]}` (honored as of #1604).
@@ -431,6 +546,66 @@ class MyView(LiveView):
 V008 is broader than V006 and will flag any custom class instantiation, not just service-like names. This helps catch subtle serialization bugs early.
 
 **Related**: [Working with External Services](services.md)
+
+---
+
+### V009: Invalid on_mount hooks
+
+**Severity**: Warning
+
+**What causes it**: A LiveView's `on_mount` is not a list or tuple ("<view>: 'on_mount' should be a list of hook functions."), or one of its entries is not callable ("<view>: on_mount[i] is not callable (...).").
+
+**Fix**: Set `on_mount = [hook1, hook2]`, where each entry is a callable hook function.
+
+---
+
+### V010: TutorialMixin after LiveView in the bases
+
+**Severity**: Error
+
+**What causes it**: A class lists `LiveView` before `TutorialMixin` in its bases. Message: "<view>: TutorialMixin must be listed before LiveView in bases." Django's `View.__init__` does not call `super().__init__()`, so mixins listed after `LiveView` are never initialised.
+
+**Fix**: Change `class MyView(LiveView, TutorialMixin)` to `class MyView(TutorialMixin, LiveView)`.
+
+---
+
+### V011: Sticky child snapshots state but its parent doesn't
+
+**Severity**: Warning
+
+**What causes it**: A view embedded as a sticky child sets `enable_state_snapshot = True`, but the parent that embeds it does not. Message: "<child>: used as a sticky child with enable_state_snapshot=True, but embedding parent <parent> does not opt in — the child's state will be silently dropped on reconnect." A sticky child is restored across a WebSocket reconnect only when both the child and its embedding parent opt in.
+
+**Fix**: Set `enable_state_snapshot = True` on the parent as well, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V011"]}`. See [Sticky Child Persistence](sticky-child-persistence.md).
+
+---
+
+### V012: Sticky child template declares its own dj-view
+
+**Severity**: Warning
+
+**What causes it**: A view embedded with `{% live_render ... sticky=True %}` has a template whose root declares `dj-view`. Message: "<view>: sticky child template declares its own 'dj-view' on its root — this nests a duplicate dj-view inside the sticky wrapper and breaks the child's client-side mount (its events won't bind)." The framework emits the wrapper element with the `dj-view` binding itself.
+
+**Fix**: Remove `dj-view` from the sticky child's root element. See [Sticky LiveViews](sticky-liveviews.md).
+
+---
+
+### V013: dispatch()/get()/post() override that won't run over WebSocket
+
+**Severity**: Warning
+
+**What causes it**: A LiveView (or one of its ancestors) overrides `dispatch()`, `get()` or `post()`. Message: "<view>: <ancestor> overrides <methods>, which will NOT run on a WebSocket mount (the WS path calls mount() directly, never dispatch()/get()/post())."
+
+**Fix**: Move the setup into `mount(self, request, **kwargs)` so it runs on every transport. Mark abstract base classes with `abstract = True`, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V013"]}`.
+
+---
+
+### V014: Time travel records PII-like fields
+
+**Severity**: Warning
+
+**What causes it**: A view sets `time_travel_enabled = True`, and its model or form declares fields whose names look like PII that are not listed in `time_travel_excluded_fields`. Message: "<view>: time_travel_enabled = True, and its model/form declares field(s) whose names look like PII and are not in time_travel_excluded_fields: ...". Time-travel snapshots can be exported as a shareable bug-capture blob.
+
+**Fix**: List the sensitive public-state keys in `time_travel_excluded_fields` on the view, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V014"]}` if they never reach the view's public state. See [Bug Capture](bug-capture.md).
 
 ---
 
@@ -545,6 +720,16 @@ class PublicCounterView(LiveView):
 
 ---
 
+### S006: Tenant isolation is fail-open
+
+**Severity**: Warning
+
+**What causes it**: `DJUST_TENANTS['STRICT_MODE']` is set to `False`. Message: "DJUST_TENANTS['STRICT_MODE'] is set to False — djust tenant isolation is fail-OPEN. Tenant-scoped queries that run without a tenant bound to the current context will return EVERY tenant's rows instead of an empty set, risking cross-tenant data disclosure (especially on the WebSocket/SSE live path)."
+
+**Fix**: Remove `STRICT_MODE` (or set it to `True`) to keep fail-closed isolation. If you must keep it, scope every query explicitly (`Model.objects.unscoped(reason=...)` for deliberate cross-tenant reads). See [Multi-Tenant](multi-tenant.md).
+
+---
+
 ### S007: Unsafe rendering of a client-supplied filename
 
 **Severity**: Warning
@@ -581,6 +766,46 @@ not trigger it.
 
 ---
 
+### S008: Upload client_name used in a storage path
+
+**Severity**: Warning
+
+**What causes it**: Python code uses an upload entry's `client_name` in a storage path or key. Message: "<file>:<line> -- upload `client_name` used in a storage path/key. `client_name` is the raw attacker-controlled original filename (path/object-key injection: CWE-22 / CWE-73)."
+
+**Fix**: Use `entry.safe_client_name` (basename only, traversal neutralised) for the path or key, and keep `client_name` for display only. Suppress with `DJUST_CONFIG = {"suppress_checks": ["S008"]}` if the value is pre-sanitised. See [Uploads](uploads.md).
+
+---
+
+### S009: View-level auth with ungated public handlers
+
+**Severity**: Warning
+
+**What causes it**: A LiveView declares view-level auth (`login_required`, `permission_required` or a Django auth mixin) and exposes a public `@event_handler` with no per-handler authorization gate. Message: "<file>:<line> -- LiveView '<View>' declares view-level auth but exposes the public @event_handler '<handler>' with no per-handler authorization gate. A user who passes the view's mount auth can call this handler."
+
+**Fix**: If the handler needs finer authorization, add `@permission_required(...)` to it or a `check_permissions()` override that inspects the event. Rename it with a leading underscore if it isn't meant to be client-callable. If view-level auth is sufficient, suppress with `# noqa: S009` on the handler or `DJUST_CONFIG = {"suppress_checks": ["S009"]}`.
+
+---
+
+### S011: Inline script inside a LiveView root without a CSP
+
+**Severity**: Warning
+
+**What causes it**: A template has an executable inline `<script>` inside a `dj-root`/`dj-view` subtree, and no Content-Security-Policy setting is configured. Message: "<file>:<line> -- inline <script> with executable JS inside a LiveView template and no Content-Security-Policy is configured. Inline scripts inside the dj-root are not re-executed after djust morphs the mount HTML (#1848), and a strict CSP would block them."
+
+**Fix**: Move the JS into a static module, or into a base-template block rendered after the `dj-root` closes. If the inline script is intentional, add a CSP nonce or place it outside the root. Suppress with `{# noqa: S011 #}` on the script line or `DJUST_CONFIG = {"suppress_checks": ["S011"]}`.
+
+---
+
+### S012: Auth in dispatch() is not enforced over WebSocket
+
+**Severity**: Error
+
+**What causes it**: A LiveView gates auth with `@method_decorator(..., name="dispatch")`, or overrides `dispatch()` with auth logic. Either is enforced only on the HTTP GET, not on the WebSocket. Message: "<file>:<line> -- LiveView '<View>' gates auth via @method_decorator(..., name='dispatch'); this is NOT enforced over WebSocket (only on the HTTP GET)." (or "... overrides dispatch() with auth logic; ...").
+
+**Fix**: Use djust's `login_required` / `permission_required` class attributes, a `check_permissions()` method, or a Django auth mixin (`LoginRequiredMixin`, `PermissionRequiredMixin`, `UserPassesTestMixin`). These are honored on every transport. See [Authentication](authentication.md).
+
+---
+
 ## Template Errors (T0xx)
 
 ### T001: Deprecated @event syntax
@@ -605,11 +830,11 @@ not trigger it.
 
 **Severity**: Info
 
-**What causes it**: A template contains djust directives (`dj-click`, `dj-input`, `dj-change`, `dj-submit`, `dj-model`) but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
+**What causes it**: A template contains djust directives (`dj-click`, `dj-input`, `dj-change`, `dj-submit`, `dj-model`) or a `dj-view` attribute, but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
 
-**What you see**: Events fire but the DOM never updates. Server logs show DJE-053 warnings.
+**What you see**: Nothing breaks. `dj-root` is auto-inferred from `dj-view` on both the client and the server, so this is informational.
 
-**Fix**: Add `dj-root` to the root element of your LiveView template:
+**Fix**: Optionally add `dj-root` next to `dj-view` for clarity, or suppress the check with `DJUST_CONFIG = {"suppress_checks": ["T002"]}`:
 
 ```html
 <div dj-view="myapp.views.MyView" dj-root>
@@ -705,25 +930,104 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 <button dj-click="show_settings" data-view="settings">Settings</button>
 
 <!-- CORRECT -- use dj-patch for navigation -->
-<a href="?view=settings" dj-patch="handle_params">Settings</a>
+<a href="?view=settings" dj-patch>Settings</a>
 ```
 
-In your LiveView, handle the URL parameter:
+A bare `dj-patch` on an `<a>` patches to its `href`. (A non-empty `dj-patch` value is itself the target URL.)
+
+In your LiveView, read the URL parameter in the `handle_params()` lifecycle hook. It is not an event handler, so don't decorate it with `@event_handler`:
 
 ```python
-from djust.decorators import event_handler
-
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        self.current_view = request.GET.get('view', 'dashboard')
+        self.current_view = "dashboard"
 
-    @event_handler()
-    def handle_params(self, **kwargs):
-        # Called when URL changes via dj-patch
-        self.current_view = self.request.GET.get('view', 'dashboard')
+    def handle_params(self, params, uri):
+        # Called after mount and on every dj-patch / back-forward URL change
+        self.current_view = params.get("view", "dashboard")
 ```
 
 **Related**: [Navigation Guide](navigation.md)
+
+---
+
+### T011: Unsupported template tag
+
+**Severity**: Warning
+
+**What causes it**: A LiveView template uses a Django template tag that the Rust renderer doesn't implement. Message: "<file>:<line> -- unsupported template tag '{% <tag> %}' will be silently ignored by Rust renderer." In 1.2.0rc10 the unsupported-tag set is empty (every tag Django registers is handled), so this check does not currently fire.
+
+**Fix**: Pre-compute the value in your view and pass it as a context variable, or use a supported alternative. Suppress with `{# noqa: T011 #}`.
+
+---
+
+### T012: dj-* directives without dj-view
+
+**Severity**: Warning
+
+**What causes it**: A template uses `dj-*` event directives but has no `dj-view` attribute. Message: "<file> -- template uses dj-* event directives but has no dj-view attribute."
+
+**Fix**: Add `dj-view="yourapp.views.YourView"` to the root element. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
+
+---
+
+### T013: Invalid dj-view value
+
+**Severity**: Warning
+
+**What causes it**: A `dj-view` attribute has an empty or invalid value ("<file>:<line> -- dj-view has empty or invalid value '...'."), or it names a context variable djust never provides, such as `dj-view="{{ view_path }}"` ("... names a context variable djust never provides; it renders as dj-view="" and the page cannot mount.").
+
+**Fix**: Write the literal dotted path, e.g. `dj-view="myapp.views.MyView"`, or put `dj-root` on the element and let djust stamp `dj-view` server-side.
+
+---
+
+### T014: Deprecated data-dj-id attribute
+
+**Severity**: Warning
+
+**What causes it**: A template contains `data-dj-id`. Message: "<file>:<line> -- deprecated 'data-dj-id' attribute (renamed to 'dj-id' in v1.0)."
+
+**Fix**: Replace `data-dj-id` with `dj-id` in hand-authored HTML.
+
+---
+
+### T015: Legacy data-djust-view / data-djust-root attribute
+
+**Severity**: Warning
+
+**What causes it**: A template uses the pre-1.0 root attributes. Message: "<file>:<line> -- legacy '<attr>' attribute detected."
+
+**Fix**: Change `data-djust-view` to `dj-view` and `data-djust-root` to `dj-root`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T015"]}`.
+
+---
+
+### T016: dj-navigate with no LiveView routes
+
+**Severity**: Warning
+
+**What causes it**: Templates use `dj-navigate`, but no LiveView routes were found in the URLconf, so the client route map is empty. Message: "dj-navigate is used in N location(s) (first: <file>:<line>) but no LiveView routes were found in the URLconf, so the client route map is empty — dj-navigate will silently full-reload instead of navigating over the WebSocket."
+
+**Fix**: Make sure your views subclass `djust.LiveView` and are wired into `urlpatterns`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T016"]}`. See [Navigation](navigation.md).
+
+---
+
+### T017: dj-view or dj-root on a table-section element
+
+**Severity**: Warning
+
+**What causes it**: `dj-view` or `dj-root` is on a `<tbody>`, `<thead>`, `<tfoot>`, `<tr>`, `<td>`, `<th>`, `<caption>`, `<col>` or `<colgroup>`. Message: "<file>:<line> -- '<attr>' is on a <tag> table-section element, which is foster-parented out of the tree at render time (the rendered output silently drops the table rows, with no error)."
+
+**Fix**: Put the attribute on a wrapping element (the `<table>` or a surrounding `<div>`). Suppress with `DJUST_CONFIG = {"suppress_checks": ["T017"]}`.
+
+---
+
+### T018: Undefined template variable
+
+**Severity**: Warning (undefined variable) / Info (templates skipped)
+
+**What causes it**: A LiveView's template references a variable that is never set via a class attribute, a `self.<name> = ...` assignment, or a literal `get_context_data()` return key, and isn't a framework- or Django-injected name. Message: "<view> -- template references undefined variable '<name>' at line N (<template>) -- it resolves to nothing and renders as empty string, with no error." Views whose templates use `{% extends %}` are skipped, and one Info message reports the count ("T018: skipped N view(s) whose template(s) use {% extends %} ...").
+
+**Fix**: Fix the typo, or, if the variable is set dynamically, silence it with a `{# djust_typecheck: noqa <name> #}` template comment. For extends-based templates, run `manage.py djust_typecheck`. Suppress globally with `DJUST_CONFIG = {"suppress_checks": ["T018"]}`. See [Template type checking](typecheck.md).
 
 ---
 
@@ -788,6 +1092,26 @@ if (globalThis.djustDebug) {
 
 ---
 
+### Q007: Key in both static_assigns and temporary_assigns
+
+**Severity**: Warning
+
+**What causes it**: A LiveView lists the same keys in `static_assigns` and `temporary_assigns`. Message: "<view>: keys ... appear in both static_assigns and temporary_assigns." A key can't be both static (never re-sent) and temporary (cleared after render).
+
+**Fix**: Remove the key from one of the two lists.
+
+---
+
+### Q010: Navigation state set without patch()
+
+**Severity**: Info
+
+**What causes it**: An event handler sets a navigation-state attribute (`active_view`, `current_tab`, `selected_page`, `current_section`, `active_tab` or `selected_view`) that the view also uses as a URL parameter elsewhere via `self.patch()`, but this handler updates it without `patch()` or `handle_params`. Message: "<file>:<line> -- Event handler '<View>.<handler>()' sets <attr> without using patch(). Consider using dj-patch for URL updates."
+
+**Fix**: Use `dj-patch="?tab=value"` and read the value in `handle_params()` (see T010), or add `# noqa: Q010` on the handler.
+
+---
+
 ## Audit / Static Security Checks (A0xx)
 
 These checks were added as follow-ups to the 2026-04-10 a downstream consumer penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
@@ -839,6 +1163,8 @@ application = ProtocolTypeRouter({
 
 **What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and re-opens CSWSH because `AllowedHostsOriginValidator` reads the same setting.
 
+Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_TRUSTED_PROXIES` are set (you are asserting a trusted L7 proxy).
+
 **Fix**: Set `ALLOWED_HOSTS` to the explicit hostnames your app serves:
 
 ```python
@@ -854,6 +1180,8 @@ ALLOWED_HOSTS = ["myapp.example.com", "api.example.com"]
 
 **What causes it**: `settings.ALLOWED_HOSTS = ["myapp.example.com", "*"]`. Django accepts any Host header as soon as `"*"` is present — the explicit hostname is meaningless once the wildcard is in the list. Authors often mix them thinking they're "also allowing the explicit host for clarity."
 
+Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_TRUSTED_PROXIES` are set (you are asserting a trusted L7 proxy).
+
 **Fix**: Remove `"*"` and keep only the explicit hostnames.
 
 ---
@@ -863,6 +1191,8 @@ ALLOWED_HOSTS = ["myapp.example.com", "api.example.com"]
 **Severity**: Error
 
 **What causes it**: `USE_X_FORWARDED_HOST=True` makes Django trust the `X-Forwarded-Host` header. Combined with wildcard `ALLOWED_HOSTS`, there is no validation of that header — attackers can inject any Host.
+
+Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_TRUSTED_PROXIES` are set (you are asserting a trusted L7 proxy).
 
 **Fix**: Set `ALLOWED_HOSTS` to explicit hostnames, or set `USE_X_FORWARDED_HOST=False` if your reverse proxy is not configured to set it safely.
 
@@ -946,6 +1276,232 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 ---
 
+### A031: Observability endpoints without LocalhostOnlyObservabilityMiddleware
+
+**Severity**: Warning
+
+**What causes it**: The djust observability URLs (`_djust/observability/`) are wired, but `LocalhostOnlyObservabilityMiddleware` is not in `MIDDLEWARE`. Message: "djust observability endpoints (_djust/observability/) are wired but LocalhostOnlyObservabilityMiddleware is not in MIDDLEWARE." The endpoints also gate themselves to localhost, so this is defense in depth.
+
+**Fix**: Add the middleware (under DEBUG), which rejects non-localhost requests before the view runs.
+
+---
+
+### A070: dj_activity without a name
+
+**Severity**: Warning
+
+**What causes it**: A `{% dj_activity %}` block has no `name` argument. Message: "<file>:<line> -- {% dj_activity %} is missing a 'name' argument." Without a name, `ActivityMixin` cannot route events or track visibility for the region.
+
+**Fix**: Give every block a non-empty name: `{% dj_activity "my-panel" visible=expr %}`. See [Activity](activity.md).
+
+---
+
+### A071: Duplicate dj_activity name
+
+**Severity**: Error
+
+**What causes it**: Two `{% dj_activity %}` blocks in one template share a name. Message: "<file>:<line> -- duplicate {% dj_activity %} name '<name>' (first declared at line N)."
+
+**Fix**: Rename one of the blocks, or split the template if the regions should be tracked independently.
+
+---
+
+### A072: Non-LiveView class in an admin widget slot
+
+**Severity**: Warning
+
+**What causes it**: A djust admin `change_form_widgets` or `change_list_widgets` slot contains a class that isn't a LiveView subclass. Message: "Admin <site> -- <slot> on <model> contains non-LiveView class '<name>'. Widget slots can only embed djust LiveView subclasses."
+
+**Fix**: Make the widget a subclass of `djust.LiveView`, or remove it from the slot. See [Admin Widgets](admin-widgets.md).
+
+---
+
+### A073: Progress actions with multiple ASGI workers
+
+**Severity**: Info
+
+**What causes it**: An admin site uses `@admin_action_with_progress` and `DJUST_ASGI_WORKERS` is greater than 1. The progress widget keeps job state in a process-local dict, so the progress URL must reach the worker that started the job.
+
+**Fix**: Run a single ASGI worker, or enable sticky sessions on your load balancer. Unset `DJUST_ASGI_WORKERS` (or set it to 1) to silence the check. See [Admin Widgets](admin-widgets.md).
+
+---
+
+### A075: live_render with both sticky=True and lazy=True
+
+**Severity**: Warning
+
+**What causes it**: A `{% live_render %}` tag passes both `sticky=True` and `lazy=True`. Message: "<file>:<line> -- {% live_render %} has both sticky=True and lazy=True — these kwargs are mutually exclusive." Sticky reattach needs the slot to exist at mount time, and lazy defers it.
+
+**Fix**: Pick one. Suppress with `DJUST_CONFIG = {"suppress_checks": ["A075"]}` if you have a deliberate reason.
+
+---
+
+### A090: djust_markdown in use
+
+**Severity**: Info
+
+**What causes it**: Templates use `{% djust_markdown %}`. Message: "{% djust_markdown %} is used in N location(s) (first: <file>:<line>) — djust is rendering Markdown server-side via the Rust pulldown-cmark backend with safe-by-default escaping (ENABLE_HTML never set, javascript: URLs neutralised, 10 MiB input cap)."
+
+**Fix**: Informational. Suppress with `DJUST_CONFIG = {"suppress_checks": ["A090"]}`. See [Streaming Markdown](streaming-markdown.md).
+
+---
+
+## Database Notification Checks (D0xx)
+
+### D001: Postgres LISTEN/NOTIFY unavailable
+
+**Severity**: Warning
+
+**What causes it**: The default database uses the PostgreSQL backend with the legacy `psycopg2` driver, and `psycopg` (psycopg3) is missing or older than 3.2. Message: "Postgres LISTEN/NOTIFY (db.notifications) is unavailable because psycopg[binary]>=3.2 is not installed." Apps that use `@notify_on_save` or `db.listen()` will hit a permanent-failure warning at the first NOTIFY attempt.
+
+**Fix**: `pip install 'psycopg[binary]>=3.2'`, or silence with `SILENCED_SYSTEM_CHECKS = ["djust.D001"]` if you don't use `db.notifications`. See [Database Notifications](database-notifications.md).
+
+---
+
+## Update Notice (U0xx)
+
+### U001: Newer djust release or security advisory
+
+**Severity**: Warning (published advisories affect the installed version) / Info (a newer release exists)
+
+**What causes it**: With `DEBUG=True`, the cached update check reports either "SECURITY: djust <version> has N published advisory/advisories (...)" or "djust <latest> is available (you have <installed>)". The system check reads the cache only; it makes no network request.
+
+**Fix**: Upgrade djust. Disable the notice with `DJUST_CONFIG = {"update_check": False}` or the `DJUST_NO_UPDATE_CHECK=1` environment variable. It is also skipped when `CI` is set.
+
+---
+
+## Accessibility Checks (Y0xx)
+
+These scan LiveView templates. All are Warnings, so a false positive never fails `manage.py check`, and each can be suppressed with `DJUST_CONFIG['suppress_checks']`. See [Accessibility](accessibility.md).
+
+### Y001: Control with no accessible name
+
+**Severity**: Warning
+
+**What causes it**: "<file>:<line> -- <tag> has no accessible name (icon-only content and no aria-label)."
+
+**Fix**: Add `aria-label="..."` (or `aria-labelledby` / `title`) so the control's purpose is announced.
+
+---
+
+### Y002: img without alt
+
+**Severity**: Warning
+
+**What causes it**: "<file>:<line> -- <img> tag is missing an 'alt' attribute (WCAG 1.1.1)."
+
+**Fix**: Use `alt="describe the image"` for informative images, or `alt=""` for decorative ones.
+
+---
+
+### Y003: Form control with no label
+
+**Severity**: Warning
+
+**What causes it**: "<file>:<line> -- <tag> form control has no associated label (WCAG 1.3.1)." Applies to `<input>`, `<select>` and `<textarea>`; `<input>` types `hidden`, `submit`, `button`, `reset` and `image` are not flagged.
+
+**Fix**: Associate a label via `<label for="...">`, wrap the control in a `<label>`, or add `aria-label` / `aria-labelledby`. `<label for>` matching is per file, so a label in a different template isn't detected.
+
+---
+
+### Y004: Positive tabindex
+
+**Severity**: Warning
+
+**What causes it**: '<file>:<line> -- positive tabindex="N" overrides natural focus order (WCAG 2.4.3).'
+
+**Fix**: Use `tabindex="0"` to add an element to the natural order, or `tabindex="-1"` to make it focusable only programmatically.
+
+---
+
+## Audio Checks (djust.audio.*)
+
+These run for routed LiveViews that use `AudioMixin`. See [Audio](audio.md).
+
+### djust.audio.E001: audio_banks value is not a SoundBank
+
+**Severity**: Error
+
+**What causes it**: "audio_banks values must be SoundBank instances"
+
+**Fix**: Make every value in the view's `audio_banks` a `SoundBank`.
+
+---
+
+### djust.audio.W001: Declared sound asset not found
+
+**Severity**: Warning
+
+**What causes it**: "Declared sound asset not found: <path>". The staticfiles finders can't locate a sound file declared in a bank.
+
+**Fix**: Add the file to a staticfiles directory before `collectstatic`.
+
+---
+
+## Theming Checks (djust_theming.*)
+
+These are registered by the `djust.theming` app under Django's `compatibility` tag, so they run with a plain `manage.py check`, not with `--tag djust`.
+
+### djust_theming.E001: theme_context processor missing
+
+**Severity**: Error
+
+**What causes it**: "djust.theming.context_processors.theme_context is not in any TEMPLATES backend's context_processors list. Theme template variables (theme_head, theme_switcher, etc.) will not be available."
+
+**Fix**: Add `"djust.theming.context_processors.theme_context"` to `TEMPLATES[0]['OPTIONS']['context_processors']`.
+
+---
+
+### djust_theming.E002: Unknown theme preset
+
+**Severity**: Error
+
+**What causes it**: 'LIVEVIEW_CONFIG["theme"]["preset"] is set to "<name>", which is not a registered theme preset.'
+
+**Fix**: Use one of the preset names listed in the check's hint.
+
+---
+
+### djust_theming.E003: Unknown design system
+
+**Severity**: Error
+
+**What causes it**: 'LIVEVIEW_CONFIG["theme"]["theme"] is set to "<name>", which is not a registered design system.'
+
+**Fix**: Use one of the design system names listed in the check's hint.
+
+---
+
+### djust_theming.E004: Invalid css_prefix
+
+**Severity**: Error
+
+**What causes it**: 'css_prefix "<prefix>" contains invalid characters. Only letters, digits, and hyphens are allowed, and it must start with a letter.'
+
+**Fix**: Use a prefix like `"djt-"` or `"myapp-"`.
+
+---
+
+### djust_theming.W001: Preset fails WCAG AA contrast
+
+**Severity**: Warning
+
+**What causes it**: The active theme preset has a colour pair below the WCAG AA minimum. Message: 'Preset "<name>" <mode> mode: <label> contrast ratio X:1 < Y:1 (WCAG AA)'.
+
+**Fix**: Adjust the named foreground or background colour to reach at least the minimum ratio.
+
+---
+
+### djust_theming.W002: css_prefix without a trailing hyphen
+
+**Severity**: Warning
+
+**What causes it**: 'css_prefix "<prefix>" does not end with "-". Component classes will render as ".<prefix>btn" instead of ".<prefix>-btn".'
+
+**Fix**: Add a trailing `-`, e.g. `"dj-"` instead of `"dj"`.
+
+---
+
 ## Permissions Document Findings (P0xx)
 
 These codes come from `manage.py djust_audit --permissions permissions.yaml` and validate the actual code against a committed declarative permissions document. See [Declarative Permissions Document](permissions-document.md) for the full setup guide.
@@ -964,7 +1520,7 @@ These codes come from `manage.py djust_audit --permissions permissions.yaml` and
 
 **Severity**: Error (strict mode only)
 
-**What causes it**: A new LiveView was added to the codebase without a corresponding entry in `permissions.yaml`, and the document has `strict: true`.
+**What causes it**: A new LiveView was added to the codebase without a corresponding entry in `permissions.yaml`. Raised unless the document sets `strict: false` (strict is the default).
 
 **Fix**: Add the view to `permissions.yaml` with its intended auth config:
 
@@ -1014,9 +1570,9 @@ class MyView(LiveView):
 
 ### P006: object_scoping field not referenced
 
-**Severity**: Warning (currently informational)
+**Severity**: Warning (reserved)
 
-**What causes it**: `permissions.yaml` declares `object_scoping.fields: [...]` for a view but the best-effort AST check couldn't find references to those fields in `get_object()` or equivalent. This is reserved for a future AST-verified implementation; today it's documentation-only.
+**What causes it**: Reserved — not currently emitted. The code is registered for a future check that `object_scoping.fields: [...]` declared for a view are referenced in `get_object()` or equivalent. Today `object_scoping.fields` is documentation-only.
 
 **Fix**: Verify manually that your `get_object()` implementation scopes the query by the declared fields.
 
@@ -1388,7 +1944,7 @@ Preferred-Languages: en
 
 ## AST Anti-Pattern Scanner Findings (X0xx)
 
-These findings are emitted by `manage.py djust_audit --ast`, which walks your Python source and Django templates looking for five specific security anti-patterns. Every pattern here was either a live vulnerability or a near-miss in the 2026-04-10 pentest of a downstream consumer. The checks are intentionally narrow: false positives are worse than missed findings for a linter that runs on every push.
+These findings are emitted by `manage.py djust_audit --ast`, which walks your Python source and Django templates looking for eight specific security anti-patterns (X001–X008). Every pattern here was either a live vulnerability or a near-miss in the 2026-04-10 pentest of a downstream consumer. The checks are intentionally narrow: false positives are worse than missed findings for a linter that runs on every push.
 
 Suppress a single finding with `# djust: noqa X001` on the offending line (or `{# djust: noqa X006 #}` inside a template). Bare `# djust: noqa` suppresses every djust.X finding on that line.
 
@@ -1452,7 +2008,7 @@ class ProjectView(LiveView):
     permission_required = "projects.manage_projects"
 
     @event_handler
-    def delete_project(self, project_id: int):
+    def delete_project(self, project_id: int = 0, **kwargs):
         Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -1461,7 +2017,7 @@ Or the more granular form:
 ```python
 @permission_required("projects.delete_project")
 @event_handler
-def delete_project(self, project_id: int):
+def delete_project(self, project_id: int = 0, **kwargs):
     Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -1583,6 +2139,16 @@ WARN [djust.X007] /path/templates/emails/body.html:3:0 Template uses {% autoesca
 
 ---
 
+### X008: Detail view matches IDOR shape — missing object-permission lifecycle override
+
+**Severity**: Warning
+
+**What causes it**: A detail-shaped view class has `permission_required`, binds a URL-kwarg id to `self` in `mount()`, and has event handlers that read it, but neither it nor a base class in the same module overrides `has_object_permission()` or `check_permissions()`. View-level permissions don't check that the user may access this particular object.
+
+**Fix**: Override `has_object_permission()` (or `check_permissions()`) to check access to the object. See [Authorization](authorization.md) for the pattern. Suppress with `# djust: noqa X008` if access is scoped elsewhere.
+
+---
+
 ## Runtime Errors (DJE-xxx)
 
 These errors appear in server logs during WebSocket communication and VDOM diffing. They are not caught by `manage.py check` -- they only occur at runtime.
@@ -1641,47 +2207,47 @@ These errors appear in server logs during WebSocket communication and VDOM diffi
 
 ---
 
-### DJE-052: Unkeyed list performance warning
-
-**Severity**: Warning (performance)
-
-**What causes it**: A large unkeyed list (10+ children) produced patches for more than half its children. This usually means the list was reordered, and without keys the VDOM had to patch every element individually.
-
-**What you see**: Trace-level warning. The page still works but updates may be visually janky or slow for large lists.
-
-**Fix**: Add `data-key` to list items:
-
-```html
-<ul>
-    {% for item in items %}
-    <li data-key="{{ item.id }}">{{ item.name }}</li>
-    {% endfor %}
-</ul>
-```
-
-**Related**: [List Reordering Performance](keyed-lists-performance.md)
-
----
-
-### DJE-053: No DOM changes
+### DJE-052: dj-virtual children fell back to index diffing
 
 **Severity**: Warning
 
-**What causes it**: An event handler modified state and triggered a re-render, but the VDOM diff produced zero patches. This usually means the modified state is rendered **outside** the `dj-root` element (e.g., in `base.html`).
+**What causes it**: A `dj-virtual` container's children could not be diffed by key (for example, some children lack keys, or keys are duplicated), so the VDOM fell back to index-addressed diffing. Index-addressed ops cannot address items outside the client's visible window.
+
+**What you see**: A server log warning: `DJE-052: a [dj-virtual] container's children ... — falling back to index-addressed diffing, which cannot address items outside the client's visible window. Give every child a unique dj-key.`
+
+**Fix**: Give every child of a `dj-virtual` container a unique `dj-key`:
+
+```html
+<div dj-virtual="items" dj-virtual-item-height="48"
+     style="height: 600px; overflow: auto;">
+    {% for item in items %}
+    <div dj-key="{{ item.id }}">{{ item.name }}</div>
+    {% endfor %}
+</div>
+```
+
+**Related**: [Large Lists](large-lists.md), [List Reordering Performance](keyed-lists-performance.md)
+
+---
+
+### DJE-053: Fell back to full HTML update
+
+**Severity**: Warning
+
+**What causes it**: An event triggered a re-render, but the VDOM diff returned no patches (or the view forced a full HTML update), after the view already had a rendered baseline. djust then sends the whole view HTML instead of patches. This often means the modified state is rendered **outside** the `dj-root` element (e.g., in `base.html`).
 
 **What you see**: In server logs:
 
 ```
-WARNING [djust] Event 'toggle_sidebar' on DashboardView produced no DOM changes (DJE-053).
-The modified state may be outside <div dj-root>.
+WARNING [djust] Event 'toggle_sidebar' on DashboardView fell back to full HTML update (DJE-053). Template: myapp/dashboard.html. VDOM diff returned no patches — this may cause event listeners and DOM state to be lost. Debugging steps: ...
 ```
 
-The page does not update even though the event handler ran and changed state.
+djust falls back to replacing the whole view HTML. The page updates, but client-side DOM state and listeners inside the root can be lost.
 
 **Common causes**:
 
 1. **State rendered outside the VDOM root**: The `{% if show_panel %}` block is in `base.html` while `dj-root` is in the child template.
-2. **Missing `dj-root`**: The attribute is not on any element, so the VDOM has no root to diff against.
+2. **Root not where you expect**: `dj-root` is auto-inferred from `dj-view`, so check which element carries `dj-view`; state rendered outside it is not diffed.
 3. **Event handler changes state that does not affect the template**: The handler updates a variable that is not used in the template.
 
 **Fix**:
@@ -1721,7 +2287,7 @@ Open the browser's Network tab and filter by "WS" (WebSocket). You should see:
 - A WebSocket connection to your server
 - Messages flowing back and forth when you click buttons
 
-If there is no WebSocket connection, check C001-C005. If events are sent but no patches come back, check DJE-053 and T002.
+If there is no WebSocket connection, check C001-C005. If events are sent but no patches come back, check the server log for DJE-053.
 
 ### 4. Check server logs
 

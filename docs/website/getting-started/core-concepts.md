@@ -14,14 +14,14 @@ Every request goes through the same cycle:
 
 ```
 1. HTTP GET  →  mount()  →  render  →  initial HTML sent to browser
-2. WebSocket opens
+2. WebSocket opens  →  mount()  →  render  (skipped if state is restored)
 3. User event  →  handler()  →  re-render  →  diff  →  patch sent to client
 4. Client patches DOM  →  back to step 3
 ```
 
 ### `mount()`
 
-Called **once** when the page loads. Initialize all state here:
+Called when the view is first rendered over HTTP, and **again** when the WebSocket connects (unless state is restored from a snapshot). Initialize all state here, and keep it idempotent — don't perform one-time side effects such as DB writes or notifications:
 
 ```python
 def mount(self, request, **kwargs):
@@ -84,7 +84,7 @@ Templates use `dj-*` attributes for event binding:
 | Attribute             | Fires when                  | Handler receives          |
 | --------------------- | --------------------------- | ------------------------- |
 | `dj-click="handler"`  | Button/element clicked      | `**kwargs`                |
-| `dj-input="handler"`  | Input value changes (keyup) | `value=` current value    |
+| `dj-input="handler"`  | Input value changes (`input` event; text fields debounced 300 ms) | `value=` current value    |
 | `dj-change="handler"` | Input/select loses focus    | `value=` current value    |
 | `dj-submit="handler"` | Form submitted              | All form fields as kwargs |
 
@@ -123,8 +123,8 @@ This means complex re-renders that change one row in a 1000-row table only trans
 djust enforces strict security by default:
 
 - **Whitelisted handlers only** — only methods decorated with `@event_handler()` can be called by clients. Calling any other method name over WebSocket returns an error.
-- **CSRF protection** — WebSocket connections require a valid CSRF token; the client reads it automatically from the `csrftoken` cookie (or a `{% csrf_token %}` hidden input if one is present in the page) — no djust template tag is needed to provide it
-- **Auth integration** — use `LoginRequiredMixin` or `@permission_required` exactly as in standard Django views
+- **Cross-site WebSocket protection** — the handshake's `Origin` header is checked against `ALLOWED_HOSTS`. The HTTP fallback transport uses Django's CSRF token, which the client reads automatically from the `csrftoken` cookie (or a `{% csrf_token %}` hidden input if one is present in the page) — no djust template tag is needed to provide it
+- **Auth integration** — use `djust.LoginRequiredMixin` / `djust.PermissionRequiredMixin` on the view, and `djust.decorators.permission_required` on individual event handlers
 
 ## Next Steps
 

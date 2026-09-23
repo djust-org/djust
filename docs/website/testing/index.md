@@ -55,16 +55,21 @@ class TestProtectedView(TestCase):
         self.user = User.objects.create_user("testuser", password="pass")
 
     def test_requires_login(self):
-        client = LiveViewTestClient(MyProtectedView)
-        # Without user — should redirect
-        with self.assertRaises(PermissionError):
-            client.mount()
+        # LiveViewTestClient.mount() does not run auth checks, so test the
+        # login gate through Django's test Client on the view's URL.
+        response = self.client.get("/protected/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login/", response["Location"])
 
     def test_authenticated(self):
         client = LiveViewTestClient(MyProtectedView, user=self.user)
         client.mount()
-        client.assert_state(user=self.user)
+        self.assertEqual(client.view_instance.request.user, self.user)
 ```
+
+`LiveViewTestClient.mount()` calls the view's `mount()` directly, without the
+`login_required` / permission check, and `user` is not part of the view's
+state. Assert on state your view sets from `request.user` instead.
 
 ### Testing with URL Parameters
 
@@ -119,11 +124,13 @@ class TestProductCard(TestCase, SnapshotTestMixin):
         self.assert_html_snapshot("product_card_1", client.render())
 ```
 
-On first run, the snapshot is saved to `tests/snapshots/product_card_1.html`. Subsequent runs compare against it. To update snapshots after an intentional change:
+On first run, the snapshot is saved to `snapshots/product_card_1.html.snapshot` next to the test file. Subsequent runs compare against it. To update snapshots after an intentional change:
 
 ```bash
-pytest --update-snapshots
+UPDATE_SNAPSHOTS=1 pytest
 ```
+
+You can also set `update_snapshots = True` on the test class, and change the directory with `snapshot_dir` (default `"snapshots"`).
 
 ## LiveViewSmokeTest
 
@@ -136,8 +143,8 @@ from djust.testing import LiveViewSmokeTest
 
 class TestAllViews(TestCase, LiveViewSmokeTest):
     app_label = "myapp"    # Only test views in this app
-    max_queries = 20       # Fail if mount() exceeds this many DB queries
-    fuzz = True            # Send XSS/type-mismatch payloads to handlers
+    max_queries = 20       # Fail if mount + render exceeds this many DB queries (default 50)
+    fuzz = True            # Send XSS/type-mismatch payloads to handlers (default True)
 ```
 
 `LiveViewSmokeTest` auto-discovers all `LiveView` subclasses in `app_label` and:
@@ -164,7 +171,7 @@ class TestSearchPerformance(TestCase):
         client.send_event("search", value="test")
 ```
 
-The test fails if `search` takes more than 50ms or executes more than 3 queries.
+The test fails if the whole test method (including client setup and `mount()`) takes more than 50 ms or runs more than 3 queries. `@performance_test` also accepts `track_memory=True` and `max_memory_bytes`.
 
 ## Testing Forms
 
@@ -181,7 +188,7 @@ class TestContactForm(TestCase):
 
         client.send_event("submit_form", name="Alice", email="alice@example.com", message="Hi")
         client.assert_state(is_valid=True)
-        self.assertIn("success_message", client.state)
+        self.assertTrue(client.get_state()["success_message"])
 
     def test_invalid_email(self):
         client = LiveViewTestClient(ContactFormView)
@@ -190,7 +197,7 @@ class TestContactForm(TestCase):
         client.send_event("submit_form", name="Bob", email="not-an-email", message="Hi")
         client.assert_state(is_valid=False)
         # Field errors should be set
-        state = client.state
+        state = client.get_state()
         self.assertIn("email", state["field_errors"])
 
     def test_realtime_validation(self):
@@ -199,7 +206,7 @@ class TestContactForm(TestCase):
 
         # Simulate dj-change="validate_field" on email field
         client.send_event("validate_field", field_name="email", value="invalid")
-        state = client.state
+        state = client.get_state()
         self.assertIn("email", state["field_errors"])
 ```
 
@@ -209,8 +216,8 @@ JavaScript tests live in `tests/js/` and run with Node.js:
 
 ```bash
 make test-js
-# or
-cd tests/js && npm test
+# or, from the repository root
+npm test
 ```
 
 Each JS feature file in `static/djust/src/` should have a corresponding test in `tests/js/`. See [JavaScript Testing](../../testing/TESTING_JAVASCRIPT.md) for details.

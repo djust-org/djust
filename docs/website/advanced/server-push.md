@@ -20,9 +20,11 @@ from djust import push_to_view
 push_to_view("myapp.views.DashboardView", state={"visitors": 42})
 
 # Call a handler method on all connected clients
-push_to_view("myapp.views.ChatView", handler="on_new_message",
+push_to_view("myapp.views.ChatView", handler="handle_new_message",
               payload={"text": "Hello from the server!"})
 ```
+
+A pushed `handler` must start with `handle_` or be decorated with `@event_handler`. Any other name is blocked (logged as `server_push: blocked handler`) and never called.
 
 ## Push from Celery Tasks
 
@@ -53,7 +55,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         push_to_view(
             "alerts.views.AlertView",
-            handler="on_alert",
+            handler="handle_alert",
             payload={"level": "warning", "message": "Deploy starting"},
         )
 ```
@@ -91,10 +93,10 @@ The view re-renders and sends VDOM patches to all connected clients after each t
 
 ## The Broadcast Pattern
 
-When multiple clients edit shared state (collaborative editing, shared dashboards), you need to broadcast changes to peers without triggering a render loop on the sender. The `_broadcast` / `_on_broadcast` pattern solves this.
+When multiple clients edit shared state (collaborative editing, shared dashboards), push each change to the view so every peer receives it. The session that made the change does not need special handling: when a handler pushes to its own view, the originating session automatically skips its own broadcast (#1677), because its direct event response already reflects the new state.
 
 ```python
-from djust import LiveView
+from djust import LiveView, push_to_view
 from djust.decorators import event_handler
 
 class SharedNoteView(LiveView):
@@ -102,33 +104,23 @@ class SharedNoteView(LiveView):
 
     def mount(self, request, **kwargs):
         self.content = Note.objects.get(pk=kwargs["pk"]).content
-        self._skip_broadcast = False
 
     @event_handler
     def update_content(self, value: str = "", **kwargs):
         self.content = value
         Note.objects.filter(pk=self.kwargs["pk"]).update(content=value)
-        self._broadcast({"content": value})
-
-    def _broadcast(self, data):
-        """Push to all peers. The sender skips re-render."""
-        self._skip_broadcast = True
         push_to_view(
             "notes.views.SharedNoteView",
-            handler="_on_broadcast",
-            payload=data,
+            handler="handle_broadcast",
+            payload={"content": value},
         )
 
-    def _on_broadcast(self, content: str = "", **kwargs):
+    def handle_broadcast(self, content: str = "", **kwargs):
         """Receive broadcast from a peer."""
-        if self._skip_broadcast:
-            self._skip_broadcast = False
-            self._skip_render = True
-            return
         self.content = content
 ```
 
-The `_skip_broadcast` flag prevents the sender from re-rendering its own update. Peers receive the broadcast and update their state normally.
+The receiver is named `handle_broadcast` because pushed handlers must start with `handle_` (or be `@event_handler`-decorated). The sender skips its own broadcast, and peers receive it and update their state normally.
 
 ## Event Sequencing
 
@@ -170,7 +162,7 @@ Synchronous. Sends an update to all clients connected to `view_path`.
 | ----------- | ------ | --------------------------------------------- |
 | `view_path` | `str`  | Dotted import path of the LiveView class      |
 | `state`     | `dict` | Attribute names and values to set on the view |
-| `handler`   | `str`  | Name of a method to call on the view          |
+| `handler`   | `str`  | Name of a method to call on the view — must start with `handle_` or be decorated with `@event_handler`; other names are blocked |
 | `payload`   | `dict` | Keyword arguments passed to the handler       |
 
 ### `apush_to_view(view_path, *, state=None, handler=None, payload=None)`

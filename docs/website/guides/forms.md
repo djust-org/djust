@@ -135,12 +135,25 @@ Write your HTML however you want. No CSS framework required:
 
 ### Or Skip the Manual HTML
 
-If you don't want to write each field by hand, use `as_live()`:
+If you don't want to write each field by hand, use the view's `as_live()` method. It belongs to `FormMixin` (not to the Django form), so render it in `get_context_data` and put the HTML in the context:
+
+```python
+from django.utils.safestring import mark_safe
+
+class ContactView(FormMixin, LiveView):
+    form_class = ContactForm
+    template_name = "contact.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_html"] = mark_safe(self.as_live())
+        return context
+```
 
 ```html
 <form dj-submit="submit_form">
     {% csrf_token %}
-    {{ form_instance.as_live }}
+    {{ form_html }}
     <button type="submit">Send</button>
 </form>
 ```
@@ -148,10 +161,10 @@ If you don't want to write each field by hand, use `as_live()`:
 This auto-renders all fields with labels, error display, and validation bindings. Configure the output style in settings:
 
 ```python
-DJUST_CSS_FRAMEWORK = "bootstrap5"  # or "tailwind", "plain"
+LIVEVIEW_CONFIG = {"css_framework": "bootstrap5"}  # or "bootstrap4", "tailwind", "plain", None
 ```
 
-You can also render individual fields: `{{ form_instance.as_live_field:"email" }}`
+You can also render a single field with `self.as_live_field("email")` the same way.
 
 ## How It Works
 
@@ -192,7 +205,7 @@ FormMixin initializes these in `mount()`, all available in your template:
 | --------------- | ------ | ------------------------------------------ |
 | `form_data`     | `dict` | Current field values (keyed by field name) |
 | `field_errors`  | `dict` | Per-field errors: `{field: [errors]}`      |
-| `form_errors`   | `list` | Non-field errors from `clean()`            |
+| `form_errors`   | `dict \| ErrorList` | Non-field errors from `clean()`: an empty dict until an invalid submit, then a list |
 | `is_valid`      | `bool` | Result of last `submit_form()`             |
 | `form_instance` | `Form` | Current Django Form instance               |
 
@@ -261,10 +274,16 @@ def submit_and_reset(self, **kwargs):
         self.reset_form()
 ```
 
-Or let users reset manually:
+Or let users reset manually. `reset_form` is not an `@event_handler`, so under the default `event_security = "strict"` a `dj-click="reset_form"` is rejected. Expose it through a decorated wrapper:
+
+```python
+@event_handler()
+def clear_form(self, **kwargs):
+    self.reset_form()
+```
 
 ```html
-<button type="button" dj-click="reset_form">Clear</button>
+<button type="button" dj-click="clear_form">Clear</button>
 ```
 
 ## Confirmation Dialogs
@@ -336,17 +355,17 @@ In your base template, after djust's `client.js`, link the form helper styleshee
 <link rel="stylesheet" href="{% static 'djust/djust-forms.css' %}">
 ```
 
-**That's it.** Django's widget mechanics put `attrs={...}` onto each `<input type="radio">`, so the rendered HTML looks like:
+**That's it.** Django's widget mechanics put `attrs={...}` onto each `<input type="radio">`, so the rendered HTML (Django 4.0+) looks like:
 
 ```html
-<ul>
-  <li><label><input type="radio" name="status" value="all" data-dj-inline="true"> All</label></li>
-  <li><label><input type="radio" name="status" value="open" data-dj-inline="true"> Open</label></li>
+<div id="id_status">
+  <div><label><input type="radio" name="status" value="all" data-dj-inline="true"> All</label></div>
+  <div><label><input type="radio" name="status" value="open" data-dj-inline="true"> Open</label></div>
   ...
-</ul>
+</div>
 ```
 
-The bundled CSS uses the `:has()` parent selector to walk up from the marked input and lay out the containing `<ul>` (or `<div>` if you're using djust-theming's form templates) as inline-flex. Result: full keyboard navigation, native focus ring preserved, no extra Python required. Browser support: Chromium 105+, Safari 15.4+, Firefox 121+ — all stable since 2023.
+The attribute sits on each `<input>`, never on the wrapper. The bundled CSS uses the `:has()` parent selector to walk up from the marked input and lay out the containing `<div>` (or `<ul>`, for templates that render a list) as inline-flex. Result: full keyboard navigation, native focus ring preserved, no extra Python required. Browser support: Chromium 105+, Safari 15.4+, Firefox 121+ — all stable since 2023.
 
 ### Why a `data-` attribute and not a custom widget?
 
@@ -361,25 +380,25 @@ Three reasons:
 Override the bundled rules in your own stylesheet (loaded after `djust-forms.css`):
 
 ```css
-ul[data-dj-inline] {
+:is(ul, div):has(> :is(li, div) > label > input[data-dj-inline]) {
     /* Replace the default flex with a CSS Grid for fixed columns: */
     display: grid;
     grid-template-columns: repeat(3, 1fr);
 }
 
 /* Or turn it into a segmented-control: */
-ul[data-dj-inline] > li > label {
+label:has(> input[data-dj-inline]) {
     border: 1px solid #ccc;
     padding: 0.4em 0.8em;
     border-radius: 4px;
 }
-ul[data-dj-inline] > li > label:has(input:checked) {
+label:has(> input[data-dj-inline]:checked) {
     background: #1e88e5;
     color: white;
 }
 ```
 
-The `[data-dj-inline]` selector is the documented contract. The default styling is a starting point.
+The `[data-dj-inline]` attribute on the radio input is the documented contract. The default styling is a starting point.
 
 ### Multiple inline fields on one form
 
@@ -397,7 +416,7 @@ class FilterForm(forms.Form):
     )
 ```
 
-Each `<ul>` gets the attribute independently. No form-level config, no class hierarchy.
+Each radio input carries the attribute; the CSS finds its wrapper with `:has()`. No form-level config, no class hierarchy.
 
 ## Tips
 

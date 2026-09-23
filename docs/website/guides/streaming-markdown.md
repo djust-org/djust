@@ -7,7 +7,7 @@ level: intermediate
 description: "Safely render streaming LLM output as Markdown on the server with {% djust_markdown %}."
 ---
 
-# Streaming Markdown (v0.7.0)
+# Streaming Markdown
 
 LLM chat UIs usually render Markdown character-by-character as it streams back
 from the model. Doing that safely in the browser means shipping a Markdown
@@ -85,15 +85,18 @@ Markdown renderer will see an unclosed `**` and do one of two things:
 1. Render the `**` as literal characters (the reader sees the raw syntax).
 2. Emit a half-open `<strong>` tag that tears open the rest of the page.
 
-Neither is good. `{% djust_markdown %}` splits the source at the *last
-newline*. Everything before the last newline is sent to the Markdown parser
-as usual; the partial trailing line is escaped and wrapped in:
+Neither is good. `{% djust_markdown %}` looks at the trailing line (the text
+after the last newline). If it contains unbalanced inline syntax (an odd
+number of `**`, a lone `*`, an odd number of backticks, an unclosed `[`, or a
+dangling `](`), that line is split off, escaped and wrapped in:
 
 ```html
 <p class="djust-md-provisional">Hello **wor</p>
 ```
 
-When the model finishes the line and emits `\n`, the split disappears and
+A trailing line with no open syntax (e.g. `Hello wor`) is parsed normally,
+and so is anything inside an unclosed code fence. When the model finishes
+the line and emits `\n`, the split disappears and
 the text is re-rendered by the Markdown parser as `<p>Hello <strong>word</strong></p>`.
 
 This behaviour is controlled by `provisional=True` (the default). Turn it
@@ -117,8 +120,9 @@ The Rust renderer is built to be **safe by construction**. These properties
 are enforced in the core crate and tested (see
 `crates/djust_templates/src/markdown.rs`):
 
-- **Raw HTML is escaped.** `Options::ENABLE_HTML` is never set on the
-  underlying pulldown-cmark parser. Anything that looks like a tag
+- **Raw HTML is escaped.** djust rewrites every raw-HTML event that
+  pulldown-cmark emits into a text event, so the HTML writer escapes it.
+  Anything that looks like a tag
   (`<script>`, `<img onerror=…>`, `<iframe>`, …) becomes escaped text.
 - **`javascript:` / `vbscript:` / `data:` URLs are neutralised.** Links and
   images pointing at those schemes are rewritten to `#`.
@@ -265,19 +269,18 @@ html = render_markdown(
 
 The return value is a `django.utils.safestring.SafeString`.
 
-## Limitations (v0.7.0)
+## Limitations
 
 These are intentional — they'll be reconsidered in later releases:
 
-- **Tag-only API.** There is no `|djust_markdown` filter form. Deferred to
-  v0.7.1 if demand emerges.
+- **Tag-only API.** There is no `|djust_markdown` filter form.
 - **No syntax highlighting.** Fenced code blocks render as `<pre><code>`
   with no language-class styling. Highlighting pulls in a multi-megabyte
   dependency; roll your own client-side (Prism / highlight.js) if needed.
 - **No MathJax / LaTeX.**
 - **No autolinks in plain text.** `https://example.com` stays as text
-  unless wrapped in an explicit `[text](url)`. pulldown-cmark 0.12 does not
-  expose the GFM-autolink flag we'd need; we'll revisit when the pulled
+  unless wrapped in an explicit `[text](url)`. pulldown-cmark 0.13 does not
+  support GFM autolink literals; we'll revisit when the pulled
   parser version makes this cheap.
 - **Reference-style links across a streaming boundary.** If the reference
   `[1]: https://…` line is still mid-stream when the body `[foo][1]`

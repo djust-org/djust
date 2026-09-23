@@ -17,9 +17,10 @@ Shipped in **v0.5.0** (`djust.db.notify_on_save`, `djust.db.send_pg_notify`,
 ## The 30-second version
 
 ```python
+from asgiref.sync import async_to_sync
 from django.db import models
 from djust import LiveView
-from djust.db import notify_on_save
+from djust.db import PostgresNotifyListener, notify_on_save
 
 @notify_on_save                         # default channel: "shop_order"
 class Order(models.Model):
@@ -27,10 +28,14 @@ class Order(models.Model):
 
 class OrderDashboard(LiveView):
     template_name = "dashboard.html"
+    # Known issue #2962: declare the channel at class level so the
+    # WebSocket consumer joins its group (self.listen() in mount() doesn't).
+    _listen_channels = frozenset({"shop_order"})
 
     def mount(self, request, **kwargs):
         self.orders = list(Order.objects.filter(status="pending"))
-        self.listen("shop_order")       # subscribe to the NOTIFY channel
+        # Start the process-wide Postgres LISTEN for the channel.
+        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("shop_order")
 
     def handle_info(self, message):
         if message["type"] == "db_notify":
@@ -39,7 +44,22 @@ class OrderDashboard(LiveView):
 
 Create / update / delete an `Order` from anywhere — a Django admin, a
 Celery task, a management command, even a `psql` shell — and every user
-viewing `OrderDashboard` sees fresh data within a few milliseconds.
+viewing `OrderDashboard` gets fresh data, usually within a few
+milliseconds. Delivery is best-effort; see
+[Dropped notifications](#dropped-notifications-under-contention).
+
+> **Known issue: #2962.** The intended API is `self.listen("shop_order")`
+> inside `mount()`. At 1.2.0rc10 that call records the channel and starts
+> the Postgres `LISTEN`, but the WebSocket consumer reads the channel set
+> *before* `mount()` runs, so on a fresh mount it never joins the Channels
+> group and `handle_info` is never called. Until the fix ships, use the
+> workaround above: a class-level `_listen_channels` (which the consumer
+> reads when it wires up the view), plus an explicit
+> `PostgresNotifyListener.instance().ensure_listening(...)` call in
+> `mount()`. Calling `self.listen()` for a channel that is already in the
+> class-level set returns early without starting the listener, which is
+> why the example calls `ensure_listening` directly. Every example on this
+> page uses this workaround.
 
 ## How it works
 
@@ -63,12 +83,15 @@ viewing `OrderDashboard` sees fresh data within a few milliseconds.
    `psycopg.AsyncConnection` and does `async for notify in
    conn.notifies():`. On each NOTIFY it calls
    `channel_layer.group_send("djust_db_notify_<channel>", ...)`.
-3. `self.listen(channel)` in `mount()` joins the view's WebSocket
-   consumer to that Channels group.
+3. When the WebSocket consumer wires up the view, it joins the Channels
+   group for every channel in the view's `_listen_channels`. (This is
+   meant to be populated by `self.listen(channel)` in `mount()`, but at
+   rc10 the consumer reads it before `mount()` runs; see
+   [Known issue #2962](#the-30-second-version).)
 4. The consumer's `db_notify` handler calls `handle_info(message)` and
    re-renders — VDOM patches stream down to the browser.
 
-The only code you write is the decorator, `self.listen()`, and
+The only code you write is the decorator, the channel subscription, and
 `handle_info()`.
 
 ## `@notify_on_save`
@@ -95,8 +118,10 @@ class Order(models.Model): ...
 {"pk": 42, "event": "save", "model": "shop.Order"}
 ```
 
-Minimal by design. Postgres caps NOTIFY payloads at **8000 bytes**;
-receivers re-fetch full state via the ORM when they need it.
+Minimal by design. Postgres caps NOTIFY payloads at **8000 bytes**, and
+djust is stricter: `send_pg_notify` logs a warning above 4 KB and drops
+(with an ERROR log) any payload over 7,500 bytes. Receivers re-fetch full
+state via the ORM when they need it.
 
 **Channel name rules:** `^[a-z_][a-z0-9_]{0,62}$`. Uppercase, hyphens,
 dots, and quotes are rejected at decorator-registration time. This is
@@ -113,10 +138,18 @@ def mount(self, request, **kwargs):
     self.listen("orders")      # duplicate subscriptions are idempotent
 ```
 
+> **Known issue: #2962.** At 1.2.0rc10, channels passed to `self.listen()`
+> inside `mount()` are **not** joined on a fresh WebSocket mount, so
+> `handle_info` never fires for them. Use the class-level
+> `_listen_channels` workaround shown in
+> [The 30-second version](#the-30-second-version).
+
 Raises `ValueError` for bad channel names.
 
-Raises `djust.db.DatabaseNotificationNotSupported` when the configured DB
-backend isn't PostgreSQL or `psycopg` isn't installed. The decorator
+On a non-PostgreSQL backend, or without psycopg 3.2+, `self.listen()` does
+**not** raise. The background listener logs a
+`pg listener disabled (permanent failure)` warning and no notifications
+are delivered. The decorator
 `@notify_on_save` itself degrades gracefully — it becomes a no-op with a
 debug log — so the same model code works in sqlite test suites.
 
@@ -187,9 +220,10 @@ class Order(models.Model):
 
 class OrderDashboard(LoginRequiredMixin, LiveView):
     template_name = "admin/orders.html"
+    _listen_channels = frozenset({"orders"})  # #2962 workaround
 
     def mount(self, request, **kwargs):
-        self.listen("orders")
+        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("orders")
         self._refresh()
 
     def handle_info(self, message):
@@ -210,13 +244,17 @@ class Document(models.Model):
     body = models.TextField()
 
 class DocumentView(LiveView):
+    _listen_channels = frozenset({"document"})  # #2962 workaround
+
     def mount(self, request, doc_id, **kwargs):
         self._doc_id = doc_id
-        self.listen("document")
+        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("document")
         self.doc = Document.objects.get(pk=doc_id)
 
     def handle_info(self, message):
-        if message["payload"].get("pk") == self._doc_id:
+        # The payload pk is a JSON number; URL kwargs are strings unless
+        # the route uses <int:doc_id>, so compare as strings.
+        if str(message["payload"].get("pk")) == str(self._doc_id):
             self.doc.refresh_from_db()
 ```
 
@@ -230,13 +268,15 @@ customer's page updates instantly with no extra plumbing.
 class Order(models.Model): ...
 
 class CustomerOrderView(LiveView):
+    _listen_channels = frozenset({"orders"})  # #2962 workaround
+
     def mount(self, request, order_id, **kwargs):
         self._order_id = order_id
-        self.listen("orders")
+        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("orders")
         self.order = Order.objects.get(pk=order_id)
 
     def handle_info(self, message):
-        if message["payload"].get("pk") == self._order_id:
+        if str(message["payload"].get("pk")) == str(self._order_id):
             self.order.refresh_from_db()
 ```
 
@@ -257,13 +297,25 @@ down gets picked up on the next NOTIFY after reconnect, but intervening
 changes are silent.
 
 **Mitigation:** if your dashboard must never miss an update, combine
-NOTIFY with a periodic `handle_tick()` that refreshes from the DB. NOTIFY
+NOTIFY with a periodic `handle_tick()` that refreshes from the DB (set
+`tick_interval = 30_000` or similar on the view; `handle_tick()` only
+runs when `tick_interval` is set). NOTIFY
 handles "instant" updates; `handle_tick()` serves as a catch-up for any
 missed events.
 
+### Dropped notifications under contention
+
+Delivery is best-effort. If the view is handling a user event, or its
+render lock is held for more than 100 ms, the notification is dropped
+(debug-logged) and not queued. Under bursty notification streams some
+re-renders are skipped. Pair NOTIFY with a periodic refresh (above) if
+every change must render.
+
 ### 8000-byte payload cap
 
-Postgres's `NOTIFY` payload limit is 8000 bytes. Keep payloads minimal.
+Postgres's `NOTIFY` payload limit is 8000 bytes. djust warns above 4 KB
+and drops (with an ERROR log) any payload over 7,500 bytes, below
+Postgres's cap. Keep payloads minimal.
 Full row snapshots often exceed that; re-fetching via the ORM is the
 intended pattern.
 
@@ -271,8 +323,9 @@ intended pattern.
 
 `LISTEN/NOTIFY` is Postgres-specific. SQLite, MySQL, and Oracle are not
 supported. `@notify_on_save` is a silent no-op on non-Postgres backends
-so you can develop on SQLite without conditional imports, but
-`self.listen()` raises `DatabaseNotificationNotSupported`.
+so you can develop on SQLite without conditional imports. `self.listen()`
+does not raise either: the background listener logs a
+`pg listener disabled (permanent failure)` warning and delivers nothing.
 
 ### One listener per process
 
@@ -312,7 +365,8 @@ Point this at a direct (non-pooler) endpoint so the session-mode `LISTEN`
 connection can't saturate a shared transaction-pool. The setting is fully
 backwards-compatible — when unset, the listener uses `DATABASES["default"]`
 exactly as before. The postgres-only check still applies: a non-postgresql
-URL scheme raises `DatabaseNotificationNotSupported`. The override URL (and
+URL scheme raises `DatabaseNotificationNotSupported` inside the listener
+task, which logs it as a permanent failure and stops. The override URL (and
 its embedded password) is never logged.
 
 #### Connection query parameters (TLS, unix sockets)

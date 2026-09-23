@@ -48,7 +48,7 @@ Hooks are inherited via MRO (parent-first, deduplicated). See [on_mount Hooks Gu
 
 #### `mount(request, **kwargs)`
 
-Called once when the page first loads (HTTP request). Initialize all state here.
+Called on the initial HTTP request and again when the WebSocket connects (unless state is restored from a snapshot). Keep it idempotent and initialize all state here.
 
 **Parameters:**
 
@@ -84,18 +84,17 @@ def get_context_data(self, **kwargs):
 
 ---
 
-#### `handle_params(params, url, **kwargs)`
+#### `handle_params(params, uri)`
 
-Called when URL parameters change via `live_patch()` (soft navigation without a full page reload).
+Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation.
 
 **Parameters:**
 
 - `params` — `dict` of current URL query parameters
-- `url` — Current URL string
-- `**kwargs` — Additional keyword arguments
+- `uri` — Current path plus query string
 
 ```python
-def handle_params(self, params, url, **kwargs):
+def handle_params(self, params, uri):
     self.page = int(params.get("page", 1))
     self.sort = params.get("sort", "name")
     self._refresh()
@@ -103,53 +102,45 @@ def handle_params(self, params, url, **kwargs):
 
 ---
 
-#### `handle_info(event, data, **kwargs)`
+#### `handle_info(message)`
 
-Called when the server sends a message to this LiveView (e.g., from background tasks, PubSub, or `send_update()`).
+Receives out-of-band messages, such as PostgreSQL `NOTIFY` events delivered to a view that subscribed with `self.listen(channel)`. It is called with a single `dict` argument; the default implementation does nothing. Background tasks and `push_to_view()` do not go through this hook.
 
 **Parameters:**
 
-- `event` — Event name string
-- `data` — Event payload (dict)
-- `**kwargs` — Additional metadata
+- `message` — `dict` with a `"type"` key (e.g. `"db_notify"`) and the message payload
 
 ```python
-def handle_info(self, event, data, **kwargs):
-    if event == "new_message":
-        self.messages.append(data["message"])
-    elif event == "task_complete":
-        self.is_processing = False
-        self.result = data["result"]
+def handle_info(self, message):
+    if message["type"] == "db_notify":
+        self.refresh()
 ```
+
+> **Known issue: #2962.** `self.listen()` called in `mount()` never subscribes, so `handle_info` receives nothing. Workaround: declare the channels at class level with `_listen_channels = {"orders"}`.
 
 ---
 
-#### `disconnect(**kwargs)`
+#### Disconnect cleanup
 
-Called when the WebSocket connection closes (user navigates away, tab closes, etc.). Use for cleanup.
-
-```python
-def disconnect(self, **kwargs):
-    self._cleanup_resources()
-```
+LiveView has no user-level disconnect hook in 1.2: a `disconnect()`, `unmount()` or `disconnected()` method you define on the view is never called when the WebSocket closes. The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, and uploads and child views are released. Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep).
 
 ---
 
 ### Navigation Methods
 
-#### `live_patch(url, params=None)`
+#### `live_patch(params=None, path=None, replace=False)`
 
-Navigate to a new URL without a full page reload. Updates the browser URL and calls `handle_params()`:
+Update the browser URL without remounting the view. `params` is merged into the current query string (`{}` clears it), `path` optionally changes the path, and `replace=True` uses `replaceState` instead of `pushState`. Calls `handle_params()`:
 
 ```python
 @event_handler()
 def go_to_page(self, page: int = 1, **kwargs):
-    self.live_patch(f"/items/?page={page}")
+    self.live_patch(params={"page": page})
 ```
 
-#### `live_redirect(url)`
+#### `live_redirect(path, params=None, replace=False)`
 
-Navigate to a new URL with a full page load (replaces the current LiveView):
+Navigate to a different LiveView over the existing WebSocket. The current view is unmounted and the new one mounted, with no full page reload or reconnection. For a real full-page navigation, use a normal link or an HTTP redirect.
 
 ```python
 @event_handler()
@@ -161,9 +152,9 @@ def logout(self, **kwargs):
 
 ### Streaming
 
-#### `stream(name, items)`
+#### `stream(name, items, dom_id=None, at=-1, reset=False, limit=None)`
 
-Stream a collection to the template — items are JIT-evaluated by the Rust engine when the template renders them, not before:
+Stream a collection to the template. The items are evaluated immediately (the iterable is turned into a list) and sent as stream inserts; the stream is cleared from server memory after each render:
 
 ```python
 def mount(self, request, **kwargs):
@@ -320,14 +311,19 @@ See [Document Metadata Guide](../guides/document-metadata.md) for detailed examp
 
 ### Server-Push
 
-#### `send_update()`
+#### `push_to_view()`
 
-Trigger a re-render and push the updated HTML to the client immediately (outside of an event handler):
+LiveView has no `send_update()` method. To update connected clients from outside an event handler (a Celery task, signal handler or management command), use `push_to_view()` (or `await apush_to_view()` from async code). It either sets state or calls a handler on every connected instance of the view:
 
 ```python
+from djust import push_to_view
+
 # From a background task or signal handler:
-view.send_update()
+push_to_view("myapp.views.DashboardView", state={"alert_count": 5})
+push_to_view("myapp.views.DashboardView", handler="handle_refresh", payload={"source": "celery"})
 ```
+
+The handler must start with `handle_` or be decorated with `@event_handler`. See [Server Push](../advanced/server-push.md).
 
 ---
 

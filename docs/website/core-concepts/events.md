@@ -7,7 +7,7 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 | Attribute                     | Fires when                       | Handler receives                  |
 | ----------------------------- | -------------------------------- | --------------------------------- |
 | `dj-click="handler"`          | Element is clicked               | `data-*` attrs as kwargs          |
-| `dj-input="handler"`          | Input value changes (keyup)      | `value=` string, `_target=` name  |
+| `dj-input="handler"`          | Input value changes (`input` event; text inputs debounced 300 ms by default) | `value=` string, `_target=` name  |
 | `dj-change="handler"`         | Input/select loses focus         | `value=` string, `_target=` name  |
 | `dj-submit="handler"`         | Form is submitted                | All named fields as kwargs        |
 | `dj-keydown.enter="handler"`  | Enter key pressed                | `**kwargs`                        |
@@ -104,7 +104,7 @@ literal known at template-author time. (Available since v0.1.7.)
 ### Input
 
 ```html
-<!-- Fires on every keystroke -->
+<!-- Fires 300 ms after the user stops typing (override with dj-debounce) -->
 <input type="text" dj-input="search" value="{{ query }}" placeholder="Search..." />
 ```
 
@@ -191,7 +191,16 @@ Supported attributes:
 
 Key modifier filtering works the same as `dj-keydown`: `dj-window-keydown.escape="close"`.
 
-`dj-window-scroll` and `dj-window-resize` default to 150ms throttle to prevent flooding. Override with `data-throttle` or `data-debounce` on the element.
+`dj-window-scroll` and `dj-window-resize` fire on every browser event. They are not throttled by default, and they ignore `dj-throttle`/`data-throttle` on the element. Scroll handlers receive `scrollX`/`scrollY`; resize handlers receive `innerWidth`/`innerHeight`. Rate-limit them with the handler decorator:
+
+```python
+from djust.decorators import event_handler, throttle
+
+@event_handler()
+@throttle(interval=0.15)
+def on_scroll(self, scrollY: int = 0, **kwargs):
+    self.scroll_pos = scrollY
+```
 
 ### Click Away
 
@@ -217,8 +226,10 @@ Declarative keyboard shortcuts with modifier key support:
 <div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">
 
 <!-- Modifier keys: ctrl, alt, shift, meta (cmd on Mac) -->
-<button dj-shortcut="ctrl+shift+s:save_draft:prevent">Save</button>
+<button dj-shortcut="ctrl+shift+S:save_draft:prevent">Save</button>
 ```
+
+With `shift`, write a letter key as the browser reports it (`S`, not `s`): the key is compared case-sensitively against `KeyboardEvent.key`.
 
 Syntax: `[modifier+...]key:handler[:prevent]`, comma-separated for multiple bindings.
 
@@ -334,11 +345,11 @@ Apply debounce or throttle to any `dj-*` event attribute directly in HTML, givin
 <input dj-input="validate" dj-debounce="blur" />
 ```
 
-`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. HTML attributes take precedence over `data-debounce`/`data-throttle`.
+`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. `data-debounce`/`data-throttle` are legacy spellings honoured only on `dj-input`; use `dj-debounce`/`dj-throttle` everywhere.
 
 ### Python Decorators
 
-Use decorators to control how often handlers fire server-side:
+Use decorators to rate-limit a handler for every element that triggers it (applied in the browser before the event is sent):
 
 ```python
 from djust.decorators import event_handler, debounce, throttle
@@ -353,11 +364,11 @@ def search(self, value: str = "", **kwargs):
 # Fire at most once per second
 @event_handler()
 @throttle(interval=1.0)
-def on_scroll(self, position: int = 0, **kwargs):
-    self.scroll_pos = position
+def on_scroll(self, scrollY: int = 0, **kwargs):
+    self.scroll_pos = scrollY
 ```
 
-HTML attributes and Python decorators can be combined: the HTML attribute controls client-side timing, the decorator controls server-side timing.
+HTML attributes and Python decorators can be combined: the HTML attribute wraps one element's listener, and the decorator gates every send of that handler. Both run client-side and compose.
 
 ## Loading States
 
@@ -482,16 +493,17 @@ Copy text to the clipboard on click without a server round-trip:
 <button dj-copy="{{ token }}" dj-copy-class="btn-success">Copy</button>
 
 <!-- Fire a server event after successful copy (e.g., for analytics) -->
-<button dj-copy="#snippet" dj-copy-event="copied" dj-value-snippet-id="{{ snippet.id }}">Copy</button>
+<!-- The handler receives one param, text (the copied string) -->
+<button dj-copy="#snippet" dj-copy-event="copied">Copy</button>
 ```
 
 | Attribute | Description |
 |---|---|
 | `dj-copy="text"` | Literal text to copy |
 | `dj-copy="#selector"` | Copy `textContent` of the matched element |
-| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-feedback="text"` | Button text shown for 1.5s after copy (default: `"Copied!"`) |
 | `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
-| `dj-copy-event="handler"` | Server event fired after successful copy |
+| `dj-copy-event="handler"` | Server event fired after successful copy; receives `text` |
 
 All enhancements are backward compatible with existing `dj-copy` usage.
 
@@ -500,7 +512,7 @@ All enhancements are backward compatible with existing `dj-copy` usage.
 After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
 
 ```html
-<div dj-auto-recover="restore_canvas" dj-value-canvas-id="main">
+<div dj-auto-recover="restore_canvas" data-canvas-id="main">
     <canvas id="drawing-canvas"></canvas>
     <input name="brush_size" value="5" />
 </div>
@@ -508,15 +520,17 @@ After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire 
 
 ```python
 @event_handler()
-def restore_canvas(self, brush_size: str = "", canvas_id: str = "", **kwargs):
+def restore_canvas(self, _form_values=None, _data_attrs=None, **kwargs):
     """Called automatically after reconnect with DOM state from the container."""
-    self.brush_size = int(brush_size) if brush_size else 5
-    self.canvas_id = canvas_id
+    form = _form_values or {}
+    data = _data_attrs or {}
+    self.brush_size = int(form.get("brush_size") or 5)
+    self.canvas_id = data.get("canvas-id", "")
 ```
 
 Key behavior:
 - Does **not** fire on initial page load — only after reconnection
-- Serializes form field values and `data-*` attributes from the container element
+- Serializes the container's form field values and `data-*` attributes; they arrive as the `_form_values` and `_data_attrs` dicts. `data-*` keys keep their dashes (`canvas-id`), and `dj-value-*` attributes are not included
 - Multiple independent `dj-auto-recover` elements can coexist on the same page
 - Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
 
@@ -603,7 +617,8 @@ djust skips its own internal `data-*` attributes so they don't leak into your ha
 
 - `data-liveview-*`, `data-live-*`, `data-djust-*` — framework internals
 - `data-loading`, `data-component-id` — component machinery
-- `data-key` — VDOM list diffing key
+
+`data-key` is **not** skipped. If the keyed element itself carries a `dj-*` event, the handler receives `key=`, so accept `**kwargs` or use `dj-key` (also a VDOM list diffing key) instead.
 
 ### Quick reference
 

@@ -23,28 +23,26 @@ pip install 'mcp[cli]'
 
 ### One-shot install: `djust mcp install`
 
-From a djust project, the `djust` CLI knows about Claude Code,
-Cursor, and Windsurf and can wire up the MCP server in one
-command:
+From inside a djust project, the `djust` CLI can wire up the MCP
+server for Claude Code in one command. It takes no options:
 
 ```bash
-djust mcp install                # auto-detect available editors
-djust mcp install --client claude   # Claude Code only
-djust mcp install --client cursor   # Cursor only
-djust mcp install --client windsurf # Windsurf only
+djust mcp install
 ```
 
 Behavior:
 
-- Tries `claude mcp add` first (canonical for Claude Code).
-- Falls back to writing `.mcp.json` directly when the CLI is
-  unavailable or you're configuring Cursor / Windsurf.
-- Merges with any existing `.mcp.json` instead of overwriting —
-  malformed files are backed up to `.mcp.json.bak.<ts>` before the
-  rewrite. Idempotent: running it twice is a no-op.
+- Finds `manage.py` in the current directory or a parent.
+- Runs `claude mcp add --scope project` when the `claude` CLI is on
+  your `PATH`.
+- Otherwise (or if that command fails), writes or merges `.mcp.json`
+  in the current directory, with absolute paths to your Python and
+  `manage.py`. Other servers already in the file are kept.
+- A malformed `.mcp.json` is moved to `.mcp.json.bak` first.
+  Re-running is safe.
 
-If you want to inspect or hand-edit the config, the manual options
-below produce the same `.mcp.json` content.
+It doesn't detect or configure other editors. For VS Code, Cursor or
+Windsurf, use the manual configuration below.
 
 ### Claude Code (manual)
 
@@ -108,7 +106,7 @@ Use full mode when working inside a Django project. Use framework-only mode when
 
 ## Tools Reference
 
-The server exposes 14 tools organized into four categories.
+The server exposes 24 tools in five categories.
 
 ### Framework Schema (no Django required)
 
@@ -116,7 +114,7 @@ These tools return static framework metadata. They work in both modes.
 
 **`get_framework_schema()`** — Returns the complete djust framework schema: all directives, lifecycle methods, decorators, class attributes, mixins, data attribute types, and conventions. **This is the first tool an AI should call.**
 
-**`get_template_directives()`** — Returns just the `dj-*` template directives with their parameters, DOM events, examples, and modifiers. Covers all 28+ directives: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-model`, `dj-update`, `dj-target`, `dj-loading.*`, `dj-hook`, `dj-patch`, `dj-navigate`, `dj-stream`, `dj-upload`, and more.
+**`get_template_directives()`** — Returns just the `dj-*` template directives with their parameters, DOM events, examples, and modifiers. Covers all 68 directives, including `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-model`, `dj-update`, `dj-target`, `dj-loading.*`, `dj-hook`, `dj-patch`, `dj-navigate`, `dj-stream` and `dj-upload`.
 
 **`get_decorators()`** — Returns all djust decorators with import paths, parameters, and usage examples: `@event_handler`, `@debounce`, `@throttle`, `@cache`, `@rate_limit`, `@permission_required`, `@reactive`, `@computed`, `state()`, and the inert markers `@optimistic` (#2699) and `@client_state` (#2680).
 
@@ -140,7 +138,9 @@ These tools inspect your live Django project. They only work when launched via `
 
 **`run_audit(app_label="")`** — Runs a security audit across all LiveViews. Returns exposed state, auth config, handler signatures, decorator protections, and mixins per view. *(Requires Django.)*
 
-**`validate_view(code)`** — Validates a LiveView class definition without running it. Pass in Python source code and get back a list of issues: missing `@event_handler` decorators, missing `**kwargs`, missing `mount()`, security problems. Uses AST parsing, so it works without Django.
+**`validate_view(code)`** — Validates a LiveView class definition without running it. Pass in Python source code and get back a list of issues: missing `@event_handler` decorators, missing `**kwargs` on handlers, a `mount()` without `request` or `**kwargs`, a missing `template_name`, and `mark_safe()` with f-strings. Uses AST parsing, so it works without Django.
+
+**`detect_common_issues(code)`** — Checks LiveView source for common anti-patterns: service instances stored in state, public QuerySet attributes (should be `_`-prefixed), handlers missing `**kwargs`, and handler-like methods missing `@event_handler`. Also AST-based, so it works without Django.
 
 ### Code Generation (no Django required)
 
@@ -162,8 +162,10 @@ require:
 - `LocalhostOnlyObservabilityMiddleware` in `MIDDLEWARE` (rejects any
   non-loopback caller)
 
-Each tool corresponds 1:1 to an HTTP endpoint under
-`/_djust/observability/` — the MCP wrapper just calls it.
+Most of these tools call an HTTP endpoint under
+`/_djust/observability/`. `find_handlers_for_template` and
+`seed_fixtures` run inside the MCP process and need only Django
+configured (not the URL include or `DEBUG`).
 
 **`get_view_assigns(session_id)`** — Real server-side `self.*` state of
 the mounted LiveView for a given session. Complements
@@ -196,10 +198,12 @@ registered instance. Clears public attrs and re-invokes
 `mount(stashed_request, **stashed_kwargs)`. Useful between fixture
 replays.
 
-**`eval_handler(session_id, handler_name, params={}, dry_run=True)`** —
-Dry-run a handler against the live view's current state. Returns
-`{before_assigns, after_assigns, delta, result}`. With `dry_run=True`
-(default) a `DryRunContext` blocks side effects:
+**`eval_handler(session_id, handler_name, params=None, dry_run=False, dry_run_block=True)`** —
+Run a handler against the live view's current state. Returns
+`{before_assigns, after_assigns, delta, result}`. **`dry_run` is off by
+default: without it the handler runs for real**, with real side effects
+(database writes, email, HTTP). Pass `dry_run=True` to install a
+`DryRunContext` that blocks side effects:
 
 - `Model.save` / `delete`
 - `QuerySet.update` / `delete` / `bulk_create` / `bulk_update`
@@ -209,7 +213,8 @@ Dry-run a handler against the live view's current state. Returns
 The first attempt raises `DryRunViolation`; the response surfaces
 `{"blocked_side_effect": "..."}` so the caller knows what was
 attempted. Pass `dry_run_block=False` to record violations without
-blocking. A process-wide lock serializes dry-runs.
+blocking (the side effects then still happen). A process-wide lock
+serializes dry-runs.
 
 **`find_handlers_for_template(template_path)`** — Cross-references a
 template file against every view that uses it. Returns the `dj-*`
@@ -228,14 +233,16 @@ handler methods, so you can catch dead bindings (template uses
 
 ## Example
 
-Scaffolding a view with search and pagination:
+Scaffolding a view with search and pagination. The generator uses a
+placeholder `Item` model; replace it with yours:
 
 ```python
 # AI calls: scaffold_view("ProductListView", "search,pagination,auth")
 # Generates:
 
 from djust import LiveView
-from djust.decorators import event_handler, debounce
+from djust.decorators import event_handler, permission_required
+
 
 class ProductListView(LiveView):
     template_name = 'myapp/product_list.html'
@@ -248,15 +255,16 @@ class ProductListView(LiveView):
         self._refresh()
 
     def _refresh(self):
-        qs = Product.objects.all()
+        # TODO: Replace with your model
+        qs = Item.objects.all()
         if self.search_query:
             qs = qs.filter(name__icontains=self.search_query)
         start = (self.page - 1) * self.per_page
         self._total_count = qs.count()
-        self._items = qs[start:start + self.per_page]
+        qs = qs[start:start + self.per_page]
+        self._items = qs
 
     @event_handler()
-    @debounce(wait=0.3)
     def search(self, value: str = '', **kwargs):
         self.search_query = value
         self.page = 1
@@ -266,6 +274,12 @@ class ProductListView(LiveView):
     def go_to_page(self, page: int = 1, **kwargs):
         self.page = page
         self._refresh()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['items'] = self._items
+        ctx['total_pages'] = (self._total_count + self.per_page - 1) // self.per_page
+        return ctx
 ```
 
 ## Recommended Workflow

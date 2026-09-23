@@ -104,21 +104,33 @@ Every command accepts **at most one** of these three target kwargs. If you omit 
 
 A "close" button inside a modal usually wants to hide **the modal**, not itself. Without scoped targets, every modal needed a unique ID:
 
+```python
+# Old way — fragile, every modal needs its own chain and a unique id
+self.close_modal_42 = JS.hide(to="#modal-42")
+```
+
 ```html
-<!-- Old way — fragile, every modal needs a unique id -->
 <div id="modal-42">
-    <button dj-click="{{ JS.hide(to='#modal-42') }}">Close</button>
+    <button dj-click="{{ close_modal_42 }}">Close</button>
 </div>
 ```
 
 With `closest`:
 
+```python
+# New way — one chain works in every modal
+self.close_modal = JS.hide(closest=".modal")
+```
+
 ```html
-<!-- New way — the same button works in every modal -->
 <div class="modal">
-    <button dj-click="{{ JS.hide(closest='.modal') }}">Close</button>
+    <button dj-click="{{ close_modal }}">Close</button>
 </div>
 ```
+
+Chains are always built in Python and referenced as plain variables. Template
+syntax cannot call a method with arguments, so `{{ JS.hide(closest='.modal') }}`
+fails to parse.
 
 Drop the same `<button>` into every modal in the app. Zero per-instance configuration.
 
@@ -126,10 +138,14 @@ Drop the same `<button>` into every modal in the app. Zero per-instance configur
 
 `inner` is the mirror image: select within the trigger element's subtree.
 
+```python
+self.highlight_title = JS.add_class("highlight", inner=".title")
+```
+
 ```html
 <div class="card">
     <h2 class="title">Report</h2>
-    <button dj-click="{{ JS.add_class('highlight', inner='.title') }}">
+    <button dj-click="{{ highlight_title }}">
         Highlight title
     </button>
 </div>
@@ -273,17 +289,19 @@ self.jump_to_error = (JS.ext.editor_goto(to="#code-editor", line=self.error_line
 
 ## Command reference
 
-### `show(selector=None, *, inner=None, closest=None, display=None, transition=None, time=None)`
+### `show(selector=None, *, inner=None, closest=None, display=None)`
 
 Unhide the target. Sets `element.style.display` to `display` (default: browser default, which restores the CSS rule) and removes the `hidden` attribute. Fires a `djust:show` CustomEvent on the target.
 
 ```python
 JS.show("#modal")
 JS.show(closest=".card", display="flex")
-JS.show("#modal", transition="fade-in", time=300)
+JS.show("#modal").transition("fade-in", to="#modal", time=300)
 ```
 
-### `hide(selector=None, *, inner=None, closest=None, transition=None, time=None)`
+`show()` and `hide()` also accept `transition=` and `time=` keywords, but at 1.2.0rc10 the client ignores them. Chain `.transition(...)` as above to animate.
+
+### `hide(selector=None, *, inner=None, closest=None)`
 
 Set the target's `display` to `none`. Fires a `djust:hide` CustomEvent on the target.
 
@@ -375,7 +393,9 @@ save_and_close = (
 )
 ```
 
-Set `page_loading=True` to show the navigation-level loading bar (`dj-page-loading` elements) while the event is in flight. This bridges per-event scoped loading and the page-level progress indicator.
+Set `page_loading=True` to show the top-of-page loading bar (`#djust-page-loading-bar`) and add `djust-navigating` to `[dj-root]` while the event is in flight. This bridges per-event scoped loading and the page-level progress indicator.
+
+> **Known issue: #2965.** At 1.2.0rc10 the bar starts but never finishes when the event completes. It stays at about 90% (and `djust-navigating` stays set) until a later navigation or mount finishes it.
 
 ```python
 JS.push("generate_report", page_loading=True)
@@ -421,17 +441,18 @@ await js.exec();
 
 ## Backwards compatibility with `dj-click="handler_name"`
 
-The event-binding layer detects whether `dj-click` (and other event attributes) contain a JSON command list (`[[...]]`) or a plain handler name, and dispatches accordingly. **Existing code continues to work unchanged** — you only opt into JS Commands by assigning a chain.
+The `dj-click` binding detects whether its value is a JSON command list (`[[...]]`) or a plain handler name, and dispatches accordingly. Other event attributes (`dj-submit`, `dj-change`, …) do not interpret chains; a chain there is sent to the server as an event name. Use `dj-click`, a hook's `this.js()`, or `push_commands` for those. **Existing code continues to work unchanged** — you only opt into JS Commands by assigning a chain.
 
 ```html
 <!-- Plain handler — sends an event to the server. Same as before. -->
 <button dj-click="save_draft">Save</button>
 
-<!-- Chain — runs locally. -->
-<button dj-click="{{ JS.hide('#modal') }}">Close</button>
+<!-- Chain — runs locally. In mount(): self.close = JS.hide("#modal") -->
+<button dj-click="{{ close }}">Close</button>
 
-<!-- Chain with a push — runs locally, then sends a server event. -->
-<button dj-click="{{ JS.hide('#modal').push('saved') }}">Save & Close</button>
+<!-- Chain with a push — runs locally, then sends a server event.
+     In mount(): self.save_and_close = JS.hide("#modal").push("saved") -->
+<button dj-click="{{ save_and_close }}">Save & Close</button>
 ```
 
 ---

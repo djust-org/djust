@@ -95,7 +95,8 @@ The default auto-dismiss is 5000ms (5 seconds). Override it per-container:
 <!-- Dismiss after 8 seconds -->
 {% dj_flash auto_dismiss=8000 %}
 
-<!-- Never auto-dismiss (user must close manually or call clear_flash) -->
+<!-- Never auto-dismiss: stays until the server calls clear_flash() or your own JS
+     calls window.djust.flash.dismiss(el). djust renders no close button. -->
 {% dj_flash auto_dismiss=0 %}
 ```
 
@@ -234,15 +235,20 @@ class DestinationView(LiveView):
 
 ### Flash After Form Submission
 
+With [`FormMixin`](forms.md), put the flash in the `form_valid` / `form_invalid` hooks. `FormMixin.submit_form` (the `dj-submit` handler) calls them:
+
 ```python
-@event_handler()
-def submit_form(self, **kwargs):
-    form = MyForm(self._form_data)
-    if form.is_valid():
+from djust import LiveView
+from djust.forms import FormMixin
+
+class MyView(FormMixin, LiveView):
+    form_class = MyForm
+
+    def form_valid(self, form):
         form.save()
         self.put_flash("success", "Form submitted successfully.")
-        self.clear_form()
-    else:
+
+    def form_invalid(self, form):
         self.put_flash("error", "Please fix the errors below.")
 ```
 

@@ -179,7 +179,7 @@ Stack traces are included only when `DEBUG = True`. User parameters are never in
 
 ## CSRF Protection
 
-djust LiveViews use WebSocket connections authenticated by the Django session. The initial HTTP handshake carries the session cookie, and the WebSocket consumer verifies the session before accepting the connection.
+Cross-site WebSocket hijacking is blocked by an `Origin` check: before accepting the handshake, the WebSocket consumer verifies that the `Origin` header matches `ALLOWED_HOSTS`, and closes the connection with code 4403 otherwise. The connection carries the Django session cookie, and view-level authentication (`LoginRequiredMixin`, `login_required`, auth mixins) is enforced when the view mounts.
 
 For any HTTP endpoints in your djust application, standard Django CSRF protection applies. Never use `@csrf_exempt` without documented justification.
 
@@ -198,7 +198,7 @@ class DashboardView(LoginRequiredMixin, LiveView):
         self.user = request.user
 ```
 
-The WebSocket consumer checks `request.user` during connection. If using `PresenceMixin`, the framework gracefully handles missing authentication middleware by checking `hasattr(request, "user")` before accessing `request.user`.
+The WebSocket consumer checks `request.user` when the view mounts. If using `PresenceMixin`, the framework gracefully handles missing authentication middleware by checking `hasattr(request, "user")` before accessing `request.user`.
 
 ## Multi-Tenant Isolation
 
@@ -212,10 +212,14 @@ All storage keys (cache, state backends, sessions) must include the tenant ident
 from djust.tenants.mixin import TenantScopedMixin
 
 class TenantDocumentView(TenantScopedMixin, LiveView):
-    def get_queryset(self):
-        # TenantScopedMixin auto-filters: .filter(tenant=self.tenant)
-        return Document.objects.all()
+    model = Document
+
+    def mount(self, request, **kwargs):
+        # Filtered by tenant_field (default "tenant_id")
+        self.documents = self.get_tenant_queryset()
 ```
+
+`TenantScopedMixin` does not filter querysets automatically, and it does not override `get_queryset()`. A plain `Document.objects.all()` returns every tenant's rows. Always go through `get_tenant_queryset()`, `get_tenant_object(pk)` and `create_for_tenant(**fields)`.
 
 ### Isolation Checklist
 
@@ -275,7 +279,7 @@ When a user interacts with a LiveView, here's what happens:
 | Context dict | Used server-side for rendering only, never serialized to the client |
 | Private attributes (`_name`) | Excluded from `get_context_data()` by convention |
 | Unreferenced model fields | JIT serialization only processes fields the template actually uses |
-| Handler return values | Return values are discarded; only the re-rendered HTML matters |
+| Handler return values | Return values of WebSocket event handlers are discarded — except handlers exposed with `@event_handler(expose_api=True)` and `@server_function` methods, whose return values are sent to the caller |
 
 ### DEBUG mode only
 
