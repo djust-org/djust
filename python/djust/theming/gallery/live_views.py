@@ -95,6 +95,15 @@ _DESCRIPTOR_STUBS: Dict[str, list] = {
 # have no descriptor to declare.
 
 
+#: Preview-only values. They never reach the component: `HIDDEN` replaces the
+#: examples with a sentence and a way back (a dismissed alert, a closed sheet —
+#: the component has no "dismissed" state, the host stops rendering it), and
+#: `RECEIVED` names the last event the page answered without a visible change
+#: (approve, send, save), so a click is seen to reach the server.
+PREVIEW_HIDDEN = "__preview_hidden__"
+PREVIEW_RECEIVED = "__preview_received__"
+
+
 def _text(_current: Any, incoming: Any) -> Any:
     return incoming
 
@@ -147,6 +156,29 @@ def _month_step(delta: int):
         "self.component.month % 12 + 1" if delta > 0 else "(self.component.month - 2) % 12 + 1"
     )
     return _shift
+
+
+def _hide(sentence: str):
+    """A dismiss / close / accept: the host stops rendering the component."""
+    return (PREVIEW_HIDDEN, lambda _c, _v: sentence)
+
+
+def _received(event: str):
+    """An event the host acts on that moves no state the preview could show."""
+    return (PREVIEW_RECEIVED, lambda _c, _v: event)
+
+
+def _tick_option(current: Any, incoming: Any, params: Dict[str, Any]) -> Any:
+    """`multi_select`: `option` is the box, `value` whether it is now ticked."""
+    option = params.get("option")
+    picked = [o for o in (current or []) if o != option]
+    return picked + [option] if incoming and option is not None else picked
+
+
+_tick_option.with_params = True  # type: ignore[attr-defined]
+_tick_option.stub_expr = (  # type: ignore[attr-defined]
+    "...  # the handler gets `option` (the box) and `value` (ticked or not)"
+)
 
 
 def _append_row(current: Any, _incoming: Any) -> Any:
@@ -218,19 +250,41 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_menu": ("open", _flip),
     "toggle_notifications": ("is_open", _flip),
     "toggle_sheet": ("is_open", _flip),
-    "close_sheet": ("is_open", lambda _c, _v: False),
-    "close_palette": ("is_open", lambda _c, _v: False),
-    "accept_cookies": ("accepted", lambda _c, _v: True),
-    "dismiss_alert": ("dismissed", lambda _c, _v: True),
+    # Closing, dismissing, accepting: the host stops rendering the component,
+    # which has no "dismissed" state of its own to re-render with. Writing
+    # `dismissed=True` (as this table did) changed nothing on screen, so the
+    # button looked broken; the preview now says what happened and offers the
+    # component back.
+    "close_sheet": _hide("Closed — your handler sets it closed."),
+    "close_palette": _hide("Closed — your handler sets it closed."),
+    "close_export": _hide("Closed — your handler sets it closed."),
+    "close_lightbox": _hide("Closed — your handler sets it closed."),
+    "accept_cookies": _hide(
+        "Accepted — your handler records consent and stops rendering the banner."
+    ),
+    "dismiss_alert": _hide("Dismissed — your handler stops rendering it."),
     "add_row": ("rows", _append_row),
-    # These three carry no state the component can be re-rendered with — the
-    # host is expected to act on them itself (send a message, record a review).
-    # Answered anyway, so the preview reports no failure; there is simply
-    # nothing for the page to change.
-    "approve": ("status", lambda _c, _v: "approved"),
-    "reject": ("status", lambda _c, _v: "rejected"),
-    "send": ("sent", lambda _c, _v: True),
-    "save_prompt": ("saved", lambda _c, _v: True),
+    # These carry no state the component can be re-rendered with — the host
+    # acts on them itself (send a message, run a search, record a review). The
+    # preview says the event arrived, so the click is seen to do something.
+    "approve": _received("approve"),
+    "reject": _received("reject"),
+    "send": _received("send"),
+    "save_prompt": _received("save_prompt"),
+    "export": _received("export"),
+    "mark_notification_read": _received("mark_notification_read"),
+    "clear_notifications": _received("clear_notifications"),
+    "palette_search": _received("palette_search"),
+    # `combobox` sends `<name>_search` as the reader types; filtering the
+    # options is the host's job. Unanswered, every keystroke was an error.
+    "language_search": _received("language_search"),
+    # `multi_select`'s checkboxes send the ticked value; `selected` holds them.
+    "set_frameworks": ("selected", _tick_option),
+    # `rich_text_editor` sends its content on input.
+    "update_content": ("value", _text),
+    "lightbox_navigate": ("active", _as_int),
+    # `otp_input`'s script fills the hidden input once every box has a digit.
+    "verify_code": _received("verify_code"),
     # `error_boundary`'s Retry: a host reloads and clears `error`.
     "retry_load": ("error", lambda _c, _v: ""),
     # Found by re-running the audit after the examples above gained content:
@@ -240,7 +294,7 @@ _DEMO_EVENTS: Dict[str, Any] = {
     # `tag_input` fall back to their `name` as the event name — so their
     # examples now pass an explicit `event` rather than making the handler
     # depend on what the example happened to be called.
-    "dismiss_announcement": ("dismissed", lambda _c, _v: True),
+    "dismiss_announcement": _hide("Dismissed — your handler stops rendering it."),
     "carousel_next": ("active", _step(1)),
     "carousel_prev": ("active", _step(-1)),
     "set_color": ("value", _text),
@@ -295,7 +349,10 @@ def _make_demo_handler(event: str, effects: Any):
                 values[key] = _example_value(self.state.examples, key)
             # The value arrives typed (ADR-033 D4: every shipped component
             # emits `dj-value-value:int="4"`), so no coercion here.
-            values[key] = transform(values[key], value)
+            if getattr(transform, "with_params", False):
+                values[key] = transform(values[key], value, kwargs)
+            else:
+                values[key] = transform(values[key], value)
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
         self.state.values = values
@@ -367,7 +424,7 @@ def render_preview_examples(
     cached = _PREVIEW_RENDER_CACHE.get(key)
     if cached is not None:
         return cached
-    rendered = _render_preview_examples(component_name, component_type, examples, values)
+    rendered = _render_with_preview_feedback(component_name, component_type, examples, values)
     if len(_PREVIEW_RENDER_CACHE) >= 64:
         _PREVIEW_RENDER_CACHE.clear()
     _PREVIEW_RENDER_CACHE[key] = rendered
@@ -375,6 +432,42 @@ def render_preview_examples(
 
 
 _PREVIEW_RENDER_CACHE: Dict[Any, list] = {}
+
+
+def _render_with_preview_feedback(
+    component_name: str, component_type: str, examples: list, values: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    from django.utils.html import escape
+
+    values = dict(values)
+    hidden = values.pop(PREVIEW_HIDDEN, "")
+    received = values.pop(PREVIEW_RECEIVED, "")
+    # The playground renders its own copy of the first example with the values
+    # already merged in (`component_preview`), so the keys can arrive there.
+    cleaned = []
+    for example in examples or []:
+        example = dict(example)
+        hidden = example.pop(PREVIEW_HIDDEN, "") or hidden
+        received = example.pop(PREVIEW_RECEIVED, "") or received
+        cleaned.append(example)
+    examples = cleaned
+    if hidden:
+        note = (
+            f'<div class="dc-preview-feedback"><span>{escape(hidden)}</span> '
+            '<button type="button" class="btn btn-sm btn-outline" dj-click="reset_preview">'
+            "Show again</button></div>"
+        )
+        return [{"html": note, "kwargs": {}, "kwargs_display": ""} for _ in examples or [None]]
+    rendered = _render_preview_examples(component_name, component_type, examples, values)
+    if received and rendered:
+        first = dict(rendered[0])
+        first["html"] = (
+            f"{first['html']}"
+            f'<p class="dc-preview-feedback">Your view received <code>{escape(received)}</code>'
+            " — what happens next is its handler's to decide.</p>"
+        )
+        rendered = [first] + list(rendered[1:])
+    return rendered
 
 
 def _render_preview_examples(
@@ -440,6 +533,15 @@ class Preview(LiveComponent):
         "{% load theme_tags %}"
         "{% component_preview component_name component_type examples values playground %}"
     )
+
+    @event_handler()
+    def reset_preview(self, **kwargs: Any) -> None:
+        """ "Show again" after a dismiss or close: drop the preview-only keys."""
+        self.state.values = {
+            k: v
+            for k, v in self.state.values.items()
+            if k not in (PREVIEW_HIDDEN, PREVIEW_RECEIVED)
+        }
 
     @event_handler()
     def set_option(self, value: Any = "", **kwargs: Any) -> None:
@@ -1149,7 +1251,9 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
 
 
 for _event in (
-    list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()] + ["set_option"]
+    list(_DEMO_EVENTS)
+    + [cls.Meta.event for cls in _INTERACTIVE.values()]
+    + ["set_option", "reset_preview"]
 ):
     if not hasattr(ComponentsDetailView, _event):
         setattr(ComponentsDetailView, _event, _make_forwarder(_event))

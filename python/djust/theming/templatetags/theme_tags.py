@@ -640,6 +640,7 @@ _PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="
   </div>
   {% endfor %}
   {% endif %}
+{% if preview_note %}<p class="dc-note">{{ preview_note }}</p>{% endif %}
 {% endcard %}
 </section>"""
 
@@ -683,7 +684,7 @@ def component_preview(
     """
     from ..gallery.live_views import render_preview_examples
     from ..gallery.catalogue import playground_options
-    from ..gallery.component_registry import empty_preview_reason
+    from ..gallery.component_registry import empty_preview_reason, preview_note
 
     examples = list(examples or [])
     values = dict(values or {})
@@ -714,7 +715,11 @@ def component_preview(
             playground_html = shown[0]["html"] if shown else ""
             playground_call = (
                 f"{component_name}("
-                + ", ".join(f"{k}={v!r}" for k, v in chosen.items() if not k.startswith("slot_"))
+                + ", ".join(
+                    f"{k}={v!r}"
+                    for k, v in chosen.items()
+                    if not k.startswith(("slot_", "__preview_"))
+                )
                 + ")"
             )
             # An example is "more" only if it shows something the chips cannot:
@@ -754,6 +759,7 @@ def component_preview(
                     "playground_code_html": _highlighted_python(playground_call),
                     "more_examples": more_examples,
                     "empty_reason": empty_preview_reason(component_name),
+                    "preview_note": preview_note(component_name),
                 }
             )
         )

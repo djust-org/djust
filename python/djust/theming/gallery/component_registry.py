@@ -889,7 +889,18 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "command_palette": [{}],
+        # Overlays render OPEN: the preview box contains a position-fixed
+        # element, so an open overlay stays inside it. Closing hands the preview
+        # a "Show again" (see `live_views._hide`).
+        "command_palette": [
+            {
+                "is_open": True,
+                "content": (
+                    '<div class="palette-item">New component</div>'
+                    '<div class="palette-item">Open settings</div>'
+                ),
+            }
+        ],
         "comparison_table": [
             {
                 "plans": [
@@ -1197,6 +1208,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
                     {"value": "fastapi", "label": "FastAPI"},
                 ],
                 "selected": ["django"],
+                # Explicit, so the preview's handler does not depend on what
+                # the example happens to be called (`name` is the fallback).
+                "event": "set_frameworks",
             }
         ],
         "multimodal_input": [{"name": "prompt", "placeholder": "Ask anything…"}],
@@ -1242,7 +1256,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "otp_input": [{"name": "code", "digits": 6, "label": "Verification code"}],
+        "otp_input": [
+            {"name": "code", "digits": 6, "label": "Verification code", "event": "verify_code"}
+        ],
         "pagination": [{}],
         "pie_chart": [
             {
@@ -1302,11 +1318,53 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "rich_select": [{}],
-        "rich_text_editor": [{}],
+        "rich_text_editor": [{"value": "Draft <strong>release notes</strong> here."}],
         "scroll_area": [{"content": "<p>Scrollable body text.</p>" * 12}],
         "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
         "scroll_to_top": [{}],
-        "sheet": [{}],
+        "sheet": [
+            {
+                "is_open": True,
+                "title": "Filters",
+                "content": '<p style="margin:0">Status, owner and date range.</p>',
+            }
+        ],
+        "bottom_sheet": [
+            {
+                "open": True,
+                "title": "Share",
+                # `content` is escaped text here, unlike `sheet`'s.
+                "content": "Copy link · Email · Embed",
+            }
+        ],
+        "export_dialog": [
+            {
+                "open": True,
+                "formats": ["csv", "xlsx", "json"],
+                "columns": [
+                    {"id": "name", "label": "Name"},
+                    {"id": "email", "label": "Email"},
+                    {"id": "joined", "label": "Joined", "checked": False},
+                ],
+            }
+        ],
+        "image_lightbox": [
+            {
+                "open": True,
+                "images": [
+                    {
+                        "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='270'><rect width='100%' height='100%' fill='%2334473a'/><text x='50%' y='50%' fill='%23edf1ed' font-family='sans-serif' font-size='28' text-anchor='middle' dominant-baseline='middle'>1</text></svg>",
+                        "alt": "First slide",
+                        "caption": "First",
+                    },
+                    {
+                        "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='270'><rect width='100%' height='100%' fill='%2334473a'/><text x='50%' y='50%' fill='%23edf1ed' font-family='sans-serif' font-size='28' text-anchor='middle' dominant-baseline='middle'>2</text></svg>",
+                        "alt": "Second slide",
+                        "caption": "Second",
+                    },
+                ],
+            }
+        ],
         "sidebar": [
             {
                 "title": "Workspace",
@@ -1426,9 +1484,6 @@ COMPONENT_DESCRIPTION_KEYS = (
 #: "needs runtime dependencies or has no examples" was true of none of these:
 #: most render nothing until opened, one is a mixin, one needs a bound form.
 EMPTY_PREVIEW_REASONS: dict[str, str] = {
-    "bottom_sheet": "Renders nothing until opened — pass open=True from your view to show it.",
-    "export_dialog": "Renders nothing until opened — pass open=True from your view to show it.",
-    "image_lightbox": "Renders nothing until opened — pass open=True with images to show it.",
     "tour": "Renders nothing until started — it draws over the page's own elements.",
     "form_validation": "Renders a bound Django form field's errors — it needs a form to show anything.",
     "server_event_toast": (
@@ -1436,6 +1491,27 @@ EMPTY_PREVIEW_REASONS: dict[str, str] = {
         "so there is nothing to render on its own."
     ),
 }
+
+
+#: A sentence under a preview that renders but shows nothing ON PURPOSE, so
+#: the empty box is not read as a broken component.
+PREVIEW_NOTES: dict[str, str] = {
+    "connection_status": "Hidden while connected — it appears when the WebSocket drops.",
+    "scroll_to_top": "Hidden until the page is scrolled past its threshold.",
+    "infinite_scroll": (
+        "An invisible sentinel: when it scrolls into view it sends load_more, "
+        "and your view appends the next page."
+    ),
+    "collab_selection": (
+        "Draws other users' selections over your content through a client hook djust "
+        "does not ship — see below."
+    ),
+}
+
+
+def preview_note(component_name: str) -> str:
+    """The sentence shown under a preview that is empty by design."""
+    return PREVIEW_NOTES.get(component_name, "")
 
 
 def empty_preview_reason(component_name: str) -> str:

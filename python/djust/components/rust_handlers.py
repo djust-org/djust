@@ -2216,6 +2216,7 @@ class NotificationCenterHandler:
                 notifications=notifs,
                 unread_count=unread,
                 open_event=kwargs.get("open_event", "toggle_notifications"),
+                is_open=kwargs.get("is_open", False),
             )
         )
 

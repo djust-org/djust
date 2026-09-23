@@ -86,11 +86,13 @@ class TestEventsAreWhatTheComponentSends:
         assert describe_component("pagination")["events"] == []
 
     def test_an_event_named_after_the_field_is_still_listed(self):
-        """`multi_select` falls back to its `name` as the event; the example's
-        `name` is therefore an event the host must answer, not example data."""
-        described = describe_component("multi_select")
-        example_name = described["examples"][0].get("name")
-        assert example_name and example_name in described["events"]
+        """A component that falls back to its `name` as the event (multi_select,
+        combobox) emits that name: it is the host's event, not example data."""
+        from djust.theming.gallery.catalogue import contract_events
+
+        html = '<div dj-change="frameworks"><input type="checkbox" value="django"></div>'
+        params = [{"name": "event", "default": "''"}]
+        assert contract_events(params, {"name": "frameworks"}, html) == ["frameworks"]
 
     def test_an_example_that_renames_the_event_lists_the_new_name(self):
         described = describe_component("color_picker")
@@ -151,11 +153,32 @@ class TestDemoHandlersMoveThePreview:
 
 class TestUsageSnippetsAreCodeThatWorks:
     def test_a_handler_never_writes_a_kwarg_the_component_lacks(self):
-        """`NotificationCenter` has no `is_open`; the snippet told readers to
-        flip it."""
-        view = _detail("notification_center")
-        assert "is_open" not in view._base_ctx["usage_parts"]["view"]
-        assert "def toggle_notifications(self" in view._base_ctx["usage_parts"]["view"]
+        """Every `self.component.<kwarg> = …` a snippet writes is a parameter
+        of that component (`self.component.dismissed` was not)."""
+        import re
+
+        from djust.theming.gallery.component_registry import COMPONENT_CATEGORIES
+
+        names = sorted({n for group in COMPONENT_CATEGORIES.values() for n in group})
+        wrong = []
+        for name in names:
+            described = describe_component(name)
+            if described["component_type"] != "python":
+                continue
+            params = {p["name"] for p in described["params"]}
+            snippet = _detail(name)._base_ctx["usage_parts"]["view"]
+            for attr in re.findall(r"self\.component\.(\w+) =", snippet):
+                if attr not in params:
+                    wrong.append(f"{name}.{attr}")
+        assert not wrong, wrong
+
+    def test_the_notification_bell_opens(self):
+        from djust.components import NotificationCenter
+
+        assert "notif-center--open" in str(NotificationCenter(is_open=True).render())
+        assert "notif-center--open" not in str(NotificationCenter().render())
+        snippet = _detail("notification_center")._base_ctx["usage_parts"]["view"]
+        assert "self.component.is_open = not self.component.is_open" in snippet
 
     def test_the_dismiss_handler_does_not_invent_a_dismissed_attribute(self):
         view = _detail("page_alert")
@@ -306,3 +329,70 @@ def test_a_descriptor_preview_starts_in_the_state_its_example_documents():
     assert state.values.get("active") == "1"
     html = render_preview_examples("accordion", "python", state.examples, state.values)[0]["html"]
     assert "dj-accordion-item--open" in html
+
+
+class TestPreviewFeedback:
+    """An event the component has no state for still visibly answers."""
+
+    def _values_after(self, name, event, **kw):
+        view = _detail(name)
+        getattr(view.preview, event)(**kw)
+        return view.preview.state
+
+    def test_dismiss_replaces_the_preview_with_a_way_back(self):
+        from djust.theming.gallery.live_views import render_preview_examples
+
+        state = self._values_after("page_alert", "dismiss_alert")
+        html = render_preview_examples("page_alert", "python", state.examples, state.values)[0][
+            "html"
+        ]
+        assert "Dismissed" in html and 'dj-click="reset_preview"' in html
+        view = _detail("page_alert")
+        view.preview.dismiss_alert()
+        view.preview.reset_preview()
+        html = render_preview_examples(
+            "page_alert", "python", view.preview.state.examples, view.preview.state.values
+        )[0]["html"]
+        assert "Your trial expires" in html
+
+    def test_a_host_acted_event_is_acknowledged(self):
+        from djust.theming.gallery.live_views import render_preview_examples
+
+        state = self._values_after("approval_gate", "approve")
+        html = render_preview_examples("approval_gate", "python", state.examples, state.values)[0][
+            "html"
+        ]
+        assert "Your view received <code>approve</code>" in html
+
+    @pytest.mark.parametrize(
+        "name,event",
+        [
+            ("combobox", "language_search"),
+            ("multi_select", "set_frameworks"),
+            ("rich_text_editor", "update_content"),
+            ("otp_input", "verify_code"),
+        ],
+    )
+    def test_the_events_that_errored_are_answered(self, name, event):
+        from djust.theming.gallery.live_views import Preview
+
+        assert event in _detail(name)._base_ctx["events"]
+        assert hasattr(Preview, event)
+
+    @pytest.mark.parametrize(
+        "name", ["sheet", "bottom_sheet", "export_dialog", "image_lightbox", "command_palette"]
+    )
+    def test_overlays_preview_open(self, name):
+        import re
+
+        from djust.theming.gallery.live_views import render_preview_examples
+
+        html = render_preview_examples(name, "python", describe_component(name)["examples"], {})[0][
+            "html"
+        ]
+        assert re.sub(r"<[^>]+>", "", html).strip(), f"{name} renders nothing"
+
+    def test_otp_input_ships_its_script(self):
+        from djust.theming.gallery.component_registry import component_client
+
+        assert component_client("otp_input")["script"] == "djust_components/otp-input.js"
