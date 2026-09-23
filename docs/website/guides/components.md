@@ -11,7 +11,7 @@ description: "Build reusable UI with stateless Components and interactive LiveCo
 
 djust provides a two-tier component system: **Component** for fast, stateless rendering and **LiveComponent** for interactive widgets with state and event handlers. Both render server-side with no JavaScript build step.
 
-For **styling**, djust follows manifesto principle #7: *"Strong opinions on security, state, transport. Zero opinions on CSS, markup, or design."* Components output semantic HTML -- you bring your own styling via CSS custom properties, Tailwind, Bootstrap, or plain CSS. The optional [`djust-components`](#djust-components-template-tag-library) and [`djust-theming`](#djust-theming) packages provide a style-agnostic component library and design system powered by CSS custom properties.
+For **styling**, djust follows manifesto principle #7: *"Strong opinions on security, state, transport. Zero opinions on CSS, markup, or design."* Components output semantic HTML -- you bring your own styling via CSS custom properties, Tailwind, Bootstrap, or plain CSS. The optional [`djust.components` template tag library](#djust-components-template-tag-library) and [`djust.theming`](#djust-theming) (installed with the `djust[components]` and `djust[theming]` extras) provide a style-agnostic component library and design system powered by CSS custom properties.
 
 ## Two Types of Components
 
@@ -96,12 +96,12 @@ class Badge(Component):
     def get_context_data(self):
         return {"text": self.text, "variant": self.variant}
 
-    # Tier 3: Custom Python (if template engine fails)
+    # Tier 3: Custom Python (used only when no `template` is set)
     def _render_custom(self):
         return f'<span class="badge bg-{self.variant}">{self.text}</span>'
 ```
 
-Most components only need a `template`. Add `_render_custom()` when you need framework-specific HTML (Bootstrap vs Tailwind). Add `_rust_impl_class` for hot-path components rendered hundreds of times per page.
+Most components only need a `template`. Use `_render_custom()` instead of a `template` when you need framework-specific HTML (Bootstrap vs Tailwind). `_render_custom()` is reached only when the class has no `template`: a template that fails in the Rust engine is re-rendered by Django's engine, not by `_render_custom()`, so in the `Badge` above it never runs. Add `_rust_impl_class` for hot-path components rendered hundreds of times per page.
 
 ### Updating a Component
 
@@ -134,6 +134,9 @@ def set_rating(self, value, name=None, **kwargs):
 ```
 
 Every trigger the instance renders then carries `dj-value-name="row-7"`.
+(Form-field components whose constructor already takes `name`, such as
+`DatePicker`, use it as the HTML field name instead, and it is not stamped
+on triggers.)
 Components that render their own triggers do this through
 `self.event_attrs(self.event, value=...)`, which is also what a custom
 component should call instead of hand-writing `dj-click="…"`.
@@ -188,9 +191,9 @@ Then style with CSS custom properties that adapt to any theme:
 .dj-alert--info { background: var(--dj-info); color: white; }
 ```
 
-This approach works with any styling system -- `djust-theming` presets, Tailwind, Bootstrap, or your own CSS. See [Styling & Theming](#djust-theming) below for the full design system.
+This approach works with any styling system -- `djust.theming` presets, Tailwind, Bootstrap, or your own CSS. See [Styling & Theming](#djust-theming) below for the full design system.
 
-> **Note:** The built-in components in `djust.components.ui` currently use `_render_custom()` with per-framework render methods (Bootstrap, Tailwind, Plain). This approach is being migrated toward CSS custom properties for true style independence. For new projects, prefer the [`djust-components`](#djust-components-template-tag-library) template tag library which is already style-agnostic.
+> **Note:** The built-in components in `djust.components.ui` currently use `_render_custom()` with per-framework render methods (Bootstrap, Tailwind, Plain). This approach is being migrated toward CSS custom properties for true style independence. For new projects, prefer the [`djust.components` template tag library](#djust-components-template-tag-library), which is already style-agnostic.
 
 ## LiveComponents (Stateful)
 
@@ -640,17 +643,16 @@ def mount(self, request, **kwargs):
 
 ## Component Registry
 
-Components can be registered by name for dynamic lookup:
+LiveComponent classes can be registered by name for dynamic lookup (`register_component` rejects plain `Component` subclasses with `TypeError`):
 
 ```python
 from djust.components import register_component, get_component, list_components
 
-# Register a custom component
-register_component("status_dot", StatusDotComponent)
+# Register a custom LiveComponent (CounterWidget from above)
+register_component("counter", CounterWidget)
 
 # Look up by name
-cls = get_component("status_dot")
-dot = cls(color="green")
+cls = get_component("counter")
 
 # List all registered components
 for name, cls in list_components().items():
@@ -765,17 +767,8 @@ When building a custom component:
 
 - Use inline `template = "..."` for small components (< 20 lines of HTML)
 - Use `template_name = "components/my_widget.html"` for complex HTML
-- Inline templates get Rust-accelerated rendering. File-based templates use Django's engine.
-
-**Avoid `{% elif %}` in inline templates** -- the Rust template engine has a known limitation. Use separate `{% if %}` blocks:
-
-```python
-# Don't:
-template = '{% if size == "lg" %}big{% elif size == "sm" %}small{% endif %}'
-
-# Do:
-template = '{% if size == "lg" %}big{% endif %}{% if size == "sm" %}small{% endif %}'
-```
+- Both inline `template` and file-based `template_name` render through djust's Rust engine. A `template_name` that uses `{% extends %}` falls back to Django's engine.
+- `{% if %}` / `{% elif %}` / `{% else %}` chains are supported in both.
 
 **Components in templates render via `{{ component }}`** -- the `__str__` method calls `render()` automatically, and this is the canonical spelling for both `Component` and `LiveComponent`; every example in these docs uses it ([#2634](https://github.com/djust-org/djust/issues/2634)). `{{ component.render }}` still resolves (it's the same underlying call) but isn't preferred: it depends on Django's nullary auto-call, which `LIVEVIEW_CONFIG['template_auto_call'] = False` switches off -- `{{ component }}` then still renders, while `{{ component.render }}` prints a bound-method repr. As of [#2503](https://github.com/djust-org/djust/issues/2503), the two spellings render **identical output** on every render path -- verified directly, not assumed.
 
@@ -783,18 +776,18 @@ template = '{% if size == "lg" %}big{% endif %}{% if size == "sm" %}small{% endi
 
 ## djust-components (Template Tag Library)
 
-[`djust-components`](https://github.com/djust-org/djust-components) is a separate package that provides 12 style-agnostic UI components as Django template tags. Unlike the core `djust.components` Python classes, these use CSS custom properties for all styling -- no hardcoded Bootstrap or Tailwind classes.
+The `djust.components` app ships a library of style-agnostic UI components as Django template tags. Unlike the Python component classes in `djust.components.ui`, these use CSS custom properties for all styling -- no hardcoded Bootstrap or Tailwind classes.
 
 ### Installation
 
 ```bash
-pip install djust-components
+pip install "djust[components]"
 ```
 
 ```python
 # settings.py
 INSTALLED_APPS = [
-    "djust_components",
+    "djust.components",
     # ...
 ]
 ```
@@ -961,29 +954,29 @@ All components use CSS custom properties. Override them to match any theme:
 }
 ```
 
-This is what makes them style-agnostic: change the variables, and every component adapts. Works standalone or with `djust-theming` for full design system support.
+This is what makes them style-agnostic: change the variables, and every component adapts. Works standalone or with `djust.theming` for full design system support.
 
 ## djust-theming
 
-[`djust-theming`](https://github.com/djust-org/djust-theming) is a production-ready theming system inspired by shadcn/ui. It provides CSS custom properties-based theming with light/dark mode, 132 built-in theme combinations, and reactive theme switching via djust LiveViews.
+`djust.theming` is a production-ready theming system inspired by shadcn/ui, shipped in core. It provides CSS custom properties-based theming with light/dark mode, 12 design systems × 68 color presets, and reactive theme switching via djust LiveViews.
 
 ### Installation
 
 ```bash
-pip install djust-theming
+pip install "djust[theming]"
 ```
 
 ```python
 # settings.py
 INSTALLED_APPS = [
-    "djust_theming",
+    "djust.theming",
     # ...
 ]
 
 TEMPLATES = [{
     "OPTIONS": {
         "context_processors": [
-            "djust_theming.context_processors.theme_context",
+            "djust.theming.context_processors.theme_context",
         ],
     },
 }]
@@ -991,8 +984,8 @@ TEMPLATES = [{
 # Choose a design system + color preset
 LIVEVIEW_CONFIG = {
     "theme": {
-        "theme": "material",       # Design system (11 options)
-        "preset": "blue",          # Color preset (12 options)
+        "theme": "material",       # Design system (12 options)
+        "preset": "blue",          # Color preset (68 options)
         "default_mode": "system",  # light, dark, or system
     }
 }
@@ -1000,13 +993,12 @@ LIVEVIEW_CONFIG = {
 
 ### Design Systems + Color Presets
 
-Mix any design system with any color preset (11 x 12 = 132 combinations):
+Mix any design system with any color preset (12 design systems × 68 color presets):
 
 **Design systems** control typography, spacing, radius, shadows, and animations:
-Material, iOS, Fluent, Minimalist, Playful, Corporate, Retro, Elegant, Neo-Brutalist, Organic, Dense
+Material, iOS, Fluent, Minimalist, Playful, Corporate, Retro, Elegant, Neo-Brutalist, Organic, Dense, djust
 
-**Color presets** control the palette:
-Default, Shadcn, Blue, Green, Purple, Orange, Rose, Cyberpunk, Sunset, Forest, Ocean, Metallic
+**Color presets** control the palette. A few of the 68: Default, Shadcn, Blue, Green, Purple, Orange, Rose, Cyberpunk, Forest, Nord, Dracula, Ocean Deep, Sunrise. Run `python manage.py djust_theme list-presets` for the full list.
 
 ```python
 # Material Design + Cyberpunk colors
@@ -1121,8 +1113,8 @@ When set, theming cookies are read and written under
 cookie jar.
 
 The read path tries the namespaced cookie first and falls back to the legacy
-unprefixed cookie once on the first request after upgrade — users keep their
-existing theme choice. After the user clicks the switcher (or any other path
+unprefixed cookie whenever the namespaced one is absent (until the next theme
+write creates it) — users keep their existing theme choice. After the user clicks the switcher (or any other path
 that calls `setPreset` / `setPack` / `setTheme` / `setLayout`), only the
 namespaced cookie is written.
 
@@ -1133,10 +1125,10 @@ existing deployments don't lose their theme on upgrade.
 
 | Approach                                 | When to Use                                                                                                                           |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **`djust-components` + `djust-theming`** | New projects. Style-agnostic, CSS custom properties, 132 theme combos, shadcn/ui compatible. **Recommended.**                         |
-| **`djust-theming` alone**                | You want the design system and theme switching but prefer to write your own component HTML.                                           |
-| **`djust-components` alone**             | You want pre-built template tags but will define your own `--dj-*` CSS variables.                                                     |
-| **Core `djust.components`**              | You need Rust-accelerated rendering for high-frequency components (100+ per page), or need programmatic component creation in Python. |
+| **`djust.components` tags + `djust.theming`** | New projects. Style-agnostic, CSS custom properties, 12 design systems × 68 color presets, shadcn/ui compatible. **Recommended.** |
+| **`djust.theming` alone**                | You want the design system and theme switching but prefer to write your own component HTML.                                           |
+| **`djust.components` tags alone**        | You want pre-built template tags but will define your own `--dj-*` CSS variables.                                                     |
+| **Python component classes**             | You need Rust-accelerated rendering for high-frequency components (100+ per page), or need programmatic component creation in Python. |
 | **Plain HTML**                           | You want full control. Use `dj-click`, `dj-submit` etc. directly on your own markup. djust has zero opinions on your HTML structure.  |
 
 ## Function Components (v0.5.0+)
@@ -1178,6 +1170,8 @@ Both tags are synonyms — pick whichever reads best at the call site. The body 
 
 Declare the expected inputs with `Assign(...)` to get runtime validation, type coercion, and self-documenting components. Available on both `LiveComponent` subclasses (via class attribute) and function components (via `@component(assigns=[...])`).
 
+`assigns` on a `LiveComponent` are validated whenever the class is constructed. `slots` are different: they are enforced only when the class is registered with `@component` and invoked through `{% call %}` / `{% component %}`. A `Card(title=...)` built in `mount()` never has its `required=True` slot checked. When invoked through `{% call %}`, the slot content reaches the instance as `self._slots` / `self._children`, which your `get_context_data()` must expose to the template itself.
+
 ```python
 from djust import LiveComponent, Assign, Slot
 
@@ -1195,9 +1189,9 @@ class Card(LiveComponent):
 
 Validation behaviour:
 
-- **Required missing** — raises `AssignValidationError` when `settings.DEBUG=True`; logs a warning otherwise.
+- **Required missing**, **bad coercion**, **value outside `values=[...]`** — all are validation failures.
 - **Type coercion** — `str → int`, `str → float`, `str → bool` (case-insensitive `true`/`yes`/`1`/`on`; `false`/`no`/`0`/`off`/empty).
-- **Enum check** — values outside `values=[...]` raise.
+- **Where failures go** — for a `LiveComponent`, any validation failure raises `AssignValidationError` when `settings.DEBUG=True` and logs a warning otherwise (the raw kwargs are kept). For a function component invoked with `{% call %}` / `{% component %}`, any failure raises `RuntimeError("Component '<name>' validation failed: …")` in every mode.
 - **Inheritance** — child-class `assigns` extend parent's; same-name entries override.
 
 ### Named Slots
@@ -1227,7 +1221,7 @@ def card(assigns):
     return f"<div class='card'><header>{header}</header>{body}<footer>{footer}</footer></div>"
 ```
 
-`assigns["slots"]` is `{name: [slot_dict, ...]}` where each `slot_dict` carries `{"attrs": {...}, "content": "..."}`. Multiple same-name slots collect into a list:
+`assigns["slots"]` is `{name: [slot_dict, ...]}` where each `slot_dict` carries `{"attrs": {...}, "content": "..."}`. Multiple same-name slots collect into a list. If you declare the slot, declare it `Slot("col", multiple=True)`: a declared slot is single by default, and repeating it raises.
 
 ```django
 {% slot col label="Name" %}{{ row.name }}{% endslot %}
