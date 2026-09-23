@@ -1748,9 +1748,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._attach_debug_payload(response, event_name)
             if parameter_contract_snapshot is not None:
                 response.update(parameter_contract_snapshot)
-            if snapshot_fields:
-                response.update(snapshot_fields)
                 self._capture_recovery_contracts(response)
+            if snapshot_fields:
+                # ADR-038: an explicit root's refreshed signed snapshot.
+                response.update(snapshot_fields)
             await self.send_json(response)
             await self._flush_all_pending()
 
