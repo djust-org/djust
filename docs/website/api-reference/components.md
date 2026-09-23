@@ -92,24 +92,24 @@ def get_context_data(self):
 
 Re-render this component and push the diff to the client. Call after changing state in an event handler.
 
-#### `send_parent(event_name, data)`
+#### `send_parent(event, data=None)`
 
 Send an event to the parent LiveView.
 
 **Parameters:**
 
-- `event_name` (`str`) — Event name string
-- `data` (`dict`) — Event payload
+- `event` (`str`) — Event name string
+- `data` (`dict`, optional) — Event payload
 
 The parent receives it via `handle_component_event()`.
 
 ### Critical Template Rule
 
-Every element in a LiveComponent template that has a `dj-*` event attribute **must** include `data-component-id="{{ component_id }}"`. Without it, events route to the parent LiveView:
+Put `data-component-id="{{ component_id }}"` on the component's root element. The client walks up from the element that fired the event to the nearest `data-component-id`, so events from any descendant are routed to the component. Without it, events route to the parent LiveView:
 
 ```html
 <div data-component-id="{{ component_id }}">
-    <button dj-click="increment" data-component-id="{{ component_id }}">+</button>
+    <button dj-click="increment">+</button>
     <span>{{ count }}</span>
 </div>
 ```
@@ -301,7 +301,7 @@ self.pagination = PaginationComponent(
 ```python
 from djust.components import ProgressComponent
 
-self.progress = ProgressComponent(value=65, max=100, label="65%")
+self.progress = ProgressComponent(value=65, max_value=100, custom_label="65%")
 ```
 
 ### `ForeignKeySelect` / `ManyToManySelect`
@@ -332,7 +332,7 @@ register_component("my_widget", MyWidgetComponent)
 cls = get_component("my_widget")
 
 # List all registered components
-names = list_components()  # ['alert', 'modal', 'my_widget', ...]
+registry = list_components()  # {'alert': AlertComponent, 'modal': ModalComponent, ...}
 ```
 
 ---
@@ -344,9 +344,9 @@ Quick-use display components. No event handling.
 ```python
 from djust.components.ui import Badge, Button, Card, Alert
 
-badge = Badge(label="New", variant="success")
-button = Button(label="Click me", variant="primary", disabled=False)
-card = Card(title="My Card", body="Content here")
+badge = Badge(text="New", variant="success")
+button = Button(text="Click me", variant="primary", disabled=False)
+card = Card(body="Content here", header="My Card")
 ```
 
 Full list:
