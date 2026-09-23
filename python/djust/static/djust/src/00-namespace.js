@@ -112,6 +112,36 @@ window.djLog = function djLog(...args) {
 };
 
 // ============================================================================
+// CSRF token for HTTP requests (event fallback, djust.call)
+// ============================================================================
+// Order: a rendered {% csrf_token %} input, then the CSRF cookie under the
+// project's configured name, then the token the server emits in
+// <meta name="djust-csrf-token">. The cookie is preferred over the meta tag
+// because Django rotates the token at login and the cookie follows the
+// rotation; the meta tag covers CSRF_COOKIE_HTTPONLY and CSRF_USE_SESSIONS,
+// where the cookie is not readable from JavaScript. Empty values are skipped
+// (the Rust engine renders "" for a csrf_token with no request, #696).
+window.djust.csrfToken = function csrfToken() {
+    try {
+        const input = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (input && input.value) return input.value;
+        const nameMeta = document.querySelector('meta[name="djust-csrf-cookie"]');
+        const cookieName = (nameMeta && nameMeta.getAttribute('content')) || 'csrftoken';
+        for (const part of (document.cookie || '').split(';')) {
+            const eq = part.indexOf('=');
+            if (eq > -1 && part.slice(0, eq).trim() === cookieName) {
+                const value = decodeURIComponent(part.slice(eq + 1).trim());
+                if (value) return value;
+            }
+        }
+        const tokenMeta = document.querySelector('meta[name="djust-csrf-token"]');
+        return (tokenMeta && tokenMeta.getAttribute('content')) || '';
+    } catch (_) {
+        return '';
+    }
+};
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template

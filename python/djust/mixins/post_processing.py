@@ -343,6 +343,26 @@ class PostProcessingMixin:
 
         full_script = config_script + script
 
+        # The HTTP event fallback and djust.call need the CSRF token even when
+        # the project renames the cookie (CSRF_COOKIE_NAME) or keeps it out of
+        # JavaScript's reach (CSRF_COOKIE_HTTPONLY, CSRF_USE_SESSIONS). The
+        # client reads these via window.djust.csrfToken() (00-namespace.js).
+        csrf_meta = ""
+        request = getattr(self, "request", None)
+        if request is not None:
+            from django.middleware.csrf import get_token
+            from django.utils.html import escape
+
+            csrf_meta = (
+                f'<meta name="djust-csrf-cookie" content="{escape(settings.CSRF_COOKIE_NAME)}">'
+                f'<meta name="djust-csrf-token" content="{escape(get_token(request))}">'
+            )
+        if csrf_meta:
+            if "</head>" in html:
+                html = html.replace("</head>", f"{csrf_meta}</head>", 1)
+            else:
+                full_script = csrf_meta + full_script
+
         if debug_css_link and "</head>" in html:
             html = html.replace("</head>", f"{debug_css_link}</head>")
 
