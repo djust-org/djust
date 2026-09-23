@@ -319,7 +319,8 @@ on the **same URL** (a header or session resolver, or `set_tenant()`), don't
 rely on the state cache to separate them: include the tenant in the URL, or
 re-derive tenant data in the event handler. `TenantMixin.get_state_key_prefix()`
 returns `tenant:<id>`, but no built-in state backend calls it at this release;
-it is a hook for your own storage.
+it is a hook for your own storage (see
+[#2973](https://github.com/djust-org/djust/issues/2973)).
 
 ## Tenant-Aware Presence
 
@@ -384,7 +385,8 @@ Any other value **silently falls back to in-process memory**, which isn't
 shared between workers. That includes a dotted path such as
 `'djust.tenants.backends.TenantAwareRedisBackend'`, and `'tenant_redis'`, which
 `get_tenant_presence_backend()` accepts but the global registry used by
-`PresenceMixin` does not.
+`PresenceMixin` does not
+([#2973](https://github.com/djust-org/djust/issues/2973)).
 
 ## Template Context
 

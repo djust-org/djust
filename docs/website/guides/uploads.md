@@ -377,7 +377,7 @@ Re-run the webhook delivery. The log will show the key that failed to match and 
 
 Network hiccups, backgrounded mobile tabs, and brief WebSocket disconnects should not kill a long upload. Resumable uploads persist chunk-level state server-side so the transfer picks up where it left off on reconnect.
 
-> **Known issue (1.2.0rc10, not yet filed):** when a WebSocket disconnects, djust aborts every in-flight upload writer, `ResumableUploadWriter` included, and the wrapper's `abort()` deletes the upload's state entry (and aborts the inner writer, e.g. the S3 multipart upload). A resume after a dropped connection therefore gets `not_found` and the client starts over from byte 0. The protocol below describes the intended behaviour; don't rely on resume across a WebSocket drop at this version.
+> **Known issue ([#2972](https://github.com/djust-org/djust/issues/2972), 1.2.0rc10):** when a WebSocket disconnects, djust aborts every in-flight upload writer, `ResumableUploadWriter` included, and the wrapper's `abort()` deletes the upload's state entry (and aborts the inner writer, e.g. the S3 multipart upload). A resume after a dropped connection therefore gets `not_found` and the client starts over from byte 0. The protocol below describes the intended behaviour; don't rely on resume across a WebSocket drop at this version.
 
 ### How it works
 
