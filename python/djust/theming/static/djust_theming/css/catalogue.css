@@ -124,6 +124,12 @@ body.dc-body {
 .dc-badges { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 .dc-note { font-size: 0.8125rem; color: hsl(var(--muted-foreground)); margin: 0.75rem 0 0; }
 .dc-note code { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+/* Text stays foreground: the presets' warning hue fails AA as text on light
+   backgrounds, so the tone is carried by the border alone. */
+.dc-note--warning {
+  color: hsl(var(--foreground)); border-left: 3px solid hsl(var(--warning, 38 92% 50%));
+  padding-left: 0.625rem;
+}
 .dc-subtitle:first-child { margin-top: 0; }
 .dc-details > summary {
   cursor: pointer; list-style: none; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
@@ -143,6 +149,23 @@ body.dc-body {
   display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
 }
 .dc-preview--empty { color: hsl(var(--muted-foreground)); font-size: 0.875rem; }
+/* "Dismissed — Show again" / "Your view received `x`": the preview's answer to
+   an event the component itself has no state for. */
+/* An overlay previewed OPEN (sheet, dialog, lightbox, palette) is
+   position: fixed. Without its own containing block it was sized by the
+   Preview card, spilled over the usage sample below and hid its own close
+   button. The preview becomes the containing block, with room for it. */
+.dc-preview:has(.dj-export-dialog__backdrop, .dj-bottom-sheet__backdrop, .dj-lightbox,
+    .palette-overlay[data-open="true"], .sheet-overlay[data-open="true"]) {
+  transform: translateZ(0); min-height: 30rem; overflow: hidden;
+}
+.dc-preview .dj-export-dialog, .dc-preview .dj-bottom-sheet { max-height: calc(100% - 2rem); overflow-y: auto; }
+.dc-preview-feedback { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  font-size: 0.8125rem; color: hsl(var(--muted-foreground)); margin: 0; flex-basis: 100%; }
+.dc-preview-feedback code { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+/* "Your view received" follows the preview box rather than sitting in it, so
+   an open overlay's backdrop cannot cover it. */
+.dc-preview + .dc-preview-feedback { margin: 0.5rem 0 0.75rem; }
 .dc-example + .dc-example { margin-top: 1rem; }
 .dc-example-args { margin-top: 0.375rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
 .dc-example-args summary { cursor: pointer; }

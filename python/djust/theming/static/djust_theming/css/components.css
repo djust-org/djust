@@ -382,6 +382,7 @@
 
 [data-theme="dark"] .theme-mode-btn.active {
     background-color: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
 }
 
 /* ==========================================================================
@@ -1528,3 +1529,10 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
 
 /* Conditional section divider */
 .conditional-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid hsl(var(--border)); }
+
+/* The click-outside target of an overlay. It sits BEHIND the panel inside the
+   backdrop, rather than the backdrop itself carrying the close event: djust
+   delegates clicks from the root, so a panel had to stopPropagation() to keep
+   inside clicks from closing it, which swallowed every dj-click in the panel. */
+.dj-scrim { position: absolute; inset: 0; z-index: -1; }
+:has(> .dj-scrim) { isolation: isolate; }

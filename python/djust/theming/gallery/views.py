@@ -430,32 +430,32 @@ def _template_sample_data() -> dict:
             {"value": "lg", "label": "Large"},
         ],
         "breadcrumb_items": [
-            {"label": "Home", "url": "/"},
-            {"label": "Products", "url": "/products/"},
+            {"label": "Home", "url": "#"},
+            {"label": "Products", "url": "#products"},
             {"label": "Current Page", "url": ""},
         ],
         "nav_group_items": [
-            {"label": "Users", "url": "/admin/users/"},
-            {"label": "Settings", "url": "/admin/settings/"},
+            {"label": "Users", "url": "#admin-users"},
+            {"label": "Settings", "url": "#admin-settings"},
         ],
         "nav_items": [
-            {"label": "Home", "url": "/"},
-            {"label": "Docs", "url": "/docs/"},
-            {"label": "Gallery", "url": "/gallery/"},
+            {"label": "Home", "url": "#"},
+            {"label": "Docs", "url": "#docs"},
+            {"label": "Gallery", "url": "#gallery"},
         ],
         "sidebar_sections": [
             {
                 "title": "Main",
                 "items": [
-                    {"label": "Dashboard", "url": "/dash/"},
-                    {"label": "Analytics", "url": "/analytics/"},
+                    {"label": "Dashboard", "url": "#dash"},
+                    {"label": "Analytics", "url": "#analytics"},
                 ],
             },
             {
                 "title": "Settings",
                 "items": [
-                    {"label": "Profile", "url": "/profile/"},
-                    {"label": "Billing", "url": "/billing/"},
+                    {"label": "Profile", "url": "#profile"},
+                    {"label": "Billing", "url": "#billing"},
                 ],
             },
         ],

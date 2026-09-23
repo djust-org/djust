@@ -9,23 +9,33 @@ from typing import Any
 class ErrorBoundary(Component):
     """Style-agnostic error boundary component.
 
-    Catches rendering errors and displays a fallback message.
+    Shows ``content`` normally and a fallback message while ``error`` is set.
+    It does not catch exceptions itself: your view catches the failure and
+    sets ``error``, then clears it (for example from ``retry_event``) once the
+    work succeeds.
 
     Usage in a LiveView::
 
         self.boundary = ErrorBoundary(
-            fallback="Component failed to render",
+            content="Revenue chart",
+            fallback="The chart could not load.",
+            retry_event="retry_load",
         )
+
+        @event_handler()
+        def retry_load(self, **kwargs):
+            self.boundary.error = ""
 
     In template::
 
-        {{ boundary|safe }}
+        {{ boundary }}
 
     Args:
         fallback: Fallback message to show on error
         error: Current error message (empty = no error)
         retry_event: djust event for retrying
         custom_class: Additional CSS classes
+        content: What to show while there is no error — plain text, escaped
     """
 
     def __init__(

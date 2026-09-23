@@ -407,6 +407,94 @@ def component_events(rendered_html: str) -> list[str]:
     return seen
 
 
+def _is_event_param(name: str) -> bool:
+    return name == "event" or name.endswith("_event")
+
+
+#: Event parameters that do NOT name an event the view receives. A
+#: ``stream_event`` / ``loading_event`` is what the SERVER pushes to the
+#: component's client hook (``conversation_thread``'s ``new_message``,
+#: ``content_loader``'s ``data_loaded``), the opposite direction.
+_PUSH_EVENT_PARAMS = frozenset({"stream_event", "loading_event"})
+
+
+def _source_literal(source: Any) -> Any:
+    """A default in SOURCE form (``"'toggle_menu'"``) back to its value."""
+    import ast
+
+    try:
+        return ast.literal_eval(source) if isinstance(source, str) else source
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _supplied_by_example(event: str, example: dict) -> bool:
+    """Did the example put ``event`` into the markup itself?
+
+    True when the name occurs inside caller-supplied data rather than as a
+    value the component turns into an event: embedded in a larger string (the
+    HTML ``content`` `loading_overlay` wraps) or anywhere in a nested
+    structure (`dropdown_menu`'s per-item ``event`` keys). A top-level value
+    EQUAL to the name — `multi_select(name="frameworks")`, which falls back to
+    its name as the event — is the component's event, not example data.
+    """
+
+    def nested(value: Any) -> bool:
+        if isinstance(value, str):
+            return event in value
+        if isinstance(value, dict):
+            return any(nested(v) for v in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(nested(v) for v in value)
+        return False
+
+    for key, value in example.items():
+        if _is_event_param(key):
+            continue
+        if isinstance(value, str):
+            if value != event and event in value:
+                return True
+        elif nested(value):
+            return True
+    return False
+
+
+def contract_events(params: list, example: dict | None, rendered_html: str) -> list[str]:
+    """The server events a component sends, for a host to answer.
+
+    Two sources, because neither alone is true:
+
+    * the markup of the first example — what it emits in the state shown,
+      minus any name the example itself wrote into that markup; and
+    * the component's own event parameters (``event``, ``*_event``), at the
+      value the example passes or the default. Scraping alone missed every
+      event emitted in a state the example does not show (`notification_center`
+      with no notifications) or from a client hook (`kanban_board`'s
+      ``kanban_move``).
+
+    ``params`` are ``{"name", "default"}`` dicts with defaults in source form,
+    as :func:`get_python_component_signature` returns them; pass ``[]`` for a
+    template tag, whose events are what its markup sends. A parameter whose
+    ``doc`` calls it a *prefix* (`tour`'s ``event``, which fires
+    ``tour_next`` / ``tour_prev`` / ``tour_skip``) names no event itself and
+    is skipped.
+    """
+    example = example or {}
+    events = [
+        name for name in component_events(rendered_html) if not _supplied_by_example(name, example)
+    ]
+    for param in params:
+        name = param.get("name", "")
+        if not _is_event_param(name) or name in _PUSH_EVENT_PARAMS:
+            continue
+        if "prefix" in str(param.get("doc") or param.get("description") or "").lower():
+            continue
+        value = example[name] if name in example else _source_literal(param.get("default"))
+        if isinstance(value, str) and value and value not in events:
+            events.append(value)
+    return events
+
+
 def usage_with_events(
     snippet: str,
     events: list[str],

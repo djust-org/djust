@@ -132,8 +132,9 @@ class ModalNode(template.Node):
         title_id = f"{modal_id}-title"
         labelledby = f' aria-labelledby="{title_id}"' if title else ""
 
-        return mark_safe(f"""<div class="dj-modal-backdrop" dj-click="{e_close_event}"{cid_attr}>
-  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby} onclick="event.stopPropagation()">
+        return mark_safe(f"""<div class="dj-modal-backdrop">
+  <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
+  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby}>
     <div class="dj-modal__header">
       <h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>
       <button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>
@@ -2372,8 +2373,12 @@ def notification_center(
     open_event: Any = "toggle_notifications",
     mark_read_event: Any = "mark_notification_read",
     clear_event: Any = "clear_notifications",
+    is_open: Any = False,
 ) -> SafeString:
-    """Render a notification bell with dropdown list."""
+    """Render a notification bell with dropdown list.
+
+    ``is_open`` shows the dropdown; flip it in the ``open_event`` handler.
+    """
     if notifications is None:
         notifications = []
     try:
@@ -2416,8 +2421,9 @@ def notification_center(
         else ""
     )
 
+    open_cls = " notif-center--open" if is_open else ""
     return mark_safe(
-        f'<div class="notif-center">'
+        f'<div class="notif-center{open_cls}">'
         f'<button class="notif-trigger" dj-click="{e_open}">'
         f'<span class="notif-bell">&#128276;</span>'
         f"{badge_html}"
@@ -3467,7 +3473,8 @@ def multi_select(
                 f'<span class="multi-select-tag">'
                 f"{conditional_escape(ol)}"
                 f'<button type="button" class="multi-select-tag-remove" '
-                f'dj-click="{dj_event}" data-value="{conditional_escape(ov)}"'
+                f'dj-click="{dj_event}" data-value="{conditional_escape(ov)}" '
+                f'dj-value-option="{conditional_escape(ov)}" dj-value-value:bool="false"'
                 f"{disabled_attr}>&times;</button>"
                 f"</span>"
             )
@@ -3482,7 +3489,10 @@ def multi_select(
         cb_parts.append(
             f'<label class="multi-select-option">'
             f'<input type="checkbox" name="{e_name}" value="{conditional_escape(ov)}"'
-            f'{checked_attr}{disabled_attr} dj-change="{dj_event}">'
+            f'{checked_attr}{disabled_attr} dj-change="{dj_event}" '
+            # A checkbox's change sends only `value` (checked or not); without
+            # the option the handler could not tell WHICH box changed.
+            f'dj-value-option="{conditional_escape(ov)}">'
             f" {conditional_escape(ol)}"
             f"</label>"
         )
@@ -8154,8 +8164,9 @@ class BottomSheetNode(template.Node):
             title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>'
 
         return mark_safe(
-            f'<div class="dj-bottom-sheet__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-bottom-sheet__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"
@@ -8955,8 +8966,9 @@ class ExportDialogNode(template.Node):
         )
 
         return mark_safe(
-            f'<div class="dj-export-dialog__backdrop" dj-click="{e_close}">'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            f'<div class="dj-export-dialog__backdrop">'
+            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-export-dialog__header">'
             f"<h3>{e_title}</h3>"
             f'<button class="dj-export-dialog__close" dj-click="{e_close}">&times;</button></div>'
