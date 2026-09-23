@@ -113,6 +113,36 @@ window.djLog = function djLog(...args) {
 };
 
 // ============================================================================
+// CSRF token for HTTP requests (event fallback, djust.call)
+// ============================================================================
+// Order: a rendered {% csrf_token %} input, then the CSRF cookie under the
+// project's configured name, then the token the server emits in
+// <meta name="djust-csrf-token">. The cookie is preferred over the meta tag
+// because Django rotates the token at login and the cookie follows the
+// rotation; the meta tag covers CSRF_COOKIE_HTTPONLY and CSRF_USE_SESSIONS,
+// where the cookie is not readable from JavaScript. Empty values are skipped
+// (the Rust engine renders "" for a csrf_token with no request, #696).
+window.djust.csrfToken = function csrfToken() {
+    try {
+        const input = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (input && input.value) return input.value;
+        const nameMeta = document.querySelector('meta[name="djust-csrf-cookie"]');
+        const cookieName = (nameMeta && nameMeta.getAttribute('content')) || 'csrftoken';
+        for (const part of (document.cookie || '').split(';')) {
+            const eq = part.indexOf('=');
+            if (eq > -1 && part.slice(0, eq).trim() === cookieName) {
+                const value = decodeURIComponent(part.slice(eq + 1).trim());
+                if (value) return value;
+            }
+        }
+        const tokenMeta = document.querySelector('meta[name="djust-csrf-token"]');
+        return (tokenMeta && tokenMeta.getAttribute('content')) || '';
+    } catch (_) {
+        return '';
+    }
+};
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
@@ -6995,12 +7025,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
-        // Read CSRF token from hidden input first, fall back to cookie.
-        // Skip the hidden input if its value is empty — the Rust engine
-        // renders "" when no csrf_token is in the template context (#696).
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
-            || '';
+        // Input, configured-name cookie, then server meta tag (00-namespace.js).
+        const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
             method: 'POST',
@@ -18576,17 +18602,12 @@ globalThis.djust.djTransitionGroup = {
 // LiveView. No re-render, no assigns diff — pure request/response. Rejects
 // with an Error carrying {code, status, details} on non-2xx responses.
 //
-// CSRF: reads the hidden input (preferred) then falls back to the cookie.
-// Mirrors the resolver in src/11-event-handler.js for consistency.
+// CSRF: window.djust.csrfToken() (00-namespace.js), shared with the
+// HTTP event fallback in src/11-event-handler.js.
 
 (function () {
     function _csrf() {
-        try {
-            const input = document.querySelector('[name=csrfmiddlewaretoken]');
-            if (input && input.value) return input.value;
-        } catch (_) { /* SSR / detached DOM */ }
-        const m = (document.cookie || '').match(/(?:^|;\s*)csrftoken=([^;]+)/);
-        return m ? m[1] : '';
+        return window.djust.csrfToken();
     }
 
     async function call(viewSlug, funcName, params) {
