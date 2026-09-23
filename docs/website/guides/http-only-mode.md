@@ -9,7 +9,7 @@ description: "Run djust without WebSockets: HTTP polling for environments where 
 
 # HTTP-Only Mode (Without WebSocket)
 
-djust supports running in HTTP-only mode, which uses standard HTTP POST requests instead of WebSocket for event handling. This is useful for:
+djust can run without WebSockets. With `use_websocket: False`, the client uses the SSE transport: the server pushes updates over an `EventSource` stream, and the client sends events as HTTP POST requests. Only in a browser without `EventSource` does it fall back to POSTing events to the page URL. This is useful for:
 
 - Testing without WebSocket infrastructure
 - Environments where WebSocket connections are blocked
@@ -37,6 +37,22 @@ from djust.config import config
 config.set('use_websocket', False)
 ```
 
+### Mount the SSE endpoint
+
+The SSE transport needs its URL patterns. Add them to your root URLconf:
+
+```python
+from django.urls import include, path
+from djust.sse import sse_urlpatterns
+
+urlpatterns = [
+    # ...
+    path("djust/", include(sse_urlpatterns)),
+]
+```
+
+Without these routes the stream at `/djust/sse/<session>/` returns 404, the client marks the transport disabled and fires `dj-disconnected`, and events do nothing.
+
 ## How It Works
 
 ### With WebSocket (Default)
@@ -51,25 +67,32 @@ Browser                    Server
    |<--Patches--------------|
 ```
 
-### With HTTP-Only Mode
+### With `use_websocket: False` (SSE transport)
+
+```
+Browser                                   Server
+   |---GET /djust/sse/<session>/ (EventSource)-->|
+   |<==stream: patches ==========================|
+   |---POST /djust/sse/<session>/message/ ------>| (event + params)
+   |<==stream: patches ==========================|
+```
+
+### Fallback: browsers without `EventSource`
 
 ```
 Browser                    Server
-   |                        |
-   |---POST /view/ -------->| (event + params)
-   |<--JSON patches---------|
-   |---POST /view/ -------->| (event + params)
+   |---POST <page URL> ---->| (event + params)
    |<--JSON patches---------|
 ```
 
 ## Behavior Differences
 
-| Feature | WebSocket Mode | HTTP Mode |
+| Feature | WebSocket Mode | SSE / HTTP Mode |
 |---------|---------------|-----------|
-| Connection | Persistent | Per-request |
+| Connection | Persistent | SSE stream + one POST per event |
 | Latency | Lower (~10ms) | Higher (~50-100ms) |
-| Server Load | Lower | Higher (new connection each time) |
-| Fallback | Automatic | N/A |
+| Server Load | Lower | Higher (new request per event) |
+| Fallback | To SSE, if mounted | To page POST, if no `EventSource` |
 | Deployment | Requires WebSocket support | Standard HTTP only |
 
 ## Example: HTTP-Only LiveView
@@ -77,6 +100,7 @@ Browser                    Server
 ```python
 # views.py
 from djust import LiveView
+from djust.decorators import event_handler
 
 class CounterView(LiveView):
     template_name = 'counter.html'
@@ -84,16 +108,17 @@ class CounterView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
-    def increment(self):
+    @event_handler
+    def increment(self, **kwargs):
         self.count += 1
 
-    def decrement(self):
+    @event_handler
+    def decrement(self, **kwargs):
         self.count -= 1
 ```
 
 ```html
 <!-- counter.html -->
-{% load djust %}
 <!DOCTYPE html>
 <html>
 <head>
@@ -127,14 +152,14 @@ class CounterView(LiveView):
    python manage.py runserver
    ```
 
-3. **Check browser console**:
-   - Should see: `[LiveView] Using HTTP-only mode (WebSocket disabled)`
+3. **Check browser console** (with `DEBUG=True` and `globalThis.djustDebug = true`):
+   - Should see: `[LiveView] WebSocket disabled, using SSE transport directly`
+   - In a browser without `EventSource`: `[LiveView] HTTP-only mode (use_websocket: false)`
    - No WebSocket connection attempts
 
 4. **Test interactions**:
-   - Click events trigger HTTP POST requests
-   - Check Network tab in DevTools to see POST requests
-   - Each event creates a new HTTP request
+   - Click events trigger HTTP POST requests to `/djust/sse/<session>/message/`
+   - Check the Network tab in DevTools: one open `EventSource` stream, plus one POST per event
 
 ## Performance Considerations
 
@@ -153,20 +178,15 @@ class CounterView(LiveView):
 
 ## Automatic Fallback
 
-Even in WebSocket mode, djust automatically falls back to HTTP if:
-- WebSocket connection fails
-- Max reconnection attempts exceeded
-- WebSocket server unavailable
-
-This ensures your application remains functional even if WebSocket infrastructure fails.
+If the WebSocket exhausts its reconnect attempts and the SSE endpoint is mounted (`include(sse_urlpatterns)`), djust switches to the SSE transport automatically. Without SSE mounted there is no automatic fallback.
 
 ## Troubleshooting
 
 ### Events not working in HTTP mode
 
 Check:
-1. CSRF token is present in cookies
-2. POST endpoint is accessible
+1. `sse_urlpatterns` is mounted (see [Mount the SSE endpoint](#mount-the-sse-endpoint)); the stream at `/djust/sse/<session>/` must not 404
+2. Event handlers are decorated with `@event_handler` (the default `event_security = "strict"` rejects undecorated methods)
 3. Browser console for errors
 4. Django middleware allows POST requests
 
