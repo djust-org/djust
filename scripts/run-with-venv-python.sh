@@ -41,6 +41,12 @@
 # source and no shadow is needed.
 # CAVEAT: this shadows only Python source. Rust (`djust._rust`) changes still
 # need `maturin develop` run against the worktree before they are gated.
+#
+# WHY (#2526): a checkout that owns a `.venv` (`make worktree-env`) has its own
+# extension and its own `djust.pth`, so it wins over the main checkout's venv
+# in every mode, and `--worktree-pythonpath` is a no-op there — shadowing is
+# unnecessary, and symlinking the MAIN tree's `.so` would clobber the one the
+# worktree built for itself.
 set -euo pipefail
 
 WORKTREE_PYTHONPATH=0
@@ -61,6 +67,11 @@ main_root=""
 if common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
     main_root="$(dirname "$common_dir")"
 fi
+# The CURRENT tree's own venv (`make worktree-env`, #2526) takes precedence.
+own_venv_python=""
+if this_root="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -x "$this_root/.venv/bin/python" ]; then
+    own_venv_python="$this_root/.venv/bin/python"
+fi
 
 # --worktree-pythonpath: emit the path to PREPEND to PYTHONPATH so a worktree
 # push tests the worktree's Python source (#1810). No-op (silent exit 0) when
@@ -71,7 +82,7 @@ if [ "$WORKTREE_PYTHONPATH" -eq 1 ]; then
     # Nothing to do if we can't resolve a git tree, can't resolve the main
     # root, or this tree already IS the main checkout (its `.pth` points here).
     if [ -z "$worktree_root" ] || [ -z "$main_root" ] || \
-       [ "$worktree_root" = "$main_root" ]; then
+       [ "$worktree_root" = "$main_root" ] || [ -n "$own_venv_python" ]; then
         exit 0
     fi
     worktree_python="$worktree_root/python"
@@ -109,7 +120,9 @@ if [ "$WORKTREE_PYTHONPATH" -eq 1 ]; then
 fi
 
 venv_python=""
-if [ -n "$main_root" ] && [ -x "$main_root/.venv/bin/python" ]; then
+if [ -n "$own_venv_python" ]; then
+    venv_python="$own_venv_python"
+elif [ -n "$main_root" ] && [ -x "$main_root/.venv/bin/python" ]; then
     venv_python="$main_root/.venv/bin/python"
 elif [ -x ".venv/bin/python" ]; then
     # Fallback: a `.venv` in the current tree (non-git context, or a worktree
