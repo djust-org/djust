@@ -7,6 +7,7 @@ Similar to Django's ModelAdmin but designed for reactive LiveView rendering.
 import logging
 from typing import Any, Dict, List, Optional, Type
 
+from django.contrib.auth import get_permission_codename
 from django.db import models
 from django.forms import BaseModelForm, modelform_factory
 from django.http import HttpRequest
@@ -91,23 +92,49 @@ class DjustModelAdmin:
         return bool(user.has_perms(perms))
 
     # Permissions
+    #
+    # The defaults follow django.contrib.admin.ModelAdmin: each hook asks
+    # ``request.user.has_perm("<app_label>.<action>_<model_name>")``, and view
+    # access is granted by either the view or the change permission. The admin
+    # views call these hooks on mount and before every save or delete, so an
+    # override returning False is enforced on every transport.
+    def _has_model_permission(self, request: HttpRequest, action: str) -> bool:
+        user = getattr(request, "user", None)
+        if user is None:
+            return False
+        codename = get_permission_codename(action, self.opts)
+        return bool(user.has_perm(f"{self.opts.app_label}.{codename}"))
+
     def has_add_permission(self, request: HttpRequest) -> bool:
-        return True
+        return self._has_model_permission(request, "add")
 
     def has_change_permission(
         self, request: HttpRequest, obj: Optional[models.Model] = None
     ) -> bool:
-        return True
+        return self._has_model_permission(request, "change")
 
     def has_delete_permission(
         self, request: HttpRequest, obj: Optional[models.Model] = None
     ) -> bool:
-        return True
+        return self._has_model_permission(request, "delete")
 
-    def has_view_permission(
+    def has_view_permission(self, request: HttpRequest, obj: Optional[models.Model] = None) -> bool:
+        return self._has_model_permission(request, "view") or self._has_model_permission(
+            request, "change"
+        )
+
+    def has_view_or_change_permission(
         self, request: HttpRequest, obj: Optional[models.Model] = None
     ) -> bool:
-        return True
+        return self.has_view_permission(request, obj) or self.has_change_permission(request, obj)
+
+    def has_any_permission(self, request: HttpRequest) -> bool:
+        """True when the user may use this model's admin at all (list it in the index)."""
+        return (
+            self.has_view_or_change_permission(request)
+            or self.has_add_permission(request)
+            or self.has_delete_permission(request)
+        )
 
     def __init__(self, model: Type[models.Model], admin_site: Any) -> None:
         self.model = model
