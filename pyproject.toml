@@ -845,7 +845,6 @@ module = [
     "djust.pwa.sync",
     "djust.pwa.utils",
     "djust.optimization.__init__",
-    "djust.optimization.cache",
     "djust.optimization.codegen",
     "djust.optimization.fingerprint",
     "djust.optimization.query_optimizer",

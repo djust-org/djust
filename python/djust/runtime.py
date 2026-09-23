@@ -2006,7 +2006,12 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     if source is not None and not (
         isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG
     ):
-        key = (hashlib.sha1(source.encode("utf-8", "surrogatepass")).hexdigest(), name)
+        key = (
+            hashlib.sha1(
+                source.encode("utf-8", "surrogatepass"), usedforsecurity=False
+            ).hexdigest(),
+            name,
+        )
     verdict = cache.get(key)
     if verdict is None:
         verdict = _template_is_component_opaque(source, name)
