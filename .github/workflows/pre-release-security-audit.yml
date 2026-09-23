@@ -87,7 +87,9 @@ jobs:
           echo "## Bandit Results" > bandit-report.md
           echo '```' >> bandit-report.md
           echo "::group::Bandit full output"
-          uvx bandit -r python/djust/ -ll -f txt 2>&1 | tee -a bandit-report.md || true
+          # Same excludes and reviewed skips as the gate below, so the log shows
+          # only findings that need a decision. The JSON below stays unfiltered.
+          uvx bandit -r python/djust/ -ll -ii -x tests/,python/tests/,python/djust/tests/ -s B703,B308 -f txt 2>&1 | tee -a bandit-report.md || true
           echo "::endgroup::"
           echo '```' >> bandit-report.md
 
@@ -118,7 +120,7 @@ jobs:
           uvx bandit -r python/djust \
             -lll -ii \
             -x tests/,python/tests/,python/djust/tests/ \
-            -s B703,B308,B324,B301,B102 \
+            -s B703,B308 \
             -f json -o bandit-high.json || true
           HIGH=$(python -c "import json; d=json.load(open('bandit-high.json')); print(sum(1 for r in d['results'] if r['issue_severity']=='HIGH'))")
           echo "Bandit high-severity findings (after reviewed skips): $HIGH"

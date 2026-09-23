@@ -1,5 +1,7 @@
 # djust ORM JIT Auto-Serialization Architecture
 
+> **Note:** the persistent `SerializerCache` (filesystem or Redis, via `pickle`) described in this design was removed after 1.2.0. It was never used by the framework: generated serializers cannot be pickled, so it could only ever load data someone else had placed in its cache directory or Redis key. Compiled serializers are cached in-process only (`djust.session_utils._jit_serializer_cache`).
+
 **Status**: Approved for Implementation
 **Version**: 1.0
 **Last Updated**: 2025-11-16

@@ -74,7 +74,6 @@ assert len(ALLOWLIST_PACKAGE) == 23
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
         "djust.optimization",
-        "djust.optimization.cache",
         "djust.optimization.codegen",
         "djust.optimization.fingerprint",
         "djust.optimization.query_optimizer",
@@ -87,7 +86,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 35
+assert len(ALLOWLIST_BACKEND) == 34
 
 
 # The compat shim (``djust/template_backend.py``) is one extra module.
@@ -126,7 +125,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 60
+assert len(ALLOWLIST_SETUP) == 59
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
