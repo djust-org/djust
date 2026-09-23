@@ -8,6 +8,8 @@ This is a specialized checkbox styled as a Bootstrap form-switch.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustSwitch
 
@@ -144,9 +146,9 @@ class Switch(Component):
             'class="form-check-input"',
             'type="checkbox"',
             'role="switch"',
-            f'id="{self.id}"',  # Use base class id property
-            f'name="{self.name}"',
-            f'value="{self.value}"',
+            f'id="{conditional_escape(self.id)}"',  # Use base class id property
+            f'name="{conditional_escape(self.name)}"',
+            f'value="{conditional_escape(self.value)}"',
         ]
         if self.checked:
             attrs.append("checked")
@@ -155,15 +157,15 @@ class Switch(Component):
 
         parts.append(f"        <input {' '.join(attrs)}>")
         parts.append(
-            f'        <label class="form-check-label" for="{self.id}">'
+            f'        <label class="form-check-label" for="{conditional_escape(self.id)}">'
         )  # Use base class id property
-        parts.append(f"            {self.label}")
+        parts.append(f"            {conditional_escape(self.label)}")
         parts.append("        </label>")
         parts.append("    </div>")
 
         # Help text
         if self.help_text:
-            parts.append(f'    <div class="form-text">{self.help_text}</div>')
+            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
 
         parts.append("</div>")
 

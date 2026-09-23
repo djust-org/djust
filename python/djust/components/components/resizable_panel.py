@@ -2,6 +2,8 @@
 
 import html
 
+from django.utils.html import conditional_escape
+
 from djust import Component
 from typing import Any
 
@@ -17,7 +19,7 @@ class ResizablePanel(Component):
             direction="horizontal",
             min_size="200px",
             max_size="800px",
-            content="<p>Panel content here</p>",
+            content=mark_safe("<p>Panel content here</p>"),
         )
 
     In template::
@@ -91,7 +93,7 @@ class ResizablePanel(Component):
             f'data-direction="{direction}" '
             f'data-min-size="{e_min}" data-max-size="{e_max}" '
             f"{style}{disabled_attr}>"
-            f'<div class="dj-resizable-panel__content">{self.content}</div>'
+            f'<div class="dj-resizable-panel__content">{conditional_escape(self.content)}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '
             f'aria-orientation="{direction}" tabindex="0">'
             f'<span class="dj-resizable-panel__handle-bar"></span>'

@@ -131,7 +131,7 @@ impl Tabs {
                         .attr("role", "tab")
                         .attr("aria-controls", format!("{}-pane", tab.id))
                         .attr("aria-selected", if is_active { "true" } else { "false" })
-                        .child(&tab.label)
+                        .text(&tab.label)
                         .build(),
                 )
                 .build();
@@ -236,7 +236,7 @@ impl Tabs {
                 .attr("type", "button")
                 .attr("id", format!("{}-tab", tab.id))
                 .attr("data-tab", &tab.id)
-                .child(&tab.label)
+                .text(&tab.label)
                 .build();
             nav_items.push(item_html);
         }
@@ -307,7 +307,7 @@ impl Tabs {
                 .attr("type", "button")
                 .attr("id", format!("{}-tab", tab.id))
                 .attr("data-tab", &tab.id)
-                .child(&tab.label)
+                .text(&tab.label)
                 .build();
             nav_items.push(item_html);
         }
@@ -443,5 +443,38 @@ mod tests {
             .vertical(true);
         let html = tabs.render(Framework::Bootstrap5).unwrap();
         assert!(html.contains("flex-column"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    const FWS: [Framework; 3] = [Framework::Bootstrap5, Framework::Tailwind, Framework::Plain];
+
+    #[test]
+    fn tab_label_is_html_escaped() {
+        for fw in FWS {
+            let html = Tabs::new("t")
+                .tab("a", "<img src=x onerror=alert(1)>", "<b>ok</b>")
+                .render(fw)
+                .unwrap();
+            assert!(!html.contains("<img"), "{fw:?}");
+            assert!(
+                html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{fw:?}"
+            );
+            // pane content is a markup slot
+            assert!(html.contains("<b>ok</b>"), "{fw:?}");
+        }
+    }
+
+    #[test]
+    fn plain_label_output_unchanged() {
+        let html = Tabs::new("t")
+            .tab("a", "First", "C")
+            .render(Framework::Bootstrap5)
+            .unwrap();
+        assert!(html.contains(">First</a>"));
     }
 }

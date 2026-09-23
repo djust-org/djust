@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class DataCardGrid(Component):
@@ -112,7 +113,7 @@ class DataCardGrid(Component):
 
             img_html = ""
             if image:
-                e_img = html.escape(str(image))
+                e_img = url_attr(image, image=True)
                 img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
 
             click_attr = ""

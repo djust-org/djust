@@ -19,10 +19,11 @@ import uuid
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escapejs
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
+from djust.components.utils import rich_html, url_attr
 from django.utils.safestring import mark_safe
 
 
@@ -2531,11 +2532,11 @@ def carousel(
     dots = ""
     for i, img in enumerate(images):
         if isinstance(img, dict):
-            src = conditional_escape(str(img.get("src", img.get("url", ""))))
+            src = url_attr(img.get("src", img.get("url", "")), image=True)
             alt = conditional_escape(str(img.get("alt", f"Slide {i + 1}")))
             caption = img.get("caption", "")
         else:
-            src = conditional_escape(str(img))
+            src = url_attr(img, image=True)
             alt = f"Slide {i + 1}"
             caption = ""
 
@@ -3011,7 +3012,7 @@ def file_dropzone(
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     helper_html = f'<span class="form-helper">{e_helper}</span>' if helper else ""
 
-    js_id = f"dz-{name}"
+    js_id = f"dz-{e_name}"
 
     return mark_safe(
         f"{label_html}"
@@ -3246,7 +3247,9 @@ def kanban_board(
     if not columns:
         return mark_safe('<div class="kanban"></div>')
 
-    e_move = conditional_escape(move_event)
+    # e_move sits inside a single-quoted JS string in the ondrop attribute:
+    # escapejs \u-escapes quotes, backslashes and HTML special characters.
+    e_move = escapejs(move_event)
     e_add_card = conditional_escape(add_card_event)
 
     cols_html = ""
@@ -3352,7 +3355,9 @@ def rich_text_editor(
         required = required.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
-    e_value = value  # Already HTML — rendered as-is (trust server content)
+    # Editor HTML keeps its formatting: values marked safe pass through, and
+    # anything else is cleaned to the Markdown allowlist (utils.rich_html).
+    e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
     e_height = conditional_escape(height)
@@ -4861,7 +4866,7 @@ def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:
 
     if image:
         parts.append(
-            f'<img class="rich-select-option-image" src="{conditional_escape(str(image))}" alt="">'
+            f'<img class="rich-select-option-image" src="{url_attr(image, image=True)}" alt="">'
         )
     elif icon:
         parts.append(
@@ -5364,7 +5369,7 @@ def responsive_image(
     if isinstance(lazy, str):
         lazy = lazy.lower() not in ("false", "0", "")
 
-    e_src = conditional_escape(src)
+    e_src = url_attr(src, image=True)
     e_alt = conditional_escape(alt)
     e_cls = conditional_escape(custom_class)
 
@@ -5391,7 +5396,7 @@ def responsive_image(
 
     placeholder_html = ""
     if placeholder:
-        e_ph = conditional_escape(placeholder)
+        e_ph = url_attr(placeholder, image=True)
         placeholder_html = (
             f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" aria-hidden="true">'
         )
@@ -6433,7 +6438,7 @@ class AvatarGroupNode(template.Node):
                 name = str(user)
                 src = ""
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
             z = len(visible) - i
             if e_src:
@@ -7316,7 +7321,7 @@ class ChatBubbleNode(template.Node):
         e_name = conditional_escape(str(name))
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
-        e_avatar = conditional_escape(str(avatar_src))
+        e_avatar = url_attr(avatar_src, image=True)
         e_class = conditional_escape(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
@@ -7424,7 +7429,7 @@ class PresenceAvatarsNode(template.Node):
                 status = "online"
 
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = conditional_escape(
                 "".join(w[0].upper() for w in str(name).split()[:2] if w) or "?"
@@ -7509,7 +7514,7 @@ class MentionsInputNode(template.Node):
                 continue
             uid = conditional_escape(str(user.get("id", "")))
             uname = conditional_escape(str(user.get("name", "")))
-            avatar_src = conditional_escape(str(user.get("avatar", "")))
+            avatar_src = url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 conditional_escape(
@@ -8871,7 +8876,7 @@ class MeterNode(template.Node):
                     continue
                 color = conditional_escape(str(seg.get("color", "")))
                 seg_label = conditional_escape(str(seg.get("label", "")))
-                val = seg.get("value", 0)
+                val = conditional_escape(seg.get("value", 0))
                 swatch_style = f"background:{color}" if color else ""
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
@@ -9133,7 +9138,7 @@ class AuditLogNode(template.Node):
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     cell_cls += (
                         f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
@@ -9328,7 +9333,7 @@ class SortableGridNode(template.Node):
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = conditional_escape(str(thumbnail))
+                e_thumb = url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
                     f'src="{e_thumb}" alt="{label}" loading="lazy">'
@@ -9376,7 +9381,7 @@ class ImageCropperNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_src = conditional_escape(str(src))
+        e_src = url_attr(src, image=True)
         e_event = conditional_escape(str(crop_event))
         e_class = conditional_escape(str(custom_class))
 
@@ -9613,7 +9618,7 @@ class LightboxNode(template.Node):
         if images and 0 <= idx < total:
             img = images[idx]
             if isinstance(img, dict):
-                e_src = conditional_escape(str(img.get("src", "")))
+                e_src = url_attr(img.get("src", ""), image=True)
                 e_alt = conditional_escape(str(img.get("alt", "")))
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
@@ -9717,7 +9722,7 @@ class DashboardGridNode(template.Node):
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            content = panel.get("content", "")
+            content = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):

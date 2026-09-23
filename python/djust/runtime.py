@@ -212,7 +212,8 @@ class Transport(Protocol):
     async def on_view_mounted(self, view_instance: Any) -> None:
         """Stamp transport-specific identity + post-mount setup on the freshly-mounted view.
 
-        Called by ``dispatch_mount`` once ``self.view_instance`` is set, so a
+        Called by ``dispatch_mount`` once ``self.view_instance`` is set and the
+        pre-mount auth sequence + on_mount hooks have admitted it, so a
         transport can attach its own back-references the way the legacy bespoke
         mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
         for introspection + limits) and the real query string. WS performs the
@@ -715,10 +716,11 @@ class WSConsumerTransport:
         Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation setup
         block (websocket.py:2148-2217 + the per-mount ``_sticky_auto_reattached``
         reset at websocket.py:2082) that ``dispatch_mount`` did NOT carry pre-flip.
-        The runtime calls this hook at the SAME point the bespoke path ran the
-        block: AFTER instantiation + back-refs, BEFORE the request build / auth /
-        mount(). It writes onto the CONSUMER (the runtime→consumer ownership
-        direction at mount, Finding B):
+        The runtime calls this hook AFTER instantiation + back-refs AND after the
+        pre-mount auth sequence + on_mount hooks have admitted the view, BEFORE
+        state restore / mount(). A refused or redirected mount therefore joins no
+        channel-layer group. It writes onto the CONSUMER (the runtime→consumer
+        ownership direction at mount, Finding B):
 
           * real-scope path/query-string stamps for path-aware VDOM cache keys
             (websocket.py:2153-2156) — the runtime set ``_websocket_path =
@@ -1526,12 +1528,43 @@ class WSConsumerTransport:
         (``mounting_in_batch`` is ``False`` outside a batch).
         """
         consumer = self._consumer
+        # The refused mount leaves the consumer with no mounted view, so it also
+        # leaves every channel-layer group it holds. This matters inside a
+        # mount_batch, where the socket stays open: the post-mount object-permission
+        # refusal runs after ``on_view_mounted`` joined the view's groups.
+        await self._leave_view_groups()
         # #1922 / #291: gate the close on the batch flag for ALL verdicts so a
         # single denied/redirected view inside a shared-socket mount_batch does
         # not kill the sibling mounts. The denial itself is already enforced
         # upstream (verdict frame sent + view_instance cleared).
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
+
+    async def _leave_view_groups(self) -> None:
+        """Leave the view / presence / db_notify groups ``on_view_mounted`` joined.
+
+        Resets the consumer's group attributes so ``disconnect`` does not
+        discard them a second time. Discard failures are logged, never raised.
+        """
+        consumer = self._consumer
+        groups: List[str] = []
+        for attr in ("_view_group", "_presence_group"):
+            group = getattr(consumer, attr, None)
+            if isinstance(group, str) and group:
+                groups.append(group)
+                setattr(consumer, attr, None)
+        channels = getattr(consumer, "_db_notify_channels", None)
+        if isinstance(channels, set) and channels:
+            groups.extend(f"djust_db_notify_{ch}" for ch in channels)
+            consumer._db_notify_channels = set()
+        channel_layer = getattr(consumer, "channel_layer", None)
+        if channel_layer is None:
+            return
+        for group in groups:
+            try:
+                await channel_layer.group_discard(group, consumer.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
 
     @property
     def mounting_in_batch(self) -> bool:
@@ -2207,21 +2240,6 @@ class ViewRuntime:
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
 
-        # Transport-specific identity + post-mount setup hook (#1887 / #1919):
-        # SSE stamps _sse_session_id / _sse_session + the real query string here so
-        # the converged runtime mount preserves everything legacy _sse_mount_view
-        # exposed. WS performs its post-mount channel-layer wiring (view/presence/
-        # db_notify group_add), tick-task start, use_actors flag, and real-scope
-        # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
-        # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
-        # so duck-typed test transport fakes that predate this Protocol method (or
-        # still expose a SYNC no-op) keep working.
-        on_view_mounted = getattr(self.transport, "on_view_mounted", None)
-        if on_view_mounted is not None:
-            result = on_view_mounted(view_instance)
-            if inspect.isawaitable(result):
-                await result
-
         # Optional client timezone (validate IANA string).
         view_instance.client_timezone = None
         if client_timezone:
@@ -2303,6 +2321,28 @@ class ViewRuntime:
             self.view_instance = None
             return
         # ---- End on_mount hooks ----
+
+        # Transport-specific identity + post-mount setup hook (#1887 / #1919):
+        # SSE stamps _sse_session_id / _sse_session + the real query string here so
+        # the converged runtime mount preserves everything legacy _sse_mount_view
+        # exposed. WS performs its post-mount channel-layer wiring (view/presence/
+        # db_notify group_add), tick-task start, use_actors flag, and real-scope
+        # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
+        # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
+        # so duck-typed test transport fakes that predate this Protocol method (or
+        # still expose a SYNC no-op) keep working.
+        #
+        # Runs only once the pre-mount auth sequence and the on_mount hooks have
+        # admitted the view: a view that is redirected or refused never joins the
+        # view / presence / db_notify groups, never starts a tick task, and never
+        # becomes the SSE session's mounted view. Still BEFORE state restore and
+        # mount(), so the db_notify join reads ``_listen_channels`` at the same
+        # point it always has.
+        on_view_mounted = getattr(self.transport, "on_view_mounted", None)
+        if on_view_mounted is not None:
+            result = on_view_mounted(view_instance)
+            if inspect.isawaitable(result):
+                await result
 
         # ---- Mount kwargs ----
         mount_kwargs = dict(params)

@@ -264,6 +264,58 @@ def test_anonymous_session_signs_and_verifies_consistently():
 
 
 @pytest.mark.django_db
+def test_envelope_sid_is_keyed_digest_not_session_key():
+    """The signed envelope is readable by the client, so ``sid`` holds a
+    keyed digest of the session key rather than the key itself."""
+    from django.utils.crypto import salted_hmac
+
+    session_key = "u8w1n5q2z9k3j7f4d0a6s8h2l5p1x3c7"
+    signed = sign_snapshot(json.dumps({"n": 1}), _VIEW_SLUG, session_key)
+    assert session_key not in signed
+    envelope = json.loads(signed.rsplit(":", 2)[0])
+    assert (
+        envelope["sid"]
+        == salted_hmac("djust.state_snapshot.sid", session_key, algorithm="sha256").hexdigest()
+    )
+    # The digest still binds: same session verifies, another does not.
+    assert unsign_snapshot(signed, _VIEW_SLUG, session_key) is not None
+    assert unsign_snapshot(signed, _VIEW_SLUG, "other-session") is None
+
+
+@pytest.mark.django_db
+def test_envelope_with_plain_session_key_sid_is_rejected():
+    """A validly signed envelope whose ``sid`` is the plain session key (the
+    format issued by earlier releases) is not accepted."""
+    from django.core import signing
+
+    from djust.security.state_snapshot import SNAPSHOT_SALT
+
+    session_key = "sess-1"
+    envelope = json.dumps(
+        {"slug": _VIEW_SLUG, "sid": session_key, "state": json.dumps({"n": 1})},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    blob = signing.TimestampSigner(salt=SNAPSHOT_SALT).sign(envelope)
+    assert unsign_snapshot(blob, _VIEW_SLUG, session_key) is None
+
+
+@pytest.mark.django_db
+def test_envelope_with_non_string_sid_is_rejected():
+    from django.core import signing
+
+    from djust.security.state_snapshot import SNAPSHOT_SALT
+
+    envelope = json.dumps(
+        {"slug": _VIEW_SLUG, "sid": None, "state": json.dumps({"n": 1})},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    blob = signing.TimestampSigner(salt=SNAPSHOT_SALT).sign(envelope)
+    assert unsign_snapshot(blob, _VIEW_SLUG, None) is None
+
+
+@pytest.mark.django_db
 def test_unsigned_plain_json_is_rejected():
     """The legacy plain ``state_json`` (no signature) must be rejected — there
     is no bypass for unsigned input."""

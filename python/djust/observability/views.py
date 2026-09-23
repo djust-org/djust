@@ -15,7 +15,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
 from djust._log_utils import sanitize_for_log
-from djust.observability.middleware import is_localhost
+from djust.observability.middleware import (
+    TOKEN_HEADER,
+    has_valid_token,
+    is_direct_local_request,
+)
 from djust.observability.log_handler import get_recent_logs
 from djust.observability.registry import (
     get_registered_session_count,
@@ -93,23 +97,35 @@ def _gate(request: HttpRequest) -> HttpResponse | None:
     """Per-view access gate for every observability endpoint — returns a 404
     response when the request must be refused, else ``None``.
 
-    Enforces BOTH conditions IN the view: ``settings.DEBUG`` must be on, AND the
-    request must originate from loopback. The localhost check is duplicated here
-    (it also lives in ``LocalhostOnlyObservabilityMiddleware``) on purpose: the
-    middleware is opt-in and was omitted from the documented setup, so without
-    an in-view check these endpoints — which expose live cross-session state,
-    tracebacks, logs, and a method-invocation endpoint — were reachable from any
-    host whenever DEBUG slipped on (e.g. a ``0.0.0.0``-bound staging server).
-    Defense-in-depth so the boundary holds regardless of middleware (finding #9).
+    Enforces, IN the view, that ``settings.DEBUG`` is on, that the request came
+    straight from a loopback peer with no reverse-proxy headers
+    (``is_direct_local_request``), and that it carries the observability token
+    (``has_valid_token``). The network check is duplicated in
+    ``LocalhostOnlyObservabilityMiddleware`` on purpose: the middleware is
+    opt-in, so the views must hold the boundary without it.
 
-    Returns 404 (not 403) in both cases to avoid disclosing the endpoint's
-    existence to a non-localhost or production client.
+    The token is what separates a local developer tool from anything else that
+    can reach the port: a reverse proxy on the same host connects from
+    loopback, and a proxy that forwards without adding headers (nginx's plain
+    ``proxy_pass``) is indistinguishable from a local client by address alone.
+    See ``djust.observability.middleware`` for how tooling obtains the token.
+
+    Returns 404 (not 403) in every case to avoid disclosing the endpoint's
+    existence.
     """
     if not settings.DEBUG:
         return HttpResponse(status=404)
-    if not is_localhost(request):
+    if not is_direct_local_request(request):
         logger.warning(
-            "Rejected observability request from non-localhost (in-view gate): path=%s",
+            "Rejected observability request that is not a direct local request "
+            "(in-view gate): path=%s",
+            sanitize_for_log(request.path),
+        )
+        return HttpResponse(status=404)
+    if not has_valid_token(request):
+        logger.warning(
+            "Rejected observability request without a valid %s header: path=%s",
+            TOKEN_HEADER,
             sanitize_for_log(request.path),
         )
         return HttpResponse(status=404)
@@ -121,8 +137,12 @@ def _gate(request: HttpRequest) -> HttpResponse | None:
 def health(request: HttpRequest) -> HttpResponse:
     """Liveness probe. Returns the registry size + DEBUG flag.
 
-    `curl http://127.0.0.1:8000/_djust/observability/health/` during
-    live-verification. Returns:
+    During live-verification::
+
+        curl -H "X-Djust-Observability-Token: $(python manage.py djust_observability_token)" \
+            http://127.0.0.1:8000/_djust/observability/health/
+
+    Returns:
 
         {"ok": true, "debug": true, "registered_sessions": 0}
     """

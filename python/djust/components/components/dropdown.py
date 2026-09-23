@@ -1,6 +1,7 @@
 """Dropdown component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -47,7 +48,11 @@ class Dropdown(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_label = html.escape(self.label)
-        menu_html = f'<div class="dj-dropdown__menu">{self.content}</div>' if self.is_open else ""
+        menu_html = (
+            f'<div class="dj-dropdown__menu">{conditional_escape(self.content)}</div>'
+            if self.is_open
+            else ""
+        )
         open_attr = " data-open" if self.is_open else ""
         return (
             f'<div class="{cls}"{open_attr}>'

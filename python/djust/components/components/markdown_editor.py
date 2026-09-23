@@ -1,6 +1,7 @@
 """Markdown Editor component — split-pane editor with live preview."""
 
 import html
+from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any
@@ -123,7 +124,7 @@ class MarkdownEditor(Component):
 
         textarea_html = (
             f'<textarea class="dj-md-editor__textarea" name="{e_name}" data-markdown-editor="{self.mode}" '
-            f'placeholder="{e_placeholder}" rows="{self.rows}"'
+            f'placeholder="{e_placeholder}" rows="{conditional_escape(self.rows)}"'
             f"{disabled_attr}{event_attr}>{e_value}</textarea>"
         )
 

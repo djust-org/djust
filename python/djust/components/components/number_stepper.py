@@ -1,6 +1,7 @@
 """NumberStepper component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any, Optional
 
@@ -60,15 +61,15 @@ class NumberStepper(Component):
         label_html = (
             f'<label class="form-label" for="{e_name}">{e_label}</label>' if self.label else ""
         )
-        min_attr = f' min="{self.min_val}"' if self.min_val is not None else ""
-        max_attr = f' max="{self.max_val}"' if self.max_val is not None else ""
+        min_attr = f' min="{conditional_escape(self.min_val)}"' if self.min_val is not None else ""
+        max_attr = f' max="{conditional_escape(self.max_val)}"' if self.max_val is not None else ""
         return (
             f'<div class="{cls}">{label_html}'
             f'<div class="number-stepper-controls">'
             f'<button type="button" class="number-stepper-btn number-stepper-dec" '
             f"{self.event_attrs(event, value='dec')}>&minus;</button>"
             f'<input type="number" class="number-stepper-input" name="{e_name}" '
-            f'value="{self.value}" step="{self.step}"{min_attr}{max_attr} '
+            f'value="{conditional_escape(self.value)}" step="{conditional_escape(self.step)}"{min_attr}{max_attr} '
             f"{self.event_attrs(event, trigger='change')}>"
             f'<button type="button" class="number-stepper-btn number-stepper-inc" '
             f"{self.event_attrs(event, value='inc')}>&plus;</button>"

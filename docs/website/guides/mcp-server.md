@@ -160,7 +160,15 @@ require:
 - `path("_djust/observability/", include("djust.observability.urls"))`
   in the project's `urls.py`
 - `LocalhostOnlyObservabilityMiddleware` in `MIDDLEWARE` (rejects any
-  non-loopback caller)
+  non-loopback caller, and any request relayed by a reverse proxy)
+- the observability token: every request must carry it in the
+  `X-Djust-Observability-Token` header. The MCP server sends it on its own
+  when started with `python manage.py djust_mcp`, because the token is
+  derived from the project's `SECRET_KEY`. Other local tools can print it
+  with `python manage.py djust_observability_token`. If the dev server and
+  the tool don't load the same `SECRET_KEY` (for example, a key generated
+  at random on each start), set the same `DJUST_OBSERVABILITY_TOKEN`
+  environment variable for both
 
 Most of these tools call an HTTP endpoint under
 `/_djust/observability/`. `find_handlers_for_template` and

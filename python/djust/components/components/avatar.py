@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from djust.components.utils import url_attr
 from typing import Any
 
 
@@ -48,7 +49,7 @@ class Avatar(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         if self.src:
-            e_src = html.escape(self.src)
+            e_src = url_attr(self.src, image=True)
             e_alt = html.escape(self.alt)
             inner = f'<img class="dj-avatar-img" src="{e_src}" alt="{e_alt}">'
         else:

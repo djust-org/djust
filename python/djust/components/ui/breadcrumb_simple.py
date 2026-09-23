@@ -8,6 +8,10 @@ This is a stateless Component optimized for performance.
 from typing import Any, Dict, List, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
+from djust.components.utils import url_attr
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -139,7 +143,7 @@ class Breadcrumb(Component):
         last_index = len(self.items) - 1
 
         for i, item in enumerate(self.items):
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             is_active = (i == last_index) or (url is None)
 
@@ -159,7 +163,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'  <li class="breadcrumb-item"><a href="{url}">{label}</a></li>'
+                    f'  <li class="breadcrumb-item"><a href="{url_attr(url)}">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)
@@ -179,7 +183,7 @@ class Breadcrumb(Component):
         last_index = len(self.items) - 1
 
         for i, item in enumerate(self.items):
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             is_active = (i == last_index) or (url is None)
 
@@ -204,7 +208,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'    <li class="inline-flex items-center"><a href="{url}" class="inline-flex items-center text-sm font-medium text-gray-700 hover:text-blue-600">{label}</a></li>'
+                    f'    <li class="inline-flex items-center"><a href="{url_attr(url)}" class="inline-flex items-center text-sm font-medium text-gray-700 hover:text-blue-600">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)
@@ -224,7 +228,7 @@ class Breadcrumb(Component):
         last_index = len(self.items) - 1
 
         for i, item in enumerate(self.items):
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             is_active = (i == last_index) or (url is None)
 
@@ -234,7 +238,9 @@ class Breadcrumb(Component):
 
             # Add separator between items (except first)
             if i > 0:
-                breadcrumb_items.append(f'  <li class="breadcrumb-separator">{self.separator}</li>')
+                breadcrumb_items.append(
+                    f'  <li class="breadcrumb-separator">{conditional_escape(self.separator)}</li>'
+                )
 
             if is_active:
                 # Current page (active) - no link
@@ -244,7 +250,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'  <li class="breadcrumb-item"><a href="{url}">{label}</a></li>'
+                    f'  <li class="breadcrumb-item"><a href="{url_attr(url)}">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)

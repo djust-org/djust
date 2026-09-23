@@ -659,6 +659,10 @@ class UploadEntry:
     writer_result: Any = field(default=None, repr=False)
     _writer_opened: bool = field(default=False, repr=False)
     _writer_aborted: bool = field(default=False, repr=False)
+    # Django session key of the connection that registered the upload. A
+    # resumable writer records it so only that session can resume the upload
+    # or read its status.
+    _session_key: Optional[str] = field(default=None, repr=False)
 
     @property
     def data(self) -> bytes:
@@ -863,12 +867,18 @@ class UploadManager:
         writer_cls = config.writer
         assert writer_cls is not None  # caller guards
         if entry.writer_instance is None:
+            from .resumable import ResumableUploadWriter
+
+            writer_kwargs: Dict[str, Any] = {}
+            if issubclass(writer_cls, ResumableUploadWriter):
+                writer_kwargs["session_key"] = entry._session_key
             try:
                 entry.writer_instance = writer_cls(
                     upload_id=entry.ref,
                     filename=entry.client_name,
                     content_type=entry.client_type,
                     expected_size=entry.client_size,
+                    **writer_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001
                 # Do NOT surface the raw exception message to the client —
@@ -984,9 +994,14 @@ class UploadManager:
         client_name: str,
         client_type: str,
         client_size: int,
+        session_key: Optional[str] = None,
     ) -> Optional[UploadEntry]:
         """
         Register a new upload entry. Called when client announces a file selection.
+
+        ``session_key`` is the registering connection's Django session key.
+        Resumable uploads store it as the upload's owner; without one the
+        upload cannot be resumed.
 
         Returns the entry, or None if validation fails.
         """
@@ -1043,6 +1058,7 @@ class UploadManager:
             client_name=client_name,
             client_type=client_type,
             client_size=client_size,
+            _session_key=session_key,
         )
         self._entries[ref] = entry
         self._name_to_refs.setdefault(upload_name, []).append(ref)

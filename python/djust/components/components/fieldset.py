@@ -1,6 +1,7 @@
 """Fieldset component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -47,6 +48,6 @@ class Fieldset(Component):
         return (
             f'<fieldset class="{cls}"{disabled_attr}>'
             f"{legend_html}"
-            f'<div class="fieldset-content">{self.content}</div>'
+            f'<div class="fieldset-content">{conditional_escape(self.content)}</div>'
             f"</fieldset>"
         )

@@ -1,6 +1,7 @@
 """Modal component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -57,7 +58,7 @@ class Modal(Component):
             f'<h3 class="dj-modal__title">{e_title}</h3>'
             f'<button class="dj-modal__close" {close_attrs}>&times;</button>'
             f"</div>"
-            f'<div class="dj-modal__body">{self.content}</div>'
+            f'<div class="dj-modal__body">{conditional_escape(self.content)}</div>'
             f"</div>"
             f"</div>"
         )

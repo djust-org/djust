@@ -264,7 +264,7 @@ each) is in [`docs/SECURE_DEFAULTS.md`](SECURE_DEFAULTS.md).
   ladder whose **default branch denies**, enforced inside the view, returning a
   **non-disclosing 404** (never 403 — a 403 confirms the endpoint exists). Mirror
   `api/openapi.py:_openapi_gate` (DEBUG → opt-in-setting → authenticated → 404)
-  or `observability/views.py:_gate` (DEBUG → localhost → 404).
+  or `observability/views.py:_gate` (DEBUG → direct local request → token → 404).
   *(SECURE_DEFAULTS.md pattern 3.)*
 - [ ] **Writes attributes from input? Use `safe_setattr`** - Route every
   untrusted-key write through `safe_setattr(..., allow_private=False)`; pass

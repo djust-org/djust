@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.decorators import event_handler
 from djust.observability.registry import _clear_registry, register_view
@@ -49,7 +51,7 @@ class _FakeCounterView:
 
 
 def _post(body: dict, session_id: str = "s"):
-    rf = RequestFactory()
+    rf = observability_request_factory()
     return rf.post(
         f"/?session_id={session_id}",
         data=json.dumps(body),
@@ -103,7 +105,7 @@ def test_eval_change_count_zero_when_handler_is_noop():
 def test_eval_405_for_non_post():
     view = _FakeCounterView()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = eval_handler(rf.get("/?session_id=s"))
     assert resp.status_code == 405
 
@@ -173,7 +175,7 @@ def test_eval_500_when_handler_raises():
 def test_eval_400_on_invalid_json_body():
     view = _FakeCounterView()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = eval_handler(
         rf.post("/?session_id=s", data=b"not-json", content_type="application/json")
     )

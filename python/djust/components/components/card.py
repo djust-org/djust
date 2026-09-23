@@ -3,6 +3,7 @@
 import html
 from typing import Any, Optional
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -114,7 +115,7 @@ class Card(Component):
 
         # Add variant class
         if self.variant != "default":
-            classes.append(f"dj-card-{self.variant}")
+            classes.append(f"dj-card-{conditional_escape(self.variant)}")
 
         # Add hover class
         if self.hover:
@@ -122,7 +123,7 @@ class Card(Component):
 
         # Add padding class (none = no padding class)
         if self.padding != "none":
-            classes.append(f"dj-card-p-{self.padding}")
+            classes.append(f"dj-card-p-{conditional_escape(self.padding)}")
 
         # Add clickable class if action provided
         if self.action:
@@ -153,18 +154,18 @@ class Card(Component):
 
         # Image section
         if self.image:
-            sections.append(f'<div class="dj-card-image">{self.image}</div>')
+            sections.append(f'<div class="dj-card-image">{conditional_escape(self.image)}</div>')
 
         # Header section
         if self.header:
-            sections.append(f'<div class="dj-card-header">{self.header}</div>')
+            sections.append(f'<div class="dj-card-header">{conditional_escape(self.header)}</div>')
 
         # Content section (always present)
-        sections.append(f'<div class="dj-card-content">{self.content}</div>')
+        sections.append(f'<div class="dj-card-content">{conditional_escape(self.content)}</div>')
 
         # Footer section
         if self.footer:
-            sections.append(f'<div class="dj-card-footer">{self.footer}</div>')
+            sections.append(f'<div class="dj-card-footer">{conditional_escape(self.footer)}</div>')
 
         sections_html = "".join(sections)
 

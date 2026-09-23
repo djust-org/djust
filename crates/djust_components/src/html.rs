@@ -44,7 +44,7 @@ impl HtmlBuilder {
     /// Add a class
     pub fn class(mut self, class: &str) -> Self {
         if !class.is_empty() {
-            write!(self.output, " class=\"{class}\"").unwrap();
+            write!(self.output, " class=\"{}\"", html_escape(class)).unwrap();
         }
         self
     }
@@ -66,7 +66,7 @@ impl HtmlBuilder {
     /// Add an ID
     pub fn id(mut self, id: &str) -> Self {
         if !id.is_empty() {
-            write!(self.output, " id=\"{id}\"").unwrap();
+            write!(self.output, " id=\"{}\"", html_escape(id)).unwrap();
         }
         self
     }
@@ -186,7 +186,7 @@ impl ElementBuilder {
 
         if !self.classes.is_empty() {
             html.push_str(" class=\"");
-            html.push_str(&self.classes.join(" "));
+            html.push_str(&html_escape(&self.classes.join(" ")));
             html.push('"');
         }
 
@@ -211,12 +211,33 @@ impl ElementBuilder {
 }
 
 /// Escape HTML special characters
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Escape a value for use inside a single- or double-quoted JavaScript string
+/// literal. Combine with [`html_escape`] when the script sits in an attribute.
+pub(crate) fn js_string_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '<' => out.push_str("\\u003C"),
+            '>' => out.push_str("\\u003E"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -271,5 +292,37 @@ mod tests {
             .build();
 
         assert_eq!(html, "<input type=\"text\" placeholder=\"Enter text\" />");
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn class_and_id_values_are_escaped() {
+        let html = HtmlBuilder::new()
+            .start_tag("div")
+            .class("a\" onmouseover=\"y")
+            .id("i\"><img src=x>")
+            .close_start()
+            .end_tag("div")
+            .build();
+        assert!(!html.contains("a\" onmouseover"));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("class=\"a&quot; onmouseover=&quot;y\""));
+
+        let html = element("span").class("c\"><img src=x>").build();
+        assert!(!html.contains("<img"));
+        assert!(html.contains("class=\"c&quot;&gt;&lt;img src=x&gt;\""));
+    }
+
+    #[test]
+    fn js_string_values_are_quoted() {
+        assert_eq!(js_string_escape("plain-id_1"), "plain-id_1");
+        assert_eq!(
+            js_string_escape("a'b\"c\\d\ne</"),
+            "a\\'b\\\"c\\\\d\\ne\\u003C/"
+        );
     }
 }

@@ -1,6 +1,7 @@
 """Rich Select component for programmatic use in LiveViews."""
 
 import html
+from djust.components.utils import url_attr
 import re
 from typing import Any, Dict, List, Optional
 
@@ -256,7 +257,7 @@ class RichSelect(Component):
 
         if image:
             parts.append(
-                f'<img class="rich-select-option-image" src="{html.escape(str(image))}" alt="">'
+                f'<img class="rich-select-option-image" src="{url_attr(image, image=True)}" alt="">'
             )
         elif icon:
             parts.append(f'<span class="rich-select-option-icon">{html.escape(str(icon))}</span>')
