@@ -77,9 +77,11 @@ class PromptEditor(Component):
         prompt with its variables blanked ("Summarise .") instead of the
         editor, and the catalogue preview showed nothing.
         """
+        from typing import cast
+
         from django.utils.safestring import mark_safe
 
-        return mark_safe(self._render_custom())
+        return cast(str, mark_safe(self._render_custom()))
 
     def _render_custom(self) -> str:
         cls = "dj-prompt-editor"
