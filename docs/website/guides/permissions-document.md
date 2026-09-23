@@ -11,9 +11,15 @@ description: "Validate every view's auth config against a committed YAML documen
 
 The `djust_audit --permissions permissions.yaml` flag validates every LiveView
 in your project against a committed, human-readable YAML document describing
-the expected auth configuration for each view. CI fails on any deviation,
-making the permission model an **auditable artifact** — security reviewers
-can sign it off once, and no new view can merge without an explicit declaration.
+the expected auth configuration for each view. Run with `--strict` and CI fails
+on any deviation, making the permission model an **auditable artifact** —
+security reviewers can sign it off once, and no new view can merge without an
+explicit declaration. (Without `--strict` the command prints findings and exits
+0.)
+
+`LiveComponent` subclasses are audited too. In strict mode they must also be
+declared, usually as `public: true`, since a component inherits its parent
+view's auth.
 
 This closes a structural gap in `djust_audit`: the tool can tell "no auth" from
 "some auth", but it cannot tell that `login_required=True` should have been
@@ -92,7 +98,7 @@ views:
 | Key | Type | Description |
 |-----|------|-------------|
 | `public` | `bool` | View is intentionally accessible without auth. Mutually exclusive with `login_required` / `permissions`. |
-| `login_required` | `bool` | Matches `cls.login_required = True` on the view class. |
+| `login_required` | `bool` | Declares that the view requires auth. Satisfied by any auth in code: `login_required`, `permission_required`, a custom `check_permissions()`, or an auth dispatch mixin. |
 | `permissions` | `[str]` | Matches `cls.permission_required` (list or single string, normalized to list). |
 | `roles` | `[str]` | Documentation only — djust cannot verify Django group membership via static analysis. |
 | `object_scoping.fields` | `[str]` | Documents which object-level fields the view checks for ownership. Currently informational; may be promoted to AST-verified in a later release. |
@@ -102,8 +108,8 @@ views:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `version` | `int` | (required) | Document schema version. Only `1` is supported. |
-| `strict` | `bool` | `true` | When `true`, views found in code but not declared in the document fail the audit. |
+| `version` | `int` | `1` | Document schema version. Only `1` is supported. |
+| `strict` | `bool` | `true` | When `true`, views found in code but not declared in the document are reported (P002). Whether a finding fails the command is controlled by the `--strict` CLI flag. |
 | `views` | `mapping` | (required) | Mapping of dotted view path → per-view declaration. |
 
 ## Findings
@@ -116,9 +122,9 @@ stable error code:
 | `djust.P001` | error | View declared in `permissions.yaml` but not found in code (stale entry). |
 | `djust.P002` | error | View found in code but not declared in `permissions.yaml` (strict mode only). |
 | `djust.P003` | error | Document says `public: true` but code has auth configured. |
-| `djust.P004` | error | Document says auth required but code has none (`login_required=False`, no `permission_required`). |
+| `djust.P004` | error | Document says auth required but code has none (no `login_required`, `permission_required`, custom `check_permissions()` or auth mixin). |
 | `djust.P005` | error | Permission list in `permissions.yaml` does not match `cls.permission_required`. |
-| `djust.P006` | warning | `object_scoping.fields` not referenced in the view (best-effort, currently informational). |
+| `djust.P006` | warning | Reserved: not emitted yet. `object_scoping` is stored but not checked. |
 | `djust.P007` | info | `roles` declaration — djust cannot verify at static-analysis time, treated as documentation. |
 
 ## CLI

@@ -33,7 +33,7 @@ def require_verified_email(view, request, **kwargs):
         return '/verify-email/'
 ```
 
-The `@on_mount` decorator marks the function so djust recognises it as a hook. It does not change the function's behaviour -- it simply sets an internal marker attribute.
+`@on_mount` is an optional marker: it sets an attribute that `is_on_mount()` checks, and does not change the function's behaviour. djust runs every callable listed in `on_mount`, decorated or not.
 
 ### 2. Attach Hooks to a LiveView
 
@@ -73,7 +73,7 @@ def my_hook(view, request, **kwargs) -> Optional[str]:
 |-----------|------|-------------|
 | `view` | `LiveView` instance | The view being mounted. You can read/write state on it. |
 | `request` | `HttpRequest` | The Django request object (HTTP on initial mount, synthetic on reconnect). |
-| `**kwargs` | `dict` | URL keyword arguments from the route (e.g., `pk` from `path("<int:pk>/", ...)`). |
+| `**kwargs` | `dict` | On the HTTP render: URL keyword arguments from the route (e.g., `pk` from `path("<int:pk>/", ...)`). On a WebSocket mount or reconnect: the page's query-string parameters. URL-route kwargs are **not** passed to hooks on the WebSocket path; resolve them from `request.path` if you need them (see [Tenant Resolution](#tenant-resolution)). |
 | **Return** | `None` or `str` | `None` to continue the chain. A URL string to halt and redirect. |
 
 ## Halting Mount with a Redirect
@@ -154,9 +154,13 @@ def track_mount(view, request, **kwargs):
 ### Tenant Resolution
 
 ```python
+from django.urls import resolve
+
 @on_mount
 def resolve_tenant(view, request, **kwargs):
-    tenant_slug = kwargs.get('tenant')
+    # Read the slug from the path: on a WebSocket mount, kwargs holds the
+    # query-string params, not the URL-route kwargs.
+    tenant_slug = resolve(request.path_info).kwargs.get('tenant')
     if not tenant_slug:
         return '/select-tenant/'
     try:
@@ -203,7 +207,7 @@ These checks run automatically with `python manage.py check` and at server start
 from djust.hooks import on_mount
 ```
 
-Marks a function as an on_mount hook. Does not alter the function's runtime behaviour.
+Marks a function as an on_mount hook (checked by `is_on_mount()`). Optional: undecorated callables in `on_mount` run too. Does not alter the function's runtime behaviour.
 
 ### `is_on_mount(func) -> bool`
 

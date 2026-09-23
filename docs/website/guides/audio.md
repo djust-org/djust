@@ -1,6 +1,7 @@
 # Declarative audio
 
-Unreleased feature implementation in PR #2815, based on current main.
+Added in 1.2.0 (available in the 1.2.0rc10 pre-release).
+
 Short sound effects are application-owned static files. Python emits names;
 the optional djust player owns browser activation and playback.
 
@@ -60,7 +61,7 @@ pushes; audio-only ticks flush even when no HTML changes.
 For multiplayer rooms, keep a bounded shared event log and a separate
 `_audio_cursor` for every view. Advance that cursor even while the user is muted.
 Initialize it to the room's current sequence at mount. Do not drain a shared log
-for the first listener. Snake Arena is a reference implementation.
+for the first listener.
 
 ## Delivery and lifecycle
 
@@ -116,12 +117,13 @@ credentials in URLs, and non-HTTP(S) URLs are refused. Media URLs are declared
 configuration, never supplied in playback events. No microphone, recording,
 external service, persistence of volume preferences or telemetry is used.
 
-## Verification status
+## Troubleshooting
 
-### Troubleshooting
-
-- **Controls are absent:** check that the view inherits `AudioMixin`, the template
-  loads `live_tags`, and `{% djust_audio %}` is inside the owning `dj-root`.
+- **`djust_audio requires AudioMixin on the view`:** the owning view must inherit
+  `AudioMixin` (listed before `LiveView`). A missing `{% load live_tags %}` is
+  also a `TemplateSyntaxError`.
+- **Controls render but do nothing:** check that `{% djust_audio %}` is inside the
+  owning view's `dj-root`.
 - **Sound stays off:** click Enable sound in the browser. A server handler cannot
   satisfy browser activation requirements. After browser suspension, use Resume sound.
 - **Retry sound appears:** check the asset request, CORS/CSP policy, file limits,
@@ -133,16 +135,7 @@ external service, persistence of volume preferences or telemetry is used.
 - **Some cues are silent:** muted, hidden, loading, duplicate, and excess cues are
   deliberately dropped. Keep visual feedback for every meaningful application event.
 
-### Coverage and remaining qualification
+## Browser support
 
-The implementation has Python tests for validation, template escaping, scoped
-batches, ephemeral state, WS/SSE delivery and audio-only ticks, plus browser
-runtime tests for activation failure, mute, hidden tabs, resource limits,
-nested roots, duplicate events and teardown. Snake has integration tests for
-fan-out, late joins and bounded room history. The local browser exercise verifies
-real buffer starts and mute during gameplay; the `data-audio-played` diagnostic
-on the controls counts successful buffer starts, not proof of audible output.
-
-Release qualification still needs Firefox/WebKit coverage and human listening
-review of the application sound pack. Passing automated checks does not establish
-sound quality, audibility on the user's speakers, or synchronized playback.
+Firefox and WebKit have not been qualified yet. The `data-audio-played` diagnostic on the controls counts
+successful buffer starts; it does not prove audible output.

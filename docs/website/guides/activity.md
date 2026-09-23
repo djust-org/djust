@@ -27,27 +27,40 @@ re-rendering would drop local DOM state.
 <button dj-click="switch_tab('profile')">Profile</button>
 <button dj-click="switch_tab('notes')">Notes</button>
 
-{% dj_activity "profile" visible=active_tab %}
+{% dj_activity "profile" visible=profile_visible %}
     <input type="text" dj-input="set_name" value="{{ name }}"/>
 {% enddj_activity %}
 
-{% dj_activity "notes" visible=active_tab %}
+{% dj_activity "notes" visible=notes_visible %}
     <textarea dj-input="set_notes">{{ notes }}</textarea>
 {% enddj_activity %}
 ```
 
-When `active_tab` is not `"profile"`, the profile panel's wrapper
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class TabbedView(LiveView):
+    def mount(self, request, **kwargs):
+        self.profile_visible = True
+        self.notes_visible = False
+
+    @event_handler
+    def switch_tab(self, tab: str = "", **kwargs):
+        self.profile_visible = tab == "profile"
+        self.notes_visible = tab == "notes"
+```
+
+When `profile_visible` is false, the profile panel's wrapper
 receives the HTML `hidden` attribute plus `aria-hidden="true"` — but the
 `<input>` element stays in the DOM with its current value. Switch back
 to it and the value is still there.
 
-> **Note on `visible` semantics.** The tag accepts any truthy expression.
-> In the example above `visible=active_tab` is compared for truthiness
-> against the string `"profile"` by the panel that wants to show when
-> `active_tab == "profile"`. To make that clean, pass an explicit
-> boolean from your handler — e.g. `self.profile_visible = (tab == "profile")` —
-> and write `visible=profile_visible`. Both forms work; boolean assigns
-> are clearer.
+> **Note on `visible` semantics.** `visible` is evaluated for truthiness
+> only; it is not compared with the activity name. `visible=active_tab`
+> with `active_tab == "notes"` makes *every* panel visible, because
+> `"notes"` is truthy. Pass a boolean.
 
 ## Arguments
 
@@ -101,16 +114,22 @@ window.addEventListener('djust:activity-shown', (e) => {
 
 ## Server API — `ActivityMixin`
 
-`LiveView` composes in `ActivityMixin` automatically. Use these methods
-from event handlers:
+`LiveView` composes in `ActivityMixin` automatically.
+
+Visibility is driven by the tag's `visible=` expression: on every render
+the tag records its result on the view, so to show or hide a panel, set
+the variable that expression reads (as in the basic example above).
+
+`set_activity_visible(name, visible)` is a low-level override of the
+server-side gate state. The next render replaces it with the value of the
+template's `visible=` expression, so it does **not** show or hide a panel
+by itself. It matters only in a handler that skips rendering, where it
+lets the deferred-event queue for that activity drain in the same turn.
+
+`is_activity_visible(name)` reads the gate state:
 
 ```python
 class TabbedView(LiveView):
-    def switch_tab(self, tab: str = "", **kwargs):
-        # Either assign directly, or use the mixin helper:
-        self.set_activity_visible("profile", tab == "profile")
-        self.set_activity_visible("notes",   tab == "notes")
-
     def check_status(self):
         if self.is_activity_visible("notes"):
             # Notes panel is currently shown to the user.
@@ -200,7 +219,8 @@ Auth runs in **two phases** and it's important to keep them distinct:
   activity state.** When the activity becomes visible, each queued
   event is dispatched through `_dispatch_single_event`, which runs the
   FULL auth stack: `_validate_event_security`, `@permission_required`
-  decorators, the rate limiter, and CSRF. A queued event **cannot**
+  decorators, and the rate limiter (CSRF was already validated on the
+  originating frame). A queued event **cannot**
   reach its handler without passing all of those — even if the user's
   permissions have changed in the meantime. There is no path that
   dispatches a handler without going through these checks, so a user

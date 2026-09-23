@@ -38,7 +38,7 @@ class CounterView(LiveView):
     template_name = "myapp/counter.html"
 
     def mount(self, request, **kwargs):
-        """Called once when the page first loads. Initialize state here."""
+        """Initialize state here. Runs on the first HTTP render and again when the WebSocket connects."""
         self.count = 0
 
     def get_context_data(self, **kwargs):
@@ -56,7 +56,7 @@ class CounterView(LiveView):
 
 **Key rules:**
 
-- `mount()` runs once — set initial state here, not in `__init__`
+- `mount()` runs on the initial HTTP render and again when the WebSocket connects (unless state is restored) — set initial state here, not in `__init__`, and keep it idempotent (no one-time side effects)
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
 - Always accept `**kwargs` in event handlers (djust may pass extra metadata)
 - State lives on `self` — any change to `self.count` triggers a re-render automatically
@@ -128,13 +128,13 @@ Visit **http://localhost:8000/counter/** and click the buttons — the count upd
 
 1. The first request is a normal HTTP response (good for SEO and initial load)
 2. The page JS opens a WebSocket connection to `/ws/live/`
-3. When you click a button, the client sends `{"event": "increment"}` over the WebSocket
+3. When you click a button, the client sends `{"type": "event", "event": "increment", "params": {}}` over the WebSocket
 4. djust calls your `increment()` method, re-renders the template in Rust, diffs the VDOM, and sends only the changed HTML fragments back
 5. The client patches the DOM — no full page reload
 
 ## Responding to Input
 
-For text inputs, use `dj-input` (fires on every keystroke) or `dj-change` (fires on blur):
+For text inputs, use `dj-input` (fires on the `input` event, debounced 300 ms by default for text-like fields; override with `dj-debounce`/`dj-throttle`) or `dj-change` (fires on blur):
 
 ```python
 @event_handler()

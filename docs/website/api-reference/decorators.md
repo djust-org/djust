@@ -20,9 +20,13 @@ from djust.decorators import (
     cache,
     client_state,
     permission_required,
+    rate_limit,
     background,
+    server_function,
 )
 ```
+
+The module also exports `reactive`, `state`, `computed` and `on_mount`, which are covered in their own guides.
 
 ---
 
@@ -31,7 +35,7 @@ from djust.decorators import (
 Mark a method as callable from the client. **Required** on all event handlers — djust blocks any unmarked method for security.
 
 ```python
-@event_handler(params=None, description="", coerce_types=True)
+@event_handler(params=None, description="", coerce_types=True, expose_api=False, serialize=None)
 ```
 
 **Parameters:**
@@ -39,6 +43,8 @@ Mark a method as callable from the client. **Required** on all event handlers �
 - `params` (`list[str]`, optional) — Explicit list of allowed parameter names. Defaults to auto-extraction from the function signature.
 - `description` (`str`) — Human-readable description shown in the debug panel. Defaults to the method docstring.
 - `coerce_types` (`bool`, default `True`) — Automatically coerce string values from `data-*` attributes to the expected types based on type hints (`"5"` → `5` for `int`).
+- `expose_api` (`bool`, default `False`) — Also expose the handler as an HTTP API endpoint at `POST /djust/api/<view_slug>/<handler_name>/`, with the same validation, permissions and rate limiting. On that transport the handler's return value is the response body.
+- `serialize` (callable or method name, optional) — Override the HTTP API response shape. HTTP only; requires `expose_api=True` (otherwise `TypeError` at decoration time).
 
 **Usage:**
 
@@ -108,7 +114,7 @@ def autosave(self, content: str = "", **kwargs):
     self.draft = content
 ```
 
-Must be applied **inside** `@event_handler()` (closer to the function).
+By convention it is applied **inside** `@event_handler()` (closer to the function); since it only records metadata, the order does not change its behaviour.
 
 ---
 
@@ -140,7 +146,7 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ## `@optimistic`
 
-Apply state changes immediately in the UI before the server confirms. If the handler raises, djust rolls back the optimistic update.
+**INERT (#2699):** records metadata only. No optimistic UI update and no rollback occur; the handler behaves exactly like an undecorated one.
 
 ```python
 @optimistic
@@ -154,7 +160,7 @@ No arguments — apply directly.
 @event_handler()
 @optimistic
 def toggle_like(self, item_id: int = 0, **kwargs):
-    """UI updates instantly; server confirms asynchronously."""
+    """Behaves like an undecorated handler today."""
     item = next(i for i in self.items if i["id"] == item_id)
     item["liked"] = not item["liked"]
 ```
@@ -278,7 +284,6 @@ from djust.decorators import background
 @background
 def generate_content(self, prompt: str = "", **kwargs):
     """Entire method runs in background thread."""
-    self.generating = True
     try:
         self.content = call_llm(prompt)  # Long-running operation
     except Exception as e:
@@ -289,10 +294,13 @@ def generate_content(self, prompt: str = "", **kwargs):
 
 **How it works:**
 
-1. Current view state is flushed to client (e.g., loading spinner appears)
+1. Current view state is flushed to client
 2. Handler executes in background thread
 3. View re-renders and sends patches when handler completes
-4. Loading state stops (spinner disappears)
+
+Because the whole body runs in the background, state you set inside it is rendered only once, when the body finishes. A `self.generating = True` at the top of the body never reaches the client. To show progress, use `dj-loading.*` attributes on the triggering element, or set the flag in a normal handler and then call `self.start_async(...)` (see below).
+
+> **Known issue: #2963.** The server never sends `async_pending` for `@background` tasks, so a `dj-loading.*` indicator ends when the handler returns, not when the background work finishes.
 
 **Task naming and cancellation:**
 
@@ -330,20 +338,55 @@ See also: [Loading States & Background Work guide](../guides/loading-states.md)
 
 ---
 
-## Decorator Composition
+## `@rate_limit`
 
-Decorators compose — apply multiple to one handler. Order matters: decorators execute from **outermost to innermost** (top to bottom):
+Rate-limit a handler on the server with a per-handler token bucket. When the limit is exceeded, the event is dropped and the client is warned.
 
 ```python
-@event_handler()   # outermost — registers the handler
+@rate_limit(rate=10, burst=5)
+```
+
+**Parameters:**
+
+- `rate` (`float`) — Tokens per second (sustained rate). Default `10`.
+- `burst` (`int`) — Maximum burst capacity. Default `5`.
+
+**Usage:**
+
+```python
+@rate_limit(rate=5, burst=3)
+@event_handler()
+def expensive_operation(self, **kwargs):
+    ...
+```
+
+---
+
+## `@server_function`
+
+Mark a method as a same-origin browser RPC target. The client calls it with `await djust.call('<view_slug>', '<method_name>', {params})` and receives its JSON-serialized return value, with no re-render. It cannot be combined with `@event_handler`.
+
+```python
+@server_function
+def search(self, q: str = "", **kwargs) -> list[dict]:
+    return [{"id": p.id, "name": p.name} for p in Product.objects.filter(name__icontains=q)[:10]]
+```
+
+---
+
+## Decorator Composition
+
+Decorators compose — apply multiple to one handler:
+
+```python
+@event_handler()   # registers the handler
 @debounce(0.5)     # wait for typing to stop
-@optimistic        # update UI immediately
 @cache(ttl=60)     # return cached result if available
 def search(self, value: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=value)
 ```
 
-Execution order: `debounce → optimistic → cache → search()`
+`@debounce`, `@throttle` and `@cache` only record metadata that the client reads, so their order is not significant. `@optimistic` is inert. `@background` is the only one that wraps the handler at runtime.
 
 ---
 

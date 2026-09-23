@@ -118,7 +118,7 @@ const newWidth = document.querySelector('.measured').offsetWidth;
 
 Returns `true` on full success, `false` if any patch failed (caller may
 trigger a full re-render fallback). Same return value the framework
-already branches on at `02-response-handler.js:109`.
+already branches on in `02-response-handler.js`.
 
 ## Testing View Transitions in JSDOM
 

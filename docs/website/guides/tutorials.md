@@ -124,7 +124,7 @@ And four event handlers you can wire to buttons, keyboard shortcuts, or call fro
 <button dj-click="restart_tutorial">Start over</button>
 ```
 
-The default `{% tutorial_bubble %}` template tag already binds `skip_tutorial` and `cancel_tutorial` to its own buttons — you only need to wire `start_tutorial` explicitly.
+The default `{% tutorial_bubble %}`'s own Skip and Close buttons only hide the bubble client-side (they dispatch `tour:hide`); they don't reach the server, so the tour keeps waiting on the current step and the highlight stays. To let users advance or end the tour, wire your own `skip_tutorial` / `cancel_tutorial` buttons inside the `dj-root`, as above.
 
 ## `TutorialStep` reference
 
@@ -173,7 +173,7 @@ TutorialStep(
     message="Try searching for 'hello'.",
     wait_for="search",
     on_enter=(
-        JS.scroll_into_view("#search-input")
+        JS.focus("#search-input")
           .set_attr("placeholder", "try: hello", to="#search-input")
     ),
     on_exit=JS.remove_attr("placeholder", to="#search-input"),
@@ -181,6 +181,8 @@ TutorialStep(
 ```
 
 `on_enter` runs after the default highlight/narrate/focus chain and before the wait. `on_exit` runs after the wait and before the default cleanup chain.
+
+There is no built-in scroll command; the chain supports `show`, `hide`, `toggle`, `add_class`, `remove_class`, `transition`, `set_attr`, `remove_attr`, `focus`, `dispatch` and `push`. To scroll a target into view, register a custom client command and call it through `JS.ext` (for example `JS.ext.scroll_into_view(to="#search-input")`).
 
 ### `highlight_class` and `narrate_event`
 
@@ -197,7 +199,7 @@ TutorialStep(
 
 ## The `{% tutorial_bubble %}` template tag
 
-Renders a floating bubble container that listens for `tour:narrate` events and displays the current step's message. The bubble is absolutely positioned next to the target element per the step's `position` hint, shows `step N / total` progress, and includes "Skip" and "Close" buttons bound to `skip_tutorial` and `cancel_tutorial`.
+Renders a floating bubble container that listens for `tour:narrate` events and displays the current step's message. The bubble is absolutely positioned next to the target element per the step's `position` hint, shows `step N / total` progress, and includes "Skip" and "Close" buttons. Those buttons only hide the bubble (`tour:hide`); they don't call `skip_tutorial` or `cancel_tutorial` on the server.
 
 ```html
 {% load djust_tutorials %}
@@ -428,11 +430,14 @@ The mixin provides two user-facing exit paths:
 - **`skip_tutorial`** — advances past the current step immediately. The loop moves to the next step. Use for "Next" buttons or keyboard shortcuts.
 - **`cancel_tutorial`** — aborts the tour entirely. The loop exits on the next iteration. Use for "Close" buttons, Escape key, or when the user navigates away.
 
-Both are wired to the default `{% tutorial_bubble %}` skip/close buttons.
+Neither is wired to the default `{% tutorial_bubble %}` Skip/Close buttons, which only hide the bubble client-side. Bind them yourself inside the `dj-root`:
 
 ```html
-<!-- Bind keyboard shortcuts if you want -->
-<div dj-keydown.escape="cancel_tutorial" dj-keydown.right="skip_tutorial"></div>
+<button dj-click="skip_tutorial">Next</button>
+<button dj-click="cancel_tutorial">Close</button>
+
+<!-- Page-level keyboard shortcuts: dj-window-keydown fires wherever focus is -->
+<div dj-window-keydown.escape="cancel_tutorial" dj-window-keydown.right="skip_tutorial"></div>
 ```
 
 ## View disconnect cleanup
@@ -467,17 +472,17 @@ A few real constraints worth knowing:
   ```
 - **Actor-mode views bypass the dispatch hook.** Tours don't work on views running under `use_actors = True`. The non-actor path is the default and is fully supported.
 - **Handlers that fail parameter validation don't run** — meaning a waiter on them never resolves via the handler path, only via timeout. Make sure your `wait_for` handlers have matching client-side call shapes (the inline `dj-click="handler_name(args)"` syntax works fine).
-- **Tours are single-user.** A tour running on user A's session doesn't affect user B. For instructor-led multi-user tours (one instructor drives many students), wait for Phase 4 (`broadcast_commands` + consent envelope) in v0.5.x.
+- **Tours are single-user.** A tour running on user A's session doesn't affect user B. Instructor-led multi-user tours (one instructor drives many students) need multi-user broadcast (`broadcast_commands` + the ADR-005 consent envelope), which is planned and not yet shipped.
 
 ## What's next
 
 `TutorialMixin` is the capstone of ADR-002 Phase 1 — the three primitives (`push_commands`, `wait_for_event`, `TutorialMixin`) compose to let any djust app ship a real guided tour in under 50 lines of Python.
 
-Future phases on the same foundation:
+Future phases on the same foundation are planned but **not shipped**; none of the APIs below exist yet:
 
-- **Phase 4 (v0.5.x)** — multi-user broadcast via `broadcast_commands(chain, group=...)` and the consent envelope from [ADR-005](../../adr/005-consent-envelope-for-remote-control.md). Enables instructor-led classroom tours where one instructor drives 30 students' real LiveViews in lockstep.
-- **Phase 5 (v0.5.x)** — LLM-driven `AssistantMixin` from [ADR-002 Phase 5](../../adr/002-backend-driven-ui-automation.md#ai-interaction-llm-driven-ui-from-user-speech). Users can speak their intent and an LLM generates the tour steps on the fly, adapting to real user actions.
-- **v0.6.0** — AI-generated UIs with capture-and-promote from [ADR-006](../../adr/006-ai-generated-uis-with-capture-and-promote.md). Tours become one kind of generative UI among many.
+- **Phase 4** — multi-user broadcast via `broadcast_commands(chain, group=...)` and the consent envelope from [ADR-005](../../adr/005-consent-envelope-for-remote-control.md). Enables instructor-led classroom tours where one instructor drives 30 students' real LiveViews in lockstep.
+- **Phase 5** — LLM-driven `AssistantMixin` from [ADR-002 Phase 5](../../adr/002-backend-driven-ui-automation.md#ai-interaction-llm-driven-ui-from-user-speech). Users can speak their intent and an LLM generates the tour steps on the fly, adapting to real user actions.
+- **Later** — AI-generated UIs with capture-and-promote from [ADR-006](../../adr/006-ai-generated-uis-with-capture-and-promote.md). Tours become one kind of generative UI among many.
 
 ## See also
 

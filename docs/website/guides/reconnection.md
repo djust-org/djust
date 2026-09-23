@@ -47,13 +47,14 @@ During reconnection, djust provides several UI hooks:
 
 A fixed banner appears at the top of the page showing the current attempt number (e.g., "Reconnecting... (attempt 2 of 10)"). The banner is automatically removed on successful reconnect.
 
-Style with CSS:
+Style with CSS. The default amber colours are set as an inline style, so your
+rule needs `!important` to win:
 
 ```css
 .dj-reconnecting-banner {
-    /* Override default amber banner */
-    background: #dc2626;
-    color: white;
+    /* Override default amber banner (inline style, hence !important) */
+    background: #dc2626 !important;
+    color: white !important;
 }
 ```
 
@@ -124,7 +125,7 @@ Fields inside a `dj-auto-recover` container are **skipped** by automatic form re
 <input name="email" dj-change="save" />
 
 <!-- Custom recovery handler owns this section -->
-<div dj-auto-recover="restore_editor_state" dj-value-editor-id="main">
+<div dj-auto-recover="restore_editor_state" data-editor-id="main">
     <!-- Fields here are NOT auto-recovered -->
     <textarea name="content" dj-change="update_content"></textarea>
     <input name="cursor_pos" type="hidden" dj-change="update_cursor" />
@@ -136,27 +137,31 @@ Fields inside a `dj-auto-recover` container are **skipped** by automatic form re
 For views with complex state that cannot be inferred from form values alone (canvas state, editor cursors, drag positions), use `dj-auto-recover`:
 
 ```html
-<div dj-auto-recover="restore_state" dj-value-canvas-id="main">
+<div dj-auto-recover="restore_state" data-canvas-id="main">
     <input name="brush_size" value="5" />
     <input name="color" value="#ff0000" />
 </div>
 ```
 
-On reconnect, djust fires the `restore_state` handler with:
-- All form field values from the container (serialized)
-- All `data-*` attributes from the container element
+On reconnect, djust fires the `restore_state` handler with two dict arguments
+(they are not flattened into separate kwargs):
+- `_form_values`: the container's form field values, keyed by `name`
+- `_data_attrs`: the container element's `data-*` attributes, keyed without the
+  `data-` prefix (`dj-value-*` attributes are **not** collected)
 
 ```python
 @event_handler()
-def restore_state(self, canvas_id="", brush_size="5", color="#ff0000", **kwargs):
-    self.canvas_id = canvas_id
-    self.brush_size = int(brush_size)
-    self.color = color
+def restore_state(self, _form_values=None, _data_attrs=None, **kwargs):
+    fv = _form_values or {}
+    da = _data_attrs or {}
+    self.canvas_id = da.get("canvas-id", "")
+    self.brush_size = int(fv.get("brush_size", 5))
+    self.color = fv.get("color", "#ff0000")
 ```
 
 ## SSE Transport
 
-Form recovery and backoff with jitter work identically over the SSE (Server-Sent Events) transport. The reconnection UI, banner, and data attributes behave the same way regardless of transport.
+Over SSE (Server-Sent Events), the browser's `EventSource` handles reconnection itself. There is no backoff with jitter, no reconnection banner and no `data-dj-reconnect-attempt` attribute; only the `dj-connected` / `dj-disconnected` body classes and the post-remount form recovery apply.
 
 ## Example: Full Reconnection-Resilient Form
 
@@ -177,7 +182,7 @@ Form recovery and backoff with jitter work identically over the SSE (Server-Sent
       <input name="search" dj-input="filter_tags" dj-no-recover />
 
       <!-- Custom recovery for rich editor -->
-      <div dj-auto-recover="restore_editor" dj-value-doc-id="{{ doc.id }}">
+      <div dj-auto-recover="restore_editor" data-doc-id="{{ doc.id }}">
           <div id="rich-editor" dj-update="ignore"></div>
           <input name="cursor" type="hidden" dj-change="sync_cursor" />
       </div>
@@ -209,7 +214,7 @@ class EditorView(LiveView):
         self.body = value
 
     @event_handler()
-    def restore_editor(self, doc_id="", cursor="", **kwargs):
+    def restore_editor(self, _form_values=None, _data_attrs=None, **kwargs):
         # Custom recovery: restore editor state from DOM values
-        self.doc_id = doc_id
-        self.cursor_pos = cursor
+        self.doc_id = (_data_attrs or {}).get("doc-id", "")
+        self.cursor_pos = (_form_values or {}).get("cursor", "")

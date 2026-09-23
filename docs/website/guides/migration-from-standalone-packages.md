@@ -1,20 +1,20 @@
 # Migrating from standalone djust packages
 
-**TL;DR:** Replace `pip install djust-auth` (or any sibling package) with `pip install djust[auth]`. Imports from `djust_auth` become `djust.auth`. A `DeprecationWarning` reminder is emitted from the legacy package until you migrate.
+**TL;DR:** Replace `pip install djust-auth` (or any sibling package) with `pip install djust[auth]`. Imports from `djust_auth` become `djust.auth`. Whether the legacy package warns you depends on which release you have installed; see [What changed](#what-changed).
 
 ## Who this applies to
 
 You're using one or more of the legacy standalone packages:
 
-| Standalone | Sunset | Replacement |
-|---|---|---|
-| `djust-auth` | v99.0.0 | `djust[auth]` |
-| `djust-tenants` | v99.0.0 | `djust[tenants]` (+ `djust[tenants-redis]` or `djust[tenants-postgres]` for backends) |
-| `djust-theming` | v99.0.0 | `djust[theming]` |
-| `djust-components` | v99.0.0 | `djust[components]` |
-| `djust-admin` | v99.0.0 | `djust[admin]` (module is `djust.admin_ext` — see note below) |
+| Standalone | Frozen at (git tag) | Latest on PyPI | Replacement |
+|---|---|---|---|
+| `djust-auth` | v99.0.0 | 0.3.0 | `djust[auth]` |
+| `djust-tenants` | v99.0.0 | 0.3.0 | `djust[tenants]` (+ `djust[tenants-redis]` or `djust[tenants-postgres]` for backend libraries) |
+| `djust-theming` | v99.0.0 | 99.0.0 | `djust[theming]` |
+| `djust-components` | v99.0.0 | 99.0.0 | `djust[components]` |
+| `djust-admin` | v99.0.0 | 0.3.0 | `djust[admin]` (module is `djust.admin_ext` — see note below) |
 
-All standalone packages were frozen at `v99.0.0` on 2026-04-23 ([ADR-007](../../adr/007-package-taxonomy-and-consolidation.md) Phase 4). They stay installable from PyPI forever for legacy projects, but no new releases will ship. All future work happens in `djust[<name>]` extras.
+The standalone repos were frozen with a `v99.0.0` **git tag** on 2026-04-23 ([ADR-007](../../adr/007-package-taxonomy-and-consolidation.md) Phase 4, "Path A"). On PyPI, `djust-theming` and `djust-components` have a 99.0.0 shim release; `djust-auth`, `djust-tenants` and `djust-admin` stop at 0.3.0, which is the old standalone code, not a shim. Existing PyPI versions stay installable, but no new releases will ship. All future work happens in `djust[<name>]` extras.
 
 ## What changed
 
@@ -22,8 +22,8 @@ The consolidation that started in v0.5.0 moved each sibling package's source int
 
 - **Source of truth** is `djust.<name>` (e.g., `djust.auth`, `djust.tenants`).
 - **Installation** is via extras (`pip install djust[auth]`).
-- **Legacy imports** (`from djust_auth import X`) still work — the standalone packages retain a compat shim that re-exports from `djust.<name>` and emits a `DeprecationWarning`.
-- **Direct upgrades** of the standalone packages no longer happen. `pip install djust-auth --upgrade` stays at v99.0.0.
+- **Legacy imports** (`from djust_auth import X`) behave differently depending on what's installed. The v99.0.0 shim (the git tag, or PyPI for `djust-theming` / `djust-components`) re-exports from `djust.<name>` and emits a `DeprecationWarning`. The 0.3.0 PyPI releases of `djust-auth`, `djust-tenants` and `djust-admin` are the old standalone code: they import the old implementation and emit **no** warning.
+- **Direct upgrades** of the standalone packages no longer happen. `pip install djust-auth --upgrade` stays at 0.3.0 (and `djust-theming` / `djust-components` at 99.0.0).
 
 ## Migration steps
 
@@ -50,13 +50,13 @@ dependencies = [
 
 You can list multiple extras in a single `djust[a,b,c]` brace. Remove the old standalone pins.
 
-For `djust-tenants` users: pick the backend-specific extra that matches your tenant resolver.
+For `djust-tenants` users: the sub-extras only install a backend library.
 
 ```toml
-# Redis-backed tenant resolver:
+# Redis client for the tenant-aware presence backend (PRESENCE_BACKEND='tenant_redis'):
 "djust[tenants-redis]>=0.6.0"
 
-# PostgreSQL schema-per-tenant:
+# psycopg 3 (djust.tenants itself is row-level; there is no schema-per-tenant mode):
 "djust[tenants-postgres]>=0.6.0"
 ```
 
@@ -144,13 +144,13 @@ If you reference the app label in code (e.g., for migrations or signal routing),
 
 ### 4. Run the test suite
 
-The shipped shims keep old imports working but emit a `DeprecationWarning`. Running with `python -W error::DeprecationWarning` surfaces any missed import site:
+The v99.0.0 shims (`djust-theming` / `djust-components` from PyPI, or any package installed from the git tag) keep old imports working but emit a `DeprecationWarning`. Running with `python -W error::DeprecationWarning` surfaces missed import sites for those:
 
 ```bash
 python -W error::DeprecationWarning -m pytest
 ```
 
-Fix any `DeprecationWarning` hits before removing the old standalone pins.
+The 0.3.0 PyPI releases of `djust-auth`, `djust-tenants` and `djust-admin` emit no warning, so this won't find their imports. Use the `grep -r 'djust_' . --include='*.py'` check from step 2 for those, and fix every hit before removing the old standalone pins.
 
 ### 5. Remove the old standalone packages
 
@@ -165,7 +165,7 @@ Verify with `pip list | grep djust` — only `djust` should remain.
 
 ### Will the standalone packages stop working?
 
-**No.** `v99.0.0` is the frozen release and stays on PyPI. Projects that never migrate will continue to install and work, indefinitely. The `DeprecationWarning` is a nudge, not a hard deadline.
+**No.** Existing PyPI releases stay installable (99.0.0 for `djust-theming` / `djust-components`, 0.3.0 for `djust-auth`, `djust-tenants` and `djust-admin`). Projects that never migrate will continue to install, but the 0.3.0 packages are the old code and receive no fixes. Where the `DeprecationWarning` shim is installed, it's a nudge, not a hard deadline.
 
 ### Can I use `djust.auth` without installing the `auth` extra?
 
@@ -177,20 +177,22 @@ Django already ships `django.contrib.admin`. A module named `djust.admin` would 
 
 ### Why isn't `djust.tenants` in `INSTALLED_APPS`?
 
-`djust.tenants` is a library, not a Django app — it ships `TenantMiddleware` and schema-isolation helpers but doesn't register models, admin, or management commands of its own. Register the middleware in `MIDDLEWARE`; leave `INSTALLED_APPS` alone. (In the old `djust-tenants` package, `djust_tenants` was registered as a Django app with an AppConfig; that AppConfig was removed during consolidation because nothing in the module needed it.)
+`djust.tenants` is a library, not a Django app — it ships `TenantMiddleware`, resolvers, mixins and managers, with no admin or management commands of its own. Register the middleware in `MIDDLEWARE`; leave `INSTALLED_APPS` alone. (In the old `djust-tenants` package, `djust_tenants` was registered as a Django app with an AppConfig; that AppConfig was removed during consolidation.)
+
+One exception: `DatabaseAuditBackend` needs the `AuditLog` model (app label `djust_tenants`), and no installed app provides that label after consolidation, so it can't work. Use `LoggingAuditBackend` or `CallbackAuditBackend` instead.
 
 ### What about the `djust.tenants` backend deps?
 
-Some tenant resolvers need a backend-specific library (Redis, psycopg). Use the sub-extras:
+Some tenant backends need a backend-specific library (Redis, psycopg). Use the sub-extras:
 
-- `djust[tenants-redis]` — pulls in `redis>=5.0.0,<7`.
+- `djust[tenants-redis]` — pulls in `redis>=5.0.0,<9`.
 - `djust[tenants-postgres]` — pulls in `psycopg[binary]>=3.1,<4`.
 
 Or install the library yourself if you already have it pinned at a different version.
 
 ### Why "Path A" (tag-only, no PyPI publish)?
 
-Path A avoids publishing 5 new PyPI releases whose only content is a `DeprecationWarning`. Existing installations stay untouched; new projects discover the extras via `djust[...]`. Less noise, same safety.
+Path A avoids publishing new PyPI releases whose only content is a `DeprecationWarning`: the v99.0.0 git tags are the canonical frozen releases. In practice `djust-theming` and `djust-components` did get a 99.0.0 shim on PyPI, while `djust-auth`, `djust-tenants` and `djust-admin` did not (PyPI still ends at 0.3.0). Existing installations stay untouched; new projects discover the extras via `djust[...]`.
 
 ### My sibling repo's `src/djust_<name>/` still has real source files (`mixins.py`, `views.py`, ...) — aren't they dead code?
 

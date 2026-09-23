@@ -11,7 +11,9 @@ description: "Why dj-key matters: what the diff does when a list reorders withou
 
 ## The Problem
 
-When you render a list in a djust template **without** `data-key` attributes, the VDOM diff algorithm matches children **by position**. If items reorder (sort, filter, remove from the middle), every shifted item generates a patch — even though the items themselves haven't changed.
+Give each list item a stable key with `dj-key="…"` (or the equivalent `data-key="…"`; the examples below use `data-key`).
+
+When you render a list in a djust template **without** a key attribute, the VDOM diff algorithm matches children **by position**. If items reorder (sort, filter, remove from the middle), every shifted item generates a patch — even though the items themselves haven't changed.
 
 ### Example: Removing the First Item
 
@@ -82,7 +84,7 @@ Use any **stable, unique** identifier as the key value:
 
 **Do NOT use the loop index as a key** — `data-key="{{ forloop.counter }}"` is equivalent to unkeyed diffing and provides no benefit.
 
-The `id` HTML attribute also works as a fallback if `data-key` is not present, but `data-key` is preferred because it doesn't affect CSS or JavaScript selectors.
+Only `dj-key` or `data-key` enable keyed diffing. An `id` attribute alone does not: a list keyed only by `id` is diffed by position.
 
 ## Debugging
 
@@ -97,13 +99,7 @@ Or in `settings.py`:
 LIVEVIEW_CONFIG = {'debug_vdom': True}
 ```
 
-When an unkeyed list produces many patches from a reorder, the trace output will include:
-
-```
-[VDOM TRACE] PERFORMANCE WARNING: Unkeyed list with 100 children produced 99 patches.
-This often means the list was reordered. Add `data-key` attributes to enable keyed
-diffing and reduce patch count.
-```
+The trace prints `[VDOM TRACE]` lines for each diff step and the patches it emits. There is no dedicated warning for unkeyed lists; a reorder that produces a long run of `SetText` patches across a list is the sign that it needs keys.
 
 ## Further Reading
 

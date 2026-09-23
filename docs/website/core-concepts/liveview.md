@@ -13,13 +13,9 @@ class MyView(LiveView):
     template_name = "myapp/my_view.html"
 
     def mount(self, request, **kwargs):
-        """Initialize state. Called once on page load."""
+        """Initialize state. Public attributes reach the template automatically."""
         self.count = 0
         self.items = []
-
-    def get_context_data(self, **kwargs):
-        """Return template context. Called before every render."""
-        return {"count": self.count, "items": self.items}
 
     @event_handler()
     def increment(self, **kwargs):
@@ -31,7 +27,7 @@ class MyView(LiveView):
 
 ### `mount(request, **kwargs)`
 
-Called **once** when the LiveView is first loaded (HTTP request). Use this to:
+Called when the LiveView is first rendered over HTTP, and **again** when the WebSocket connects (unless state is restored from a snapshot). Keep it idempotent — no one-time side effects. Use this to:
 
 - Initialize state variables
 - Read URL parameters from `**kwargs`
@@ -62,25 +58,27 @@ def get_context_data(self, **kwargs):
     return context
 ```
 
-### `handle_params(params, url, **kwargs)`
+### `handle_params(params, uri)`
 
-Called when URL parameters change via `live_patch()` navigation (without a full page reload):
+Called after `mount()` on the initial render, and again on every URL change (`live_patch()`, browser back/forward) without a full page reload. Use it to derive state from query params:
 
 ```python
-def handle_params(self, params, url, **kwargs):
+def handle_params(self, params, uri):
     self.page = int(params.get("page", 1))
     self._refresh()
 ```
 
-### `handle_info(event, data, **kwargs)`
+### `handle_info(message)`
 
-Called when the server sends a message to this LiveView (e.g., from background tasks or PubSub):
+Called with out-of-band messages delivered to the view. Currently these are PostgreSQL `NOTIFY` events for views that subscribe with `self.listen(channel)` (`NotificationMixin`). The single argument is a dict:
 
 ```python
-def handle_info(self, event, data, **kwargs):
-    if event == "new_message":
-        self.messages.append(data["message"])
+def handle_info(self, message):
+    if message["type"] == "db_notify":
+        self.refresh()
 ```
+
+> **Known issue: #2962.** At 1.2.0rc10, calling `self.listen()` inside `mount()` never subscribes. Declare the channels at class level with `_listen_channels` instead.
 
 ## State Management
 
@@ -90,11 +88,11 @@ State lives on `self`. Any public attribute (`self.count`) is:
 - Preserved across WebSocket events
 - Re-rendered when changed
 
-Private attributes (prefixed with `_`) are excluded from serialization:
+Private attributes (prefixed with `_`) are kept out of the template context and never sent to the client. Those set in `mount()` are still saved with the view's server-side state when they are JSON-serializable (models are stored as refs). Other values, such as QuerySets, are dropped on restore, so re-derive them rather than caching them in `_` attributes:
 
 ```python
 def mount(self, request, **kwargs):
-    self._db_items = Item.objects.all()  # private — not serialized
+    self._db_items = Item.objects.all()  # private — not in the template, not restored
     self.count = self._db_items.count()  # public — available in template
 ```
 
@@ -149,7 +147,7 @@ def delete_item(self, item_id: int = 0, **kwargs):
 
 ## HTTP Fallback Mode
 
-LiveViews work without WebSockets — they degrade gracefully to standard HTTP form submissions. This enables server-side rendering for environments that don't support WebSockets (some proxies, crawlers).
+If the WebSocket is unavailable (for example, behind a proxy that blocks it), client.js sends each event as a JSON POST to the view's URL and applies the returned patches. JavaScript is still required. The initial GET is always a complete server-rendered page, which is what crawlers see.
 
 ## Next Steps
 

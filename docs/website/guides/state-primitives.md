@@ -35,8 +35,13 @@ from djust.decorators import computed, state
 
 
 class CartView(LiveView):
-    items = state(default_factory=list)
     tax_rate = state(default=0.0825)
+
+    def mount(self, request, **kwargs):
+        # A fresh list per view instance. state() takes only `default=`
+        # (there is no `default_factory`), and a mutable default would be
+        # shared by every instance.
+        self.items = []
 
     @computed("items", "tax_rate")
     def total(self):
@@ -76,29 +81,38 @@ def display_name(self):
 
 ## Automatic dirty tracking
 
-After `mount()`, djust captures a baseline of every public attr. From
-that point on:
+After `mount()`, djust captures a baseline of every plain public attr
+(one assigned directly on the instance, e.g. in `mount()`). From that
+point on:
 
 - `self.changed_fields` — set of attr names that differ from baseline.
 - `self.is_dirty` — `bool(self.changed_fields)`.
 - `self.mark_clean()` — reset the baseline (call after a successful save).
 
 ```python
-class ProfileView(LiveView):
-    first_name = state(default="")
-    last_name = state(default="")
+from djust import LiveView
+from djust.decorators import event_handler
 
-    def mount(self, request):
+
+class ProfileView(LiveView):
+    # Plain attributes, not state(): dirty tracking doesn't see state() fields.
+    def mount(self, request, **kwargs):
         self.first_name = request.user.first_name
         self.last_name = request.user.last_name
 
     @event_handler
-    def save(self):
-        request.user.first_name = self.first_name
-        request.user.last_name = self.last_name
-        request.user.save()
+    def save(self, **kwargs):
+        user = self.request.user
+        user.first_name = self.first_name
+        user.last_name = self.last_name
+        user.save()
         self.mark_clean()       # baseline now matches the saved state
 ```
+
+> **Known issue: #2956.** Dirty tracking covers plain public attributes
+> only. Fields declared with `state()` are stored under a private
+> `_state_<name>` key, so changing one leaves `is_dirty` `False` and
+> `changed_fields` empty. Assign the fields in `mount()` instead, as above.
 
 ```django
 {# template — show a Save button only when there's work to save #}
@@ -134,7 +148,7 @@ element position. Format: `djust-<viewslug>-<n>[-<suffix>]`.
 
 ```python
 class FormView(LiveView):
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         self.email_id = self.unique_id("email")
         self.email_help_id = self.unique_id("email-help")
 ```
@@ -147,8 +161,10 @@ class FormView(LiveView):
 
 The counter resets per render boundary via the framework's
 `reset_unique_ids()` hook, so the same call in `mount()` always
-returns the same ID across re-renders. Two views on the same page
-get distinct IDs because the slug differs.
+returns the same ID across re-renders. Two views of *different
+classes* on the same page get distinct IDs because the slug (the
+lowercased class name) differs. Two instances of the *same* class share
+the slug, so their IDs collide.
 
 When to reach for `unique_id()`:
 
@@ -172,9 +188,12 @@ provided it).
 
 ```python
 class ThemedAppView(LiveView):
-    def mount(self, request):
-        self.provide_context("theme", request.user.preferences.theme)
-        self.provide_context("locale", request.LANGUAGE_CODE)
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Provide AFTER super(): each render clears the providers first.
+        self.provide_context("theme", self.request.user.preferences.theme)
+        self.provide_context("locale", self.request.LANGUAGE_CODE)
+        return ctx
 
 
 # In a deeply-nested LiveComponent:
@@ -185,9 +204,11 @@ class AccentBadge(LiveComponent):
 ```
 
 The lookup walks `_djust_context_parent` upward until a provider is
-found — no prop drilling required. Scope is per render tree;
-`clear_context_providers()` resets the chain (rarely needed
-manually — render boundaries do this for you).
+found — no prop drilling required. Scope is per render tree:
+`get_context_data()` calls `clear_context_providers()` at the start of
+every render, so providers set in `mount()` or in an event handler are
+wiped before any component reads them. Provide context in
+`get_context_data()`, after calling `super()`, as above.
 
 When to reach for context vs explicit props:
 

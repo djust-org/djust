@@ -1,11 +1,16 @@
 # State Management Examples
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **Inert.** `@optimistic` (#2699) and `@client_state` (#2680) are both INERT: they record metadata that no shipped client code reads, so a decorated handler behaves exactly like an undecorated one. The `StateBus` that `@client_state` named was deleted in #2680. Neither decorator is used in the examples below.
 
-**Status**: Ready to Copy
-**Version**: djust 0.4.0
+**Status**: Illustrative. Adapt the models, forms and helpers to your project.
 
-This document provides complete, copy-paste ready examples demonstrating state management decorators in real-world scenarios.
+This document provides complete examples of the state management tools (`@debounce`, `@throttle`, `@cache`, `DraftModeMixin` and the `dj-loading.*` attributes) in real-world scenarios.
+
+Three rules apply to every example on this page:
+
+- **Every handler needs `@event_handler`.** The default `event_security` policy is `"strict"`, which rejects any event whose method is not decorated with `@event_handler`. `@debounce`, `@throttle` and `@cache` only configure the client; they do not register the method as an event.
+- **`dj-input` and `dj-change` send `value` and `field`,** not a keyword named after the input. The typed value arrives as `value`, and the input's `name` arrives as `field`. Static context goes in `dj-value-*` attributes (for example `dj-value-item-id:int="{{ item.id }}"`).
+- **The live region is a literal `<div dj-root>`.** The server stamps `dj-view` onto that exact string. Put classes and other attributes on an inner element, or write `dj-view="app.views.MyView"` yourself.
 
 ## Table of Contents
 
@@ -41,63 +46,73 @@ This document provides complete, copy-paste ready examples demonstrating state m
 | Need | Decorator | Example Use Case | Code |
 |------|-----------|------------------|------|
 | **Delay until user stops typing/interacting** | `@debounce(wait)` | Search input, text area, slider | `@debounce(wait=0.5)` |
-| **Limit event frequency** | `@throttle(interval)` | Scroll handler, resize, mousemove | `@throttle(interval=0.1)` |
-| **Instant UI feedback** | `@optimistic` | Counter, toggle, checkbox, cart add | `@optimistic` |
-| **Cache server responses** | `@cache(ttl, key_params)` | Autocomplete, search results, API calls | `@cache(ttl=60, key_params=["query"])` |
-| **Share state between components** | `@client_state(keys)` | Dashboard filters, coordinated views | `@client_state(keys=["filter"])` |
+| **Limit event frequency** | `@throttle(interval)` | Load-more button, refresh button | `@throttle(interval=1.0)` |
+| **Cache server responses in the browser** | `@cache(ttl, key_params)` | Autocomplete, read-only lookups | `@cache(ttl=60, key_params=["value"])` |
 | **Auto-save form drafts** | `DraftModeMixin` | Long forms, email composer, comments | `class MyView(DraftModeMixin, LiveView)` |
-| **Show/hide loading indicators** | `@loading` (HTML) | Button states, spinner visibility | `<button @loading>` |
+| **Show/hide loading indicators** | `dj-loading.*` (HTML) | Button states, spinner visibility | `<button dj-loading.disable>` |
 
 ### Common Decorator Combinations
 
 | Pattern | Decorators | Use Case |
 |---------|------------|----------|
 | **Debounced Search** | `@debounce(0.5)` | Basic search (100 keystrokes → 1 request) |
-| **Smart Search** | `@debounce(0.5)`<br>`@optimistic`<br>`@cache(ttl=60)` | Search with instant feedback + caching |
-| **Real-Time Updates** | `@optimistic`<br>`@client_state(keys=["count"])` | Counter with component coordination |
-| **Filtered Dashboard** | `@debounce(0.3)`<br>`@client_state(keys=["filter", "sort"])`<br>`@cache(ttl=300)` | Dashboard with multiple coordinated filters |
+| **Cached Lookup** | `@debounce(0.5)`<br>`@cache(ttl=60)` | Read-only lookup with browser caching |
+| **Filtered Dashboard** | `@debounce(0.3)` | Dashboard with several filter inputs |
 | **Form with Drafts** | `DraftModeMixin`<br>`@debounce(1.0)` | Auto-save form with server sync |
-| **Infinite Scroll** | `@throttle(interval=1.0)`<br>`@cache(ttl=60)` | Load more with rate limiting |
+| **Load More** | `@throttle(interval=1.0)` | Load more with rate limiting |
+
+Each combination also needs `@event_handler` on top.
 
 ### Quick Copy-Paste Templates
 
 **1. Debounced Search:**
 ```python
-from djust.decorators import debounce
+from djust.decorators import debounce, event_handler
 
+@event_handler
 @debounce(wait=0.5)
-def search(self, query: str = "", **kwargs):
-    self.results = Model.objects.filter(name__icontains=query)
+def search(self, value: str = "", **kwargs):
+    self.query = value
+    self.results = Model.objects.filter(name__icontains=value)
 ```
 
-**2. Optimistic Counter:**
+**2. Counter:**
 ```python
-from djust.decorators import optimistic
+from djust.decorators import event_handler
 
-@optimistic
+@event_handler
 def increment(self, **kwargs):
     self.count += 1
 ```
 
 **3. Cached API Call:**
 ```python
-from djust.decorators import cache
+from djust.decorators import cache, event_handler
 
-@cache(ttl=300, key_params=["city"])
-def get_weather(self, city: str = "", **kwargs):
-    self.weather = fetch_weather_api(city)
+# A cache hit replays the stored patches without running this method,
+# so keep cached handlers to read-only lookups.
+@event_handler
+@cache(ttl=300, key_params=["value"])
+def get_weather(self, value: str = "", **kwargs):
+    self.weather = fetch_weather_api(value)
 ```
 
-**4. Coordinated Filters:**
+**4. Several Filters, One Handler:**
 ```python
-from djust.decorators import client_state, debounce
+from djust.decorators import debounce, event_handler
 
+FILTER_FIELDS = {"category", "min_price"}
+
+@event_handler
 @debounce(wait=0.3)
-@client_state(keys=["category", "min_price"])
-def apply_filters(self, category: str = "", min_price: int = 0, **kwargs):
+def apply_filters(self, value: str = "", field: str = "", **kwargs):
+    # dj-change sends the input's name as `field` and its value as `value`
+    if field not in FILTER_FIELDS:
+        return
+    setattr(self, field, int(value or 0) if field == "min_price" else value)
     self.results = Product.objects.filter(
-        category=category,
-        price__gte=min_price
+        category=self.category,
+        price__gte=self.min_price,
     )
 ```
 
@@ -112,24 +127,27 @@ class ContactView(DraftModeMixin, FormMixin, LiveView):
 ```
 
 ```html
-<!-- Template needs draft attributes on root -->
-<div dj-root
-     data-draft-enabled="{{ draft_enabled }}"
-     data-draft-key="{{ draft_key }}">
-    <input name="name" data-draft="true" />
-    <input name="email" data-draft="true" />
-    <textarea name="message" data-draft="true"></textarea>
+<!-- Draft attributes go on an element inside the literal <div dj-root> -->
+<div dj-root>
+    <div {% if draft_enabled %}data-draft-enabled data-draft-key="{{ draft_key }}"{% endif %}>
+        <input name="name" data-draft="true" />
+        <input name="email" data-draft="true" />
+        <textarea name="message" data-draft="true"></textarea>
+    </div>
 </div>
 ```
 
-**6. Throttled Scroll Handler:**
-```python
-from djust.decorators import throttle
+The client checks only whether `data-draft-enabled` is present, so render it conditionally rather than as `data-draft-enabled="{{ draft_enabled }}"`.
 
-@throttle(interval=0.2, leading=True, trailing=True)
-def on_scroll(self, scroll_y: int = 0, **kwargs):
-    if scroll_y > 1000:
-        self.show_back_to_top = True
+**6. Throttled Load More:**
+```python
+from djust.decorators import event_handler, throttle
+
+@event_handler
+@throttle(interval=1.0, leading=True, trailing=False)
+def load_more(self, **kwargs):
+    self.page += 1
+    self.items = Item.objects.all()[: self.page * 20]
 ```
 
 ### Performance Guidelines
@@ -137,37 +155,31 @@ def on_scroll(self, scroll_y: int = 0, **kwargs):
 | Decorator | Recommended Values | Impact |
 |-----------|-------------------|--------|
 | `@debounce` | `wait=0.3-0.5` (search)<br>`wait=1.0-2.0` (auto-save) | Reduces requests by 80-95% |
-| `@throttle` | `interval=0.1-0.2` (scroll)<br>`interval=1.0-5.0` (polling) | Limits to 5-10 events/sec or 0.2-1 events/sec |
+| `@throttle` | `interval=0.1-0.2` (rapid input)<br>`interval=1.0-5.0` (buttons, polling) | Limits to 5-10 events/sec or 0.2-1 events/sec |
 | `@cache` | `ttl=60` (autocomplete)<br>`ttl=300` (search)<br>`ttl=3600` (static data) | Reduces server load by 40-80% |
 | `DraftModeMixin` | Auto-saves after 500ms debounce | No server requests (localStorage only) |
 
-### Decorator Order Rules
+### Decorator Order
 
-**Always use this order (top to bottom):**
+The order of `@debounce`, `@throttle` and `@cache` does not matter. Each one only adds client-side configuration to the handler's metadata. Put `@event_handler` on every handler (on top, by convention). If both `@debounce` and `@throttle` are present, `@debounce` wins.
 
 ```python
-@debounce(wait=0.5)       # 1. Rate limiting (debounce/throttle)
-@optimistic                # 2. Optimistic updates
-@cache(ttl=60)            # 3. Response caching
-@client_state(keys=[...]) # 4. State sharing
-def my_handler(self, **kwargs):
+@event_handler
+@debounce(wait=0.5)
+@cache(ttl=60, key_params=["value"])
+def my_handler(self, value: str = "", **kwargs):
     pass
 ```
-
-**Why this order?**
-1. **Rate limiting first** - Reduces events before processing
-2. **Optimistic second** - UI updates before debounce delay
-3. **Cache third** - Check cache before sending to server
-4. **Client state last** - Broadcast after all processing
 
 ### Troubleshooting Quick Fixes
 
 | Problem | Solution |
 |---------|----------|
+| Event rejected: "not decorated with @event_handler" | Add `@event_handler` to the handler |
+| Handler receives default arguments | `dj-input`/`dj-change` send `value` and `field`; pass static context with `dj-value-*` |
 | Debounce not working | Check `wait` is in seconds (not milliseconds): `wait=0.5` not `wait=500` |
-| Optimistic updates flicker | Add `@debounce()` to batch rapid changes |
-| Cache always misses | Ensure `key_params` matches event data keys |
-| Form drafts not restoring | Check template has `data-draft-enabled` and `data-draft-key` on root element, fields have `data-draft="true"` |
+| Cache always misses | Ensure `key_params` matches the event's parameter names (`value`, `field`, `dj-value-*` keys) |
+| Form drafts not restoring | Check the template has `data-draft-enabled` and `data-draft-key` on the draft root, and fields have `data-draft="true"` |
 | Loading indicator stuck | Verify handler doesn't throw exception (causes loading state to persist) |
 
 ---
@@ -176,12 +188,12 @@ def my_handler(self, **kwargs):
 
 ### Product Search
 
-**Use Case**: Real-time product search with debouncing, caching, and filters.
+**Use Case**: Real-time product search with debouncing and filters.
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, optimistic, cache, client_state
+from djust.decorators import debounce, event_handler
 from shop.models import Product
 
 class ProductSearchView(LiveView):
@@ -193,6 +205,7 @@ class ProductSearchView(LiveView):
         ('clothing', 'Clothing'),
         ('books', 'Books'),
     ]
+    SEARCH_FIELDS = {"query", "category", "min_price"}
 
     def mount(self, request, **kwargs):
         self.query = ""
@@ -201,32 +214,25 @@ class ProductSearchView(LiveView):
         self.max_price = 10000
         self.results = Product.objects.filter(in_stock=True)[:20]
 
+    @event_handler
     @debounce(wait=0.5)
-    @optimistic
-    @cache(ttl=60, key_params=["query", "category", "min_price", "max_price"])
-    @client_state(keys=["query", "category", "min_price", "max_price"])
-    def search(
-        self,
-        query: str = "",
-        category: str = "",
-        min_price: int = 0,
-        max_price: int = 10000,
-        **kwargs
-    ):
-        """Search products with filters."""
-        self.query = query
-        self.category = category
-        self.min_price = min_price
-        self.max_price = max_price
+    def search(self, value: str = "", field: str = "", **kwargs):
+        """Update one filter (named by the input's `name`) and re-run the search."""
+        if field not in self.SEARCH_FIELDS:
+            return
+        if field == "min_price":
+            self.min_price = int(value or 0)
+        else:
+            setattr(self, field, value)
 
         # Build query
         filters = {'in_stock': True}
-        if query:
-            filters['name__icontains'] = query
-        if category:
-            filters['category'] = category
-        filters['price__gte'] = min_price
-        filters['price__lte'] = max_price
+        if self.query:
+            filters['name__icontains'] = self.query
+        if self.category:
+            filters['category'] = self.category
+        filters['price__gte'] = self.min_price
+        filters['price__lte'] = self.max_price
 
         self.results = Product.objects.filter(**filters)[:20]
 
@@ -244,15 +250,16 @@ class ProductSearchView(LiveView):
 
 ```html
 <!-- templates/shop/product_search.html -->
-{% load djust %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Product Search</title>
-    {% djust_head %}
+    {% djust_client_config %}
 </head>
 <body>
-    <div class="container" @loading>
+    <div dj-root>
+    <div class="container">
         <input
             type="text"
             name="query"
@@ -271,12 +278,14 @@ class ProductSearchView(LiveView):
 
         <input
             type="range"
-            dj-input="search"
+            dj-change="search"
             name="min_price"
             value="{{ min_price }}"
             min="0"
             max="10000"
         />
+
+        <span dj-loading.show dj-loading.for="search">Searching…</span>
 
         <div class="results">
             {% for product in results %}
@@ -289,21 +298,23 @@ class ProductSearchView(LiveView):
 
         <p>Found {{ count }} products</p>
     </div>
-    {% djust_body %}
+    </div>
 </body>
 </html>
 ```
+
+The client script is injected automatically; `{% djust_client_config %}` is optional.
 
 ---
 
 ### Shopping Cart
 
-**Use Case**: Add/remove items with optimistic updates and server validation.
+**Use Case**: Add/remove items with server validation.
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import optimistic, throttle
+from djust.decorators import event_handler
 from shop.models import Product, CartItem
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
@@ -316,14 +327,15 @@ class ShoppingCartView(LiveView):
         self.cart_items = CartItem.objects.filter(user=request.user)
         self.total = sum(item.subtotal for item in self.cart_items)
 
-    @optimistic
-    def update_quantity(self, item_id: int = 0, quantity: int = 1, **kwargs):
+    @event_handler
+    def update_quantity(self, item_id: int = 0, value: int = 1, **kwargs):
         """
         Update cart item quantity.
 
-        Optimistic: UI updates instantly
-        Server validates and corrects if needed
+        `item_id` comes from dj-value-item-id; `value` is the input's value.
+        The server validates and corrects if needed.
         """
+        quantity = value
         try:
             item = CartItem.objects.get(id=item_id, user=self.request.user)
 
@@ -344,7 +356,7 @@ class ShoppingCartView(LiveView):
         except CartItem.DoesNotExist:
             pass
 
-    @optimistic
+    @event_handler
     def remove_item(self, item_id: int = 0, **kwargs):
         """Remove item from cart."""
         try:
@@ -356,6 +368,7 @@ class ShoppingCartView(LiveView):
         except CartItem.DoesNotExist:
             pass
 
+    @event_handler
     def clear_cart(self, **kwargs):
         """Clear entire cart."""
         CartItem.objects.filter(user=self.request.user).delete()
@@ -372,14 +385,15 @@ class ShoppingCartView(LiveView):
 
 ```html
 <!-- templates/shop/cart.html -->
-{% load djust %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Shopping Cart</title>
-    {% djust_head %}
+    {% djust_client_config %}
 </head>
 <body>
+    <div dj-root>
     <div class="container">
         <h1>Shopping Cart ({{ item_count }} items)</h1>
 
@@ -390,15 +404,15 @@ class ShoppingCartView(LiveView):
 
             <input
                 type="number"
-                dj-input="update_quantity"
-                data-item-id="{{ item.id }}"
+                dj-change="update_quantity"
+                dj-value-item-id:int="{{ item.id }}"
                 value="{{ item.quantity }}"
                 min="0"
             />
 
             <button
                 dj-click="remove_item"
-                data-item-id="{{ item.id }}"
+                dj-value-item-id:int="{{ item.id }}"
             >
                 Remove
             </button>
@@ -410,7 +424,7 @@ class ShoppingCartView(LiveView):
             <button dj-click="clear_cart">Clear Cart</button>
         </div>
     </div>
-    {% djust_body %}
+    </div>
 </body>
 </html>
 ```
@@ -419,16 +433,20 @@ class ShoppingCartView(LiveView):
 
 ### Product Filters
 
-**Use Case**: Multiple coordinated filters (category, price, rating).
+**Use Case**: Multiple filters (category, price, rating) driven by one handler.
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, client_state, cache
+from djust.decorators import debounce, event_handler
 from shop.models import Product
 
 class ProductFilterView(LiveView):
     template_name = 'shop/product_filter.html'
+
+    INT_FIELDS = {"min_price", "max_price", "min_rating"}
+    TEXT_FIELDS = {"category"}
+    SORT_OPTIONS = {"name", "price", "-price", "-rating"}
 
     def mount(self, request, **kwargs):
         self.category = ""
@@ -438,35 +456,30 @@ class ProductFilterView(LiveView):
         self.sort = "name"
         self.results = Product.objects.filter(in_stock=True).order_by(self.sort)
 
+    @event_handler
     @debounce(wait=0.3)
-    @cache(ttl=120, key_params=["category", "min_price", "max_price", "min_rating", "sort"])
-    @client_state(keys=["category", "min_price", "max_price", "min_rating", "sort"])
-    def apply_filters(
-        self,
-        category: str = "",
-        min_price: int = 0,
-        max_price: int = 10000,
-        min_rating: int = 0,
-        sort: str = "name",
-        **kwargs
-    ):
-        """Apply all filters at once."""
-        self.category = category
-        self.min_price = min_price
-        self.max_price = max_price
-        self.min_rating = min_rating
-        self.sort = sort
+    def apply_filters(self, value: str = "", field: str = "", **kwargs):
+        """Update the filter named by the input's `name`, then re-query."""
+        if field in self.INT_FIELDS:
+            setattr(self, field, int(value or 0))
+        elif field in self.TEXT_FIELDS:
+            setattr(self, field, value)
+        elif field == "sort" and value in self.SORT_OPTIONS:
+            self.sort = value
+        else:
+            return
 
         # Build query
         filters = {'in_stock': True}
-        if category:
-            filters['category'] = category
-        filters['price__gte'] = min_price
-        filters['price__lte'] = max_price
-        filters['rating__gte'] = min_rating
+        if self.category:
+            filters['category'] = self.category
+        filters['price__gte'] = self.min_price
+        filters['price__lte'] = self.max_price
+        filters['rating__gte'] = self.min_rating
 
-        self.results = Product.objects.filter(**filters).order_by(sort)
+        self.results = Product.objects.filter(**filters).order_by(self.sort)
 
+    @event_handler
     def reset_filters(self, **kwargs):
         """Reset to defaults."""
         self.category = ""
@@ -499,7 +512,7 @@ class ProductFilterView(LiveView):
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import throttle, optimistic
+from djust.decorators import event_handler, throttle
 from djust.drafts import DraftModeMixin
 from chat.models import Message, ChatRoom
 
@@ -517,6 +530,7 @@ class LiveChatView(DraftModeMixin, LiveView):
         """Include room ID in draft key for per-room drafts"""
         return f"chat_message_{self.room.id}"
 
+    @event_handler
     @throttle(interval=2.0, leading=True, trailing=False)
     def typing_indicator(self, **kwargs):
         """
@@ -525,16 +539,17 @@ class LiveChatView(DraftModeMixin, LiveView):
         Throttled to max 1 update per 2 seconds
         Reduces server load during fast typing
         """
-        # Broadcast to other users in room
-        self.broadcast_typing(self.request.user.username)
+        # LiveView has no built-in broadcast_* methods. Notify the room with
+        # your own helper built on server push (djust.push_to_view) or presence.
+        notify_room_typing(self.room.id, self.request.user.username)  # your helper
 
-    @optimistic
+    @event_handler
     def send_message(self, message: str = "", **kwargs):
         """
         Send chat message.
 
-        Optimistic: Message appears instantly
-        Server persists and broadcasts to others
+        dj-submit sends the form's fields by name, so `message` arrives here.
+        Server persists and notifies others.
         """
         if not message.strip():
             return
@@ -546,36 +561,38 @@ class LiveChatView(DraftModeMixin, LiveView):
             text=message
         )
 
-        # Broadcast to other users
-        self.broadcast_message(msg)
+        # Notify other users (your helper, e.g. built on push_to_view)
+        notify_room_message(self.room.id, msg.id)
 
         # Update local state
         self.message = ""
         self.messages = Message.objects.filter(room=self.room).order_by('-created_at')[:50]
 
     def get_context_data(self, **kwargs):
-        return {
+        # Call super() so DraftModeMixin adds draft_enabled / draft_key
+        context = super().get_context_data(**kwargs)
+        context.update({
             'room': self.room,
             'messages': self.messages,
             'message': self.message,
             'typing_users': self.typing_users
-        }
+        })
+        return context
 ```
 
 ```html
 <!-- templates/chat/live_chat.html -->
-{% load djust %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Chat: {{ room.name }}</title>
-    {% djust_head %}
+    {% djust_client_config %}
 </head>
 <body>
+    <div dj-root>
     <div class="chat-container"
-         dj-root
-         data-draft-enabled="{{ draft_enabled }}"
-         data-draft-key="{{ draft_key }}">
+         {% if draft_enabled %}data-draft-enabled data-draft-key="{{ draft_key }}"{% endif %}>
 
         <div class="messages">
             {% for msg in messages %}
@@ -603,13 +620,13 @@ class LiveChatView(DraftModeMixin, LiveView):
             />
             <button
                 type="submit"
-                @loading-text="Sending..."
+                dj-disable-with="Sending..."
             >
                 Send
             </button>
         </form>
     </div>
-    {% djust_body %}
+    </div>
 </body>
 </html>
 ```
@@ -623,6 +640,7 @@ class LiveChatView(DraftModeMixin, LiveView):
 ```python
 # views.py
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.forms import FormMixin
 from djust.drafts import DraftModeMixin
 from messaging.forms import MessageForm
@@ -633,10 +651,12 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
     draft_key = "message_composer"
 
     def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)  # FormMixin sets up form state here
         self.to = ""
         self.subject = ""
         self.body = ""
         self.attachments = []
+        self.success_message = ""
 
     def form_valid(self, form):
         """Send message and clear draft."""
@@ -644,30 +664,36 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
         message.sender = self.request.user
         message.save()
 
-        # Clear draft on successful send
+        # Clear draft on successful send (applied on the next page load)
         self.clear_draft()
         self.success_message = "Message sent!"
         self.to = ""
         self.subject = ""
         self.body = ""
 
+    @event_handler
     def add_attachment(self, file_data, **kwargs):
         """Add attachment."""
         # Handle file upload
         self.attachments.append(file_data)
 
+    @event_handler
     def remove_attachment(self, index: int = 0, **kwargs):
         """Remove attachment."""
         if 0 <= index < len(self.attachments):
             self.attachments.pop(index)
 
     def get_context_data(self, **kwargs):
-        return {
+        # Call super() so DraftModeMixin adds draft_enabled / draft_key
+        context = super().get_context_data(**kwargs)
+        context.update({
             'to': self.to,
             'subject': self.subject,
             'body': self.body,
-            'attachments': self.attachments
-        }
+            'attachments': self.attachments,
+            'success_message': self.success_message,
+        })
+        return context
 ```
 
 ---
@@ -681,7 +707,7 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import cache, throttle
+from djust.decorators import event_handler, throttle
 from analytics.models import Metric
 from django.utils import timezone
 from datetime import timedelta
@@ -689,25 +715,24 @@ from datetime import timedelta
 class DashboardView(LiveView):
     template_name = 'analytics/dashboard.html'
 
+    PERIODS = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+
     def mount(self, request, **kwargs):
         self.period = "24h"
         self.metrics = self.fetch_metrics(self.period)
         self.last_updated = timezone.now()
 
-    @cache(ttl=300, key_params=["period"])  # Cache for 5 minutes
     def fetch_metrics(self, period: str = "24h"):
-        """Fetch metrics for period."""
-        if period == "24h":
-            start = timezone.now() - timedelta(hours=24)
-        elif period == "7d":
-            start = timezone.now() - timedelta(days=7)
-        elif period == "30d":
-            start = timezone.now() - timedelta(days=30)
-        else:
-            start = timezone.now() - timedelta(hours=24)
+        """Fetch metrics for period.
 
+        This is a plain helper, not an event, so @cache would do nothing here
+        (@cache caches event responses in the browser). For server-side
+        memoization use Django's cache framework (django.core.cache).
+        """
+        start = timezone.now() - self.PERIODS.get(period, timedelta(hours=24))
         return Metric.objects.filter(timestamp__gte=start)
 
+    @event_handler
     @throttle(interval=5.0, leading=True, trailing=False)
     def refresh(self, **kwargs):
         """
@@ -719,10 +744,11 @@ class DashboardView(LiveView):
         self.metrics = self.fetch_metrics(self.period)
         self.last_updated = timezone.now()
 
-    def change_period(self, period: str = "24h", **kwargs):
-        """Change time period."""
-        self.period = period
-        self.metrics = self.fetch_metrics(period)
+    @event_handler
+    def change_period(self, value: str = "24h", **kwargs):
+        """Change time period (dj-change sends the selected option as `value`)."""
+        self.period = value if value in self.PERIODS else "24h"
+        self.metrics = self.fetch_metrics(self.period)
         self.last_updated = timezone.now()
 
     def get_context_data(self, **kwargs):
@@ -737,14 +763,15 @@ class DashboardView(LiveView):
 
 ```html
 <!-- templates/analytics/dashboard.html -->
-{% load djust %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Analytics Dashboard</title>
-    {% djust_head %}
+    {% djust_client_config %}
 </head>
 <body>
+    <div dj-root>
     <div class="dashboard">
         <div class="controls">
             <select dj-change="change_period">
@@ -755,7 +782,8 @@ class DashboardView(LiveView):
 
             <button
                 dj-click="refresh"
-                @loading-text="Refreshing..."
+                dj-loading.disable
+                dj-disable-with="Refreshing..."
             >
                 Refresh
             </button>
@@ -775,7 +803,7 @@ class DashboardView(LiveView):
             </div>
         </div>
     </div>
-    {% djust_body %}
+    </div>
 </body>
 </html>
 ```
@@ -784,12 +812,12 @@ class DashboardView(LiveView):
 
 ### Chart Filters
 
-**Use Case**: Interactive chart with coordinated filters.
+**Use Case**: Interactive chart with several filter inputs.
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, client_state, cache
+from djust.decorators import debounce, event_handler
 from analytics.models import SalesData
 from django.db.models import Sum, Count
 from datetime import datetime, timedelta
@@ -804,24 +832,19 @@ class SalesChartView(LiveView):
         self.region = ""
         self.chart_data = self.calculate_chart_data()
 
+    @event_handler
     @debounce(wait=0.5)
-    @cache(ttl=600, key_params=["start_date", "end_date", "group_by", "region"])
-    @client_state(keys=["start_date", "end_date", "group_by", "region"])
-    def update_chart(
-        self,
-        start_date: str = "",
-        end_date: str = "",
-        group_by: str = "day",
-        region: str = "",
-        **kwargs
-    ):
-        """Update chart data."""
-        if start_date:
-            self.start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-        if end_date:
-            self.end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-        self.group_by = group_by
-        self.region = region
+    def update_chart(self, value: str = "", field: str = "", **kwargs):
+        """Update the filter named by the input's `name`, then recalculate."""
+        if field in ("start_date", "end_date"):
+            if value:
+                setattr(self, field, datetime.strptime(value, "%Y-%m-%d").date())
+        elif field == "group_by" and value in ("day", "week", "month"):
+            self.group_by = value
+        elif field == "region":
+            self.region = value
+        else:
+            return
 
         self.chart_data = self.calculate_chart_data()
 
@@ -873,10 +896,11 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
     template_name = 'contact/form.html'
     form_class = ContactForm
     draft_key = "contact_form"
-    draft_ttl = 3600  # 1 hour
 
     def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)  # FormMixin sets up form state here
         self.success_message = ""
+        self.error_message = ""
 
     def form_valid(self, form):
         """Handle valid form submission."""
@@ -884,9 +908,10 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
         form.send_email()
 
         self.success_message = "Message sent! We'll respond within 24 hours."
+        self.error_message = ""
 
-        # Clear draft
-        self.draft_key = None
+        # Clear the saved draft
+        self.clear_draft()
 
     def form_invalid(self, form):
         """Handle invalid form."""
@@ -895,45 +920,58 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['success_message'] = self.success_message
+        context['error_message'] = self.error_message
         return context
 ```
 
 ```html
 <!-- templates/contact/form.html -->
-{% load djust %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Contact Us</title>
-    {% djust_head %}
+    {% djust_client_config %}
 </head>
 <body>
-    <div class="container">
+    <div dj-root>
+    <div class="container"
+         {% if draft_enabled %}data-draft-enabled data-draft-key="{{ draft_key }}"{% endif %}
+         {% if draft_clear %}data-draft-clear{% endif %}>
         <h1>Contact Us</h1>
 
         {% if success_message %}
         <div class="alert alert-success">{{ success_message }}</div>
         {% endif %}
+        {% if error_message %}
+        <div class="alert alert-danger">{{ error_message }}</div>
+        {% endif %}
 
-        <form dj-submit="handle_form_submit">
-            {{ form.as_p }}
+        <form dj-submit="submit_form">
+            <input name="name" value="{{ form_data.name }}" data-draft="true" />
+            <input name="email" type="email" value="{{ form_data.email }}" data-draft="true" />
+            <textarea name="message" data-draft="true">{{ form_data.message }}</textarea>
 
             <button
                 type="submit"
-                @loading-text="Sending..."
+                dj-disable-with="Sending..."
             >
                 Send Message
             </button>
         </form>
 
         <p class="help-text">
-            Your message is automatically saved as you type.
+            Your message is automatically saved in this browser as you type.
         </p>
     </div>
-    {% djust_body %}
+    </div>
 </body>
 </html>
 ```
+
+`submit_form` is FormMixin's submit handler; it validates the posted fields and calls `form_valid` or `form_invalid`. Errors are available as `field_errors`. The fields are written by hand here because each one needs `data-draft="true"`; without drafts, `{% live_form view %}` renders the whole form.
+
+`clear_draft()` does not remove the draft immediately. The client reads `data-draft-clear` only when the page loads, so the saved draft is removed on the next full page load, not by the live update after submission.
 
 ---
 
@@ -941,77 +979,34 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 
 **Use Case**: Multi-step registration with state persistence.
 
+djust ships a multi-step helper, `WizardMixin`. It keeps per-step data on the view, validates each step with that step's form, and exposes the `next_step`, `prev_step` and `submit_wizard` handlers. FormMixin has no `get_form_class()` hook or `self.form` attribute, so don't build a wizard on top of it.
+
 ```python
 # views.py
+from django.contrib.auth.models import User
 from djust import LiveView
-from djust.forms import FormMixin
-from djust.drafts import DraftModeMixin
+from djust.wizard import WizardMixin
 from registration.forms import Step1Form, Step2Form, Step3Form
 
-class MultiStepRegistrationView(DraftModeMixin, FormMixin, LiveView):
+class MultiStepRegistrationView(WizardMixin, LiveView):
     template_name = 'registration/multi_step.html'
-    draft_key = "registration_form"
-    draft_ttl = 7200  # 2 hours
+    wizard_steps = [
+        {"name": "account", "title": "Account", "form_class": Step1Form},
+        {"name": "profile", "title": "Profile", "form_class": Step2Form},
+        {"name": "confirm", "title": "Confirm", "form_class": Step3Form},
+    ]
 
-    def mount(self, request, **kwargs):
-        self.step = 1
-        self.step1_data = {}
-        self.step2_data = {}
-        self.step3_data = {}
+    def on_wizard_complete(self, step_data):
+        """Called by submit_wizard once every step is valid.
 
-    def get_form_class(self):
-        """Return form for current step."""
-        if self.step == 1:
-            return Step1Form
-        elif self.step == 2:
-            return Step2Form
-        else:
-            return Step3Form
-
-    def next_step(self, **kwargs):
-        """Move to next step."""
-        # Save current step data
-        if self.step == 1:
-            self.step1_data = self.form.cleaned_data
-        elif self.step == 2:
-            self.step2_data = self.form.cleaned_data
-
-        self.step += 1
-
-    def previous_step(self, **kwargs):
-        """Move to previous step."""
-        if self.step > 1:
-            self.step -= 1
-
-    def form_valid(self, form):
-        """Handle final submission."""
-        if self.step < 3:
-            self.next_step()
-        else:
-            # Final step - save all data
-            self.step3_data = form.cleaned_data
-            self.save_registration()
-
-    def save_registration(self):
-        """Save all registration data."""
-        # Combine all step data
-        data = {**self.step1_data, **self.step2_data, **self.step3_data}
-
-        # Create user
-        user = User.objects.create(**data)
-
-        # Clear draft
-        self.draft_key = None
-
+        step_data maps each step name to the raw string values entered.
+        """
+        data = {**step_data["account"], **step_data["profile"], **step_data["confirm"]}
+        User.objects.create_user(**data)
         self.success_message = "Registration complete!"
-
-    def get_context_data(self, **kwargs):
-        return {
-            'step': self.step,
-            'total_steps': 3,
-            'progress': (self.step / 3) * 100
-        }
 ```
+
+The template receives `current_step`, `total_steps`, `progress_percent`, `field_html`, `step_errors` and related values; see `djust.wizard` for the full list.
 
 ---
 
@@ -1024,7 +1019,7 @@ class MultiStepRegistrationView(DraftModeMixin, FormMixin, LiveView):
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import optimistic
+from djust.decorators import event_handler
 from products.models import Product
 
 class ProductBulkActionsView(LiveView):
@@ -1034,33 +1029,38 @@ class ProductBulkActionsView(LiveView):
         self.products = Product.objects.all()
         self.selected_ids = []
 
-    @optimistic
+    @event_handler
     def toggle_select(self, product_id: int = 0, **kwargs):
-        """Toggle product selection."""
+        """Toggle product selection (dj-value-product-id:int on the checkbox)."""
         if product_id in self.selected_ids:
             self.selected_ids.remove(product_id)
         else:
             self.selected_ids.append(product_id)
 
+    @event_handler
     def select_all(self, **kwargs):
         """Select all products."""
         self.selected_ids = [p.id for p in self.products]
 
+    @event_handler
     def deselect_all(self, **kwargs):
         """Deselect all products."""
         self.selected_ids = []
 
+    @event_handler
     def bulk_delete(self, **kwargs):
         """Delete selected products."""
         Product.objects.filter(id__in=self.selected_ids).delete()
         self.products = Product.objects.all()
         self.selected_ids = []
 
+    @event_handler
     def bulk_activate(self, **kwargs):
         """Activate selected products."""
         Product.objects.filter(id__in=self.selected_ids).update(is_active=True)
         self.products = Product.objects.all()
 
+    @event_handler
     def bulk_deactivate(self, **kwargs):
         """Deactivate selected products."""
         Product.objects.filter(id__in=self.selected_ids).update(is_active=False)
@@ -1078,22 +1078,27 @@ class ProductBulkActionsView(LiveView):
 
 ### Inline Editing
 
-**Use Case**: Edit table cells inline with optimistic updates.
+**Use Case**: Edit table cells inline.
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import optimistic, debounce
+from djust.decorators import debounce, event_handler
 from products.models import Product
 
 class ProductInlineEditView(LiveView):
     template_name = 'admin/product_inline_edit.html'
 
+    # Only these fields may be edited inline. `field` comes from the client
+    # (dj-change fills it from the input's name), so never setattr an
+    # arbitrary name onto the model.
+    EDITABLE_FIELDS = {"name", "sku"}
+
     def mount(self, request, **kwargs):
         self.products = Product.objects.all()
         self.editing_cell = None
 
-    @optimistic
+    @event_handler
     @debounce(wait=0.5)
     def update_field(
         self,
@@ -1105,12 +1110,16 @@ class ProductInlineEditView(LiveView):
         """
         Update product field inline.
 
-        Optimistic: UI updates instantly
+        Bind with: <input name="name" dj-change="update_field"
+                          dj-value-product-id:int="{{ product.id }}">
         Debounced: Server request delayed 500ms
         """
+        if field not in self.EDITABLE_FIELDS:
+            return
         try:
             product = Product.objects.get(id=product_id)
             setattr(product, field, value)
+            product.full_clean()
             product.save()
 
             # Refresh products
@@ -1119,10 +1128,12 @@ class ProductInlineEditView(LiveView):
         except Product.DoesNotExist:
             pass
 
+    @event_handler
     def start_editing(self, product_id: int = 0, field: str = "", **kwargs):
         """Mark cell as being edited."""
         self.editing_cell = f"{product_id}_{field}"
 
+    @event_handler
     def stop_editing(self, **kwargs):
         """Stop editing."""
         self.editing_cell = None
@@ -1133,6 +1144,8 @@ class ProductInlineEditView(LiveView):
             'editing_cell': self.editing_cell
         }
 ```
+
+For richer validation, run the edit through a `ModelForm` restricted to the editable fields.
 
 ---
 
@@ -1145,7 +1158,7 @@ class ProductInlineEditView(LiveView):
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, optimistic, client_state
+from djust.decorators import debounce, event_handler
 from documents.models import Document, DocumentVersion
 
 class CollaborativeEditorView(LiveView):
@@ -1157,17 +1170,15 @@ class CollaborativeEditorView(LiveView):
         self.version = self.document.version
         self.active_users = self.get_active_users()
 
+    @event_handler
     @debounce(wait=1.0)
-    @optimistic
-    @client_state(keys=["content"])
-    def update_content(self, content: str = "", **kwargs):
+    def update_content(self, value: str = "", **kwargs):
         """
-        Update document content.
+        Update document content (<textarea dj-input="update_content">).
 
-        Optimistic: Textarea updates instantly
         Debounced: Save after 1 second of inactivity
-        Client State: Broadcast to other users
         """
+        content = value
         # Check for conflicts
         current_doc = Document.objects.get(id=self.document.id)
         if current_doc.version != self.version:
@@ -1191,8 +1202,9 @@ class CollaborativeEditorView(LiveView):
 
         self.version = self.document.version
 
-        # Broadcast to other users
-        self.broadcast_update()
+        # Notify other users. LiveView has no built-in broadcast_* methods;
+        # use your own helper built on server push (djust.push_to_view).
+        notify_document_updated(self.document.id)  # your helper
 
     def merge_content(self, base_content, new_content):
         """Simple merge strategy (override with sophisticated diff-merge)."""
@@ -1222,7 +1234,7 @@ class CollaborativeEditorView(LiveView):
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import throttle, optimistic, client_state
+from djust.decorators import event_handler
 from whiteboard.models import Whiteboard, DrawingAction
 
 class SharedWhiteboardView(LiveView):
@@ -1232,9 +1244,7 @@ class SharedWhiteboardView(LiveView):
         self.board = Whiteboard.objects.get(id=board_id)
         self.actions = DrawingAction.objects.filter(board=self.board).order_by('created_at')
 
-    @throttle(interval=0.05, leading=True, trailing=True)  # Max 20 events/sec
-    @optimistic
-    @client_state(keys=["x", "y", "color", "tool"])
+    @event_handler
     def draw(
         self,
         x: int = 0,
@@ -1246,9 +1256,9 @@ class SharedWhiteboardView(LiveView):
         """
         Handle drawing action.
 
-        Throttled: Max 20 events/second (60 FPS / 3)
-        Optimistic: Canvas updates instantly
-        Client State: Broadcast to other users
+        Sent from a canvas hook: this.pushEvent("draw", {x, y, color, tool}).
+        A hook's pushEvent bypasses @throttle/@debounce, so rate-limit
+        pointer events in the hook itself (e.g. at most 20 per second).
         """
         # Save action
         action = DrawingAction.objects.create(
@@ -1260,16 +1270,17 @@ class SharedWhiteboardView(LiveView):
             tool=tool
         )
 
-        # Broadcast to other users
-        self.broadcast_drawing_action(action)
+        # Notify other users (your helper, e.g. built on push_to_view)
+        notify_board_action(self.board.id, action.id)
 
+    @event_handler
     def clear_board(self, **kwargs):
         """Clear entire board."""
         DrawingAction.objects.filter(board=self.board).delete()
-        self.actions = []
+        self.actions = DrawingAction.objects.none()
 
-        # Broadcast clear action
-        self.broadcast_clear()
+        # Notify other users (your helper)
+        notify_board_cleared(self.board.id)
 
     def get_context_data(self, **kwargs):
         return {
@@ -1284,19 +1295,21 @@ class SharedWhiteboardView(LiveView):
 
 These examples demonstrate:
 
-1. **@debounce**: Search, filters, form inputs
-2. **@throttle**: Scroll events, drawing, refresh buttons
-3. **@optimistic**: Shopping cart, inline editing, chat
-4. **@cache**: Expensive queries, dashboard metrics
-5. **@client_state**: Coordinated filters, collaborative editing
-6. **DraftModeMixin**: Forms, email composer, registration
+1. **@event_handler**: Required on every handler
+2. **@debounce**: Search, filters, form inputs
+3. **@throttle**: Refresh buttons, typing indicators, load more
+4. **@cache**: Read-only lookups cached in the browser
+5. **dj-loading.\*** and **dj-disable-with**: Loading states in HTML
+6. **DraftModeMixin**: Forms, email composer, chat
+7. **WizardMixin**: Multi-step forms
+
+`@optimistic` and `@client_state` are inert and are not used here. For multi-user sync, use server push or presence.
 
 **Key Takeaways:**
 
-- ✅ Zero custom JavaScript required
+- ✅ Zero custom JavaScript required (except canvas-style hooks)
 - ✅ Declarative Python decorators
 - ✅ Composable patterns
-- ✅ Production-ready examples
 
 **Next Steps:**
 
@@ -1315,12 +1328,6 @@ These examples demonstrate:
 - [State Management Migration](STATE_MANAGEMENT_MIGRATION.md) - Migrate from JavaScript to Python
 - [State Management Architecture](STATE_MANAGEMENT_ARCHITECTURE.md) - Implementation architecture
 - [State Management Comparison](STATE_MANAGEMENT_COMPARISON.md) - vs Phoenix LiveView & Laravel Livewire
-
-### Marketing & Competitive Analysis
-- Marketing Overview - Feature highlights and positioning
-- Framework Comparison - djust vs 13+ frameworks
-- Technical Pitch - Technical selling points
-- Why Not Alternatives - When to choose djust
 
 ---
 

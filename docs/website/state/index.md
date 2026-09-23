@@ -18,7 +18,7 @@ djust's state management decorators replace patterns that traditionally require 
 ```
 User is typing?           → @debounce(wait=0.5)
 Rapid scroll/resize?      → @throttle(interval=0.1)
-Need instant UI feedback? → @optimistic
+Need instant UI feedback? → dj-loading.* attributes (@optimistic is INERT, #2699)
 Same query repeated?      → @cache(ttl=300)
 Coordinating components?  → one handler, one re-render (@client_state is INERT, #2680)
 Auto-save forms?          → DraftModeMixin
@@ -37,7 +37,7 @@ def search(self, value: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
 
-Without `@debounce`, every keystroke fires a server request. With it, only one request fires per typing pause — typical for search boxes.
+`dj-input` already debounces text fields by 300 ms on the client. `@debounce` sets a handler-level delay on top of that (here 500 ms), so only one request fires per typing pause — typical for search boxes.
 
 ## Throttle
 
@@ -69,20 +69,23 @@ For spinners, show/hide, and CSS classes, see
 
 ## Optimistic Updates
 
-Apply the state change immediately in the UI before the server confirms — makes the interface feel instant:
+`@optimistic` is **inert at rc10** (#2699): it is recorded but has no client
+implementation, so no optimistic update is applied and nothing is rolled back.
+The handler below behaves exactly as it would undecorated — the UI updates
+when the server re-render arrives:
 
 ```python
 from djust.decorators import event_handler, optimistic
 
 @event_handler()
-@optimistic
+@optimistic  # inert: no effect at runtime
 def toggle_like(self, item_id: int = 0, **kwargs):
-    """UI updates instantly; server confirms asynchronously."""
     item = next(i for i in self.items if i["id"] == item_id)
     item["liked"] = not item["liked"]
 ```
 
-If the handler raises an exception, djust rolls back the optimistic state change.
+For instant feedback today, use `dj-loading.*` attributes (see
+[Loading States](#loading-states)) or JS Commands.
 
 ## Caching
 
@@ -101,13 +104,12 @@ A search for "laptop" costs one DB query; subsequent searches for "laptop" withi
 
 ## Composing Decorators
 
-Decorators compose — apply multiple to one handler. Order matters: decorators apply top-to-bottom (outer-to-inner):
+Decorators compose — apply multiple to one handler. Their order does not change behaviour: each one records configuration that the client reads. If both `@debounce` and `@throttle` are present, `@debounce` wins.
 
 ```python
 @event_handler()
-@debounce(wait=0.5)   # 1. Wait for typing to stop
-@optimistic           # 2. Update UI immediately
-@cache(ttl=60)        # 3. Return cached result if available
+@debounce(wait=0.5)   # wait for typing to stop
+@cache(ttl=60)        # reuse a cached response for a repeated value
 def search(self, value: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
@@ -144,11 +146,23 @@ from djust import DraftModeMixin, LiveView
 
 class ContactFormView(DraftModeMixin, LiveView):
     template_name = "contact.html"
-    draft_fields = ["name", "email", "message"]  # Fields to auto-save
-    draft_ttl = 3600  # Expire after 1 hour
+    draft_key = "contact_form"  # optional; defaults to "<classname>_draft"
 ```
 
-The draft is restored automatically when the user returns to the page.
+The template opts in: mark a container with `data-draft-enabled` and
+`data-draft-key`, and each field to save with `data-draft="true"`:
+
+```html
+<form dj-submit="save" data-draft-enabled data-draft-key="{{ draft_key }}" {% if draft_clear %}data-draft-clear{% endif %}>
+  <input name="name" data-draft="true">
+  <input name="email" data-draft="true">
+  <textarea name="message" data-draft="true"></textarea>
+  <button type="submit">Send</button>
+</form>
+```
+
+The draft is restored when the user returns to the page. Drafts have no
+expiry; call `self.clear_draft()` after a successful save to remove it.
 
 ## Debugging Decorators
 
@@ -158,12 +172,10 @@ Enable client-side logging to see decorator behavior:
 window.djustDebug = true;
 ```
 
-You'll see logs like:
+For example, a `@cache` hit logs:
 
 ```
-[djust:debounce] Waiting 500ms for search(value=laptop)
-[djust:cache] Cache hit for search(value=laptop) - age: 45s / TTL: 300s
-[djust:state] Published to bus: filter=electronics
+[LiveView:cache] Cache hit: <cache key>
 ```
 
 ## Full Reference
@@ -173,10 +185,10 @@ You'll see logs like:
 | `@debounce(wait)`         | `wait`: seconds (float)                 | Search, autosave     |
 | `@throttle(interval)`     | `interval`: seconds (float)             | Scroll, resize       |
 | `@background`             | —                                       | API calls, AI gen    |
-| `@optimistic`             | —                                       | Toggles, counters    |
+| `@optimistic`             | —                                       | *(INERT — no client impl, #2699)* |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
 | `@client_state(keys)`     | `keys`: list[str]                       | *(INERT — no client impl, #2680)* |
-| `DraftModeMixin`          | `draft_fields`, `draft_ttl`             | Auto-save forms      |
+| `DraftModeMixin`          | `draft_enabled`, `draft_key`            | Auto-save forms      |
 
 For detailed API docs, see [API Reference: Decorators](../api-reference/decorators.md).
 

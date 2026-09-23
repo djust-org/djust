@@ -54,6 +54,17 @@ class SignupWizard(WizardMixin, LiveView):
             last_name=step_data["personal"]["last_name"],
             email=step_data["personal"]["email"],
         )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Pair each rendered field with its errors. A template can't look up
+        # step_errors by a loop variable (step_errors.name reads the literal
+        # key "name"), so build the list here.
+        context["fields"] = [
+            {"name": name, "html": html, "errors": context["step_errors"].get(name, [])}
+            for name, html in context["field_html"].items()
+        ]
+        return context
 ```
 
 Place `WizardMixin` **before** `LiveView` in the class definition so its methods take priority.
@@ -79,14 +90,12 @@ Place `WizardMixin` **before** `LiveView` in the class definition so its methods
     <div class="progress-bar" style="width: {{ progress_percent }}%"></div>
 
     {# Current step form fields #}
-    {% for name, html in field_html.items %}
+    {% for field in fields %}
         <div class="field">
-            {{ html|safe }}
-            {% if step_errors %}
-                {% for error in step_errors.name %}
-                    <span class="error">{{ error }}</span>
-                {% endfor %}
-            {% endif %}
+            {{ field.html|safe }}
+            {% for error in field.errors %}
+                <span class="error">{{ error }}</span>
+            {% endfor %}
         </div>
     {% endfor %}
 
@@ -110,7 +119,7 @@ That's it. The wizard handles validation, navigation, and data collection automa
 ## How It Works
 
 1. `mount()` initializes step state (index, data, errors, completed steps)
-2. User fills in fields -- `dj-change="validate_field"` validates on blur
+2. User fills in fields -- `dj-change="validate_field"` stores each value as it changes (no validation yet)
 3. User clicks "Continue" -- `next_step` validates the current step, advances if valid
 4. User clicks "Back" -- `prev_step` goes back without validation (data is preserved)
 5. On the last step, "Submit" calls `submit_wizard` which re-validates ALL steps, then calls `on_wizard_complete()`
@@ -125,7 +134,7 @@ All handlers are available via `dj-click` or `dj-submit` in templates:
 | `prev_step`          | Go back one step (no validation, data preserved)           |
 | `go_to_step`         | Jump to a completed step (`data-step_index="N"`)           |
 | `update_step_field`  | Store a single field value (`data-field="name"`)           |
-| `validate_field`     | Validate a field on change (used by `as_live_field()`)     |
+| `validate_field`     | Store a field's value as the user edits it (used by `as_live_field()`); validation runs on `next_step` / `submit_wizard` |
 | `submit_wizard`      | Validate all steps, call `on_wizard_complete()` if valid   |
 
 ### Jumping to a Step
@@ -189,7 +198,7 @@ The Rust template engine cannot call Python methods with arguments, so form fiel
 {{ field_html.email|safe }}
 ```
 
-Each field includes `dj-change="validate_field"` and `data-field="<name>"` attributes for real-time validation.
+Each field carries `dj-change="validate_field"` (or `dj-input` for text widgets when `wizard_input_event = "dj-input"`) and its `name="<field>"`, which the handler receives as `field`. `validate_field` only stores the value; validation runs on `next_step` / `submit_wizard`.
 
 You can also render fields manually in `get_context_data()`:
 

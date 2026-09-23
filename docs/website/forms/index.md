@@ -90,13 +90,17 @@ class ArticleEditView(FormMixin, LiveView):
 
 ## FormMixin Template Variables
 
-| Variable        | Type | Description                          |
-| --------------- | ---- | ------------------------------------ |
-| `form_data`     | dict | Current field values                 |
-| `field_errors`  | dict | Per-field errors `{field: [errors]}` |
-| `form_errors`   | list | Non-field errors from `clean()`      |
-| `is_valid`      | bool | Result of last submission            |
-| `form_instance` | Form | Current Django Form instance         |
+| Variable          | Type | Description                                                           |
+| ----------------- | ---- | --------------------------------------------------------------------- |
+| `form_data`       | dict | Current field values                                                  |
+| `field_errors`    | dict | Per-field errors `{field: [errors]}`                                  |
+| `form_errors`     | list | Non-field errors from `clean()` (`{}` until an invalid submit)        |
+| `is_valid`        | bool | Result of last submission                                             |
+| `success_message` | str  | Success message your view sets (empty by default)                    |
+| `error_message`   | str  | Error message your view sets (empty by default)                      |
+| `form_choices`    | dict | Choices for choice fields, keyed by field name                        |
+
+The Django form instance is available in Python as `self.form_instance`; it is not in the template context.
 
 ## Multi-Step Wizards
 
