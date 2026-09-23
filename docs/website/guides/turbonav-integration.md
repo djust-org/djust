@@ -88,7 +88,7 @@ When TurboNav fires `turbo:load`, djust runs `reinitLiveViewForTurboNav()` which
 1. **Disconnects the existing WebSocket** — closes the old connection cleanly
 2. **Resets client VDOM version** — prevents stale diff conflicts
 3. **Clears lazy hydration state** — resets `dj-lazy` tracking
-4. **Stamps root attributes** — auto-applies `data-djust-root` on new content
+4. **Stamps root attributes** — auto-applies `dj-root` / `dj-liveview-root` to every `[dj-view]` element in the new content
 5. **Scans for LiveView containers** — finds all `[dj-view]` elements in the new DOM
 6. **Opens a new WebSocket** — connects to the server for the new page's LiveViews
 7. **Re-binds event handlers** — attaches `dj-click`, `dj-submit`, etc. to new elements

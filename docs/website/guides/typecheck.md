@@ -121,9 +121,12 @@ references. Coverage as of v0.5.2:
 | `{% cycle a b c as label %}` | `a`, `b`, `c` (positional refs) | `as <label>` suffix |
 | `{% blocktrans with x=expr count y=qty %}` | `expr`, `qty` (the references) | `x`, `y` (template-local bindings, scoped to the block) |
 | `{% blocktranslate %}` | same as `blocktrans` | same |
-| `{% with name=expr %}` | `expr` | `name` (block-local) |
-| `{% include "path" with k=v only %}` | `v` | `k`, `only` |
-| `{% url "name" arg1 arg2 %}` | `arg1`, `arg2` | the URL name string |
+| `{% with name=expr %}` | nothing (`expr` is **not** checked) | `name` is bound as a block-local |
+| `{% include "path" with k=v only %}` | nothing (arguments are **not** checked) | the whole tag |
+| `{% url "name" arg1 arg2 %}` | nothing (arguments are **not** checked) | the whole tag |
+
+A typo in a `with` expression or an `include`/`url` argument is therefore not
+reported.
 
 Adding tag coverage is mostly a question of teaching
 `python/djust/management/commands/djust_typecheck.py` what each tag's
