@@ -29,13 +29,9 @@ class S3BrowserView(LiveView):
         self.buckets = []
 ```
 
-You will see a `TypeError` during rendering:
+By default djust logs `LiveView state contains non-serializable value: …` and stores a string in its place, so the next handler that calls a method on `self.s3_client` gets an `AttributeError`. With `strict_serialization: True` it raises `TypeError` instead (see [Runtime Warnings and Errors](#runtime-warnings-and-errors)).
 
-```
-TypeError: Object of type S3.Client is not JSON serializable
-```
-
-Or, if you have the `djust.V006` system check enabled, it will catch this at startup.
+The `djust.V006` system check catches this pattern at startup.
 
 ---
 
@@ -82,26 +78,11 @@ class S3BrowserView(LiveView):
 
 ---
 
-## Pattern 2: Unmanaged Models
+## Pattern 2: Plain Dicts for External API Data
 
-When you need to display data from an external API in a structured way, consider using Django models with `managed = False`. These are regular Django model instances that djust can serialize, but they are not backed by a database table.
+When you need to display data from an external API in a structured way, keep it as plain dicts. Don't wrap it in table-less (`managed = False`) model instances: djust stores model instances held in private state as a model reference and re-fetches them with `objects.get(pk=...)` when state is restored, so a model with no table comes back as `None`.
 
 ```python
-# models.py
-from django.db import models
-
-
-class ExternalProduct(models.Model):
-    """Represents a product from the external catalog API."""
-    name = models.CharField(max_length=200)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    sku = models.CharField(max_length=50)
-    in_stock = models.BooleanField(default=True)
-
-    class Meta:
-        managed = False  # No database table created
-
-
 # views.py
 import httpx
 from djust import LiveView, state
@@ -114,20 +95,20 @@ class ProductCatalogView(LiveView):
     search_query = state(default="")
 
     def _fetch_products(self, query=""):
-        """Fetch products from external API and return as model instances."""
+        """Fetch products from external API and return them as plain dicts."""
         response = httpx.get(
             "https://api.example.com/products",
             params={"q": query},
         )
         data = response.json()
         return [
-            ExternalProduct(
-                id=item["id"],
-                name=item["name"],
-                price=item["price"],
-                sku=item["sku"],
-                in_stock=item["available"],
-            )
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "price": item["price"],
+                "sku": item["sku"],
+                "in_stock": item["available"],
+            }
             for item in data["results"]
         ]
 
@@ -144,7 +125,7 @@ class ProductCatalogView(LiveView):
         return super().get_context_data(**kwargs)
 ```
 
-This pattern combines the [JIT serialization pattern](../../JIT_SERIALIZATION_PATTERN.md) with unmanaged models for a clean separation.
+This pattern combines the [JIT serialization pattern](../../JIT_SERIALIZATION_PATTERN.md) with plain-dict data for a clean separation.
 
 ---
 
@@ -215,7 +196,7 @@ These types can be stored as public state variables:
 
 ## What's Not Serializable
 
-These types will raise `TypeError` if stored as public state:
+These types cannot be serialized as public state (by default djust warns and stores a string in their place; with `strict_serialization: True` it raises `TypeError`):
 
 | Type | Example | Use Helper Method Instead |
 |------|---------|---------------------------|
@@ -241,14 +222,14 @@ djust provides two static checks to catch non-serializable state at development 
 python manage.py check --tag djust
 ```
 
-**V006** detects service-like instances (class names containing "Service", "Client", "Session", "API", or "Connection"):
+**V006** (warning) detects service-like instances: a `self.x = Call(...)` in `mount()` whose call name contains "Service", "Client", "Session", "API", or "Connection" (case-insensitive):
 
 ```
-(djust.V006) MyView.api_client looks like a service instance stored in state.
-    HINT: Service instances are not JSON-serializable. Use a helper method instead.
+(djust.V006) myapp/views.py:15 -- Service instance 'api_client' assigned in mount(). Service instances cannot be serialized.
+    HINT: Use a helper method pattern instead. See: docs/guides/services.md
 ```
 
-**V008** (broader check, issue #292) detects any non-primitive type assignment in mount():
+**V008** (info, broader check, issue #292) detects any non-primitive type assignment in mount():
 
 ```
 (djust.V008) myapp/views.py:15 -- Non-primitive type 'MyServiceClass' assigned to self.service in mount().

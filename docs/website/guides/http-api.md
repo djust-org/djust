@@ -109,6 +109,7 @@ On failure the response body is:
 | 404 | `unknown_handler` | No handler by that name on the view |
 | 404 | `handler_not_exposed` | Handler exists but lacks `expose_api=True` |
 | 429 | `rate_limited` | `@rate_limit` bucket exhausted |
+| 500 | `mount_failed` | `mount()` / `api_mount()` raised. Details are logged server-side only. |
 | 500 | `handler_error` | Handler raised. **The exception message is logged server-side but never included in the response body.** |
 | 500 | `serialize_error` | `api_response()` or the handler's `serialize=` raised, or `serialize="name"` pointed at a missing method. |
 
@@ -277,8 +278,12 @@ handler and maps its type hints:
 | `UUID` | `{"type": "string", "format": "uuid"}` |
 | `Decimal` | `{"type": "string", "format": "decimal"}` |
 | `datetime` | `{"type": "string", "format": "date-time"}` |
-| `list[T]` | `{"type": "array", "items": <T>}` |
-| `Optional[T]` | `<T>` with `"nullable": true` |
+| `list[T]` / `List[T]` | currently `{"type": "string"}` (known limitation) |
+| `Optional[T]` / `T \| None` | currently `{"type": "string"}` (known limitation) |
+
+The generator receives only the bare type name (`list`, `int | None`), so
+generic and optional annotations fall through to `string`. Annotate exposed
+handler parameters with a concrete scalar type for an accurate schema.
 
 A handler's docstring's first line becomes the operation `summary`; the full
 docstring becomes the operation `description`.
@@ -301,6 +306,10 @@ Set `api_auth_classes` on the view to plug in token / header / API-key auth:
 ```python
 import hashlib
 import hmac
+
+from djust import LiveView
+from djust.api import SessionAuth
+from djust.decorators import event_handler
 
 
 class TokenAuth:
@@ -339,8 +348,8 @@ Auth classes are tried in order; the first one whose `authenticate(request)`
 returns a non-`None` user wins. CSRF is enforced only if the winning auth class
 has `csrf_exempt = False`.
 
-> **Security note**: djust ships `SessionAuth` in v0.5.1. A first-party token
-> auth implementation is tracked under a separate ADR — see the roadmap.
+> **Security note**: djust ships `SessionAuth` (the default). A first-party
+> token auth implementation is tracked under a separate ADR — see the roadmap.
 
 ---
 
@@ -359,18 +368,12 @@ public contract.
 
 ## Rate limiting
 
-`@rate_limit(rate=10, burst=5)` applies to both transports with the **same
-rate and burst settings**, but each transport maintains its own bucket storage:
-
-- **HTTP** uses a process-level `(caller, handler_name)` token bucket (the
-  caller is the authenticated user's PK, or the remote IP when anonymous).
-- **WebSocket** uses a per-connection `ConnectionRateLimiter`.
-
-A caller using both transports draws from both buckets independently. If your
-handler's rate limit must cap combined HTTP + WS traffic, pick a stricter
-`rate=` — or wait for the shared-bucket refactor tracked alongside ADR-008.
-The HTTP bucket dict is capped (LRU eviction) to prevent memory exhaustion
-from callers rotating identities.
+`@rate_limit(rate=10, burst=5)` is enforced against **one shared per-caller
+bucket per handler** across WebSocket, SSE and the HTTP API, so a caller cannot
+multiply their allowance by opening more connections or switching transports.
+The caller is the authenticated user's PK, else the anonymous session key, else
+the client IP resolved via `DJUST_TRUSTED_PROXY_COUNT`. The bucket store is
+LRU-capped (10,000 entries) to bound memory from callers rotating identities.
 
 ---
 

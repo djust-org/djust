@@ -134,7 +134,9 @@ Client sends "mount" message
         2. permission_required? → check request.user.has_perms()
         3. check_permissions()? → call custom hook (if overridden)
     → If unauthenticated: send {"type": "navigate", "to": "/login/"}
-    → If authenticated but lacking perms: close with 4403 (PermissionDenied)
+    → If authenticated but lacking permission_required perms: close with 4403 (PermissionDenied)
+    → If check_permissions() returns False or raises PermissionDenied:
+      navigate to login_url (not a 403), even for a logged-in user
     → If passed: call view.mount(request, **kwargs)
 ```
 
@@ -203,13 +205,14 @@ JSON output includes an `"unprotected_with_state"` count in the summary.
 
 ## Known Limitations
 
-### Auth is checked at mount time only
+### Auth is checked at mount time only (by default)
 
-View-level auth (`login_required`, `permission_required`, `check_permissions()`) runs once during WebSocket mount. If a user's session expires or permissions are revoked while the WebSocket is open, subsequent events will continue to be processed until the next reconnect.
+By default, view-level auth (`login_required`, `permission_required`, `check_permissions()`) runs once during WebSocket mount. If a user's session expires or permissions are revoked while the WebSocket is open, subsequent events will continue to be processed until the next reconnect.
 
 This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, Laravel Livewire, etc.) — re-checking auth on every event would add a database query per interaction.
 
 **Mitigations:**
 - Use handler-level `@permission_required` for sensitive operations (checked per event)
 - WebSocket heartbeats will eventually detect stale sessions
-- Critical admin actions should use `check_permissions()` on the handler itself
+- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403.
+- For object-level access, use `get_object()` + `has_object_permission()`, which are re-checked on every event (see [Authorization](authorization.md))

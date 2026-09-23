@@ -74,10 +74,10 @@ Each session's `RustLiveView` is cached in Redis (default TTL 1 hour) and used a
 **Since v0.9.4 this is handled automatically.** Per PR [#1367](https://github.com/johnrtipton/djust/pull/1367), the Redis cache key includes an 8-hex template-source hash:
 
 ```
-djust:state:<session>_liveview_<view_path>[_<query_hash>]_t<template_8hex>
+djust:<session>_liveview_<request_path>[_<query_hash>]_t<template_8hex>
 ```
 
-Edit any byte of a primary template, the per-template hash flips, the cache key flips, the next reconnect misses the cache, and a fresh `RustLiveView` is constructed cleanly with no stale baseline.
+(`djust:` is the default `REDIS_KEY_PREFIX`; `<request_path>` is the page's URL path.) Edit any byte of a primary template, the per-template hash flips, the cache key flips, the next reconnect misses the cache, and a fresh `RustLiveView` is constructed cleanly with no stale baseline.
 
 Operators no longer need to manually rotate the prefix on every deploy. Earlier releases (pre-v0.9.4) of djust required a pattern like:
 
@@ -93,7 +93,7 @@ DJUST_CONFIG = {
 }
 ```
 
-**Multi-template caveat.** The cache key uses the **primary** template's hash. If you use `{% include %}` / `{% extends %}` patterns and edit only a sub-template, the primary's source bytes don't change → the hash doesn't flip → the old key keeps hitting until the existing entries TTL out (default 1 hour). For an immediate invalidation in that edge case, run `djust clear --all` after the deploy. Stale entries from before the deploy still expire within `default_ttl` regardless.
+**Multi-template caveat.** The cache key uses the **primary** template's hash. If you use `{% include %}` / `{% extends %}` patterns and edit only a sub-template, the primary's source bytes don't change → the hash doesn't flip → the old key keeps hitting until the existing entries TTL out (default 1 hour). For an immediate invalidation in that edge case, run `djust clear --all` after the deploy. Stale entries from before the deploy still expire within `SESSION_TTL` (default 3600 s) regardless.
 
 ### Recovery HTML semantics
 
@@ -396,7 +396,7 @@ services:
     command: uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000
     environment:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-      - SESSION_TTL=7200
+      - SESSION_TTL=7200  # djust doesn't read this itself; see the note below
     depends_on:
       - redis
     deploy:
@@ -415,6 +415,10 @@ services:
 volumes:
   redis-data:
 ```
+
+djust reads the session TTL only from `DJUST_CONFIG["SESSION_TTL"]`, not from
+the environment. To use the `SESSION_TTL` variable above, wire it in
+`settings.py`: `'SESSION_TTL': int(os.environ.get('SESSION_TTL', 3600))`.
 
 ## Celery Integration
 
@@ -738,7 +742,7 @@ Don't combine `/static/` and `/media/` under one cache behavior — the long-TTL
 The 8-line copy-pasteable recipe. Each line links to the relevant subsection of this guide for rationale and config:
 
 ```
-☐ ASGI server: gunicorn -k uvicorn.workers.UvicornWorker -w (CPUs+1)
+☐ ASGI server: gunicorn -k uvicorn.workers.UvicornWorker -w <cpu_count> (see rationale)
 ☐ Channel layer: channels_redis.core.RedisChannelLayer (not InMemoryChannelLayer)
 ☐ State backend: DJUST_CONFIG["STATE_BACKEND"] = "redis"
 ☐ State key invalidation: auto-derived from template hash (no env var needed since v0.9.4)
@@ -774,7 +778,7 @@ Where each line is covered:
 
 - [ ] Session cleanup configured (cron or Celery)
 - [ ] Health check endpoint added
-- [ ] Logging configured for `djust.state_backend`
+- [ ] Logging configured for `djust.state_backends`
 - [ ] CSRF protection enabled
 - [ ] `SESSION_TTL` tuned for your use case
 
@@ -850,7 +854,7 @@ Anti-recommendation list. Things you should NOT re-evaluate on every deployment 
 
 - **djust state in Redis** is the canonical multi-server pattern (`DJUST_STATE_BACKEND = redis://...`). View state survives container replacement; reconnects within `SESSION_TTL` get the user's view back.
 - **`channels_redis` is required (not optional)** when any view uses `push_to_view`, presence, cursor tracking, or any cross-process feature. Don't try to make it work with `InMemoryChannelLayer` in production.
-- **`sync_to_async` for ORM** in event handlers is built into the `@event_handler` decorator — no manual wrapping needed in your view code.
+- **`sync_to_async` for ORM** in event handlers is handled by djust's event dispatcher: sync handlers run via `sync_to_async`, so no manual wrapping is needed in your view code.
 - **`transaction.on_commit()` for Celery enqueue** is the right pattern; never `.delay(...)` directly from a view.
 - **WebSocket Origin check (`check_origin`)** is on by default since v0.4.1 (CSWSH protection). Don't disable.
 - **HSTS preload, secure cookies, CSP nonce** — all covered by djust's recommended `settings/prod.py`. Disabling for "convenience" opens real attack surface.

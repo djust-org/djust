@@ -33,7 +33,7 @@ Every LiveView template needs two things:
 <button dj-click="increment">+</button>
 <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
 
-<!-- Input: fires on every keystroke, passes value= to handler -->
+<!-- Input: fires after typing pauses (300 ms default debounce), passes value= and _target= -->
 <input type="text" dj-input="search" value="{{ query }}" />
 
 <!-- Change: fires on blur or select change -->
@@ -120,12 +120,14 @@ Attach client-side lifecycle handlers to elements:
 Then in JavaScript:
 
 ```javascript
-djust.hooks.chart = {
-    mounted(el) { initChart(el); },
-    updated(el) { updateChart(el); },
-    destroyed(el) { destroyChart(el); },
+window.djust.hooks.chart = {
+    mounted()   { initChart(this.el); },
+    updated()   { updateChart(this.el); },
+    destroyed() { destroyChart(this.el); },
 };
 ```
+
+Callbacks take no arguments; the element is `this.el`.
 
 See [Hooks guide](../guides/hooks.md) for details.
 
@@ -133,7 +135,7 @@ See [Hooks guide](../guides/hooks.md) for details.
 
 All 57 Django built-in filters are supported. Some notes:
 
-- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) are in the Rust engine's `safe_output_filters` whitelist — they're automatically marked as safe without requiring `|safe`. Do not pipe them through `|safe` or you'll double-escape. *(Standard Django achieves this via `SafeData` type-checking; djust uses an explicit whitelist instead.)*
+- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) are in the Rust engine's `safe_output_filters` whitelist — they're automatically marked as safe without requiring `|safe`. They don't need `|safe`; adding it is redundant, since the filter already escaped its input. *(Standard Django achieves this via `SafeData` type-checking; djust uses an explicit whitelist instead.)*
 - `|safe` works as expected for pre-escaped HTML strings
 
 ### Custom filters (`@register.filter`)
@@ -194,17 +196,6 @@ class HelloView(LiveView):
             <input dj-input="update_name" value="{{ name }}" />
         </div>
     """
-```
-
-**Limitation:** Avoid `{% elif %}` in inline templates — use separate `{% if %}` blocks:
-
-```html
-<!-- Avoid: -->
-{% if a %}...{% elif b %}...{% endif %}
-
-<!-- Use instead: -->
-{% if a %}...{% endif %}
-{% if not a and b %}...{% endif %}
 ```
 
 ## Conditional Class Attributes

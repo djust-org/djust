@@ -49,7 +49,7 @@ The chain is serialized as a JSON-safe list of `[op_name, args]` pairs. It piggy
 
 ### Client side — the `djust:exec` auto-executor
 
-Every djust page automatically runs a small listener (`src/27-exec-listener.js`) that watches for `djust:exec` push events and interprets them via `window.djust.js._executeOps(ops, null)` — the same function that runs inline `dj-click="[[...]]"` JSON chains and fluent-API `.exec()` calls from hook code.
+Every djust page automatically runs a small listener (`src/27-exec-listener.js`) that watches for `djust:exec` push events and interprets them via `window.djust.js._executeOps(ops, document.body)` — the same function that runs inline `dj-click="[[...]]"` JSON chains and fluent-API `.exec()` calls from hook code.
 
 You don't write a `dj-hook`, you don't import anything in your templates, you don't configure the auto-executor. It ships with `client.js` and is bound once at load time.
 
@@ -93,7 +93,7 @@ All scoped-target options (`to`, `inner`, `closest`) work the same way they do i
 
 ### Sequencing multiple visible steps
 
-Every call to `push_commands()` queues a separate `djust:exec` event. The client runs each one as it arrives, so a handler that calls `push_commands` multiple times gives you a sequence of distinct steps the user can see unfold:
+Every call to `push_commands()` queues a separate `djust:exec` event, and the client runs them in the order they were queued:
 
 ```python
 @event_handler
@@ -103,7 +103,7 @@ def run_tour(self, **kwargs):
     self.push_commands(JS.add_class("highlight", to="#step-3"))
 ```
 
-Three separate events, three distinct animation frames on the client. Each ships with its own WebSocket frame, which means the steps are strictly ordered and interruptible. (For timing-sensitive sequences that need to pause between steps — "highlight for 2 seconds, then advance" — use the [`wait_for_event`](server-driven-ui.md#waiting-for-the-user) primitive from Phase 1b or the [`TutorialMixin`](tutorials.md) from Phase 1c, which handle timing declaratively.)
+Three separate events, delivered in order right after the handler returns. In a synchronous handler they arrive back-to-back, so the user sees no gap between them. For visible pacing ("highlight for 2 seconds, then advance"), use a `@background` handler and call `await self.flush_push_events()` between steps (see [Background work and pushed commands](#background-work-and-pushed-commands)), or use [`wait_for_event`](#waiting-for-the-user) or [`TutorialMixin`](tutorials.md), which handle timing declaratively.
 
 ### Mixing commands with state changes
 
@@ -156,28 +156,34 @@ The check is intentional: the framework validates the chain structure by requiri
 
 | You want to... | Use |
 |---|---|
-| Run DOM ops on a direct user click, no server round-trip | Inline `dj-click="{{ JS.show('#modal') }}"` |
+| Run DOM ops on a direct user click, no server round-trip | Build the chain in the view (`self.open_modal = JS.show('#modal')`) and render it: `dj-click="{{ open_modal }}"` |
 | Run DOM ops from inside a server handler after state changes | `self.push_commands(JS.show('#modal'))` |
 | Run DOM ops from a client-side `dj-hook` lifecycle callback | `this.js().show('#modal').exec()` |
 | Run DOM ops in response to any server event in arbitrary code | `window.djust.js.show('#modal').exec()` |
-| Build a guided tour with highlight + narrate + wait-for-user | [`TutorialMixin`](tutorials.md) *(Phase 1c, coming in v0.4.2)* |
-| Pause a background handler until the user acts | [`wait_for_event`](server-driven-ui.md#waiting-for-the-user) *(Phase 1b)* |
-| Drive another user's UI (support, instructor, assist) | Consent envelope *(coming in v0.5.x)* |
-| Have an LLM generate UI commands from user speech | `AssistantMixin` *(coming in v0.5.x)* |
+| Build a guided tour with highlight + narrate + wait-for-user | [`TutorialMixin`](tutorials.md) |
+| Pause a background handler until the user acts | [`wait_for_event`](#waiting-for-the-user) |
+| Drive another user's UI (support, instructor, assist) | Consent envelope *(planned)* |
+| Have an LLM generate UI commands from user speech | `AssistantMixin` *(planned)* |
 
-Everything in the "coming in..." rows is built on top of `push_commands`. It's intentionally the smallest possible primitive so every higher-level feature composes cleanly.
+Everything in the "planned" rows is to be built on top of `push_commands`. It's intentionally the smallest possible primitive so every higher-level feature composes cleanly.
 
 ## Background work and pushed commands
 
-`push_commands` works inside `@background` handlers too, which is the pattern for any flow longer than a single click:
+`push_commands` works inside `@background` handlers too, which is the pattern for any flow longer than a single click.
+
+Inside a `@background` task, pushed commands are queued until the task returns. Call `await self.flush_push_events()` after each step to deliver it immediately:
 
 ```python
+import asyncio
+
+from djust import LiveView
 from djust.decorators import event_handler, background
+from djust.js import JS
 
 class Onboarding(LiveView):
     @event_handler
     @background
-    def start_tour(self, **kwargs):
+    async def start_tour(self, **kwargs):
         self.tour_running = True
 
         # Step 1: highlight dashboard nav
@@ -185,7 +191,8 @@ class Onboarding(LiveView):
             JS.add_class("tour-highlight", to="#nav-dashboard")
               .dispatch("tour:narrate", detail={"text": "This is your dashboard."})
         )
-        time.sleep(3)
+        await self.flush_push_events()   # the client sees step 1 now
+        await asyncio.sleep(3)
         self.push_commands(JS.remove_class("tour-highlight", to="#nav-dashboard"))
 
         # Step 2: highlight create button
@@ -193,14 +200,15 @@ class Onboarding(LiveView):
             JS.add_class("tour-highlight", to="#btn-new-project")
               .dispatch("tour:narrate", detail={"text": "Click here to start a project."})
         )
+        await self.flush_push_events()
         # ... and so on
 
         self.tour_running = False
 ```
 
-Each step runs, the user sees the highlight appear, waits, disappears, and the next one lands. The `time.sleep(3)` is the simplest possible "wait" — it's synchronous and blocks the background task. For proper "wait for the user to actually click the highlighted button" behavior, use [`wait_for_event`](server-driven-ui.md#waiting-for-the-user) when it lands in Phase 1b.
+Each step is flushed, the user sees the highlight appear, the task waits, the highlight disappears, and the next one lands. Without the `flush_push_events()` calls, every step would arrive at once when the task ends. `asyncio.sleep(3)` is the simplest possible "wait". For "wait for the user to actually click the highlighted button" behavior, use [`wait_for_event`](#waiting-for-the-user).
 
-Once `TutorialMixin` (Phase 1c) ships, all of this becomes declarative — a list of `TutorialStep` entries — with no manual state machine to write.
+[`TutorialMixin`](tutorials.md) makes all of this declarative — a list of `TutorialStep` entries — with no manual state machine to write.
 
 ## Debugging
 
@@ -216,18 +224,21 @@ Most "chain didn't do anything" issues are selector mismatches or `push_commands
 
 ## What's next
 
-`push_commands` is **Phase 1a** of the backend-driven UI story in [ADR-002](../../adr/002-backend-driven-ui-automation.md). Two more primitives land in the same v0.4.2 release on top of this one:
+`push_commands` is **Phase 1a** of the backend-driven UI story in [ADR-002](../../adr/002-backend-driven-ui-automation.md). Two more primitives are built on top of it, and both are available:
 
 - **Phase 1b: `wait_for_event`** — see [Waiting for the user](#waiting-for-the-user) below.
 - **Phase 1c: [`TutorialMixin`](tutorials.md)** — a declarative state machine for guided tours. Describe the tour as a list of `TutorialStep` entries (target, message, wait-for event, optional on-enter/on-exit chains) and call `start_tutorial()`. The mixin handles step ordering, highlight cleanup, timeout handling, and skip/cancel. Zero boilerplate.
 
-After v0.4.2, Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `AssistantMixin`) extend the primitive into multi-user and AI-driven scenarios. See [ADR-002](../../adr/002-backend-driven-ui-automation.md) for the full roadmap.
+Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `AssistantMixin`) are planned to extend the primitive into multi-user and AI-driven scenarios. See [ADR-002](../../adr/002-backend-driven-ui-automation.md) for the full roadmap.
 
 ## Waiting for the user
 
 `push_commands` sends chains to the client, but by itself it doesn't know how to pause a background task until the user actually does something. That's what `await self.wait_for_event(...)` is for — it's the async primitive that makes "highlight this button, wait for the user to click it, then move on" work declaratively.
 
 ```python
+import asyncio
+
+from djust import LiveView
 from djust.decorators import event_handler, background
 from djust.js import JS
 
@@ -244,11 +255,13 @@ class Onboarding(LiveView):
             JS.add_class("tour-highlight", to="#btn-new-project")
               .focus("#btn-new-project")
         )
+        # Deliver the highlight now; otherwise it waits until the task returns
+        await self.flush_push_events()
 
         # Suspend until the user clicks it (which fires create_project)
         try:
             result = await self.wait_for_event("create_project", timeout=60)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self.tour_running = False
             self.push_commands(JS.remove_class("tour-highlight", to="#btn-new-project"))
             return
@@ -279,7 +292,7 @@ async def wait_for_event(
 ```
 
 - **`name`** — the name of the event handler to wait for. Must match a method decorated with `@event_handler`. Any call to that handler resolves the waiter (unless a predicate filters it out).
-- **`timeout`** — optional seconds to wait. Raises `asyncio.TimeoutError` when exceeded. `None` (the default) waits indefinitely.
+- **`timeout`** — optional seconds to wait. Raises `asyncio.TimeoutError` when exceeded. `None` (the default) waits indefinitely. Catch `asyncio.TimeoutError`, not the builtin `TimeoutError`: on Python 3.10 they are different classes.
 - **`predicate`** — optional callable that takes the handler's kwargs dict and returns `True` to resolve or `False` to keep waiting. Useful for "wait for the user to click *this specific* button" when multiple events might fire the same handler with different arguments.
 - **Returns** — the kwargs dict that was passed to the matching handler.
 
@@ -319,7 +332,7 @@ When a waiter times out, the framework removes it from the registry automaticall
 
 The two primitives compose naturally. The pattern for any guided flow is:
 
-1. Push a chain that sets up the UI state (highlight, narrate, focus)
+1. Push a chain that sets up the UI state (highlight, narrate, focus), then `await self.flush_push_events()` so it reaches the client before you wait
 2. Await a waiter for the event you want the user to trigger
 3. On resolution: push a chain that cleans up the UI state and sets up the next step
 4. Repeat
@@ -334,21 +347,22 @@ async def run_multi_step_tour(self, **kwargs):
             JS.add_class("highlight", to=step["target"])
               .dispatch("tour:narrate", detail={"text": step["message"]})
         )
+        await self.flush_push_events()
         # Wait for user action or timeout
         try:
             await self.wait_for_event(step["expect"], timeout=step.get("timeout", 60))
-        except TimeoutError:
+        except asyncio.TimeoutError:  # needs `import asyncio`
             self.push_commands(JS.remove_class("highlight", to=step["target"]))
             return  # User abandoned the tour
         # Cleanup + advance
         self.push_commands(JS.remove_class("highlight", to=step["target"]))
 ```
 
-This is exactly the state machine `TutorialMixin` will formalize in Phase 1c — a list of steps, setup/wait/cleanup per step, skip/cancel handling — without the boilerplate.
+This is exactly the state machine [`TutorialMixin`](tutorials.md) formalizes — a list of steps, setup/wait/cleanup per step, skip/cancel handling — without the boilerplate.
 
 ### Limitations
 
-- **Component events are not currently notified.** If a `LiveComponent` fires a handler, the parent `LiveView`'s waiters don't resolve. This is intentional for v0.4.2 scope — component-event waiting is uncommon and adds complexity. File a follow-up if you hit a case where it matters.
+- **Component events notify the parent view's waiters.** When a `LiveComponent` fires a handler, the parent `LiveView`'s waiters for that event name resolve too. The kwargs dict includes `component_id`, so a `predicate` can tell which component fired.
 - **Actor-mode views bypass the dispatch hook.** Views running under the experimental Rust actor system (`use_actors = True`) don't notify waiters yet. The non-actor path is the default and is fully supported.
 - **`wait_for_event` requires the handler to actually run server-side.** If the client fires an event that fails validation (missing params, auth error, etc.), the handler never executes and the waiter never resolves — only the timeout will unblock it.
 

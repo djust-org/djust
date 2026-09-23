@@ -8,12 +8,15 @@ positioning + translateY to maintain scroll semantics while reusing a small rend
 ### Fixed-height items (simplest)
 
 ```html
-<div dj-virtual dj-virtual-item-height="50">
+<div dj-virtual="items" dj-virtual-item-height="50" style="height: 600px; overflow: auto">
     {% for item in items %}
-        <div>{{ item }}</div>
+        <div data-key="{{ item.id }}">{{ item }}</div>
     {% endfor %}
 </div>
 ```
+
+The container **must** have a fixed height and `overflow: auto`. Without them it never
+scrolls, so nothing is windowed.
 
 All items must render at the exact pixel height specified. Faster (no measurement needed) but
 breaks silently if your CSS or content produces a different height.
@@ -21,9 +24,10 @@ breaks silently if your CSS or content produces a different height.
 ### Variable-height items (opt-in)
 
 ```html
-<div dj-virtual dj-virtual-variable-height dj-virtual-estimated-height="60">
+<div dj-virtual="items" dj-virtual-variable-height dj-virtual-estimated-height="60"
+     style="height: 600px; overflow: auto">
     {% for item in items %}
-        <div>{{ item.variable_content }}</div>
+        <div data-key="{{ item.id }}">{{ item.variable_content }}</div>
     {% endfor %}
 </div>
 ```
@@ -45,10 +49,10 @@ with variable text content, measuring a handful of representative items and aver
 
 ## Interaction with item reorders
 
-The current height cache is keyed by item index. If you reorder items (sort, insertion in the
-middle), cached heights bind to the wrong items until re-measurement happens when each scrolls
-back into view. For frequently-reordered lists, a `data-key`-based cache is planned (tracking
-issue #951).
+In variable-height mode, heights are cached by each item's `data-key` attribute (override the
+attribute name with `dj-virtual-key-attr`), so cached heights stay with their items when the
+list is reordered. Items without the attribute fall back to index keys, and their cached heights
+bind to the wrong items after a reorder until each is re-measured on scrolling back into view.
 
 ## When to use variable vs fixed
 
@@ -88,5 +92,5 @@ in-flow child after virtualization is the 1px spacer.
 ## See also
 
 - `dj-infinite-scroll` — pagination trigger on scroll-near-bottom
-- `stream` / `stream_append` / `stream_prune` — for large append-only data where virtualization
+- `stream` / `stream_insert` / `stream_prune` — for large append-only data where virtualization
   is overkill

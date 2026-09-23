@@ -24,7 +24,7 @@ djust hooks let you run custom JavaScript when elements are mounted, updated, or
 
 ```html
 <script>
-window.djust.hooks = {
+window.djust.hooks = Object.assign(window.djust.hooks || {}, {
     MyChart: {
         mounted() {
             this.chart = new Chart(this.el, {
@@ -40,7 +40,7 @@ window.djust.hooks = {
             this.chart.destroy();
         }
     }
-};
+});
 </script>
 ```
 
@@ -58,7 +58,7 @@ coercion rules.
 ### 3. Communicate with the Server
 
 ```javascript
-window.djust.hooks = {
+window.djust.hooks = Object.assign(window.djust.hooks || {}, {
     MapPicker: {
         mounted() {
             this.map = new MapLibrary(this.el);
@@ -76,7 +76,7 @@ window.djust.hooks = {
             this.map.remove();
         }
     }
-};
+});
 ```
 
 ## Lifecycle Callbacks
@@ -157,19 +157,21 @@ initializes on every route.
 <script>
 window.DjustHooks = window.DjustHooks || {};
 window.DjustHooks.Chart = {
+    // The hook sits on a wrapper <div>; the canvas is an ignored child.
     mounted()   { this.draw(); },   // fires on hydration AND SPA patch-insert
     updated()   { this.draw(); },   // server re-rendered new data
     destroyed() {                   // element left the DOM — dispose
-        const c = Chart.getChart(this.el);
+        const c = Chart.getChart(this.target('canvas'));
         if (c) c.destroy();
     },
     draw() {
         // Tear down a prior instance before redrawing (avoids Chart.js's
         // "Canvas is already in use" error on updated()/re-mount).
-        const prior = Chart.getChart(this.el);
+        const canvas = this.target('canvas');
+        const prior = Chart.getChart(canvas);
         if (prior) prior.destroy();
         const data = this.values.chart;
-        new Chart(this.el, {
+        new Chart(canvas, {
             type: data.type,
             data: { labels: data.labels, datasets: [{ data: data.values }] },
         });
@@ -179,9 +181,10 @@ window.DjustHooks.Chart = {
 ```
 
 ```html
-<!-- per-page template — the element opts into the hook -->
-<canvas dj-hook="Chart" dj-update="ignore"
-        dj-hook-value-chart='{{ chart_json }}'></canvas>
+<!-- per-page template — the wrapper opts into the hook; the canvas is ignored -->
+<div dj-hook="Chart" dj-hook-value-chart='{{ chart_json }}'>
+    <canvas id="sales-chart" dj-update="ignore" dj-hook-target="canvas"></canvas>
+</div>
 ```
 
 > `window.DjustHooks` and `window.djust.hooks` are merged into one registry, so
@@ -196,6 +199,17 @@ wiping its work. `dj-update="ignore"` tells the patcher to **skip this element
 entirely** on server re-renders, leaving the subtree fully under the library's
 control. You drive updates yourself from `updated()` (reading the live
 `this.values` proxy), not from the VDOM.
+
+Two details make this work:
+
+- **Give the ignored element an `id`.** On full-HTML updates the client skips
+  any `dj-update` element without one and logs "Element with dj-update must
+  have an id".
+- **Keep `dj-hook-value-*` off the ignored element.** On a full morph an
+  ignored element's attributes are frozen too, so a value attribute on the
+  canvas itself would keep its first value and `this.values` would go stale.
+  Put the hook and its values on a non-ignored wrapper, as above, and find the
+  canvas with `this.target('canvas')`.
 
 > For elements where you want the VDOM to keep patching *most* attributes but
 > leave a specific few alone (e.g. a `<dialog open>` toggled by the browser),
@@ -212,7 +226,7 @@ error when you navigate back. See [Best Practices](#best-practices) below.
 ## Hook Instance API
 
 > **Reserved names**: `el`, `viewName`, `values`, `target`, `targets`,
-> `pushEvent`, `handleEvent`, and `js` are framework-owned properties that
+> `pushEvent`, `handleEvent`, `js`, and `_eventHandlers` are framework-owned properties that
 > djust assigns on every hook instance (see `this.values` / `this.target()`
 > below). If your hook definition declares a member with one of these
 > names — `{ values: [], mounted() {...} }`, or a method named `target` —
@@ -260,7 +274,7 @@ parsing. `dj-hook-value-*` attributes are exposed on the instance as
 ```
 
 ```javascript
-window.djust.hooks = {
+window.djust.hooks = Object.assign(window.djust.hooks || {}, {
     Chart: {
         mounted() {
             this.values.points     // [1, 2, 3]  — Array
@@ -274,7 +288,7 @@ window.djust.hooks = {
             renderChart(this.el, this.values);
         },
     },
-};
+});
 ```
 
 The coercion rule: try `JSON.parse`, fall back to the raw string. A literal
@@ -453,7 +467,7 @@ class DashboardView(LiveView):
 <button dj-click="refresh_data">Refresh</button>
 
 <script>
-window.djust.hooks = {
+window.djust.hooks = Object.assign(window.djust.hooks || {}, {
     SalesChart: {
         mounted() {
             const data = this.values.chart;
@@ -475,7 +489,7 @@ window.djust.hooks = {
             this.chart.destroy();
         }
     }
-};
+});
 </script>
 ```
 
@@ -490,7 +504,7 @@ window.djust.hooks = {
 <div dj-hook="InfiniteScroll" dj-hook-value-page="{{ page }}"></div>
 
 <script>
-window.djust.hooks = {
+window.djust.hooks = Object.assign(window.djust.hooks || {}, {
     InfiniteScroll: {
         mounted() {
             this.observer = new IntersectionObserver((entries) => {
@@ -510,7 +524,7 @@ window.djust.hooks = {
             this.observer.disconnect();
         }
     }
-};
+});
 </script>
 ```
 
@@ -520,7 +534,7 @@ window.djust.hooks = {
 - **Do not create new instances in `updated()`**: Only refresh existing ones. Creating new instances on every re-render causes memory leaks.
 - **Pass data via `dj-hook-value-*` attributes**: use `this.values` for JSON-typed data (arrays, objects, numbers, booleans) — no manual `JSON.parse`. Reserve plain `data-*` / `this.el.dataset` for [pre-1.1 hooks](#pre-11-hooks-dataset-attributes) you haven't migrated yet.
 - **Use `pushEvent` / `handleEvent`** for server communication, not direct WebSocket calls.
-- **Register hooks before mount**: Place hook definitions in `<head>` or before the djust client script. Hooks registered late are picked up on the next DOM patch.
+- **Register hooks before mount**: Place hook definitions in `<head>` or before the djust client script. Hooks registered late are picked up on the next DOM patch. Before client.js loads, `window.djust` does not exist yet, so use `window.DjustHooks = Object.assign(window.DjustHooks || {}, { ... })` there. After client.js, merge into `window.djust.hooks` with `Object.assign` rather than assigning a new object, which would discard hooks already registered (including the built-in `CursorOverlay` and any `{% colocated_hook %}` hooks).
 
 ## Colocated Hooks (v0.5.0, Phoenix 1.1 parity)
 
@@ -590,4 +604,4 @@ Mark specific HTML attributes as client-owned so VDOM `SetAttr` patches skip the
 
 **Format**: comma-separated list of attribute names. Whitespace around commas is tolerated.
 
-**Scope**: only `SetAttr` patches are skipped — `RemoveAttr` is not affected. Users explicitly opt in per element; there is no framework-level default list. Rationale: the browser-native case is common, but silent magic is a bigger cost than the typing.
+**Scope**: on incremental patches only `SetAttr` is skipped (`RemoveAttr` still applies); full morphs neither set nor remove the listed attributes. Users explicitly opt in per element; there is no framework-level default list. Rationale: the browser-native case is common, but silent magic is a bigger cost than the typing.

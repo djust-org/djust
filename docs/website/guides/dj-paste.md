@@ -25,7 +25,7 @@ class ChatView(LiveView):
                      **kwargs):
         self.last_paste_preview = text[:200]
         if has_files:
-            self.flash("Received %d file(s) — uploading..." % len(files))
+            self.put_flash("info", "Received %d file(s) — uploading..." % len(files))
 ```
 
 ## What gets sent to the handler
@@ -45,7 +45,16 @@ The client also forwards any positional args from the attribute syntax:
 <textarea dj-paste="handle_paste('chat', 42)"></textarea>
 ```
 
-becomes `handle_paste('chat', 42, text=..., html=..., ...)` on the server. Access them as `kwargs["_args"]` if needed.
+Positional args bind to the handler's leading named parameters, ahead of the paste params. They are not collected into `kwargs`. Declare them first, or they overwrite `text` and `html`:
+
+```python
+@event_handler
+def handle_paste(self, room: str = "", room_id: int = 0,
+                 text: str = "", html: str = "",
+                 has_files: bool = False, files: list = None,
+                 **kwargs):
+    ...
+```
 
 ## Pasting files → uploads
 
@@ -53,18 +62,20 @@ By default `dj-paste` only sends *metadata* about pasted files. To actually uplo
 
 ```html
 <div dj-paste="handle_paste" dj-upload="chat_image">
-    Drop or paste an image here.
+    Paste an image here.
 </div>
 ```
 
 ```python
-class ChatView(LiveView):
-    uploads = {
-        "chat_image": {
-            "max_file_size": 5 * 1024 * 1024,
-            "accept": "image/*",
-        }
-    }
+from djust.uploads import UploadMixin
+
+class ChatView(UploadMixin, LiveView):
+    def mount(self, request, **kwargs):
+        self.allow_upload(
+            "chat_image",
+            accept=".png,.jpg,.jpeg,.gif,.webp",
+            max_file_size=5 * 1024 * 1024,
+        )
 
     @event_handler
     def handle_paste(self, text: str = "", has_files: bool = False, **kwargs):
@@ -73,6 +84,8 @@ class ChatView(LiveView):
             return
         self.draft = text
 ```
+
+A `dj-upload` element that is not a file input accepts pastes only. For drag-and-drop, add `dj-upload-drop="chat_image"` as well.
 
 Pasted files fire the same `djust:upload:error` / `djust:upload:progress` events as file-input uploads, so progress indicators and size-limit errors Just Work.
 
@@ -90,6 +103,8 @@ When you want to intercept the paste completely — for example when you're rout
     Paste an image here.
 </div>
 ```
+
+**Current limitation:** `dj-paste-suppress` does not suppress a paste that contains files routed to `dj-upload`, which is the case shown above. The client calls `preventDefault()` only after it has queued the files for upload, and by then the browser has already performed the native paste. Suppression works for pastes that contain no files.
 
 ## Combining with `dj-confirm` and `dj-lock`
 
