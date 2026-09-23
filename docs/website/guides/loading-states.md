@@ -62,6 +62,8 @@ This is useful when:
 - Multiple elements should react to the same event
 - You want to disable unrelated buttons during a long operation
 
+`dj-loading.disable` on a button also disables it during its own `dj-click` event, in addition to the event named by `dj-loading.for`. In the example above, Export is disabled while `generate_report` runs *and* while its own `export` event is in flight.
+
 ### CSS Classes
 
 Every trigger element automatically gets the `djust-loading` class during loading. The `<body>` also gets `djust-global-loading`. Use these for custom CSS:
@@ -74,21 +76,6 @@ Every trigger element automatically gets the `djust-loading` class during loadin
 
 .djust-global-loading .sidebar {
     pointer-events: none;
-}
-```
-
-### Configuring Grouping Classes
-
-Loading state scoping uses container CSS classes to group related elements. Configure which classes act as grouping containers:
-
-```python
-# settings.py
-LIVEVIEW_CONFIG = {
-    'loading_grouping_classes': [
-        'd-flex',           # Bootstrap
-        'flex',             # Tailwind
-        'my-custom-group',  # Your own
-    ],
 }
 ```
 
@@ -139,19 +126,20 @@ class ReportView(LiveView):
 
 ### Template
 
+Drive the spinner from server state (`generating`), not from `dj-loading.*`. The `dj-loading.*` directives stop at the first server response, which arrives before the background work finishes (see the known issue below).
+
 ```html
-<button dj-click="generate_report"
-        dj-loading.disable
-        dj-loading.for="generate_report">
+<button dj-click="generate_report" {% if generating %}disabled{% endif %}>
     Generate Report
 </button>
 
-<!-- Spinner: visible during both the initial response AND background work -->
-<div dj-loading.show dj-loading.for="generate_report"
-     style="display:none">
+<!-- Spinner: visible until _do_generate() sets generating = False -->
+{% if generating %}
+<div>
     <span class="spinner-border spinner-border-sm"></span>
     Generating...
 </div>
+{% endif %}
 
 {% if report_html %}
 <div class="report">
@@ -168,11 +156,11 @@ class ReportView(LiveView):
 
 1. User clicks "Generate Report"
 2. `generate_report()` sets `self.generating = True` and calls `self.start_async(self._do_generate)`
-3. The WebSocket consumer sends VDOM patches immediately (spinner appears)
-4. The response includes `async_pending: true`, telling the client to **keep loading state active**
-5. The consumer spawns `_do_generate()` in an asyncio background task
-6. When `_do_generate()` returns, the view re-renders and sends updated patches
-7. This final response does NOT have `async_pending`, so loading state stops (spinner disappears)
+3. The WebSocket consumer sends VDOM patches immediately (`generating` is now `True`, so the spinner appears)
+4. The consumer spawns `_do_generate()` in an asyncio background task
+5. When `_do_generate()` returns, the view re-renders and sends updated patches (`generating` is `False`, so the spinner disappears)
+
+> **Known issue: #2963.** The server is meant to flag the first response with `async_pending: true` so that `dj-loading.*` states stay active through the background work. At 1.2.0rc10 that flag is never sent for `start_async()`, `@background` or `assign_async()`, so `dj-loading.*` states end at the first response while the work is still running. Until it is fixed, show progress from server state as in the template above.
 
 ### Passing Arguments
 
@@ -194,7 +182,7 @@ def _run_export(self, format="csv"):
 
 If the background callback raises an exception:
 - The exception is logged (not sent to the client)
-- The loading state on the client will remain active indefinitely
+- Unless the view defines `handle_async_result()`, no re-render is sent, so any state set before the failure (such as `generating = True`) stays on screen
 
 To handle errors gracefully, catch exceptions in your callback and set error state:
 
@@ -306,19 +294,16 @@ def handle_async_result(self, name: str, result=None, error=None):
         self.status = "Export complete"
 ```
 
-This method is optional -- if not implemented, errors are logged and the view re-renders normally when the task completes.
+This method is optional. If it is not implemented, successful tasks still re-render. A failed task is only logged: no re-render is sent, so state set before the failure stays on screen.
 
 ## Combining Both Systems
 
-The loading directives and `start_async()` are designed to work together. The key is the `async_pending` flag:
+`dj-loading.*` directives cover the round-trip of an event: they start when the event is sent and stop when the server responds. The design is for `start_async()` to extend them through the background work with an `async_pending` flag, but at 1.2.0rc10 that flag is never sent (known issue: #2963), so loading states end at the first response in both cases.
 
-| Phase | `dj-loading.*` active? | Why |
-|-------|----------------------|-----|
-| Event sent to server | Yes | Client starts loading on event fire |
-| Server responds with patches + `async_pending: true` | Yes | Client keeps loading active |
-| Background work completes, server sends final patches | No | No `async_pending` flag, client stops loading |
+Use the two together like this:
 
-Without `start_async()`, loading states end as soon as the server responds. With `start_async()`, they persist through the entire background operation.
+- `dj-loading.*` for the immediate feedback while the event is in flight
+- a server-side flag (`self.generating = True` before `start_async()`, `False` at the end of the callback) with `{% if generating %}` in the template for the background phase
 
 ## Common Patterns
 
@@ -364,17 +349,22 @@ For simple text replacement on submit buttons, use `dj-disable-with` instead of 
 For operations where you want incremental progress (not just a spinner), combine `start_async()` with the [streaming](streaming.md) helpers. Both `AsyncWorkMixin` and `StreamingMixin` are already built into `LiveView`, so just subclass `LiveView` — do not inherit them explicitly (it raises an MRO `TypeError`):
 
 ```python
+from asgiref.sync import sync_to_async
+
+
 class ImportView(LiveView):  # AsyncWorkMixin + StreamingMixin are built in
     @event_handler()
     def start_import(self, **kwargs):
         self.importing = True
         self.start_async(self._do_import)
 
-    def _do_import(self):
+    async def _do_import(self):
+        # stream_text() is a coroutine, so the callback must be async and await it.
+        # (Calling it from a sync callback only creates an un-awaited coroutine.)
         for i, row in enumerate(large_dataset):
-            process(row)
+            await sync_to_async(process)(row)
             if i % 100 == 0:
-                self.stream_text("progress", f"{i} rows processed...")
+                await self.stream_text("progress", f"{i} rows processed...")
         self.importing = False
 ```
 
