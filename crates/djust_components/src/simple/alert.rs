@@ -21,7 +21,7 @@ impl RustAlert {
 
     /// Render alert to HTML string (Bootstrap 5)
     pub fn render(&self) -> String {
-        let mut classes = format!("alert alert-{}", self.variant);
+        let mut classes = format!("alert alert-{}", html_escape(&self.variant));
 
         if self.dismissable {
             classes.push_str(" alert-dismissible fade show");
@@ -52,4 +52,32 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn text_and_variant_are_html_escaped() {
+        let html = RustAlert::new(
+            "<img src=x onerror=alert(1)>".to_string(),
+            "x\" onmouseover=\"y",
+            false,
+        )
+        .render();
+        assert!(!html.contains("<img"));
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+        assert!(!html.contains("x\" onmouseover"));
+        assert!(html.contains("alert-x&quot; onmouseover=&quot;y"));
+    }
+
+    #[test]
+    fn plain_text_output_unchanged() {
+        let html = RustAlert::new("Saved".to_string(), "success", false).render();
+        assert_eq!(
+            html,
+            "<div class=\"alert alert-success\" role=\"alert\">\n    Saved\n</div>"
+        );
+    }
 }

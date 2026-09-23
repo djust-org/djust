@@ -1,6 +1,7 @@
 """FilterBar component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -51,7 +52,7 @@ class FilterBar(Component):
         )
         return (
             f'<div class="{cls}">'
-            f'<div class="dj-filter-bar__controls">{self.content}</div>'
+            f'<div class="dj-filter-bar__controls">{conditional_escape(self.content)}</div>'
             f"{clear_html}"
             f"</div>"
         )

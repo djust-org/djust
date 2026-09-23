@@ -31,6 +31,19 @@ const SAFE_OUTPUT_FILTERS: [&str; 7] = [
     "unordered_list",
 ];
 
+/// Whether a filter's output is safe, given whether its INPUT was safe.
+///
+/// Django's rule (``FilterExpression.resolve``): a filter registered with
+/// ``is_safe=True`` keeps a safe input safe; it does not make its own output
+/// safe. So a custom ``is_safe=True`` filter's output counts as safe only when
+/// its input was. A runtime ``SafeString`` return (#1660) and the built-ins in
+/// [`SAFE_OUTPUT_FILTERS`] are safe regardless of the input.
+fn filter_output_is_safe(filter_name: &str, produced_safe: bool, input_was_safe: bool) -> bool {
+    produced_safe
+        || SAFE_OUTPUT_FILTERS.contains(&filter_name)
+        || (input_was_safe && crate::filter_registry::is_custom_filter_safe(filter_name))
+}
+
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
 /// quoted literal — i.e. starts and ends with matching single or double
 /// quotes. Used to drive the custom-filter fallback's arg-resolution
@@ -493,11 +506,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
-            // `runtime_safe` tracks whether the LAST filter produced a runtime
-            // ``SafeString`` (Django ``mark_safe`` / ``__html__``). A later
-            // plain-returning filter re-taints it (resets to false), matching
-            // Django's final-value escape semantics (#1660).
-            let mut runtime_safe = false;
+            // `chain_safe` tracks whether the value after the LAST filter is
+            // safe (see `filter_output_is_safe`): a runtime ``SafeString``
+            // (Django ``mark_safe`` / ``__html__``, #1660), a built-in in
+            // `SAFE_OUTPUT_FILTERS`, or a custom ``is_safe=True`` filter whose
+            // input was safe. A later plain-returning filter re-taints it,
+            // matching Django's final-value escape semantics. It starts as the
+            // variable's own safeness, which is the first filter's input.
+            let mut chain_safe = context.is_safe(var_name);
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -516,7 +532,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                runtime_safe = produced_safe;
+                chain_safe = filter_output_is_safe(filter_name, produced_safe, chain_safe);
             }
 
             let text = value.to_string();
@@ -524,18 +540,19 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
             // 2. The variable is marked safe in the context (like Django's SafeData)
-            // 3. A filter that produces already-escaped/safe output is in the chain
-            //    (built-in safe_output_filters list OR a custom filter
-            //    registered with ``is_safe=True`` per #1121).
-            // 4. The final value is a runtime ``SafeString`` — a custom filter
-            //    ``mark_safe()``d its result at runtime without the static
-            //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE
-            //    values safe, and only when the LAST filter's output is safe.
-            let is_safe = filter_specs.iter().any(|(name, _)| {
-                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
-                    || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(var_name)
-                || runtime_safe;
+            // 3. A built-in filter that produces already-escaped/safe output
+            //    (`SAFE_OUTPUT_FILTERS`) is in the chain.
+            // 4. The LAST filter's output is safe (`chain_safe`): a runtime
+            //    ``SafeString`` — a custom filter ``mark_safe()``d its result
+            //    without the static ``is_safe=True`` flag (#1660) — or a custom
+            //    filter registered with ``is_safe=True`` (#1121) whose INPUT
+            //    was safe. The flag alone keeps a safe input safe; it never
+            //    makes the output safe.
+            let is_safe = filter_specs
+                .iter()
+                .any(|(name, _)| SAFE_OUTPUT_FILTERS.contains(&name.as_str()))
+                || context.is_safe(var_name)
+                || chain_safe;
             if is_safe {
                 Ok(text)
             } else if *in_attr {
@@ -567,7 +584,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // See the Variable arm: track the LAST filter's runtime safeness so
             // a custom filter that ``mark_safe()``s at runtime bypasses escaping
             // (#1660); a later plain filter re-taints.
-            let mut runtime_safe = false;
+            let mut chain_safe = context.is_safe(expr);
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
@@ -580,15 +597,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                runtime_safe = produced_safe;
+                chain_safe = filter_output_is_safe(filter_name, produced_safe, chain_safe);
             }
 
             let text = value.to_string();
-            let is_safe = filters.iter().any(|(name, _)| {
-                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
-                    || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(expr)
-                || runtime_safe;
+            let is_safe = filters
+                .iter()
+                .any(|(name, _)| SAFE_OUTPUT_FILTERS.contains(&name.as_str()))
+                || context.is_safe(expr)
+                || chain_safe;
             if is_safe {
                 Ok(text)
             } else {
@@ -2116,7 +2133,9 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 
         // Track the LAST filter's runtime safeness, mirroring the Variable arm
         // (#1660). A plain-returning filter after a runtime-safe one re-taints.
-        let mut runtime_safe = false;
+        // Starts from the base variable's own safeness: it is the first
+        // filter's input.
+        let mut runtime_safe = context.is_safe(var_name);
 
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {
@@ -2147,16 +2166,13 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
                 arg_was_quoted,
             )?;
             value = new_value;
-            // Mark safe when EITHER the filter produced a runtime SafeString
-            // (#1672) OR its NAME is in the name-based safe_output_filters
-            // whitelist / a custom is_safe=True filter — mirroring the
-            // Variable/InlineIf arms exactly (#1692). LAST-filter semantics:
-            // assigned each iteration, so a later plain filter re-taints to
-            // false. Fail-safe: only ever ADDS safeness for established names;
-            // a plain/unknown filter (e.g. `upper`) stays escaped.
-            runtime_safe = produced_safe
-                || SAFE_OUTPUT_FILTERS.contains(&filter_name)
-                || crate::filter_registry::is_custom_filter_safe(filter_name);
+            // Mark safe when the filter produced a runtime SafeString (#1672),
+            // its NAME is in the built-in `SAFE_OUTPUT_FILTERS` list, or it is a
+            // custom is_safe=True filter whose input (the previous value) was
+            // safe. LAST-filter semantics: assigned each iteration, so a later
+            // plain filter re-taints to false. Fail-safe: a plain/unknown
+            // filter (e.g. `upper`) stays escaped.
+            runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
         }
 
         return Ok((value, runtime_safe));

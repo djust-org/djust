@@ -182,6 +182,11 @@ class TestPaginationHandlersExist:
 class _RowAffectingHandlerTestView(DataTableMixin):
     """Subclass with tracking refresh_table for row-affecting handlers."""
 
+    table_columns = [
+        {"key": "name", "label": "Name", "sortable": True},
+        {"key": "status", "label": "Status", "filterable": True},
+    ]
+
     def __init__(self):
         self.table_page = 1
         self.table_total_pages = 5

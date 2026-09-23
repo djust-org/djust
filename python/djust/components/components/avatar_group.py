@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional, Union
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class AvatarGroup(Component):
@@ -90,7 +91,7 @@ class AvatarGroup(Component):
                 parts.append(
                     f'<span class="dj-avatar-group__item" title="{e_name}" '
                     f'style="z-index:{z}">'
-                    f'<img src="{e_src}" alt="{e_name}" '
+                    f'<img src="{url_attr(src, image=True)}" alt="{e_name}" '
                     f'class="dj-avatar-group__img"></span>'
                 )
             else:

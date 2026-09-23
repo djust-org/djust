@@ -1,6 +1,7 @@
 """FileDropzone component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -58,6 +59,6 @@ class FileDropzone(Component):
             f'<input type="file" name="{e_name}" class="dropzone-input"'
             f"{accept_attr}{multiple_attr}>"
             f'<div class="dz-text">Drag files here or <span class="dz-browse">browse</span></div>'
-            f'<div class="dz-hint">Max {self.max_size_mb} MB</div>'
+            f'<div class="dz-hint">Max {conditional_escape(self.max_size_mb)} MB</div>'
             f"</div>"
         )

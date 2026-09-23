@@ -1,6 +1,7 @@
 """Popover component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -52,6 +53,6 @@ class Popover(Component):
             f'<button class="popover-trigger">{e_trigger}</button>'
             f'<div class="popover popover-{e_placement}">'
             f"{title_html}"
-            f'<div class="popover-content">{self.content}</div>'
+            f'<div class="popover-content">{conditional_escape(self.content)}</div>'
             f"</div></div>"
         )

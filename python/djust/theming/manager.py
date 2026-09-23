@@ -4,6 +4,7 @@ Theme state management for djust.
 Manages theme preset and mode preferences, with session persistence.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -31,6 +32,9 @@ from ._config import (  # noqa: F401 — re-exported for back-compat
 # CodeQL flagged in alert #2352.
 
 ThemeMode = Literal["light", "dark", "system"]
+
+# Layout names are template names ("sidebar", "sidebar-topbar", ...).
+_LAYOUT_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 # Languages that use right-to-left script direction.
 RTL_LANGUAGES = frozenset(
@@ -352,12 +356,22 @@ class ThemeManager:
             mode,
         )
 
-        # If pack is set, override theme and preset from pack
+        # If pack is set, override theme and preset from pack. A pack name
+        # that isn't registered falls back to the session pack, then to the
+        # configured default pack, then to no pack.
         if pack:
             from .theme_packs import get_theme_pack
 
-            theme_pack = get_theme_pack(pack)
-            if theme_pack:
+            theme_pack = None
+            for candidate in (pack, session_data.get("pack"), self.config.get("pack")):
+                if isinstance(candidate, str) and candidate:
+                    theme_pack = get_theme_pack(candidate)
+                    if theme_pack is not None:
+                        pack = candidate
+                        break
+            if theme_pack is None:
+                pack = None
+            else:
                 theme = theme_pack.design_theme
                 preset = theme_pack.color_preset
 
@@ -373,6 +387,12 @@ class ThemeManager:
         if mode not in self.VALID_MODES:
             mode = "system"
 
+        # Validate layout: a layout is a template name, so only simple
+        # identifiers are accepted; anything else resolves to the base layout.
+        layout = layout or session_data.get("layout", "")
+        if not isinstance(layout, str) or not _LAYOUT_NAME_RE.fullmatch(layout):
+            layout = ""
+
         # Resolve system mode (default to light for server-side)
         resolved_mode = mode if mode != "system" else "light"
 
@@ -382,7 +402,7 @@ class ThemeManager:
             mode=mode,
             resolved_mode=resolved_mode,
             pack=pack,
-            layout=layout or session_data.get("layout", ""),
+            layout=layout,
         )
 
     def set_theme(self, theme_name: str) -> bool:

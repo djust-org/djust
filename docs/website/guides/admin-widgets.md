@@ -188,11 +188,21 @@ When a user runs this action:
 `allowed_permissions` attribute on the wrapped action function.
 **`DjustModelAdmin.run_action` enforces this server-side** — before
 dispatching the action it calls `request.user.has_perms(allowed)` and
-raises `PermissionDenied` if the user lacks any declared perm. This
-closes the gap where Django's default `has_*_permission` methods
-return `True` for any authenticated staff user, which would otherwise
-let a view-only staff user fire a destructive action just because the
-action dropdown rendered for them.
+raises `PermissionDenied` if the user lacks any declared perm. Use it
+for actions that need a permission beyond view access to the change
+list: a view-only staff user can open the list, so without
+`permissions=[...]` they could run any action in the dropdown.
+
+The admin views also apply the `DjustModelAdmin` permission hooks
+server-side. The change list needs `has_view_permission` (or
+`has_change_permission`), the add page and its save need
+`has_add_permission`, the change page needs view or change permission
+and its save needs `has_change_permission`, and the delete page, its
+`confirm_delete` and the built-in `delete_selected` action need
+`has_delete_permission`. As in Django's `ModelAdmin`, the default hooks
+check `request.user.has_perm("<app_label>.<action>_<model_name>")`, so
+staff users need the model's Django permissions (superusers have them
+all). Override the hooks to express other rules.
 
 ```python
 @admin_action_with_progress(

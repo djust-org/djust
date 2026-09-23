@@ -1,6 +1,7 @@
 """LoadingOverlay component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -55,4 +56,4 @@ class LoadingOverlay(Component):
                 f"{text_html}"
                 f"</div>"
             )
-        return f'<div class="{cls}">{self.content}{overlay_html}</div>'
+        return f'<div class="{cls}">{conditional_escape(self.content)}{overlay_html}</div>'

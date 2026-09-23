@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-09-23
+
+A maintenance release for the 1.1 line with the fixes from 1.2.0. Review the behaviour changes below before upgrading.
+
+### Security
+
+- **This release and 1.2.0 include fixes for the following advisories**; see each advisory for details:
+  - [GHSA-fccp-5h88-g34j](https://github.com/djust-org/djust/security/advisories/GHSA-fccp-5h88-g34j) (DataTable)
+  - [GHSA-jv2m-fcq9-94xf](https://github.com/djust-org/djust/security/advisories/GHSA-jv2m-fcq9-94xf) (admin_ext)
+  - [GHSA-c44q-w252-mr67](https://github.com/djust-org/djust/security/advisories/GHSA-c44q-w252-mr67) (observability)
+  - [GHSA-hc2m-gvfj-x6r3](https://github.com/djust-org/djust/security/advisories/GHSA-hc2m-gvfj-x6r3) and [GHSA-r372-rrpw-5cgj](https://github.com/djust-org/djust/security/advisories/GHSA-r372-rrpw-5cgj) (components)
+  - [GHSA-j23m-jxwp-m3vq](https://github.com/djust-org/djust/security/advisories/GHSA-j23m-jxwp-m3vq) (theming)
+  - [GHSA-6q7c-hvpc-ff2q](https://github.com/djust-org/djust/security/advisories/GHSA-6q7c-hvpc-ff2q) (presence)
+  - [GHSA-5ffg-p52h-v2ph](https://github.com/djust-org/djust/security/advisories/GHSA-5ffg-p52h-v2ph) (state snapshots)
+  - [GHSA-74vj-mpp4-45cg](https://github.com/djust-org/djust/security/advisories/GHSA-74vj-mpp4-45cg) (sticky live_render)
+  - [GHSA-7fcf-23mf-rhhm](https://github.com/djust-org/djust/security/advisories/GHSA-7fcf-23mf-rhhm) (uploads)
+  - [GHSA-p9vp-rh5f-2cvq](https://github.com/djust-org/djust/security/advisories/GHSA-p9vp-rh5f-2cvq) (template filters; fixed in 1.2.0rc2)
+
+### Changed
+
+- **djust admin applies the `DjustModelAdmin` permission hooks to every page, save and delete, and the default hooks follow Django's model permissions.** `has_view_permission`, `has_add_permission`, `has_change_permission` and `has_delete_permission` are checked before mount (list, add) or per object (change, delete), and again in `save`, `form_valid`, `confirm_delete` and the `delete_selected` action. The defaults now call `user.has_perm()` with the model's `view_`/`add_`/`change_`/`delete_` codename, as Django's `ModelAdmin` does. **Staff users who aren't superusers now need those permissions**; previously any active staff account had full access. The admin index lists only models the user has some permission on.
+- **Built-in components HTML-escape the values they render.** Every component class, `{% ... %}` component tag and Rust component renderer now passes interpolated values through `conditional_escape`, in all CSS-framework variants. **HTML passed to a content slot must be marked safe** (`mark_safe`, or another component's rendered output), or it is shown as text: this affects modal/card/sheet/popover/tabs/accordion bodies, headers and footers, icons, and similar slots. `href`/`src` values using `javascript:`, `vbscript:` or non-image `data:` render as `#`. The rich-text editor is the exception: its value is cleaned to an HTML allowlist (formatting kept, scripts and event attributes removed) instead of escaped.
+- **The observability endpoints require a project token.** Besides `DEBUG` and a loopback client, a request must carry no proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `X-Forwarded-Host`, `X-Forwarded-Proto`) and must send `X-Djust-Observability-Token`. The token is derived from `SECRET_KEY` (override with the `DJUST_OBSERVABILITY_TOKEN` environment variable) and printed by `manage.py djust_observability_token`. `manage.py djust_mcp` sends it automatically; other tools and hand-written requests must add the header.
+- **Back-navigation state snapshots are bound to a keyed digest of the session key instead of the key itself.** Snapshots issued by earlier versions fail verification once, and the view mounts fresh.
+- **A custom template filter registered with `is_safe=True` keeps its output escaped unless its input was already safe**, as in Django (`is_safe and isinstance(obj, SafeData)`). Previously the flag alone left the output unescaped in the Rust renderer. A filter that produces markup must return `mark_safe(...)` / `format_html(...)` itself; `{{ value|safe|myfilter }}` and `mark_safe` context values behave as before.
+
+### Fixed
+
+- **DataTable sorts, filters and groups only on declared columns.** `on_table_sort`, `on_table_filter`, group-by and expression filters now accept only keys listed in `table_columns`, checked again where the queryset is built. Sorting is on unless a column sets `"sortable": False`; filtering needs `"filterable": True`; `table_default_sort` is always accepted. Unknown column names are ignored.
+- **A LiveView joins its channel groups (view, presence, db_notify) only after its permission checks and on_mount hooks pass.** A refused mount, including one inside `mount_batch`, leaves every group, and presence and client-push messages are no longer delivered to a connection with no mounted view. `check_permissions` and on_mount hooks now run before `on_view_mounted`.
+- **Resumable uploads record the session that started them.** Resume over WebSocket and the HTTP upload-status endpoint answer only that session; the status endpoint previously returned 404 even to the owner. Uploads started before the upgrade, or whose session key changed (for example at login), restart from the beginning.
+- **A reused sticky `{% live_render %}` child re-runs its view and object permission checks on every parent render**, and `live_redirect` carry-over re-checks object permissions too. A child the user may no longer see is unmounted and the render fails the same way a fresh mount would.
+- **Theme cookies that name an unregistered pack or an invalid layout fall back to the defaults, and `{% theme_css_link %}` URL-encodes its query.** An unknown pack now resolves to the session pack, then the configured default. Layout names must match `[A-Za-z0-9_-]{1,64}`.
+- **`AzureBlockBlobWriter` raises `RuntimeError` when used before it is opened**, instead of passing an unset blob name to the Azure client.
+
 ## [1.1.3] - 2026-09-15
 
 Security-only patch release on the `1.1` maintenance branch, closing an

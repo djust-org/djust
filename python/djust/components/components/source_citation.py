@@ -1,6 +1,7 @@
 """Source Citation component for inline footnote references."""
 
 import html
+from djust.components.utils import url_attr
 from typing import Any, Optional
 
 from djust import Component
@@ -81,7 +82,7 @@ class SourceCitation(Component):
             popover_parts.append(f'<span class="dj-citation__title">{e_title}</span>')
         if e_url:
             popover_parts.append(
-                f'<a class="dj-citation__url" href="{e_url}" '
+                f'<a class="dj-citation__url" href="{url_attr(self.url)}" '
                 f'target="_blank" rel="noopener noreferrer">{e_url}</a>'
             )
         if self.relevance is not None:

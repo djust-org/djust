@@ -1,6 +1,8 @@
 """Sidebar component."""
 
 import html
+from django.utils.html import conditional_escape
+from djust.components.utils import url_attr
 
 from djust import Component
 from typing import Any, Optional
@@ -63,7 +65,7 @@ class Sidebar(Component):
                 if not isinstance(item, dict):
                     continue
                 label = html.escape(str(item.get("label", "")))
-                href = html.escape(str(item.get("href", "#")))
+                href = url_attr(item.get("href", "#"))
                 icon = item.get("icon", "")
                 active = item.get("active", False)
                 active_cls = " dj-sidebar__item--active" if active else ""
@@ -80,5 +82,5 @@ class Sidebar(Component):
                 )
             menu_html = f'<ul class="dj-sidebar__menu">{items_html}</ul>'
         else:
-            menu_html = self.content
+            menu_html = conditional_escape(self.content)
         return f'<nav class="{cls}" role="navigation">{header_html}{menu_html}</nav>'

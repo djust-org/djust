@@ -6,6 +6,7 @@ Provides data tables with sorting, selection, and actions.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 
@@ -110,7 +111,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<div class="table-responsive" id="{self.component_id}">'
+        html = f'<div class="table-responsive" id="{conditional_escape(self.component_id)}">'
         html += f'<table class="{table_class}">'
 
         # Header
@@ -121,7 +122,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             if sortable:
@@ -129,7 +130,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th style="cursor: pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th style="cursor: pointer" dj-click="sort_by" data-column="{conditional_escape(key)}">{label}{sort_icon}</th>'
             else:
                 html += f"<th>{label}</th>"
 
@@ -146,7 +147,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):
@@ -163,7 +164,7 @@ class TableComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS table"""
-        html = f'<div class="overflow-x-auto" id="{self.component_id}">'
+        html = f'<div class="overflow-x-auto" id="{conditional_escape(self.component_id)}">'
         html += '<table class="min-w-full divide-y divide-gray-200">'
 
         # Header
@@ -175,7 +176,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             th_class = (
@@ -187,7 +188,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th class="{th_class} cursor-pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th class="{th_class} cursor-pointer" dj-click="sort_by" data-column="{conditional_escape(key)}">{label}{sort_icon}</th>'
             else:
                 html += f'<th class="{th_class}">{label}</th>'
 
@@ -214,7 +215,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):
@@ -245,7 +246,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<table class="{table_class}" id="{self.component_id}">'
+        html = f'<table class="{table_class}" id="{conditional_escape(self.component_id)}">'
 
         # Header
         html += "<thead><tr>"
@@ -255,7 +256,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             if sortable:
@@ -263,7 +264,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th dj-click="sort_by" data-column="{conditional_escape(key)}">{label}{sort_icon}</th>'
             else:
                 html += f"<th>{label}</th>"
 
@@ -280,7 +281,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):

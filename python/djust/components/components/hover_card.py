@@ -2,6 +2,8 @@
 
 import html
 
+from django.utils.html import conditional_escape
+
 from djust import Component
 from typing import Any
 
@@ -85,6 +87,6 @@ class HoverCard(Component):
             f'data-delay-in="{int(self.delay_in)}" '
             f'data-delay-out="{int(self.delay_out)}">'
             f'<span class="dj-hover-card__trigger">{e_trigger}</span>'
-            f'<div class="dj-hover-card__content">{self.content}</div>'
+            f'<div class="dj-hover-card__content">{conditional_escape(self.content)}</div>'
             f"</span>"
         )

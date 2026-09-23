@@ -31,6 +31,10 @@ Performance:
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
+from djust.components.utils import url_attr
+
 # Try to import Rust implementation
 try:
     from djust._rust import RustAvatar  # type: ignore[attr-defined]
@@ -135,14 +139,16 @@ class Avatar(Component):
 
         if self.src:
             parts.append(
-                f'    <img src="{self.src}" alt="{self.alt}" class="w-100 h-100 object-fit-cover {shape_class}">'
+                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}" class="w-100 h-100 object-fit-cover {shape_class}">'
             )
         elif self.initials:
             # Initials fallback
             parts.append(
                 f'    <div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center {shape_class}">'
             )
-            parts.append(f'        <span class="fw-bold">{self.initials}</span>')
+            parts.append(
+                f'        <span class="fw-bold">{conditional_escape(self.initials)}</span>'
+            )
             parts.append("    </div>")
 
         # Status indicator
@@ -180,13 +186,15 @@ class Avatar(Component):
 
         if self.src:
             parts.append(
-                f'    <img src="{self.src}" alt="{self.alt}" class="w-full h-full object-cover {shape_class}">'
+                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}" class="w-full h-full object-cover {shape_class}">'
             )
         elif self.initials:
             parts.append(
                 f'    <div class="w-full h-full bg-blue-600 text-white flex items-center justify-center {shape_class}">'
             )
-            parts.append(f'        <span class="font-bold text-sm">{self.initials}</span>')
+            parts.append(
+                f'        <span class="font-bold text-sm">{conditional_escape(self.initials)}</span>'
+            )
             parts.append("    </div>")
 
         # Status indicator
@@ -207,15 +215,21 @@ class Avatar(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML avatar"""
-        parts = [f'<div class="avatar avatar-{self.size}">']
+        parts = [f'<div class="avatar avatar-{conditional_escape(self.size)}">']
 
         if self.src:
-            parts.append(f'    <img src="{self.src}" alt="{self.alt}">')
+            parts.append(
+                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}">'
+            )
         elif self.initials:
-            parts.append(f'    <span class="avatar-initials">{self.initials}</span>')
+            parts.append(
+                f'    <span class="avatar-initials">{conditional_escape(self.initials)}</span>'
+            )
 
         if self.status:
-            parts.append(f'    <span class="avatar-status avatar-status-{self.status}"></span>')
+            parts.append(
+                f'    <span class="avatar-status avatar-status-{conditional_escape(self.status)}"></span>'
+            )
 
         parts.append("</div>")
         return "\n".join(parts)

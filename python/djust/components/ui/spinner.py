@@ -6,6 +6,7 @@ Provides loading spinners for indicating activity.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -116,7 +117,7 @@ class SpinnerComponent(LiveComponent):
         spinner_type = "spinner-border" if self.type == "border" else "spinner-grow"
 
         # Variant
-        variant_class = f"text-{self.variant}"
+        variant_class = f"text-{conditional_escape(self.variant)}"
 
         # Container classes
         container_class = ""
@@ -127,9 +128,9 @@ class SpinnerComponent(LiveComponent):
 
         # Build HTML
         html = (
-            f'<div class="{container_class}" id="{self.component_id}">'
+            f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
             if container_class
-            else f'<div id="{self.component_id}">'
+            else f'<div id="{conditional_escape(self.component_id)}">'
         )
 
         html += (
@@ -140,7 +141,7 @@ class SpinnerComponent(LiveComponent):
 
         # Label
         if self.label:
-            html += f'<span class="ms-2">{self.label}</span>'
+            html += f'<span class="ms-2">{conditional_escape(self.label)}</span>'
 
         html += "</div>"
         return html
@@ -179,26 +180,26 @@ class SpinnerComponent(LiveComponent):
         # Spinner animation based on type
         if self.type == "grow" or self.type == "pulse":
             # Pulse animation
-            html = f'<div class="{container_class}" id="{self.component_id}">'
+            html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
             html += f'<div class="{size_class} {color_class.replace("border-", "bg-")} rounded-full animate-pulse"></div>'
         elif self.type == "dots":
             # Dots animation
-            html = f'<div class="{container_class} space-x-2" id="{self.component_id}">'
+            html = f'<div class="{container_class} space-x-2" id="{conditional_escape(self.component_id)}">'
             for i in range(3):
                 delay = f"animation-delay: {i * 150}ms;" if i > 0 else ""
                 html += f'<div class="h-2 w-2 {color_class.replace("border-", "bg-")} rounded-full animate-bounce" style="{delay}"></div>'
             html += "</div>"
             if self.label:
-                html += f'<span class="ml-2 text-gray-700">{self.label}</span>'
+                html += f'<span class="ml-2 text-gray-700">{conditional_escape(self.label)}</span>'
             return html
         else:
             # Border/ring spinner (default)
-            html = f'<div class="{container_class}" id="{self.component_id}">'
+            html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
             html += f'<div class="animate-spin rounded-full {size_class} border-4 border-gray-200 {color_class} border-t-transparent"></div>'
 
         # Label
         if self.label:
-            html += f'<span class="ml-3 text-gray-700">{self.label}</span>'
+            html += f'<span class="ml-3 text-gray-700">{conditional_escape(self.label)}</span>'
 
         html += "</div>"
         return html
@@ -221,7 +222,7 @@ class SpinnerComponent(LiveComponent):
         if self.inline:
             container_class += " spinner-inline"
 
-        html = f'<div class="{container_class}" id="{self.component_id}">'
+        html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
 
         # Spinner type
         if self.type == "dots":
@@ -229,16 +230,16 @@ class SpinnerComponent(LiveComponent):
             html += "<span></span><span></span><span></span>"
             html += "</div>"
         elif self.type == "pulse":
-            html += f'<div class="spinner-pulse {size_class} spinner-{self.variant}"></div>'
+            html += f'<div class="spinner-pulse {size_class} spinner-{conditional_escape(self.variant)}"></div>'
         else:
             # Default border spinner
-            html += f'<div class="spinner {size_class} spinner-{self.variant}">'
+            html += f'<div class="spinner {size_class} spinner-{conditional_escape(self.variant)}">'
             html += '<div class="spinner-border"></div>'
             html += "</div>"
 
         # Label
         if self.label:
-            html += f'<span class="spinner-label">{self.label}</span>'
+            html += f'<span class="spinner-label">{conditional_escape(self.label)}</span>'
 
         html += "</div>"
         return html

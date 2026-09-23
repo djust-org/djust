@@ -8,6 +8,8 @@ This is a stateless Component optimized for performance.
 from typing import Any, Dict, List
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -157,7 +159,7 @@ class ButtonGroup(Component):
         button_html = []
         for button in self.buttons:
             variant = button.get("variant", "primary")
-            label = button.get("label", "")
+            label = conditional_escape(button.get("label", ""))
             active = button.get("active", False)
             disabled = button.get("disabled", False)
 
@@ -165,12 +167,12 @@ class ButtonGroup(Component):
             disabled_attr = " disabled" if disabled else ""
 
             button_html.append(
-                f'<button type="button" class="btn btn-{variant}{active_class}"{disabled_attr}>{label}</button>'
+                f'<button type="button" class="btn btn-{conditional_escape(variant)}{active_class}"{disabled_attr}>{label}</button>'
             )
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="{group_class}{size_class}" role="{self.role}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="{group_class}{size_class}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS button group"""
@@ -203,7 +205,7 @@ class ButtonGroup(Component):
         button_html = []
         for i, button in enumerate(self.buttons):
             variant = button.get("variant", "primary")
-            label = button.get("label", "")
+            label = conditional_escape(button.get("label", ""))
             active = button.get("active", False)
             disabled = button.get("disabled", False)
 
@@ -234,12 +236,12 @@ class ButtonGroup(Component):
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="inline-flex {flex_dir}" role="{self.role}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="inline-flex {flex_dir}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
 
     def _render_plain(self) -> str:
         """Render plain HTML button group"""
         # Size class
-        size_class = f" btn-group-{self.size}" if self.size != "md" else ""
+        size_class = f" btn-group-{conditional_escape(self.size)}" if self.size != "md" else ""
 
         # Vertical or horizontal
         group_class = "btn-group-vertical" if self.vertical else "btn-group"
@@ -248,7 +250,7 @@ class ButtonGroup(Component):
         button_html = []
         for button in self.buttons:
             variant = button.get("variant", "primary")
-            label = button.get("label", "")
+            label = conditional_escape(button.get("label", ""))
             active = button.get("active", False)
             disabled = button.get("disabled", False)
 
@@ -256,9 +258,9 @@ class ButtonGroup(Component):
             disabled_attr = " disabled" if disabled else ""
 
             button_html.append(
-                f'<button type="button" class="button button-{variant}{active_class}"{disabled_attr}>{label}</button>'
+                f'<button type="button" class="button button-{conditional_escape(variant)}{active_class}"{disabled_attr}>{label}</button>'
             )
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="{group_class}{size_class}" role="{self.role}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="{group_class}{size_class}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'

@@ -29,6 +29,8 @@ Performance:
 """
 
 from ..base import Component
+
+from django.utils.html import conditional_escape
 from typing import Any
 
 # Try to import Rust implementation
@@ -106,10 +108,12 @@ class Spinner(Component):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 spinner"""
-        size_class = f" spinner-{self.animation}-sm" if self.size == "sm" else ""
+        size_class = (
+            f" spinner-{conditional_escape(self.animation)}-sm" if self.size == "sm" else ""
+        )
 
-        return f"""<div class="spinner-{self.animation} text-{self.variant}{size_class}" role="status">
-    <span class="visually-hidden">{self.sr_text}</span>
+        return f"""<div class="spinner-{conditional_escape(self.animation)} text-{conditional_escape(self.variant)}{size_class}" role="status">
+    <span class="visually-hidden">{conditional_escape(self.sr_text)}</span>
 </div>"""
 
     def _render_tailwind(self) -> str:
@@ -138,16 +142,16 @@ class Spinner(Component):
         if self.animation == "grow":
             # Pulse animation for grow
             return f"""<div class="{size_class} rounded-full bg-current {color_class} animate-pulse" role="status">
-    <span class="sr-only">{self.sr_text}</span>
+    <span class="sr-only">{conditional_escape(self.sr_text)}</span>
 </div>"""
         else:
             # Spin animation for border
             return f"""<div class="{size_class} border-4 border-t-transparent {color_class} rounded-full animate-spin" role="status">
-    <span class="sr-only">{self.sr_text}</span>
+    <span class="sr-only">{conditional_escape(self.sr_text)}</span>
 </div>"""
 
     def _render_plain(self) -> str:
         """Render plain HTML spinner"""
-        return f"""<div class="spinner spinner-{self.animation} spinner-{self.size} spinner-{self.variant}" role="status">
-    <span class="sr-only">{self.sr_text}</span>
+        return f"""<div class="spinner spinner-{conditional_escape(self.animation)} spinner-{conditional_escape(self.size)} spinner-{conditional_escape(self.variant)}" role="status">
+    <span class="sr-only">{conditional_escape(self.sr_text)}</span>
 </div>"""
