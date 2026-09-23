@@ -7,5 +7,5 @@
   `Batch sync error: <ExceptionClass>` instead of the exception text **for every
   caller**, including legacy apps: it is a plain Django endpoint with no view to
   read a policy from. `IndexedDBStorage`'s docstring now says what it is:
-  in-process server memory, not browser IndexedDB. 2 regression tests (5 cases) in
+  in-process server memory, not browser IndexedDB. 3 regression tests (7 cases) in
   `python/djust/tests/test_exposure_pwa_sync_sinks.py`.

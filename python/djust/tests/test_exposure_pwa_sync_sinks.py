@@ -17,6 +17,7 @@ its JSON body. It has no view to read a policy from, so it is value-free for
 every caller (asserted at the response bytes).
 """
 
+import re
 import asyncio
 import json
 
@@ -150,3 +151,30 @@ def test_sync_endpoint_batch_error_is_value_free(monkeypatch):
     assert ENDPOINT_SENTINEL not in response.content.decode()
     assert body["errors"] == ["Batch sync error: ValueError"]
     assert body["failed_count"] == 1
+
+
+# delete never reads action.data, so it cannot raise from it; not a case here.
+@pytest.mark.parametrize("stage", ["create", "update"])
+def test_sync_batch_helper_errors_are_value_free(stage):
+    """The per-action batch helpers' errors reach the sync endpoint's JSON
+    response. Like _perform_sync (#2950) they carry the exception class only;
+    this plain Django endpoint has no view policy to consult."""
+    from djust.pwa.sync import SyncManager
+    from djust.pwa.storage import OfflineAction
+
+    class ExplodingData(dict):
+        def copy(self):
+            raise ValueError("BATCH_HELPER_SENTINEL")
+
+        def get(self, *args, **kwargs):
+            raise ValueError("BATCH_HELPER_SENTINEL")
+
+    action = OfflineAction(
+        id="a1", type=stage, model="Note", data=ExplodingData(id=1), timestamp=0.0
+    )
+    result = getattr(SyncManager(), f"_sync_{stage}_batch")([action], "Note")
+    assert result["failed"] == 1
+    assert "BATCH_HELPER_SENTINEL" not in repr(result["errors"])
+    # Each error names the action and the exception class, nothing more.
+    for error in result["errors"]:
+        assert re.fullmatch(r"\w+ failed for action a1: \w+", error), error

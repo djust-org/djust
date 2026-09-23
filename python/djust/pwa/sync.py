@@ -369,7 +369,7 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Create failed for action {action.id}: {str(e)}")
+                errors.append(f"Create failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "errors": errors}
 
@@ -422,7 +422,7 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Update failed for action {action.id}: {str(e)}")
+                errors.append(f"Update failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "conflicts": conflicts, "errors": errors}
 
@@ -449,7 +449,7 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Delete failed for action {action.id}: {str(e)}")
+                errors.append(f"Delete failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "errors": errors}
 
