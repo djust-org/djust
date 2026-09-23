@@ -87,3 +87,38 @@ def test_http_event_failure_is_value_free_for_explicit_views(
         assert "traceback" not in json.loads(body)
         assert "HTTP_EVENT_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text
+
+
+class WrapperFailureView(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root><span>wrapped</span></div>"
+    wrapper_template = "exposure_wrapper.html"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+def test_wrapper_template_failure_log_follows_the_debug_contract(
+    monkeypatch, rf, settings, caplog, policy
+):
+    """The wrapper render runs the project's context processors (application
+    code), so its failure is value-free for an explicit view in production.
+    The page still falls back to the bare LiveView content."""
+    from django.template import loader
+
+    class FailingWrapper:
+        def render(self, context, request=None):
+            raise ValueError("WRAPPER_SENTINEL")
+
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(WrapperFailureView, "exposure_policy", policy)
+    monkeypatch.setattr(loader, "get_template", lambda name: FailingWrapper())
+    settings.DEBUG = False
+    with caplog.at_level(logging.DEBUG):
+        response = WrapperFailureView.as_view()(_request(rf, SessionStore()))
+    assert response.status_code == 200
+    assert "wrapped" in response.content.decode()
+    if policy == "legacy":
+        assert "WRAPPER_SENTINEL" in caplog.text
+    else:
+        assert "WRAPPER_SENTINEL" not in caplog.text
+        assert "Protected view operation failed" in caplog.text

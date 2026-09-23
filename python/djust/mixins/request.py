@@ -342,7 +342,14 @@ class RequestMixin:
                 html = wrapper.render({"liveview_content": liveview_content}, request)
                 html = html.replace("<div dj-root></div>", liveview_content)
             except Exception as e:
-                logger.error(
+                from .._exposure_diagnostics import log_failure_for
+
+                # The wrapper render runs the project's context processors,
+                # so its exception can carry application values (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
                     "Failed to render wrapper_template '%s': %s",
                     self.wrapper_template,
                     e,
