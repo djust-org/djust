@@ -291,7 +291,7 @@ class BlogPostEditor(DraftModeMixin, LiveView):
 
 `DraftModeMixin` puts `draft_enabled`, `draft_key` and (after `clear_draft()`) `draft_clear` into the template context. If you override `get_context_data`, call `super()` so they survive.
 
-> **Known issue (1.2.0rc10):** the client checks `data-draft-clear` only when the page first initialises, so a `clear_draft()` called from a WebSocket event is not applied to the open page, and the draft can reappear on the next load. Until that is fixed, clear the draft from JavaScript after a successful publish (for example `localStorage.removeItem("djust_draft_blog_post_editor")`), or keep the published form on a page the user does not reload.
+> **Known issue ([#2971](https://github.com/djust-org/djust/issues/2971), 1.2.0rc10):** the client checks `data-draft-clear` only when the page first initialises, so a `clear_draft()` called from a WebSocket event is not applied to the open page, and the draft can reappear on the next load. Until that is fixed, clear the draft from JavaScript after a successful publish (for example `localStorage.removeItem("djust_draft_blog_post_editor")`), or keep the published form on a page the user does not reload.
 
 #### Expected Performance
 
