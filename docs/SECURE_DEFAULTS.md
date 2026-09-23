@@ -261,13 +261,15 @@ assignment).
 **Canonical site.**
 `python/djust/security/state_snapshot.py`:
 
-- `sign_snapshot(state_json, view_slug, session_key)` (line 101) — wraps the
+- `sign_snapshot(state_json, view_slug, session_key)` (line 122) — wraps the
   serialized public state in a `django.core.signing.TimestampSigner`
-  (`SNAPSHOT_SALT = "djust.state_snapshot"`, line 61; keyed on `SECRET_KEY`) and
-  **binds** the payload to the view slug + Django session key.
-- `unsign_snapshot(...)` (line 127) — verifies signature **+ TTL**
-  (`DEFAULT_MAX_AGE = 3600`, line 66; overridable via
-  `DJUST_STATE_SNAPSHOT_MAX_AGE` — `get_max_age()`, line 69) **+ identity**
+  (`SNAPSHOT_SALT = "djust.state_snapshot"`, line 66; keyed on `SECRET_KEY`) and
+  **binds** the payload to the view slug + a keyed HMAC digest of the Django
+  session key. The payload is signed, not encrypted, so it carries only the
+  digest, never the session key itself.
+- `unsign_snapshot(...)` (line 151) — verifies signature **+ TTL**
+  (`DEFAULT_MAX_AGE = 3600`, line 71; overridable via
+  `DJUST_STATE_SNAPSHOT_MAX_AGE` — `get_max_age()`, line 74) **+ identity**
   (slug + session). Returns **`None`** (fail-closed) on any of: non-string
   input, tamper, expiry, cross-view replay (slug mismatch), or cross-session
   replay (sid mismatch). A `None` return means the caller MUST discard and fall
