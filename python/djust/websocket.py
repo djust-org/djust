@@ -2652,6 +2652,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     # File Upload Handling
     # ========================================================================
 
+    def _scope_session_key(self) -> Optional[str]:
+        """Django session key of this connection, or None when it has none.
+
+        Identifies the owner of a resumable upload: recorded at
+        ``upload_register`` and compared at ``upload_resume`` (and by the
+        HTTP ``UploadStatusView``, which reads the same cookie session).
+        """
+        try:
+            session = self.scope.get("session") if hasattr(self, "scope") else None
+            if session is not None:
+                # Channels' SessionMiddlewareStack makes the key available by
+                # the time the WS message loop is running.
+                key = getattr(session, "session_key", None)
+                return key if isinstance(key, str) and key else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("failed to read the session key: %s", exc)
+        return None
+
     async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
         """Handle upload_register message: client announces a file to upload."""
         if not self.view_instance:
@@ -2672,6 +2690,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             client_name=data.get("client_name", ""),
             client_type=data.get("client_type", ""),
             client_size=data.get("client_size", 0),
+            session_key=self._scope_session_key(),
         )
 
         if entry:
@@ -2702,8 +2721,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
              "bytes_received": N, "chunks_received": [0, 1, 2, ...]}
 
         Session-scoped access: the state entry's stored ``session_key``
-        must match the current WS session, else we reply ``not_found``
-        (same response as missing — prevents existence-probe leak).
+        must be present and match the current WS session, else we reply
+        ``not_found`` (same response as missing, so the reply does not
+        reveal whether the id exists).
         """
         from .uploads.resumable import resolve_resume_request
 
@@ -2712,17 +2732,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("upload_resume requires a ref")
             return
 
-        session_key = None
-        try:
-            session = self.scope.get("session") if hasattr(self, "scope") else None
-            if session is not None:
-                # Session object may need loading — access .session_key
-                # synchronously; Channels' SessionMiddlewareStack
-                # guarantees the key is available by the time the WS
-                # message loop is running.
-                session_key = getattr(session, "session_key", None)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("upload_resume: failed to read session key: %s", exc)
+        session_key = self._scope_session_key()
 
         # Active-ref check: is another in-flight upload using this id?
         active = False
