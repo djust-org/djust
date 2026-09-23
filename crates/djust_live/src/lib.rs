@@ -19,6 +19,7 @@ pub mod model_serializer;
 
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
+use djust_core::html_whitespace::is_html_whitespace_only;
 use djust_core::{Context, RenderEnv, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
@@ -926,9 +927,14 @@ impl RustLiveViewBackend {
                     // Use the fragment text map to produce patches directly.
                     // First verify all fragments have mappings, then apply.
                     if let Some(ref frag_map) = self.fragment_text_map {
-                        let all_mapped = text_changes
-                            .iter()
-                            .all(|(idx, _, _)| frag_map.contains_key(idx));
+                        // #2999: a text node that would become
+                        // whitespace-only is dropped or collapsed to `" "` by
+                        // a full parse depending on its neighbours; writing it
+                        // verbatim here would leave a node the parser would
+                        // not produce. Let the full parse handle it.
+                        let all_mapped = text_changes.iter().all(|(idx, _, new_text)| {
+                            frag_map.contains_key(idx) && !is_html_whitespace_only(new_text)
+                        });
                         if all_mapped {
                             let mut vdom = self.last_vdom.take().unwrap();
                             let mut patches = Vec::new();
@@ -2681,6 +2687,16 @@ fn render_template_with_dirs(
     })
 }
 
+/// The server's list of inline-level tags (#2999).
+///
+/// Whitespace between two of these is kept by the VDOM parser as a single
+/// `" "` text node. The Python egress normalizer must use the same list; its
+/// parity test compares against this.
+#[pyfunction]
+fn vdom_inline_level_tags() -> Vec<&'static str> {
+    djust_core::html_whitespace::INLINE_LEVEL_TAGS.to_vec()
+}
+
 /// Compute diff between two HTML strings
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
@@ -4335,6 +4351,14 @@ fn try_text_region_fast_path(
     new_text.push_str(new_mid);
     new_text.push_str(&old_text[end_in_text..]);
 
+    // #2999: whether a whitespace-only text node survives the parse depends on
+    // its neighbours (kept as `" "` between inline siblings, dropped
+    // otherwise). The fast path cannot see neighbours, so leave that to the
+    // full parse.
+    if is_html_whitespace_only(&new_text) {
+        return None;
+    }
+
     // Clone the old VDOM and apply the edit in place.
     let mut new_vdom = old_vdom.clone();
     {
@@ -4816,19 +4840,35 @@ fn collect_vdom_text_nodes(
     current_path: &mut Vec<usize>,
     entries: &mut Vec<(Vec<usize>, String, String)>,
 ) {
-    // Only collect true text nodes. Comment nodes also have `text` set
-    // (to store the comment body), so filter by `is_text()` to avoid
-    // miscounting — e.g. `<!--dj-if-->` placeholders would otherwise
-    // shift every subsequent text ordinal by one.
-    if node.is_text() {
-        if let Some(ref text) = node.text {
-            let djust_id = node.djust_id.clone().unwrap_or_default();
-            entries.push((current_path.clone(), text.clone(), djust_id));
-        }
-    }
     for (i, child) in node.children.iter().enumerate() {
         current_path.push(i);
-        collect_vdom_text_nodes(child, current_path, entries);
+        // Only collect true text nodes. Comment nodes also have `text` set
+        // (to store the comment body), so filter by `is_text()` to avoid
+        // miscounting — e.g. `<!--dj-if-->` placeholders would otherwise
+        // shift every subsequent text ordinal by one.
+        if child.is_text() {
+            if let Some(ref text) = child.text {
+                // #2999: a whitespace-only text node outside a
+                // whitespace-preserving parent is a kept inter-inline space
+                // (always `" "`). `scan_html_text_runs` never emits a run for
+                // whitespace-only text outside `pre`/`code`/`textarea`, so
+                // counting these here would break the 1:1 run↔node mapping
+                // and disable both text fast paths. Leaving them out also
+                // means no fast path ever targets one — a change to such a
+                // node goes through the full parse, which re-applies the
+                // collapse rule.
+                let preserving_parent = matches!(
+                    node.tag.as_str(),
+                    "pre" | "code" | "textarea" | "script" | "style"
+                );
+                if preserving_parent || !is_html_whitespace_only(text) {
+                    let djust_id = child.djust_id.clone().unwrap_or_default();
+                    entries.push((current_path.clone(), text.clone(), djust_id));
+                }
+            }
+        } else {
+            collect_vdom_text_nodes(child, current_path, entries);
+        }
         current_path.pop();
     }
 }
@@ -5001,6 +5041,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
+    m.add_function(wrap_pyfunction!(vdom_inline_level_tags, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;

@@ -337,10 +337,23 @@ class TestStripCommentsAndWhitespacePreservedBoundary:
         """A run of 3+ adjacent preserved blocks collapses EVERY gap in one
         pass (lookahead form, not a consuming group)."""
         result = mixin._strip_comments_and_whitespace(
+            "<pre>p</pre>  <textarea>t</textarea>  <pre>c</pre>"
+        )
+        assert "</pre><textarea>" in result
+        assert "</textarea><pre>" in result
+
+    def test_space_between_two_inline_preserved_blocks_is_kept(self, mixin):
+        """#2999: ``<textarea>`` and ``<code>`` are inline-level, so the
+        whitespace between them is the space between two words — the Rust
+        parser keeps it as a ``" "`` node, so the normalizer keeps one space.
+        (This test's predecessor asserted ``</textarea><code>``, i.e. it
+        encoded the #2999 bug; the all-gaps-collapse case above now uses a
+        block-level ``<pre>`` on the right.)"""
+        result = mixin._strip_comments_and_whitespace(
             "<pre>p</pre>  <textarea>t</textarea>  <code>c</code>"
         )
         assert "</pre><textarea>" in result
-        assert "</textarea><code>" in result
+        assert "</textarea> <code>" in result
 
     def test_text_between_two_preserved_blocks_keeps_single_space(self, mixin):
         """Actual TEXT between two preserved blocks is NOT a whitespace-only

@@ -1,0 +1,6094 @@
+{
+  "scenario": "keyed_list_fuzz_2999",
+  "description": "Seeded random keyed-list reorders/inserts/removes in four shapes (block; inline with ' ', ', ', or no separator).",
+  "root_selector": ".ws-root",
+  "shapes": {
+    "block": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"2\" dj-key=\"k0\">k0</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"6\" dj-key=\"k4\">k4</li></ul></div>",
+      "steps": [
+        {
+          "label": "mixed: k0 k1 k2 k3 k4 -> k4 k0 k2 k1 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "6"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 2,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"2\" dj-key=\"k0\">k0</li><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "rotate: k4 k0 k2 k1 k3 -> k2 k1 k3 k4 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "6"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 4,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"2\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "rotate: k2 k1 k3 k4 k0 -> k3 k4 k0 k2 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 4,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"2\" dj-key=\"k0\">k0</li><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li></ul></div>"
+        },
+        {
+          "label": "swap: k3 k4 k0 k2 k1 -> k3 k4 k1 k2 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 3,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"2\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "shuffle: k3 k4 k1 k2 k0 -> k4 k0 k2 k1 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 1,
+              "child_d": "2"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"2\" dj-key=\"k0\">k0</li><li dj-id=\"4\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "remove: k4 k0 k2 k1 k3 -> k4 k0 k1 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"2\" dj-key=\"k0\">k0</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "remove: k4 k0 k1 k3 -> k4 k1 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "insert: k4 k1 k3 -> k4 k2 k1 k3",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "U",
+                  "dj-key": "k2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k2",
+                "djust_id": "U"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "rotate: k4 k2 k1 k3 -> k3 k4 k2 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 0,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li></ul></div>"
+        },
+        {
+          "label": "shuffle: k3 k4 k2 k1 -> k1 k3 k2 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 0,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 2,
+              "child_d": "U"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"6\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "insert: k1 k3 k2 k4 -> k1 k3 k2 k0 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "1e",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "1e"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3\" dj-key=\"k1\">k1</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"6\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "shuffle: k1 k3 k2 k0 k4 -> k4 k0 k3 k2 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "6"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 1,
+              "child_d": "1e"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li></ul></div>"
+        },
+        {
+          "label": "insert: k4 k0 k3 k2 k1 -> k4 k8 k0 k3 k2 k1",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "1q",
+                  "dj-key": "k8"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k8",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k8",
+                "djust_id": "1q"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"6\" dj-key=\"k4\">k4</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li></ul></div>"
+        },
+        {
+          "label": "remove: k4 k8 k0 k3 k2 k1 -> k8 k0 k3 k2 k1",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"3\" dj-key=\"k1\">k1</li></ul></div>"
+        },
+        {
+          "label": "remove: k8 k0 k3 k2 k1 -> k8 k0 k3 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"U\" dj-key=\"k2\">k2</li></ul></div>"
+        },
+        {
+          "label": "swap: k8 k0 k3 k2 -> k8 k3 k0 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 1,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"U\" dj-key=\"k2\">k2</li></ul></div>"
+        },
+        {
+          "label": "rotate: k8 k3 k0 k2 -> k3 k0 k2 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "1q"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li></ul></div>"
+        },
+        {
+          "label": "rotate: k3 k0 k2 k8 -> k0 k2 k8 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "insert: k0 k2 k8 k3 -> k0 k4 k2 k8 k3",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "23",
+                  "dj-key": "k4"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k4",
+                "djust_id": "23"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "rotate: k0 k4 k2 k8 k3 -> k4 k2 k8 k3 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "1e"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "swap: k4 k2 k8 k3 k0 -> k4 k2 k8 k0 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 3,
+              "child_d": "1e"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "rotate: k4 k2 k8 k0 k3 -> k8 k0 k3 k4 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "23"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 4,
+              "child_d": "U"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li></ul></div>"
+        },
+        {
+          "label": "insert: k8 k0 k3 k4 k2 -> k8 k11 k0 k3 k4 k2",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "2v",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "2v"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li></ul></div>"
+        },
+        {
+          "label": "rotate: k8 k11 k0 k3 k4 k2 -> k4 k2 k8 k11 k0 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "23"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 5,
+              "to": 1,
+              "child_d": "U"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "swap: k4 k2 k8 k11 k0 k3 -> k4 k2 k8 k0 k11 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 3,
+              "child_d": "1e"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "rotate: k4 k2 k8 k0 k11 k3 -> k3 k4 k2 k8 k0 k11",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 5,
+              "to": 0,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li></ul></div>"
+        },
+        {
+          "label": "rotate: k3 k4 k2 k8 k0 k11 -> k0 k11 k3 k4 k2 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "1e"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 5,
+              "to": 1,
+              "child_d": "2v"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li></ul></div>"
+        },
+        {
+          "label": "rotate: k0 k11 k3 k4 k2 k8 -> k4 k2 k8 k0 k11 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 0,
+              "child_d": "23"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 1,
+              "child_d": "U"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 5,
+              "to": 2,
+              "child_d": "1q"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"5\" dj-key=\"k3\">k3</li></ul></div>"
+        },
+        {
+          "label": "swap: k4 k2 k8 k0 k11 k3 -> k4 k2 k8 k3 k11 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 5,
+              "to": 3,
+              "child_d": "5"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 4,
+              "child_d": "2v"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "rotate: k4 k2 k8 k3 k11 k0 -> k2 k8 k3 k11 k0 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 5,
+              "child_d": "23"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"U\" dj-key=\"k2\">k2</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "rotate: k2 k8 k3 k11 k0 k4 -> k8 k3 k11 k0 k4 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 5,
+              "child_d": "U"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"U\" dj-key=\"k2\">k2</li></ul></div>"
+        },
+        {
+          "label": "mixed: k8 k3 k11 k0 k4 k2 -> k8 k3 k11 k10 k4 k1 k0",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "child_d": "U"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "3H",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "3H"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "3J",
+                  "dj-key": "k1"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k1",
+                "djust_id": "3J"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 4,
+              "child_d": "23"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"3J\" dj-key=\"k1\">k1</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "remove: k8 k3 k11 k10 k4 k1 k0 -> k8 k3 k11 k10 k4 k0",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "child_d": "3J"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "insert: k8 k3 k11 k10 k4 k0 -> k6 k8 k3 k11 k10 k4 k0",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "3V",
+                  "dj-key": "k6"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k6",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k6",
+                "djust_id": "3V"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li></ul></div>"
+        },
+        {
+          "label": "swap: k6 k8 k3 k11 k10 k4 k0 -> k6 k8 k3 k11 k10 k0 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 5,
+              "child_d": "1e"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "insert: k6 k8 k3 k11 k10 k0 k4 -> k6 k8 k3 k11 k1 k10 k0 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "4h",
+                  "dj-key": "k1"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k1",
+                "djust_id": "4h"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"4h\" dj-key=\"k1\">k1</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "insert: k6 k8 k3 k11 k1 k10 k0 k4 -> k6 k8 k3 k11 k1 k10 k2 k0 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "4t",
+                  "dj-key": "k2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k2",
+                "djust_id": "4t"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"4h\" dj-key=\"k1\">k1</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"4t\" dj-key=\"k2\">k2</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "swap: k6 k8 k3 k11 k1 k10 k2 k0 k4 -> k6 k8 k3 k11 k1 k10 k0 k2 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 7,
+              "to": 6,
+              "child_d": "1e"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"4h\" dj-key=\"k1\">k1</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"4t\" dj-key=\"k2\">k2</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "insert: k6 k8 k3 k11 k1 k10 k0 k2 k4 -> k6 k8 k3 k11 k1 k9 k10 k0 k2 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "dj-id": "4O",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "4O"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"4h\" dj-key=\"k1\">k1</li><li dj-id=\"4O\" dj-key=\"k9\">k9</li><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"4t\" dj-key=\"k2\">k2</li><li dj-id=\"23\" dj-key=\"k4\">k4</li></ul></div>"
+        },
+        {
+          "label": "rotate: k6 k8 k3 k11 k1 k9 k10 k0 k2 k4 -> k10 k0 k2 k4 k6 k8 k3 k11 k1 k9",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 0,
+              "child_d": "3H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 7,
+              "to": 1,
+              "child_d": "1e"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "4t"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 9,
+              "to": 3,
+              "child_d": "23"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\"><li dj-id=\"3H\" dj-key=\"k10\">k10</li><li dj-id=\"1e\" dj-key=\"k0\">k0</li><li dj-id=\"4t\" dj-key=\"k2\">k2</li><li dj-id=\"23\" dj-key=\"k4\">k4</li><li dj-id=\"3V\" dj-key=\"k6\">k6</li><li dj-id=\"1q\" dj-key=\"k8\">k8</li><li dj-id=\"5\" dj-key=\"k3\">k3</li><li dj-id=\"2v\" dj-key=\"k11\">k11</li><li dj-id=\"4h\" dj-key=\"k1\">k1</li><li dj-id=\"4O\" dj-key=\"k9\">k9</li></ul></div>"
+        }
+      ]
+    },
+    "inline_space": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b> <b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>",
+      "steps": [
+        {
+          "label": "shuffle: k0 k1 k2 k3 k4 -> k0 k1 k2 k3 k4",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b> <b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "swap: k0 k1 k2 k3 k4 -> k2 k1 k0 k3 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"2\" dj-key=\"k0\">k0</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b> <b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "mixed: k2 k1 k0 k3 k4 -> k2 k9 k1 k0 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "child_d": "6"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "h",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "h"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "2"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"2\" dj-key=\"k0\">k0</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "insert: k2 k9 k1 k0 k3 -> k2 k9 k1 k4 k0 k3",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "q",
+                  "dj-key": "k4"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k4",
+                "djust_id": "q"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "2"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"2\" dj-key=\"k0\">k0</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "remove: k2 k9 k1 k4 k0 k3 -> k2 k9 k1 k4 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "child_d": "2"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "insert: k2 k9 k1 k4 k3 -> k2 k9 k11 k1 k4 k3",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "E",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "E"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "mixed: k2 k9 k11 k1 k4 k3 -> k11 k1 k5 k4 k2 k10 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 10,
+              "child_d": "5"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 11,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "M",
+                  "dj-key": "k5"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k5",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k5",
+                "djust_id": "M"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 10,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "P",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "P"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 12,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"M\" dj-key=\"k5\">k5</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "remove: k11 k1 k5 k4 k2 k10 k9 -> k11 k1 k4 k2 k10 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "M"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 11
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 10,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "rotate: k11 k1 k4 k2 k10 k9 -> k2 k10 k9 k11 k1 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 4,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 8,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 10,
+              "child_d": "q"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "shuffle: k2 k10 k9 k11 k1 k4 -> k2 k11 k1 k10 k9 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 4,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 6,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 8,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"3\" dj-key=\"k1\">k1</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "remove: k2 k11 k1 k10 k9 k4 -> k2 k11 k10 k9 k4",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "3"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "q"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "rotate: k2 k11 k10 k9 k4 -> k11 k10 k9 k4 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "swap: k11 k10 k9 k4 k2 -> k9 k10 k11 k4 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "E"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "insert: k9 k10 k11 k4 k2 -> k9 k10 k7 k11 k4 k2",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1E",
+                  "dj-key": "k7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k7",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k7",
+                "djust_id": "1E"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"1E\" dj-key=\"k7\">k7</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "mixed: k9 k10 k7 k11 k4 k2 -> k4 k8 k11 k2 k10 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "1E"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1L",
+                  "dj-key": "k8"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k8",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k8",
+                "djust_id": "1L"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 0,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "E"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 6,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 8,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 10,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"E\" dj-key=\"k11\">k11</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "remove: k4 k8 k11 k2 k10 k9 -> k4 k8 k2 k10 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "E"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "P"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"P\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "remove: k4 k8 k2 k10 k9 -> k4 k8 k2 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "child_d": "P"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "insert: k4 k8 k2 k9 -> k3 k4 k8 k2 k9",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "25",
+                  "dj-key": "k3"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k3",
+                "djust_id": "25"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"25\" dj-key=\"k3\">k3</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "swap: k3 k4 k8 k2 k9 -> k3 k4 k8 k9 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"25\" dj-key=\"k3\">k3</b> <b dj-id=\"q\" dj-key=\"k4\">k4</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "mixed: k3 k4 k8 k9 k2 -> k2 k3 k9 k8",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "q"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "25"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "1L"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"25\" dj-key=\"k3\">k3</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b></p></div>"
+        },
+        {
+          "label": "shuffle: k2 k3 k9 k8 -> k9 k3 k8 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"25\" dj-key=\"k3\">k3</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "insert: k9 k3 k8 k2 -> k9 k3 k10 k8 k2",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2x",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "2x"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"25\" dj-key=\"k3\">k3</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "remove: k9 k3 k10 k8 k2 -> k9 k10 k8 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "25"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "2x"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "insert: k9 k10 k8 k2 -> k9 k10 k0 k8 k2",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2K",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "2K"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"2K\" dj-key=\"k0\">k0</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "rotate: k9 k10 k0 k8 k2 -> k0 k8 k2 k9 k10",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "2K"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 4,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 8,
+              "child_d": "2x"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2K\" dj-key=\"k0\">k0</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "remove: k0 k8 k2 k9 k10 -> k8 k2 k9 k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "2K"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "h"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "2x"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "swap: k8 k2 k9 k10 -> k8 k10 k9 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "2x"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 6,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "shuffle: k8 k10 k9 k2 -> k8 k2 k9 k10",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 6,
+              "child_d": "2x"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "swap: k8 k2 k9 k10 -> k2 k8 k9 k10",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "1L"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "swap: k2 k8 k9 k10 -> k2 k10 k9 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "2x"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 6,
+              "child_d": "1L"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"1L\" dj-key=\"k8\">k8</b></p></div>"
+        },
+        {
+          "label": "swap: k2 k10 k9 k8 -> k8 k10 k9 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 0,
+              "child_d": "1L"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"h\" dj-key=\"k9\">k9</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "remove: k8 k10 k9 k2 -> k8 k10 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "h"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1L\" dj-key=\"k8\">k8</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "mixed: k8 k10 k2 -> k2 k7 k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "1L"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "3C",
+                  "dj-key": "k7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k7",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k7",
+                "djust_id": "3C"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "2x"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"3C\" dj-key=\"k7\">k7</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "remove: k2 k7 k10 -> k2 k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "3C"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "2x"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "rotate: k2 k10 -> k2 k10",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "insert: k2 k10 -> k2 k10 k11",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "3M",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "3M"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"2x\" dj-key=\"k10\">k10</b> <b dj-id=\"3M\" dj-key=\"k11\">k11</b></p></div>"
+        },
+        {
+          "label": "remove: k2 k10 k11 -> k2 k11",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "2x"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "3M"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"3M\" dj-key=\"k11\">k11</b></p></div>"
+        },
+        {
+          "label": "rotate: k2 k11 -> k2 k11",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"3M\" dj-key=\"k11\">k11</b></p></div>"
+        },
+        {
+          "label": "swap: k2 k11 -> k11 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "3M"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3M\" dj-key=\"k11\">k11</b> <b dj-id=\"4\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "swap: k11 k2 -> k2 k11",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "3M"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"4\" dj-key=\"k2\">k2</b> <b dj-id=\"3M\" dj-key=\"k11\">k11</b></p></div>"
+        }
+      ]
+    },
+    "inline_comma": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b>, <b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>",
+      "steps": [
+        {
+          "label": "rotate: k0 k1 k2 k3 k4 -> k1 k2 k3 k4 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "5"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "6"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, <b dj-id=\"2\" dj-key=\"k0\">k0</b>, </p></div>"
+        },
+        {
+          "label": "remove: k1 k2 k3 k4 k0 -> k1 k2 k3 k4",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "child_d": "2"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "insert: k1 k2 k3 k4 -> k1 k2 k3 k4 k10",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "q",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "q"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, </p></div>"
+        },
+        {
+          "label": "swap: k1 k2 k3 k4 k10 -> k1 k2 k10 k4 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 4,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 8,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, </p></div>"
+        },
+        {
+          "label": "swap: k1 k2 k10 k4 k3 -> k1 k10 k2 k4 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k1 k10 k2 k4 k3 -> k5 k3 k10 k2 k4",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "3"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "H",
+                  "dj-key": "k5"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k5",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k5",
+                "djust_id": "H"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "5"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"5\" dj-key=\"k3\">k3</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "remove: k5 k3 k10 k2 k4 -> k5 k10 k2 k4",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "5"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k10 k2 k4 -> k5 k10 k11 k2 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "W",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "W"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k10 k11 k2 k4 -> k5 k10 k11 k8 k2 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 11,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "14",
+                  "dj-key": "k8"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k8",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k8",
+                "djust_id": "14"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "swap: k5 k10 k11 k8 k2 k4 -> k11 k10 k5 k8 k2 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "W"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "H"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "swap: k11 k10 k5 k8 k2 k4 -> k11 k8 k5 k10 k2 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 6,
+              "child_d": "q"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"6\" dj-key=\"k4\">k4</b>, </p></div>"
+        },
+        {
+          "label": "remove: k11 k8 k5 k10 k2 k4 -> k11 k8 k5 k10 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 10,
+              "child_d": "6"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 11
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, </p></div>"
+        },
+        {
+          "label": "shuffle: k11 k8 k5 k10 k2 -> k5 k2 k8 k10 k11",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "W"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"4\" dj-key=\"k2\">k2</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"W\" dj-key=\"k11\">k11</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k5 k2 k8 k10 k11 -> k5 k10 k11 k8",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 4,
+              "child_d": "W"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"W\" dj-key=\"k11\">k11</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "remove: k5 k10 k11 k8 -> k5 k10 k8",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "W"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k10 k8 -> k5 k10 k3 k8",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1Q",
+                  "dj-key": "k3"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k3",
+                "djust_id": "1Q"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"1Q\" dj-key=\"k3\">k3</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "remove: k5 k10 k3 k8 -> k5 k10 k8",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "1Q"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k10 k8 -> k5 k10 k8 k0",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "22",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "22"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"22\" dj-key=\"k0\">k0</b>, </p></div>"
+        },
+        {
+          "label": "rotate: k5 k10 k8 k0 -> k0 k5 k10 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 0,
+              "child_d": "22"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"22\" dj-key=\"k0\">k0</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "swap: k0 k5 k10 k8 -> k10 k5 k0 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "q"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "22"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"q\" dj-key=\"k10\">k10</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"22\" dj-key=\"k0\">k0</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k10 k5 k0 k8 -> k0 k8 k5",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "q"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "22"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 2,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "H"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"22\" dj-key=\"k0\">k0</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "remove: k0 k8 k5 -> k8 k5",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "22"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "H"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "swap: k8 k5 -> k5 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k8 -> k5 k11 k8",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2v",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "2v"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2v\" dj-key=\"k11\">k11</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k5 k11 k8 -> k5 k4 k8 k1",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "2v"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 7,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2A",
+                  "dj-key": "k4"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k4",
+                "djust_id": "2A"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2C",
+                  "dj-key": "k1"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k1",
+                "djust_id": "2C"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, </p></div>"
+        },
+        {
+          "label": "insert: k5 k4 k8 k1 -> k0 k5 k4 k8 k1",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 9,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2F",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "2F"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "2A"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "2C"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, </p></div>"
+        },
+        {
+          "label": "insert: k0 k5 k4 k8 k1 -> k0 k5 k4 k8 k1 k9",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 11,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 10,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2R",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "2R"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"2R\" dj-key=\"k9\">k9</b>, </p></div>"
+        },
+        {
+          "label": "insert: k0 k5 k4 k8 k1 k9 -> k0 k5 k4 k2 k8 k1 k9",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 13,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2X",
+                  "dj-key": "k2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k2",
+                "djust_id": "2X"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 8,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 12,
+              "child_d": "2R"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"2R\" dj-key=\"k9\">k9</b>, </p></div>"
+        },
+        {
+          "label": "shuffle: k0 k5 k4 k2 k8 k1 k9 -> k1 k8 k4 k9 k0 k2 k5",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 0,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 6,
+              "child_d": "2R"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 10,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 12,
+              "child_d": "H"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2R\" dj-key=\"k9\">k9</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "remove: k1 k8 k4 k9 k0 k2 k5 -> k1 k8 k4 k0 k2 k5",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "child_d": "2R"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 13
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 6,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 10,
+              "child_d": "H"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "swap: k1 k8 k4 k0 k2 k5 -> k1 k4 k8 k0 k2 k5",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "2A"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "swap: k1 k4 k8 k0 k2 k5 -> k2 k4 k8 k0 k1 k5",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 0,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "2C"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, </p></div>"
+        },
+        {
+          "label": "swap: k2 k4 k8 k0 k1 k5 -> k2 k4 k8 k0 k5 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "H"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 10,
+              "child_d": "2C"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"H\" dj-key=\"k5\">k5</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k2 k4 k8 k0 k5 k1 -> k0 k4 k1 k2 k7 k8 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "child_d": "H"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 13,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "3M",
+                  "dj-key": "k7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k7",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k7",
+                "djust_id": "3M"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 12,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "3O",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "3O"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 0,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 4,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 10,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, </p></div>"
+        },
+        {
+          "label": "shuffle: k0 k4 k1 k2 k7 k8 k9 -> k1 k7 k4 k0 k9 k8 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "3M"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "2A"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 8,
+              "child_d": "3O"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 12,
+              "child_d": "2X"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, </p></div>"
+        },
+        {
+          "label": "insert: k1 k7 k4 k0 k9 k8 k2 -> k1 k7 k4 k0 k9 k8 k2 k11",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 15,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": ", ",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 14,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "47",
+                  "dj-key": "k11"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k11",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k11",
+                "djust_id": "47"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"47\" dj-key=\"k11\">k11</b>, </p></div>"
+        },
+        {
+          "label": "shuffle: k1 k7 k4 k0 k9 k8 k2 k11 -> k7 k9 k0 k4 k1 k11 k2 k8",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "3M"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 2,
+              "child_d": "3O"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 4,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "2A"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 8,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 14,
+              "to": 10,
+              "child_d": "47"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 14,
+              "child_d": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2A\" dj-key=\"k4\">k4</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"47\" dj-key=\"k11\">k11</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k7 k9 k0 k4 k1 k11 k2 k8 -> k7 k3 k2 k11 k9 k8 k0 k1",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "child_d": "2A"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "4l",
+                  "dj-key": "k3"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k3",
+                "djust_id": "4l"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 4,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 6,
+              "child_d": "47"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 8,
+              "child_d": "3O"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 14,
+              "to": 10,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 12,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 14,
+              "child_d": "2C"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"4l\" dj-key=\"k3\">k3</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"47\" dj-key=\"k11\">k11</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k7 k3 k2 k11 k9 k8 k0 k1 -> k1 k0 k9 k2 k8 k11 k7",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "4l"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 15
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 14,
+              "to": 0,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 2,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 4,
+              "child_d": "3O"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 6,
+              "child_d": "2X"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 10,
+              "to": 8,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 10,
+              "child_d": "47"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 12,
+              "child_d": "3M"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, <b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"47\" dj-key=\"k11\">k11</b>, <b dj-id=\"3M\" dj-key=\"k7\">k7</b>, </p></div>"
+        },
+        {
+          "label": "mixed: k1 k0 k9 k2 k8 k11 k7 -> k8 k9 k0 k1 k6 k7 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 10,
+              "child_d": "47"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 8,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "4H",
+                  "dj-key": "k6"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k6",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k6",
+                "djust_id": "4H"
+              }
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 8,
+              "to": 0,
+              "child_d": "14"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 2,
+              "child_d": "3O"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 4,
+              "child_d": "2F"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 6,
+              "child_d": "2C"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 12,
+              "to": 10,
+              "child_d": "3M"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 6,
+              "to": 12,
+              "child_d": "2X"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"14\" dj-key=\"k8\">k8</b>, <b dj-id=\"3O\" dj-key=\"k9\">k9</b>, <b dj-id=\"2F\" dj-key=\"k0\">k0</b>, <b dj-id=\"2C\" dj-key=\"k1\">k1</b>, <b dj-id=\"4H\" dj-key=\"k6\">k6</b>, <b dj-id=\"3M\" dj-key=\"k7\">k7</b>, <b dj-id=\"2X\" dj-key=\"k2\">k2</b>, </p></div>"
+        }
+      ]
+    },
+    "inline_tight": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"4\" dj-key=\"k2\">k2</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>",
+      "steps": [
+        {
+          "label": "remove: k0 k1 k2 k3 k4 -> k0 k1 k3 k4",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "shuffle: k0 k1 k3 k4 -> k0 k1 k3 k4",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "insert: k0 k1 k3 k4 -> k0 k1 k6 k3 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "h",
+                  "dj-key": "k6"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k6",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k6",
+                "djust_id": "h"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"h\" dj-key=\"k6\">k6</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"6\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "swap: k0 k1 k6 k3 k4 -> k0 k4 k6 k3 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 1,
+              "child_d": "6"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 4,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"h\" dj-key=\"k6\">k6</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"3\" dj-key=\"k1\">k1</b></p></div>"
+        },
+        {
+          "label": "swap: k0 k4 k6 k3 k1 -> k1 k4 k6 k3 k0",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 4,
+              "to": 0,
+              "child_d": "3"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 4,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"h\" dj-key=\"k6\">k6</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"2\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "remove: k1 k4 k6 k3 k0 -> k1 k4 k3 k0",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "h"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"2\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "swap: k1 k4 k3 k0 -> k0 k4 k3 k1",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 3,
+              "to": 0,
+              "child_d": "2"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 3,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\" dj-key=\"k0\">k0</b><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"3\" dj-key=\"k1\">k1</b></p></div>"
+        },
+        {
+          "label": "remove: k0 k4 k3 k1 -> k4 k3 k1",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"5\" dj-key=\"k3\">k3</b><b dj-id=\"3\" dj-key=\"k1\">k1</b></p></div>"
+        },
+        {
+          "label": "swap: k4 k3 k1 -> k4 k1 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 1,
+              "child_d": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"6\" dj-key=\"k4\">k4</b><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "remove: k4 k1 k3 -> k1 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b><b dj-id=\"5\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "remove: k1 k3 -> k1",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"3\" dj-key=\"k1\">k1</b></p></div>"
+        },
+        {
+          "label": "remove: k1 -> k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "3"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "13",
+                  "dj-key": "k2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k2",
+                "djust_id": "13"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"13\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "remove: k2 -> k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "13"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "16",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "16"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"16\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "insert: k10 -> k9 k10",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "19",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "19"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"19\" dj-key=\"k9\">k9</b><b dj-id=\"16\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "mixed: k9 k10 -> k6 k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "19"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1d",
+                  "dj-key": "k6"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k6",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k6",
+                "djust_id": "1d"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1d\" dj-key=\"k6\">k6</b><b dj-id=\"16\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "remove: k6 k10 -> k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "1d"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"16\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "remove: k10 -> k5",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "16"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1k",
+                  "dj-key": "k5"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k5",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k5",
+                "djust_id": "1k"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1k\" dj-key=\"k5\">k5</b></p></div>"
+        },
+        {
+          "label": "shuffle: k5 -> k5",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1k\" dj-key=\"k5\">k5</b></p></div>"
+        },
+        {
+          "label": "remove: k5 -> k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "1k"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1n",
+                  "dj-key": "k3"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k3",
+                "djust_id": "1n"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1n\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "insert: k3 -> k3 k4",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1r",
+                  "dj-key": "k4"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k4",
+                "djust_id": "1r"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1n\" dj-key=\"k3\">k3</b><b dj-id=\"1r\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "remove: k3 k4 -> k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "1r"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1n\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "insert: k3 -> k3 k9",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1y",
+                  "dj-key": "k9"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k9",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k9",
+                "djust_id": "1y"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1n\" dj-key=\"k3\">k3</b><b dj-id=\"1y\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "mixed: k3 k9 -> k7 k9",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "1n"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1B",
+                  "dj-key": "k7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k7",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k7",
+                "djust_id": "1B"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1B\" dj-key=\"k7\">k7</b><b dj-id=\"1y\" dj-key=\"k9\">k9</b></p></div>"
+        },
+        {
+          "label": "swap: k7 k9 -> k9 k7",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 0,
+              "child_d": "1y"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1y\" dj-key=\"k9\">k9</b><b dj-id=\"1B\" dj-key=\"k7\">k7</b></p></div>"
+        },
+        {
+          "label": "mixed: k9 k7 -> k2 k7",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "1y"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1J",
+                  "dj-key": "k2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k2",
+                "djust_id": "1J"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1J\" dj-key=\"k2\">k2</b><b dj-id=\"1B\" dj-key=\"k7\">k7</b></p></div>"
+        },
+        {
+          "label": "swap: k2 k7 -> k7 k2",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 0,
+              "child_d": "1B"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1B\" dj-key=\"k7\">k7</b><b dj-id=\"1J\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "shuffle: k7 k2 -> k7 k2",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1B\" dj-key=\"k7\">k7</b><b dj-id=\"1J\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "swap: k7 k2 -> k2 k7",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 0,
+              "child_d": "1J"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1J\" dj-key=\"k2\">k2</b><b dj-id=\"1B\" dj-key=\"k7\">k7</b></p></div>"
+        },
+        {
+          "label": "mixed: k2 k7 -> k10 k2",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "1B"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "1V",
+                  "dj-key": "k10"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k10",
+                "djust_id": "1V"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1V\" dj-key=\"k10\">k10</b><b dj-id=\"1J\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "insert: k10 k2 -> k10 k0 k2",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "20",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "20"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"1V\" dj-key=\"k10\">k10</b><b dj-id=\"20\" dj-key=\"k0\">k0</b><b dj-id=\"1J\" dj-key=\"k2\">k2</b></p></div>"
+        },
+        {
+          "label": "mixed: k10 k0 k2 -> k0 k10",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "1J"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 0,
+              "child_d": "20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"20\" dj-key=\"k0\">k0</b><b dj-id=\"1V\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "shuffle: k0 k10 -> k0 k10",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"20\" dj-key=\"k0\">k0</b><b dj-id=\"1V\" dj-key=\"k10\">k10</b></p></div>"
+        },
+        {
+          "label": "mixed: k0 k10 -> k4 k0",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "1V"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "28",
+                  "dj-key": "k4"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k4",
+                "djust_id": "28"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"20\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "swap: k4 k0 -> k0 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 0,
+              "child_d": "20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"20\" dj-key=\"k0\">k0</b><b dj-id=\"28\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "mixed: k0 k4 -> k4 k3",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "20"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2h",
+                  "dj-key": "k3"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k3",
+                "djust_id": "2h"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"2h\" dj-key=\"k3\">k3</b></p></div>"
+        },
+        {
+          "label": "insert: k4 k3 -> k4 k3 k0",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "2m",
+                  "dj-key": "k0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "k0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "k0",
+                "djust_id": "2m"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"2h\" dj-key=\"k3\">k3</b><b dj-id=\"2m\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "shuffle: k4 k3 k0 -> k4 k3 k0",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"2h\" dj-key=\"k3\">k3</b><b dj-id=\"2m\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "shuffle: k4 k3 k0 -> k4 k3 k0",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"2h\" dj-key=\"k3\">k3</b><b dj-id=\"2m\" dj-key=\"k0\">k0</b></p></div>"
+        },
+        {
+          "label": "rotate: k4 k3 k0 -> k3 k0 k4",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 0,
+              "to": 2,
+              "child_d": "28"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2h\" dj-key=\"k3\">k3</b><b dj-id=\"2m\" dj-key=\"k0\">k0</b><b dj-id=\"28\" dj-key=\"k4\">k4</b></p></div>"
+        },
+        {
+          "label": "shuffle: k3 k0 k4 -> k4 k0 k3",
+          "patches": [
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 2,
+              "to": 0,
+              "child_d": "28"
+            },
+            {
+              "type": "MoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "from": 1,
+              "to": 1,
+              "child_d": "2m"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"28\" dj-key=\"k4\">k4</b><b dj-id=\"2m\" dj-key=\"k0\">k0</b><b dj-id=\"2h\" dj-key=\"k3\">k3</b></p></div>"
+        }
+      ]
+    }
+  }
+}

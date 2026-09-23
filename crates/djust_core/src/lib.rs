@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub mod context;
 pub mod decimal;
 pub mod errors;
+pub mod html_whitespace;
 pub mod locale;
 pub mod object_key;
 pub mod render_env;

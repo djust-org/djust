@@ -69,6 +69,12 @@ function isDjIfComment(text) {
  *   - text nodes count unless ASCII-whitespace-only (NBSP   is
  *     significant), except inside whitespace-preserving elements
  *     (<pre>/<code>/<textarea>) where ALL text counts (preserveWhitespace=true);
+ *   - a text node that is EXACTLY " " counts (#2999): the server keeps the
+ *     whitespace between two inline siblings (`<b>A</b> <i>B</i>`) as exactly
+ *     " " and drops all other whitespace-only runs. That decision depends on
+ *     neighbours, so the server makes it once and encodes it in the node; the
+ *     client must not re-derive it, because neighbours change mid-batch.
+ *     Indentation ("\n    ") still does not count;
  *   - ONLY dj-if-family boundary comments count; the Rust parser drops every
  *     other HTML comment, so a plain <!-- comment --> must NOT shift indices.
  *
@@ -80,7 +86,8 @@ function isSignificantChild(child, preserveWhitespace = false) {
     if (child.nodeType === Node.ELEMENT_NODE) return true;
     if (child.nodeType === Node.TEXT_NODE) {
         if (preserveWhitespace) return true;
-        return (/[^ \t\n\r\f]/.test(child.textContent));
+        const text = child.textContent;
+        return text === ' ' || (/[^ \t\n\r\f]/.test(text));
     }
     if (child.nodeType === Node.COMMENT_NODE) {
         return isDjIfComment(child.textContent);
@@ -870,10 +877,14 @@ function _morphChildrenInner(existing, desired) {
             dNode.nodeType === Node.ELEMENT_NODE ||
             (dNode.nodeType === Node.COMMENT_NODE && isDjIfComment(dNode.textContent));
         if (dNodeIsSignificantElementish) {
+            // #2999: skip ANY whitespace-only text, including a counted " ":
+            // an element never matches a text node, and a stray prerendered
+            // " " must not push later elements through clone+insert.
             while (eNode &&
                    eNode.nodeType === Node.TEXT_NODE &&
                    !matched.has(eNode) &&
-                   !isSignificantChild(eNode, preserveWhitespace)) {
+                   !preserveWhitespace &&
+                   !(/[^ \t\n\r\f]/.test(eNode.textContent))) {
                 eIdx++;
                 // eslint-disable-next-line security/detect-object-injection
                 eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
@@ -1761,8 +1772,8 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  * Phases:
  *   -2: RemoveSubtree (tear down keyed subtrees first)
  *    0: RemoveChild (descending index within same parent)
- *    1: MoveChild
- *    2: InsertChild
+ *    1: InsertChild + MoveChild — per parent, applied TOGETHER as placements
+ *       at their final index (see _applyChildPlacements)
  *    3: MoveSubtree + InsertSubtree (boundary-span ops, INTERLEAVED by
  *       ascending target index — see below)
  *    4: SetText, SetAttribute, other node-targeting patches
@@ -1784,14 +1795,20 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  * them in ASCENDING target-index order so each lower-index op builds the
  * correct prefix before a higher-index op resolves against it (the outer
  * boundary is repositioned before the nested insert lands inside it).
+ *
+ * Child ops (#2999) follow the server's model (patch.rs::apply_patches):
+ * per parent, removes by DESCENDING index, then inserts and moves together as
+ * placements at their final index — see _applyChildPlacements. Moves applied
+ * one at a time against the live list mis-placed forward moves
+ * ([a,b,c] -> [b,c,a] came out "bac").
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
         switch (p.type) {
             case 'RemoveSubtree': return -2;
             case 'RemoveChild':   return 0;
+            case 'InsertChild':   return 1;
             case 'MoveChild':     return 1;
-            case 'InsertChild':   return 2;
             case 'MoveSubtree':   return 3;
             case 'InsertSubtree': return 3;
             // The [dj-virtual] keyed ops MUST share one phase and MUST keep
@@ -1820,6 +1837,13 @@ function _sortPatches(patches) {
             const pB = JSON.stringify(b.path);
             if (pA === pB) return b.index - a.index;
         }
+        // Within the placement phase, sort by ascending FINAL index per
+        // parent (#2999): `index` for an insert, `to` for a move.
+        if (phaseA === 1) {
+            const pA = JSON.stringify(a.path);
+            const pB = JSON.stringify(b.path);
+            if (pA === pB) return _placementIndex(a) - _placementIndex(b);
+        }
         // Within the boundary-span phase, apply by ASCENDING target index so a
         // moved outer boundary is positioned before a nested insert lands
         // inside it (#1678). Indices are parent-absolute significant-child
@@ -1834,6 +1858,81 @@ function _sortPatches(patches) {
     return patches;
 }
 window.djust._sortPatches = _sortPatches;
+
+/** Final index of an InsertChild / MoveChild placement. */
+function _placementIndex(patch) {
+    return patch.type === 'MoveChild' ? patch.to : patch.index;
+}
+
+/** Key identifying the parent a child op targets. */
+function _childOpParentKey(patch) {
+    return (patch.d || '') + '|' + (patch.path || []).join('/');
+}
+
+/**
+ * Apply one parent's InsertChild + MoveChild patches as placements at their
+ * FINAL index (`index` / `to`) (#2999). Moved children are resolved, then
+ * detached; the children left keep their relative order (the differ
+ * guarantees it — reconcile_keyed in diff.rs), so placing inserts and moved
+ * children by ascending final index puts each one after exactly its final
+ * predecessors. Same model as patch.rs::apply_patches.
+ *
+ * @returns {{ok: number, failed: number}}
+ */
+function _applyChildPlacements(ops, rootEl) {
+    let ok = 0;
+    let failed = 0;
+    const tally = (success) => { if (success) ok++; else failed++; };
+    const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
+    const moves = sorted.filter((p) => p.type === 'MoveChild');
+    if (moves.length === 0) {
+        for (const p of sorted) tally(applySinglePatch(p, rootEl));
+        return { ok, failed };
+    }
+    const parent = getNodeByPath(moves[0].path, moves[0].d, rootEl);
+    if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+        for (const p of sorted) tally(applySinglePatch(p, rootEl));
+        return { ok, failed };
+    }
+
+    // Resolve every moved child BEFORE detaching any, so a `from` fallback
+    // still indexes the list the server addressed.
+    const before = getSignificantChildren(parent);
+    const resolved = new Map();
+    for (const p of moves) {
+        let child = null;
+        if (p.child_d) {
+            const escaped = CSS.escape(p.child_d);
+            child = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+        }
+        if (!child) child = before[p.from] || null;
+        resolved.set(p, child);
+    }
+    for (const child of new Set(resolved.values())) {
+        if (child && child.parentNode === parent) parent.removeChild(child);
+    }
+
+    for (const p of sorted) {
+        if (p.type === 'InsertChild') {
+            tally(applySinglePatch(p, rootEl));
+            continue;
+        }
+        const child = resolved.get(p);
+        if (!child) {
+            tally(false);
+            continue;
+        }
+        const refChild = getSignificantChildren(parent)[p.to];
+        if (refChild) {
+            parent.insertBefore(child, refChild);
+        } else {
+            parent.appendChild(child);
+        }
+        tally(true);
+    }
+    return { ok, failed };
+}
+window.djust._applyChildPlacements = _applyChildPlacements;
 
 /**
  * Apply a single patch operation.
@@ -2161,7 +2260,9 @@ function applySinglePatch(patch, rootEl = null) {
                     child = fallbackChildren[patch.from];
                 }
                 if (child) {
-                    const children = getSignificantChildren(node);
+                    // #2999: `to` is the index among the siblings WITHOUT the
+                    // child (patch.rs::apply_patches).
+                    const children = getSignificantChildren(node).filter((c) => c !== child);
                     const refChild = children[patch.to];
                     if (refChild) {
                         node.insertBefore(child, refChild);
@@ -2466,9 +2567,25 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     if (patches.length <= 10) {
         let failedCount = 0;
         const failedIndices = [];
+        const placed = new Set();
         for (let _pi = 0; _pi < patches.length; _pi++) {
             // eslint-disable-next-line security/detect-object-injection
-            if (!applySinglePatch(patches[_pi], rootEl)) {
+            const patch = patches[_pi];
+            if (placed.has(patch)) continue;
+            if (patch.type === 'InsertChild' || patch.type === 'MoveChild') {
+                // #2999: one parent's inserts + moves apply together.
+                const key = _childOpParentKey(patch);
+                const ops = patches.filter((p) =>
+                    (p.type === 'InsertChild' || p.type === 'MoveChild') &&
+                    _childOpParentKey(p) === key);
+                ops.forEach((p) => placed.add(p));
+                if (_applyChildPlacements(ops, rootEl).failed > 0) {
+                    failedCount++;
+                    failedIndices.push(_pi);
+                }
+                continue;
+            }
+            if (!applySinglePatch(patch, rootEl)) {
                 failedCount++;
                 failedIndices.push(_pi);
             }
@@ -2533,7 +2650,8 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
 
     for (const [, group] of patchGroups) {
         // Phase order within a group MUST match the top-level phase order:
-        // RemoveChild → MoveChild → InsertChild → other.
+        // RemoveChild → InsertChild+MoveChild placements → other (#2999: the
+        // server's model, patch.rs::apply_patches — see _sortPatches).
         //
         // Previously the batching code below ran InsertChild patches (via
         // DocumentFragment) BEFORE iterating `group` for the RemoveChild
@@ -2543,27 +2661,40 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
         // and the wrong node gets deleted.  See regression fixtures for
         // a downstream consumer tab switches (#641).
         //
-        // Fix: apply all non-Insert patches individually FIRST, then batch
-        // the consecutive inserts, then apply any remaining inserts that
-        // were too small to batch.  _sortPatches has already sorted the
-        // removes within the group by descending index.
-        const nonInsertPatches = [];
+        // Fix: apply the removes FIRST, then the inserts and moves as
+        // placements (batching consecutive inserts when nothing moves), then
+        // the node-targeting patches (SetText, SetAttr, …) — which address
+        // nodes by NEW-tree paths, so they must wait for the structure to
+        // settle. _sortPatches has already sorted the removes within the group
+        // by descending index and the rest by phase.
+        const removePatches = [];
         const insertPatches = [];
+        const movePatches = [];
+        const laterPatches = [];
         for (const patch of group) {
-            if (patch.type === 'InsertChild') insertPatches.push(patch);
-            else nonInsertPatches.push(patch);
+            if (patch.type === 'RemoveChild') removePatches.push(patch);
+            else if (patch.type === 'InsertChild') insertPatches.push(patch);
+            else if (patch.type === 'MoveChild') movePatches.push(patch);
+            else laterPatches.push(patch);
         }
 
-        // 1. Apply non-insert patches (RemoveChild, MoveChild, SetAttr, etc.)
-        //    in their existing sorted order.  RemoveChild patches are
-        //    descending-index-sorted by _sortPatches, so they're safe to
-        //    apply sequentially without index drift.
-        for (const patch of nonInsertPatches) {
+        // 1. Apply the removes, descending-index-sorted by _sortPatches, so
+        //    they're safe to apply sequentially without index drift.
+        for (const patch of removePatches) {
             if (applySinglePatch(patch, rootEl)) {
                 successCount++;
             } else {
                 failedCount++;
             }
+        }
+
+        // 1b. With moves in the group, inserts and moves are placements at
+        //     their final index and must be applied together (#2999).
+        if (movePatches.length > 0) {
+            const res = _applyChildPlacements(insertPatches.concat(movePatches), rootEl);
+            successCount += res.ok;
+            failedCount += res.failed;
+            insertPatches.length = 0;
         }
 
         // 2. Batch consecutive inserts via DocumentFragment where possible.
@@ -2614,6 +2745,16 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
         //    groups or group size < 3) individually.
         for (const patch of insertPatches) {
             if (batchedInserts.has(patch)) continue;
+            if (applySinglePatch(patch, rootEl)) {
+                successCount++;
+            } else {
+                failedCount++;
+            }
+        }
+
+        // 4. Node-targeting patches (SetText, SetAttr, …) once the
+        //    structure has settled.
+        for (const patch of laterPatches) {
             if (applySinglePatch(patch, rootEl)) {
                 successCount++;
             } else {

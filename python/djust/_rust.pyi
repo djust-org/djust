@@ -215,6 +215,16 @@ def render_markdown(
     """
     ...
 
+def vdom_inline_level_tags() -> List[str]:
+    """
+    The VDOM parser's inline-level tag list (#2999).
+
+    Whitespace between two of these elements (or between one and a text run)
+    is kept as a single ``" "`` text node; whitespace next to anything else is
+    dropped. The egress whitespace normalizer uses the same list.
+    """
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -1373,6 +1383,7 @@ __all__ = [
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
+    "vdom_inline_level_tags",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",

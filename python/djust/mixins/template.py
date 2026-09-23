@@ -109,6 +109,149 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
     return None
 
 
+# ---------------------------------------------------------------------------
+# #2999: whitespace between inline-level siblings
+# ---------------------------------------------------------------------------
+
+# MUST equal ``djust_core::html_whitespace::INLINE_LEVEL_TAGS`` (the Rust VDOM
+# parser's list). ``python/djust/tests/test_inline_whitespace_2999.py`` pins the
+# two against each other through ``djust._rust.vdom_inline_level_tags()``.
+_INLINE_LEVEL_TAGS = frozenset(
+    (
+        "a abbr acronym audio b bdi bdo big br button canvas cite code data del "
+        "dfn em embed font i iframe img input ins kbd label mark math meter nobr "
+        "object output picture progress q rp rt ruby s samp select small span "
+        "strike strong sub sup svg textarea time tt u var video wbr"
+    ).split()
+)
+
+# Void elements: an open tag with no children and no end tag, so the element
+# is complete at its ``>``. Only these (and a self-closed ``<svg/>``/``<math/>``,
+# which html5ever treats as foreign self-closing roots) are a PREVIOUS SIBLING
+# when they end right before a whitespace run; any other open tag makes the
+# run the element's first child.
+_VOID_TAGS = frozenset(
+    "area base br col embed hr img input keygen link meta param source track wbr".split()
+)
+
+# HTML whitespace (space, tab, LF, FF, CR). NOT ``\s``: Python's ``\s`` also
+# matches NBSP and the other Unicode spaces, which the Rust parser (and the
+# browser) treat as content.
+_HTML_WS_RUN_RE = re.compile(r"[ \t\n\r\f]+")
+_TAG_NAME_RE = re.compile(r"<(/?)([A-Za-z][^\s/>]*)")
+_PLACEHOLDER_AT_RE = re.compile(r"__PRESERVED_BLOCK_(\d+)__")
+_PLACEHOLDER_END_RE = re.compile(r"__PRESERVED_BLOCK_(\d+)__$")
+# A single-space run sitting between two tag-like tokens: after ``>`` or a
+# preserved-block placeholder, before ``<`` or a placeholder.
+_INTER_TAG_SPACE_RE = re.compile(r"(>|__PRESERVED_BLOCK_\d+__) (?=<|__PRESERVED_BLOCK_\d+__)")
+
+
+def _placeholder_is_inline(block_tags: "list[str]", index: str) -> bool:
+    i = int(index)
+    return i < len(block_tags) and block_tags[i] in _INLINE_LEVEL_TAGS
+
+
+def _prev_sibling_is_inline(html: str, end: int, block_tags: "list[str]") -> bool:
+    """Is the nearest sibling ending at ``html[:end]`` inline (#2999)?
+
+    Mirrors ``build_children`` in ``crates/djust_vdom/src/parser.rs``: comments
+    and whitespace-only runs are looked through; text and inline-level
+    elements are inline; an open (non-void) tag means there is no previous
+    sibling at all.
+    """
+    while end > 0:
+        m = _PLACEHOLDER_END_RE.search(html, max(0, end - 40), end)
+        if m and m.end() == end:
+            return _placeholder_is_inline(block_tags, m.group(1))
+        if html[end - 1] != ">":
+            return True  # text
+        if html.endswith("-->", 0, end):
+            start = html.rfind("<!--", 0, end)
+            if start < 0:
+                return False
+            end = start
+            # A space right before the comment is its own whitespace run only
+            # when a tag-like token precedes it; otherwise it ends a text run.
+            if end > 0 and html[end - 1] == " ":
+                before = end - 1
+                if before > 0 and (
+                    html[before - 1] == ">"
+                    or _PLACEHOLDER_END_RE.search(html, max(0, before - 40), before)
+                ):
+                    end = before
+                    continue
+                return before > 0  # text (or nothing)
+            continue
+        start = html.rfind("<", 0, end)
+        if start < 0:
+            return False
+        m = _TAG_NAME_RE.match(html, start)
+        if not m:
+            return False  # <!DOCTYPE> and the like: block
+        closing, name = m.group(1), m.group(2).lower()
+        if closing:
+            return name in _INLINE_LEVEL_TAGS
+        if name in _VOID_TAGS or (name in ("svg", "math") and html[end - 2] == "/"):
+            return name in _INLINE_LEVEL_TAGS
+        return False  # open tag: the run is its first child
+    return False
+
+
+def _next_sibling_is_inline(html: str, start: int, block_tags: "list[str]") -> bool:
+    """Is the nearest sibling starting at ``html[start:]`` inline (#2999)?"""
+    n = len(html)
+    while start < n:
+        m = _PLACEHOLDER_AT_RE.match(html, start)
+        if m:
+            return _placeholder_is_inline(block_tags, m.group(1))
+        if html[start] != "<":
+            return True  # text
+        if html.startswith("<!--", start):
+            close = html.find("-->", start + 4)
+            if close < 0:
+                return False
+            start = close + 3
+            if start < n and html[start] == " ":
+                after = start + 1
+                if after < n and (html[after] == "<" or _PLACEHOLDER_AT_RE.match(html, after)):
+                    start = after
+                    continue
+                return after < n  # text (or nothing)
+            continue
+        m = _TAG_NAME_RE.match(html, start)
+        if not m or m.group(1):
+            return False  # closing tag (no next sibling) or <!DOCTYPE>
+        return m.group(2).lower() in _INLINE_LEVEL_TAGS
+    return False
+
+
+def _collapse_inter_tag_whitespace(html: str, block_tags: "list[str]") -> str:
+    """Drop the whitespace between two tags unless both neighbours are inline.
+
+    ``html`` has already had every whitespace run collapsed to one space and
+    its ``<pre>``/``<code>``/``<textarea>``/``<script>``/``<style>`` blocks
+    replaced by ``__PRESERVED_BLOCK_<i>__`` placeholders whose tag names are
+    ``block_tags[i]``. A space between two tag-like tokens is kept exactly when
+    the Rust VDOM parser keeps it as a ``" "`` text node (#2999): its nearest
+    non-comment neighbour on each side is text or an inline-level element.
+    ``<b>A</b> <i>B</i>`` keeps its space; ``</div> <div>``, ``<p> <b>`` and
+    ``</b> </p>`` lose theirs, as before.
+
+    This MUST agree with the parser on its own serialized output: the WS frame
+    is ``render_with_diff()``'s HTML passed through this normalizer, and a
+    space dropped here that the server VDOM kept would leave the client one
+    child short of the server.
+    """
+
+    def repl(m: "re.Match[str]") -> str:
+        keep = _prev_sibling_is_inline(html, m.end(1), block_tags) and _next_sibling_is_inline(
+            html, m.end(), block_tags
+        )
+        return m.group(1) + (" " if keep else "")
+
+    return _INTER_TAG_SPACE_RE.sub(repl, html)
+
+
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
     and various HTML extraction/stripping helpers."""
@@ -478,39 +621,29 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # Normalize whitespace
-        html = re.sub(r"\s+", " ", html)
-        html = re.sub(r">\s+<", "><", html)
+        # Normalize whitespace: collapse every run of HTML whitespace to one
+        # space (#2999: HTML whitespace only — NBSP and other Unicode spaces
+        # are content to the Rust parser and the browser, so ``\s`` was wrong).
+        html = _HTML_WS_RUN_RE.sub(" ", html)
 
-        # #1737: collapse whitespace between a tag boundary and a preserved
-        # (<pre>/<code>/<textarea>) block too, so this Python normalizer
-        # matches the Rust ``render_with_diff()`` whitespace pass exactly.
-        # Rust's parser drops every whitespace-only text node that is a direct
-        # child of a non-whitespace-preserving element (parser.rs:520-531), so
-        # the inter-element whitespace around — and BETWEEN — preserved blocks
-        # is removed: ``</div> <pre>`` → ``</div><pre>``,
-        # ``</textarea> </div>`` → ``</textarea></div>``, AND
-        # ``</textarea> <pre>`` → ``</textarea><pre>`` (preserved↔preserved).
-        # The placeholder-substitution above hides those boundaries from the
-        # ``>\s+<`` rule (the placeholder doesn't start with ``<``), so collapse
-        # them explicitly. Without this the initial-GET dj-root keeps
-        # whitespace-only text nodes around preserved blocks that the first WS
-        # frame lacks, re-opening the first-hydration whitespace mismatch
-        # (#1724 / #1737). Whitespace INSIDE a preserved block is untouched
-        # (it's hidden behind the placeholder and restored verbatim below), and
-        # whitespace adjacent to actual TEXT (e.g. ``before <pre>``) is left as
-        # a single space — Rust keeps it because that text node is not
-        # whitespace-only.
-        #
-        # (1) literal-tag → preserved   and   (2) preserved → literal-tag:
-        html = re.sub(r">\s+(__PRESERVED_BLOCK_\d+__)", r">\1", html)
-        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+<", r"\1<", html)
-        # (3) preserved → preserved: collapse whitespace between two adjacent
-        # preserved blocks. The lookahead (not a consuming group) lets a run of
-        # 3+ adjacent blocks collapse every gap in a single pass — a consuming
-        # ``\1...\2`` form would swallow the middle block and miss its trailing
-        # gap.
-        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+(?=__PRESERVED_BLOCK_\d+__)", r"\1", html)
+        # Then drop the space between two tags — and around/between preserved
+        # blocks (#1737), whose placeholders hide their ``<`` — unless it sits
+        # between two inline-level siblings, where it is the space between two
+        # words (#2999: ``<b>A</b> <i>B</i>`` must not read "AB"). This is the
+        # Rust parser's rule (``build_children`` in
+        # ``crates/djust_vdom/src/parser.rs``): whitespace-only text is dropped
+        # unless its nearest neighbour on each side is text or an inline-level
+        # element, in which case it is kept as one ``" "`` node. The
+        # placeholder cases matter for ``</strong> <code>`` — the ``<code>``
+        # block is a placeholder here. Whitespace INSIDE a preserved block is
+        # untouched (it's hidden behind the placeholder and restored verbatim
+        # below), and whitespace adjacent to actual TEXT (e.g.
+        # ``before <pre>``) is part of that text node and is left alone.
+        block_tags = []
+        for block in preserved_blocks:
+            m = _TAG_NAME_RE.match(block)
+            block_tags.append(m.group(2).lower() if m else "")
+        html = _collapse_inter_tag_whitespace(html, block_tags)
 
         # Restore preserved blocks
         for i, block in enumerate(preserved_blocks):

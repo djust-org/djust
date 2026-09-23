@@ -117,41 +117,64 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
             }
         }
 
-        // Inserts: ascending index order
-        let mut inserts: Vec<_> = group.inserts.iter().collect();
-        inserts.sort_by_key(|a| a.1);
-        for (patch, _) in &inserts {
-            if let Patch::InsertChild { index, node, .. } = patch {
-                if let Some(target) = find_by_djust_id_mut(root, pid) {
-                    let insert_at = (*index).min(target.children.len());
-                    target.children.insert(insert_at, (*node).clone());
-                }
-            }
+        // Inserts and moves are PLACEMENTS at a final index (#2999). Detach
+        // every moved child first, then place inserts and moves together in
+        // ascending final index. With the moved children out of the way the
+        // list holds only the children that keep their relative order, so
+        // each placement at index `i` has exactly the `i` final predecessors
+        // before it. Applying moves one at a time instead (remove, re-insert
+        // at `to`) is only right when no not-yet-moved child sits before the
+        // target: [A,B,C,D,E] -> [C,D,E,A,B] came out [C,D,A,E,B]. The client
+        // (`_applyChildPlacements` in 12-vdom-patch.js) uses the same model.
+        enum Placement {
+            Insert(VNode),
+            Move(Option<VNode>),
         }
-
-        // Moves: by child_d (djust_id of the child to move)
-        for patch in &group.moves {
-            if let Patch::MoveChild {
-                from, to, child_d, ..
-            } = patch
-            {
-                if let Some(target) = find_by_djust_id_mut(root, pid) {
-                    if let Some(ref cid) = child_d {
-                        if let Some(current_pos) = target
+        let mut placements: Vec<(usize, Placement)> = Vec::new();
+        if let Some(target) = find_by_djust_id_mut(root, pid) {
+            // Resolve every moved child before detaching any, so a `from`
+            // fallback index still refers to the post-remove list.
+            let mut move_positions: Vec<(usize, Option<usize>)> = Vec::new();
+            for patch in &group.moves {
+                if let Patch::MoveChild {
+                    from, to, child_d, ..
+                } = patch
+                {
+                    let pos = match child_d {
+                        Some(cid) => target
                             .children
                             .iter()
-                            .position(|c| c.djust_id.as_deref() == Some(cid.as_str()))
-                        {
-                            let node = target.children.remove(current_pos);
-                            let insert_at = (*to).min(target.children.len());
-                            target.children.insert(insert_at, node);
-                        }
-                    } else if *from < target.children.len() {
-                        let node = target.children.remove(*from);
-                        let insert_at = (*to).min(target.children.len());
-                        target.children.insert(insert_at, node);
-                    }
+                            .position(|c| c.djust_id.as_deref() == Some(cid.as_str())),
+                        None => (*from < target.children.len()).then_some(*from),
+                    };
+                    move_positions.push((*to, pos));
                 }
+            }
+            let mut detach: Vec<usize> = move_positions.iter().filter_map(|(_, p)| *p).collect();
+            detach.sort_unstable();
+            detach.dedup();
+            let mut detached: std::collections::HashMap<usize, VNode> =
+                std::collections::HashMap::new();
+            for &pos in detach.iter().rev() {
+                detached.insert(pos, target.children.remove(pos));
+            }
+            for (to, pos) in move_positions {
+                placements.push((to, Placement::Move(pos.and_then(|p| detached.remove(&p)))));
+            }
+            for (patch, index) in &group.inserts {
+                if let Patch::InsertChild { node, .. } = patch {
+                    placements.push((*index, Placement::Insert((*node).clone())));
+                }
+            }
+            placements.sort_by_key(|(i, _)| *i);
+            for (index, placement) in placements {
+                let node = match placement {
+                    Placement::Insert(n) => n,
+                    Placement::Move(Some(n)) => n,
+                    Placement::Move(None) => continue,
+                };
+                let insert_at = index.min(target.children.len());
+                target.children.insert(insert_at, node);
             }
         }
     }
