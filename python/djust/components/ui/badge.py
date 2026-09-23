@@ -6,6 +6,7 @@ Provides small labels/badges for counts, statuses, and categories.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -111,11 +112,13 @@ class BadgeComponent(LiveComponent):
         if self.pill:
             classes += " rounded-pill"
 
-        html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
+        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
+                f'dj-click="{conditional_escape(self.on_dismiss)}"'
+                if self.on_dismiss
+                else 'dj-click="dismiss"'
             )
             html += f' <button type="button" class="btn-close btn-close-white" {dismiss_attr} aria-label="Close" style="font-size: 0.65em; padding: 0.1em 0.25em;"></button>'
 
@@ -141,11 +144,13 @@ class BadgeComponent(LiveComponent):
 
         classes = f"{base_classes}{pill_classes} {variant_classes}"
 
-        html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
+        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
+                f'dj-click="{conditional_escape(self.on_dismiss)}"'
+                if self.on_dismiss
+                else 'dj-click="dismiss"'
             )
             html += f"""<button type="button" {dismiss_attr} class="ml-1 inline-flex flex-shrink-0 rounded-full p-0.5 hover:bg-opacity-20">
                 <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
@@ -158,15 +163,17 @@ class BadgeComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML badge"""
-        classes = f"badge badge-{self.variant}"
+        classes = f"badge badge-{conditional_escape(self.variant)}"
         if self.pill:
             classes += " badge-pill"
 
-        html = f'<span class="{classes}" id="{self.component_id}">{self.text}'
+        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = (
-                f'dj-click="{self.on_dismiss}"' if self.on_dismiss else 'dj-click="dismiss"'
+                f'dj-click="{conditional_escape(self.on_dismiss)}"'
+                if self.on_dismiss
+                else 'dj-click="dismiss"'
             )
             html += f' <button type="button" {dismiss_attr}>×</button>'
 

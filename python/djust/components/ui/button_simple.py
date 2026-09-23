@@ -7,6 +7,8 @@ For interactive buttons with event handlers, use them in LiveView event handlers
 """
 
 from ..base import Component
+
+from django.utils.html import conditional_escape
 from typing import Any
 
 
@@ -145,13 +147,13 @@ class Button(Component):
         size_class = size_map.get(self.size, "")
 
         if self.outline:
-            variant_class = f"btn-outline-{self.variant}"
+            variant_class = f"btn-outline-{conditional_escape(self.variant)}"
         else:
-            variant_class = f"btn-{self.variant}"
+            variant_class = f"btn-{conditional_escape(self.variant)}"
 
         disabled_attr = " disabled" if self.disabled else ""
 
-        return f'<button type="button" class="btn {variant_class}{size_class}"{disabled_attr}>{self.text}</button>'
+        return f'<button type="button" class="btn {variant_class}{size_class}"{disabled_attr}>{conditional_escape(self.text)}</button>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS button"""
@@ -191,12 +193,12 @@ class Button(Component):
         disabled_classes = " opacity-50 cursor-not-allowed" if self.disabled else ""
         disabled_attr = " disabled" if self.disabled else ""
 
-        return f'<button type="button" class="rounded font-medium {size_classes} {variant_classes}{disabled_classes}"{disabled_attr}>{self.text}</button>'
+        return f'<button type="button" class="rounded font-medium {size_classes} {variant_classes}{disabled_classes}"{disabled_attr}>{conditional_escape(self.text)}</button>'
 
     def _render_plain(self) -> str:
         """Render plain HTML button"""
-        size_class = f" button-{self.size}" if self.size != "md" else ""
+        size_class = f" button-{conditional_escape(self.size)}" if self.size != "md" else ""
         style_prefix = "button-outline-" if self.outline else "button-"
         disabled_attr = " disabled" if self.disabled else ""
 
-        return f'<button type="button" class="button {style_prefix}{self.variant}{size_class}"{disabled_attr}>{self.text}</button>'
+        return f'<button type="button" class="button {style_prefix}{conditional_escape(self.variant)}{size_class}"{disabled_attr}>{conditional_escape(self.text)}</button>'

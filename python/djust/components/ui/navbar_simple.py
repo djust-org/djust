@@ -9,6 +9,31 @@ For interactive navbars with event handlers, use them in LiveView event handlers
 from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
+from djust.components.utils import url_attr
+
+# Characters rewritten when a value is placed inside a single-quoted JS string
+# in an inline handler attribute. Letters, digits, "-" and "_" are unchanged.
+_JS_STR_TRANSLATION = {
+    ord("\\"): "\\u005C",
+    ord("'"): "\\u0027",
+    ord('"'): "\\u0022",
+    ord("<"): "\\u003C",
+    ord(">"): "\\u003E",
+    ord("&"): "\\u0026",
+    ord("="): "\\u003D",
+    ord("`"): "\\u0060",
+    0x2028: "\\u2028",
+    0x2029: "\\u2029",
+}
+_JS_STR_TRANSLATION.update((c, "\\u%04X" % c) for c in range(32))
+
+
+def _js_str(value: Any) -> str:
+    """Return ``value`` for use inside a single-quoted JS string in an HTML attribute."""
+    return str(value).translate(_JS_STR_TRANSLATION)
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -199,44 +224,48 @@ class NavBar(Component):
         data_bs_theme = ' data-bs-theme="dark"' if self.variant == "dark" else ""
 
         container_class = (
-            f"container-{self.container}" if self.container == "fluid" else "container"
+            f"container-{conditional_escape(self.container)}"
+            if self.container == "fluid"
+            else "container"
         )
 
         parts = [
-            f'<nav class="navbar navbar-expand-{self.expand} bg-{bg_variant}{sticky_class}"{data_bs_theme}>'
+            f'<nav class="navbar navbar-expand-{conditional_escape(self.expand)} bg-{bg_variant}{sticky_class}"{data_bs_theme}>'
         ]
         parts.append(f'    <div class="{container_class}">')
 
         # Brand
         if self.brand:
-            brand_text = self.brand.get("text", "")
+            brand_text = conditional_escape(self.brand.get("text", ""))
             brand_url = self.brand.get("url", "#")
             brand_logo = self.brand.get("logo", "")
 
-            parts.append(f'        <a class="navbar-brand" href="{brand_url}">')
+            parts.append(f'        <a class="navbar-brand" href="{url_attr(brand_url)}">')
             if brand_logo:
                 parts.append(
-                    f'            <img src="{brand_logo}" alt="{brand_text}" height="30" class="d-inline-block align-text-top">'
+                    f'            <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" height="30" class="d-inline-block align-text-top">'
                 )
             parts.append(f"            {brand_text}")
             parts.append("        </a>")
 
         # Toggler button
         parts.append(
-            f'        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#{self.id}-content" aria-controls="{self.id}-content" aria-expanded="false" aria-label="Toggle navigation">'
+            f'        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#{conditional_escape(self.id)}-content" aria-controls="{conditional_escape(self.id)}-content" aria-expanded="false" aria-label="Toggle navigation">'
         )
         parts.append('            <span class="navbar-toggler-icon"></span>')
         parts.append("        </button>")
 
         # Navbar content
-        parts.append(f'        <div class="collapse navbar-collapse" id="{self.id}-content">')
+        parts.append(
+            f'        <div class="collapse navbar-collapse" id="{conditional_escape(self.id)}-content">'
+        )
         parts.append('            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">')
 
         # Render nav items
         for item in self.items:
             if item.get("dropdown"):
                 # Dropdown item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 dropdown_items = item.get("dropdown", [])
 
                 parts.append('                <li class="nav-item dropdown">')
@@ -253,21 +282,21 @@ class NavBar(Component):
                             '                        <li><hr class="dropdown-divider"></li>'
                         )
                     else:
-                        dropdown_label = dropdown_item.get("label", "")
+                        dropdown_label = conditional_escape(dropdown_item.get("label", ""))
                         dropdown_url = dropdown_item.get("url", "#")
                         disabled = dropdown_item.get("disabled", False)
                         disabled_class = " disabled" if disabled else ""
                         disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                         parts.append(
-                            f'                        <li><a class="dropdown-item{disabled_class}" href="{dropdown_url}"{disabled_attr}>{dropdown_label}</a></li>'
+                            f'                        <li><a class="dropdown-item{disabled_class}" href="{url_attr(dropdown_url)}"{disabled_attr}>{dropdown_label}</a></li>'
                         )
 
                 parts.append("                    </ul>")
                 parts.append("                </li>")
             else:
                 # Regular nav item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 active = item.get("active", False)
                 disabled = item.get("disabled", False)
@@ -279,7 +308,7 @@ class NavBar(Component):
 
                 parts.append('                <li class="nav-item">')
                 parts.append(
-                    f'                    <a class="nav-link{active_class}{disabled_class}" href="{url}"{aria_current}{disabled_attr}>{label}</a>'
+                    f'                    <a class="nav-link{active_class}{disabled_class}" href="{url_attr(url)}"{aria_current}{disabled_attr}>{label}</a>'
                 )
                 parts.append("                </li>")
 
@@ -320,14 +349,16 @@ class NavBar(Component):
 
         # Brand
         if self.brand:
-            brand_text = self.brand.get("text", "")
+            brand_text = conditional_escape(self.brand.get("text", ""))
             brand_url = self.brand.get("url", "#")
             brand_logo = self.brand.get("logo", "")
 
-            parts.append(f'            <a href="{brand_url}" class="flex items-center space-x-3">')
+            parts.append(
+                f'            <a href="{url_attr(brand_url)}" class="flex items-center space-x-3">'
+            )
             if brand_logo:
                 parts.append(
-                    f'                <img src="{brand_logo}" alt="{brand_text}" class="h-8 w-auto">'
+                    f'                <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" class="h-8 w-auto">'
                 )
             parts.append(f'                <span class="text-xl font-bold">{brand_text}</span>')
             parts.append("            </a>")
@@ -338,7 +369,7 @@ class NavBar(Component):
         for item in self.items:
             if item.get("dropdown"):
                 # Dropdown item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 dropdown_items = item.get("dropdown", [])
 
                 parts.append('                <div class="relative group">')
@@ -365,13 +396,13 @@ class NavBar(Component):
                             '                            <div class="border-t border-gray-200"></div>'
                         )
                     else:
-                        dropdown_label = dropdown_item.get("label", "")
+                        dropdown_label = conditional_escape(dropdown_item.get("label", ""))
                         dropdown_url = dropdown_item.get("url", "#")
                         disabled = dropdown_item.get("disabled", False)
                         disabled_class = " opacity-50 cursor-not-allowed" if disabled else ""
 
                         parts.append(
-                            f'                            <a href="{dropdown_url}" class="{link_class} block px-4 py-2 text-sm{disabled_class}">{dropdown_label}</a>'
+                            f'                            <a href="{url_attr(dropdown_url)}" class="{link_class} block px-4 py-2 text-sm{disabled_class}">{dropdown_label}</a>'
                         )
 
                 parts.append("                        </div>")
@@ -379,7 +410,7 @@ class NavBar(Component):
                 parts.append("                </div>")
             else:
                 # Regular nav item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 active = item.get("active", False)
                 disabled = item.get("disabled", False)
@@ -393,7 +424,7 @@ class NavBar(Component):
                     item_class += " opacity-50 cursor-not-allowed"
 
                 parts.append(
-                    f'                <a href="{url}" class="{item_class} px-3 py-2 rounded-md text-sm font-medium">{label}</a>'
+                    f'                <a href="{url_attr(url)}" class="{item_class} px-3 py-2 rounded-md text-sm font-medium">{label}</a>'
                 )
 
         parts.append("            </div>")
@@ -401,7 +432,7 @@ class NavBar(Component):
         # Mobile menu button
         parts.append('            <div class="md:hidden">')
         parts.append(
-            f'                <button type="button" class="{link_class} p-2 rounded-md" onclick="document.getElementById(\'{self.id}-mobile\').classList.toggle(\'hidden\')">'
+            f'                <button type="button" class="{link_class} p-2 rounded-md" onclick="document.getElementById(\'{_js_str(self.id)}-mobile\').classList.toggle(\'hidden\')">'
         )
         parts.append(
             '                    <svg class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">'
@@ -416,13 +447,15 @@ class NavBar(Component):
         parts.append("        </div>")
 
         # Mobile menu
-        parts.append(f'        <div class="hidden md:hidden" id="{self.id}-mobile">')
+        parts.append(
+            f'        <div class="hidden md:hidden" id="{conditional_escape(self.id)}-mobile">'
+        )
         parts.append('            <div class="px-2 pt-2 pb-3 space-y-1">')
 
         for item in self.items:
             if item.get("dropdown"):
                 # Dropdown items in mobile
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 dropdown_items = item.get("dropdown", [])
 
                 parts.append(
@@ -431,17 +464,17 @@ class NavBar(Component):
 
                 for dropdown_item in dropdown_items:
                     if not dropdown_item.get("divider"):
-                        dropdown_label = dropdown_item.get("label", "")
+                        dropdown_label = conditional_escape(dropdown_item.get("label", ""))
                         dropdown_url = dropdown_item.get("url", "#")
                         disabled = dropdown_item.get("disabled", False)
                         disabled_class = " opacity-50 cursor-not-allowed" if disabled else ""
 
                         parts.append(
-                            f'                <a href="{dropdown_url}" class="{link_class} block px-6 py-2 rounded-md text-sm{disabled_class}">{dropdown_label}</a>'
+                            f'                <a href="{url_attr(dropdown_url)}" class="{link_class} block px-6 py-2 rounded-md text-sm{disabled_class}">{dropdown_label}</a>'
                         )
             else:
                 # Regular nav item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 active = item.get("active", False)
                 disabled = item.get("disabled", False)
@@ -455,7 +488,7 @@ class NavBar(Component):
                     item_class += " opacity-50 cursor-not-allowed"
 
                 parts.append(
-                    f'                <a href="{url}" class="{item_class} block px-3 py-2 rounded-md text-base font-medium">{label}</a>'
+                    f'                <a href="{url_attr(url)}" class="{item_class} block px-3 py-2 rounded-md text-base font-medium">{label}</a>'
                 )
 
         parts.append("            </div>")
@@ -468,38 +501,38 @@ class NavBar(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML navbar"""
-        sticky_class = f" navbar-sticky-{self.sticky}" if self.sticky else ""
+        sticky_class = f" navbar-sticky-{conditional_escape(self.sticky)}" if self.sticky else ""
 
-        parts = [f'<nav class="navbar navbar-{self.variant}{sticky_class}">']
-        parts.append(f'    <div class="navbar-container-{self.container}">')
+        parts = [f'<nav class="navbar navbar-{conditional_escape(self.variant)}{sticky_class}">']
+        parts.append(f'    <div class="navbar-container-{conditional_escape(self.container)}">')
 
         # Brand
         if self.brand:
-            brand_text = self.brand.get("text", "")
+            brand_text = conditional_escape(self.brand.get("text", ""))
             brand_url = self.brand.get("url", "#")
             brand_logo = self.brand.get("logo", "")
 
-            parts.append(f'        <a href="{brand_url}" class="navbar-brand">')
+            parts.append(f'        <a href="{url_attr(brand_url)}" class="navbar-brand">')
             if brand_logo:
                 parts.append(
-                    f'            <img src="{brand_logo}" alt="{brand_text}" class="navbar-logo">'
+                    f'            <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" class="navbar-logo">'
                 )
             parts.append(f"            {brand_text}")
             parts.append("        </a>")
 
         # Toggle button
         parts.append(
-            f"        <button class=\"navbar-toggler\" onclick=\"document.getElementById('{self.id}-menu').classList.toggle('show')\">☰</button>"
+            f"        <button class=\"navbar-toggler\" onclick=\"document.getElementById('{_js_str(self.id)}-menu').classList.toggle('show')\">☰</button>"
         )
 
         # Nav items
-        parts.append(f'        <div class="navbar-menu" id="{self.id}-menu">')
+        parts.append(f'        <div class="navbar-menu" id="{conditional_escape(self.id)}-menu">')
         parts.append('            <ul class="navbar-nav">')
 
         for item in self.items:
             if item.get("dropdown"):
                 # Dropdown item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 dropdown_items = item.get("dropdown", [])
 
                 parts.append('                <li class="nav-item dropdown">')
@@ -510,20 +543,20 @@ class NavBar(Component):
                     if dropdown_item.get("divider"):
                         parts.append('                        <li class="dropdown-divider"></li>')
                     else:
-                        dropdown_label = dropdown_item.get("label", "")
+                        dropdown_label = conditional_escape(dropdown_item.get("label", ""))
                         dropdown_url = dropdown_item.get("url", "#")
                         disabled = dropdown_item.get("disabled", False)
                         disabled_class = " disabled" if disabled else ""
 
                         parts.append(
-                            f'                        <li><a href="{dropdown_url}" class="dropdown-item{disabled_class}">{dropdown_label}</a></li>'
+                            f'                        <li><a href="{url_attr(dropdown_url)}" class="dropdown-item{disabled_class}">{dropdown_label}</a></li>'
                         )
 
                 parts.append("                    </ul>")
                 parts.append("                </li>")
             else:
                 # Regular nav item
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 active = item.get("active", False)
                 disabled = item.get("disabled", False)
@@ -533,7 +566,7 @@ class NavBar(Component):
 
                 parts.append('                <li class="nav-item">')
                 parts.append(
-                    f'                    <a href="{url}" class="nav-link{active_class}{disabled_class}">{label}</a>'
+                    f'                    <a href="{url_attr(url)}" class="nav-link{active_class}{disabled_class}">{label}</a>'
                 )
                 parts.append("                </li>")
 

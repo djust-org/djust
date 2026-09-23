@@ -8,6 +8,8 @@ This is a stateless Component optimized for performance.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 
 # Try to import Rust implementation
 try:
@@ -134,11 +136,11 @@ class Icon(Component):
         """Render Bootstrap 5 icon"""
         # Build icon class based on library
         if self.library == "bootstrap":
-            icon_class = f"bi bi-{self.name}"
+            icon_class = f"bi bi-{conditional_escape(self.name)}"
         elif self.library == "fontawesome":
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
         else:  # custom
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
 
         # Size classes (Bootstrap Icons uses font-size)
         size_map = {
@@ -151,10 +153,12 @@ class Icon(Component):
         size_class = size_map.get(self.size, " fs-4")
 
         # Color class
-        color_class = f" text-{self.color}" if self.color else ""
+        color_class = f" text-{conditional_escape(self.color)}" if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
+        aria_label = (
+            f' aria-label="{conditional_escape(self.label)}" role="img"' if self.label else ""
+        )
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'
 
@@ -162,11 +166,11 @@ class Icon(Component):
         """Render Tailwind CSS icon"""
         # Build icon class based on library
         if self.library == "bootstrap":
-            icon_class = f"bi bi-{self.name}"
+            icon_class = f"bi bi-{conditional_escape(self.name)}"
         elif self.library == "fontawesome":
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
         else:  # custom
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
 
         # Size classes
         size_map = {
@@ -193,7 +197,9 @@ class Icon(Component):
         color_class = color_map.get(self.color, "") if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
+        aria_label = (
+            f' aria-label="{conditional_escape(self.label)}" role="img"' if self.label else ""
+        )
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'
 
@@ -201,16 +207,18 @@ class Icon(Component):
         """Render plain HTML icon"""
         # Build icon class based on library
         if self.library == "bootstrap":
-            icon_class = f"bi bi-{self.name}"
+            icon_class = f"bi bi-{conditional_escape(self.name)}"
         elif self.library == "fontawesome":
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
         else:  # custom
-            icon_class = self.name
+            icon_class = conditional_escape(self.name)
 
-        size_class = f" icon-{self.size}" if self.size != "md" else ""
-        color_class = f" icon-{self.color}" if self.color else ""
+        size_class = f" icon-{conditional_escape(self.size)}" if self.size != "md" else ""
+        color_class = f" icon-{conditional_escape(self.color)}" if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
+        aria_label = (
+            f' aria-label="{conditional_escape(self.label)}" role="img"' if self.label else ""
+        )
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'

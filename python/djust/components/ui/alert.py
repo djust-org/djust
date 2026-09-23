@@ -6,6 +6,7 @@ Provides dismissible alert/notification messages with framework-aware styling.
 
 from typing import Any, Dict, Optional
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -107,11 +108,11 @@ class AlertComponent(LiveComponent):
         alert_type = type_map.get(self.type, "info")
         dismissible_class = " alert-dismissible fade show" if self.dismissible else ""
 
-        html = f'<div class="alert alert-{alert_type}{dismissible_class}" role="alert" id="{self.component_id}">'
-        html += f"{self.message}"
+        html = f'<div class="alert alert-{alert_type}{dismissible_class}" role="alert" id="{conditional_escape(self.component_id)}">'
+        html += f"{conditional_escape(self.message)}"
 
         if self.dismissible:
-            html += f'<button type="button" class="btn-close" dj-click="dismiss" data-component-id="{self.component_id}" aria-label="Close"></button>'
+            html += f'<button type="button" class="btn-close" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}" aria-label="Close"></button>'
 
         html += "</div>"
         return html
@@ -127,12 +128,12 @@ class AlertComponent(LiveComponent):
         }
         classes = type_map.get(self.type, "bg-blue-50 text-blue-800 border-blue-200")
 
-        html = f'<div class="rounded-md border p-4 {classes}" id="{self.component_id}">'
+        html = f'<div class="rounded-md border p-4 {classes}" id="{conditional_escape(self.component_id)}">'
         html += '<div class="flex">'
-        html += f'<div class="flex-1">{self.message}</div>'
+        html += f'<div class="flex-1">{conditional_escape(self.message)}</div>'
 
         if self.dismissible:
-            html += f'<button type="button" dj-click="dismiss" data-component-id="{self.component_id}" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
+            html += f'<button type="button" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
             html += '<span class="sr-only">Dismiss</span>'
             html += '<svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
             html += "</button>"
@@ -143,11 +144,11 @@ class AlertComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML alert"""
-        html = f'<div class="alert alert-{self.type}" id="{self.component_id}">'
-        html += f"{self.message}"
+        html = f'<div class="alert alert-{conditional_escape(self.type)}" id="{conditional_escape(self.component_id)}">'
+        html += f"{conditional_escape(self.message)}"
 
         if self.dismissible:
-            html += f'<button type="button" dj-click="dismiss" data-component-id="{self.component_id}">×</button>'
+            html += f'<button type="button" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}">×</button>'
 
         html += "</div>"
         return html
