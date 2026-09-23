@@ -124,6 +124,12 @@ body.dc-body {
 .dc-badges { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 .dc-note { font-size: 0.8125rem; color: hsl(var(--muted-foreground)); margin: 0.75rem 0 0; }
 .dc-note code { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+/* Text stays foreground: the presets' warning hue fails AA as text on light
+   backgrounds, so the tone is carried by the border alone. */
+.dc-note--warning {
+  color: hsl(var(--foreground)); border-left: 3px solid hsl(var(--warning, 38 92% 50%));
+  padding-left: 0.625rem;
+}
 .dc-subtitle:first-child { margin-top: 0; }
 .dc-details > summary {
   cursor: pointer; list-style: none; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;

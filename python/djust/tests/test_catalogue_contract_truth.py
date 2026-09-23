@@ -15,6 +15,17 @@ from djust.theming.gallery.component_registry import describe_component
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def _urlconf():
+    """The pages reverse `djust_theming:*` URLs, as in test_catalogue_ux."""
+    from django.test import override_settings
+
+    from djust.tests.test_catalogue_ux import _SETTINGS
+
+    with override_settings(**_SETTINGS):
+        yield
+
+
 def _detail(component_name: str):
     from django.test import RequestFactory
 
@@ -203,3 +214,47 @@ class TestEveryPreviewShowsSomethingOrSaysWhy:
             "html"
         ]
         assert re.sub(r"<[^>]+>", "", html).strip(), f"{name} preview has no visible text"
+
+
+class TestClientNeedsAreStated:
+    """A component whose markup needs JavaScript djust does not load says so."""
+
+    def test_a_shipped_script_is_named_and_found(self):
+        from djust.theming.gallery.component_registry import component_client
+
+        client = component_client("countdown")
+        assert client == {
+            "hook": "Countdown",
+            "script": "djust_components/countdown.js",
+            "hook_shipped": True,
+        }
+
+    def test_a_hook_nothing_ships_is_reported_as_such(self):
+        from djust.theming.gallery.component_registry import component_client
+
+        client = component_client("sortable_list")
+        assert client["hook"] == "SortableList"
+        assert client["script"] == "" and client["hook_shipped"] is False
+
+    def test_the_hook_is_found_even_when_no_example_renders_it(self):
+        """`image_lightbox` renders nothing while closed; its hook is in the
+        class source all the same."""
+        assert describe_component("image_lightbox")["client"]["hook"] == "ImageLightbox"
+
+    def test_the_detail_page_loads_the_script_and_says_so(self):
+        view = _detail("countdown")
+        ctx = view._base_ctx
+        assert ctx["client_script"] == "djust_components/countdown.js"
+        assert ctx["client_script_url"].endswith("djust_components/countdown.js")
+        assert ctx["client_hook"] == ""
+
+    def test_the_detail_page_warns_about_an_unshipped_hook(self, client):
+        assert _detail("signature_pad")._base_ctx["client_hook"] == "SignaturePad"
+        body = client.get("/theme/components/signature_pad/").content.decode()
+        assert "Needs a client hook djust does not ship" in body
+        assert "window.djust.hooks.SignaturePad" in body
+
+    def test_the_page_includes_the_script_it_names(self, client):
+        body = client.get("/theme/components/countdown/").content.decode()
+        assert 'djust_components/countdown.js" defer></script>' in body
+        assert "Needs its script on the page" in body

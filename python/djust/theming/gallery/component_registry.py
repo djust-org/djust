@@ -1418,6 +1418,7 @@ COMPONENT_DESCRIPTION_KEYS = (
     "slots",
     "style_paths",
     "python_class",
+    "client",
 )
 
 
@@ -1601,7 +1602,69 @@ def describe_component(component_name: str) -> dict:
         "slots": list(ctx.get("available_slots") or []),
         "style_paths": style_paths,
         "python_class": python_class,
+        "client": component_client(component_name),
     }
+
+
+_HOOK_ATTR_RE = re.compile(r'dj-hook="([A-Za-z_]\w*)"')
+
+
+def _components_static_dir() -> Any:
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "components" / "static" / "djust_components"
+
+
+def _client_hook_sources() -> str:
+    """Every script djust ships that could define a component hook."""
+    from pathlib import Path
+
+    djust_root = Path(__file__).resolve().parents[2]
+    texts = []
+    for folder in (_components_static_dir(), djust_root / "static" / "djust" / "src"):
+        if folder.is_dir():
+            texts += [f.read_text(errors="ignore") for f in sorted(folder.glob("*.js"))]
+    return "\n".join(texts)
+
+
+def component_client(component_name: str) -> dict:
+    """What a component needs in the browser beyond djust's client.
+
+    ``{"hook", "script", "hook_shipped"}``:
+
+    ``hook``
+        The ``dj-hook`` name its markup carries, read from the class source so
+        it is found even when no example renders it; ``""`` if none.
+    ``script``
+        The static path of the script djust ships for it
+        (``djust_components/countdown.js``), or ``""``. A page must include it:
+        the catalogue did not, so these previews were inert.
+    ``hook_shipped``
+        Whether any shipped script answers that hook. For most hooks none
+        does — the component renders its markup and the interaction its
+        docstring describes (drag, draw, crop …) is left to the app.
+    """
+    cls, _class_name = _load_component_class(component_name)
+    hook = ""
+    if cls is not None:
+        try:
+            found = _HOOK_ATTR_RE.search(inspect.getsource(cls))
+        except (OSError, TypeError):
+            found = None
+        hook = found.group(1) if found else ""
+    script_name = component_name.replace("_", "-") + ".js"
+    script = (
+        f"djust_components/{script_name}"
+        if (_components_static_dir() / script_name).is_file()
+        else ""
+    )
+    hook_shipped = False
+    if hook:
+        sources = _client_hook_sources()
+        hook_shipped = bool(
+            re.search(rf'hooks\.{hook}\s*=|dj-hook="{hook}"|\b{hook}\s*:\s*\{{', sources)
+        )
+    return {"hook": hook, "script": script, "hook_shipped": hook_shipped}
 
 
 def _docstring_args(cls: Any) -> dict:

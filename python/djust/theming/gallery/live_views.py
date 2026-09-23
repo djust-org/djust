@@ -768,6 +768,7 @@ def catalogue_chrome() -> Dict[str, Any]:
         "djust_version": djust_version,
         "docs_url": docs_url,
         "docs_guide_url": f"{docs_url}/guides/components/",
+        "docs_hooks_url": f"{docs_url}/guides/hooks/",
         "docs_reference_url": f"{docs_url}/reference/components/",
     }
 
@@ -913,6 +914,17 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         )
         ctx["usage_parts"] = split_usage(ctx["usage_snippet"])
         ctx["events"] = events
+        # What the component needs in the browser beyond djust's client: a
+        # shipped script the page must include (and which this page now loads,
+        # so the preview is live), or a `dj-hook` nothing ships.
+        from django.templatetags.static import static
+
+        from .component_registry import component_client
+
+        client = component_client(component_name)
+        ctx["client_hook"] = client["hook"] if not client["hook_shipped"] else ""
+        ctx["client_script"] = client["script"]
+        ctx["client_script_url"] = static(client["script"]) if client["script"] else ""
         # Rendered here through the Python component, not the `{% code_snippet %}`
         # tag: the Rust engine renders that tag natively and its output is not
         # highlighted (a gap noted for the docs pass). The component's own
