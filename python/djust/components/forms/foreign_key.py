@@ -8,6 +8,7 @@ with support for autocomplete and large querysets.
 from typing import Any, Callable, Dict, List, Optional
 from django.db.models import QuerySet
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 
@@ -191,21 +192,19 @@ class ForeignKeySelect(LiveComponent):
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 select."""
         options = self.get_options()
-        select_id = f"id_{self.name}"
+        select_id = f"id_{conditional_escape(self.name)}"
 
-        html = f'<div class="mb-3" id="{self.component_id}">'
+        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
 
         # Label
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            html += (
-                f'<label for="{select_id}" class="form-label">{self.label}{required_mark}</label>'
-            )
+            html += f'<label for="{conditional_escape(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
 
         # Build select classes
         select_classes = ["form-select"]
         if self.size != "md":
-            select_classes.append(f"form-select-{self.size}")
+            select_classes.append(f"form-select-{conditional_escape(self.size)}")
         if self.validation_state == "valid":
             select_classes.append("is-valid")
         elif self.validation_state == "invalid":
@@ -214,8 +213,8 @@ class ForeignKeySelect(LiveComponent):
         # Select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{select_id}"',
-            f'name="{self.name}"',
+            f'id="{conditional_escape(select_id)}"',
+            f'name="{conditional_escape(self.name)}"',
             'dj-change="select(value)"',
         ]
         if self.required:
@@ -226,21 +225,21 @@ class ForeignKeySelect(LiveComponent):
         # Searchable wrapper
         if self.searchable:
             html += '<div class="position-relative">'
-            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)">'
 
         html += f"<select {' '.join(attrs)}>"
 
         # Empty option
         if self.empty_label and not self.required:
             selected = " selected" if self.value is None else ""
-            html += f'<option value=""{selected}>{self.empty_label}</option>'
+            html += f'<option value=""{selected}>{conditional_escape(self.empty_label)}</option>'
 
         # Options
         for opt in options:
             opt_value = opt["value"]
             opt_label = opt["label"]
             selected = " selected" if str(opt_value) == str(self.value) else ""
-            html += f'<option value="{opt_value}"{selected}>{opt_label}</option>'
+            html += f'<option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
 
         html += "</select>"
 
@@ -249,14 +248,16 @@ class ForeignKeySelect(LiveComponent):
 
         # Help text
         if self.help_text:
-            html += f'<div class="form-text">{self.help_text}</div>'
+            html += f'<div class="form-text">{conditional_escape(self.help_text)}</div>'
 
         # Validation feedback
         if self.validation_message:
             feedback_class = (
                 "valid-feedback" if self.validation_state == "valid" else "invalid-feedback"
             )
-            html += f'<div class="{feedback_class}">{self.validation_message}</div>'
+            html += (
+                f'<div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
+            )
 
         html += "</div>"
         return html
@@ -264,14 +265,14 @@ class ForeignKeySelect(LiveComponent):
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS select."""
         options = self.get_options()
-        select_id = f"id_{self.name}"
+        select_id = f"id_{conditional_escape(self.name)}"
 
-        html = f'<div class="mb-4" id="{self.component_id}">'
+        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
 
         # Label
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
-            html += f'<label for="{select_id}" class="block text-sm font-medium text-gray-700 mb-1">{self.label}{required_mark}</label>'
+            html += f'<label for="{conditional_escape(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         # Build select classes
         select_classes = [
@@ -298,8 +299,8 @@ class ForeignKeySelect(LiveComponent):
         # Select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{select_id}"',
-            f'name="{self.name}"',
+            f'id="{conditional_escape(select_id)}"',
+            f'name="{conditional_escape(self.name)}"',
             'dj-change="select(value)"',
         ]
         if self.required:
@@ -310,21 +311,21 @@ class ForeignKeySelect(LiveComponent):
         # Searchable input
         if self.searchable:
             html += '<div class="relative">'
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)">'
 
         html += f"<select {' '.join(attrs)}>"
 
         # Empty option
         if self.empty_label and not self.required:
             selected = " selected" if self.value is None else ""
-            html += f'<option value=""{selected}>{self.empty_label}</option>'
+            html += f'<option value=""{selected}>{conditional_escape(self.empty_label)}</option>'
 
         # Options
         for opt in options:
             opt_value = opt["value"]
             opt_label = opt["label"]
             selected = " selected" if str(opt_value) == str(self.value) else ""
-            html += f'<option value="{opt_value}"{selected}>{opt_label}</option>'
+            html += f'<option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
 
         html += "</select>"
 
@@ -333,14 +334,16 @@ class ForeignKeySelect(LiveComponent):
 
         # Help text
         if self.help_text:
-            html += f'<p class="mt-1 text-sm text-gray-500">{self.help_text}</p>'
+            html += (
+                f'<p class="mt-1 text-sm text-gray-500">{conditional_escape(self.help_text)}</p>'
+            )
 
         # Validation feedback
         if self.validation_message:
             if self.validation_state == "valid":
-                html += f'<p class="mt-1 text-sm text-green-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-green-600">{conditional_escape(self.validation_message)}</p>'
             else:
-                html += f'<p class="mt-1 text-sm text-red-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-red-600">{conditional_escape(self.validation_message)}</p>'
 
         html += "</div>"
         return html
@@ -514,15 +517,17 @@ class ManyToManySelect(LiveComponent):
         """Render as Bootstrap 5 checkboxes."""
         options = self.get_options()
 
-        html = f'<div class="mb-3" id="{self.component_id}">'
+        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            html += f'<label class="form-label">{self.label}{required_mark}</label>'
+            html += (
+                f'<label class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+            )
 
         # Search input
         if self.searchable:
-            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)">'
 
         html += '<div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">'
 
@@ -531,16 +536,16 @@ class ManyToManySelect(LiveComponent):
             disabled = "disabled" if self.disabled else ""
             html += f"""
             <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="{self.name}_{opt["value"]}"
-                       {checked} {disabled} dj-click="toggle({opt["value"]})">
-                <label class="form-check-label" for="{self.name}_{opt["value"]}">{opt["label"]}</label>
+                <input type="checkbox" class="form-check-input" id="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}"
+                       {checked} {disabled} dj-click="toggle({conditional_escape(opt["value"])})">
+                <label class="form-check-label" for="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}">{conditional_escape(opt["label"])}</label>
             </div>
             """
 
         html += "</div>"
 
         if self.help_text:
-            html += f'<div class="form-text">{self.help_text}</div>'
+            html += f'<div class="form-text">{conditional_escape(self.help_text)}</div>'
 
         if self.validation_message:
             feedback_class = (
@@ -548,7 +553,9 @@ class ManyToManySelect(LiveComponent):
                 if self.validation_state == "valid"
                 else "invalid-feedback d-block"
             )
-            html += f'<div class="{feedback_class}">{self.validation_message}</div>'
+            html += (
+                f'<div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
+            )
 
         html += "</div>"
         return html
@@ -557,14 +564,14 @@ class ManyToManySelect(LiveComponent):
         """Render as Tailwind checkboxes."""
         options = self.get_options()
 
-        html = f'<div class="mb-4" id="{self.component_id}">'
+        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
-            html += f'<label class="block text-sm font-medium text-gray-700 mb-1">{self.label}{required_mark}</label>'
+            html += f'<label class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         if self.searchable:
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)">'
 
         html += '<div class="border border-gray-300 rounded-md p-2 max-h-48 overflow-y-auto">'
 
@@ -574,21 +581,23 @@ class ManyToManySelect(LiveComponent):
             html += f"""
             <div class="flex items-center mb-1">
                 <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                       id="{self.name}_{opt["value"]}" {checked} {disabled} dj-click="toggle({opt["value"]})">
-                <label class="ml-2 text-sm text-gray-700" for="{self.name}_{opt["value"]}">{opt["label"]}</label>
+                       id="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}" {checked} {disabled} dj-click="toggle({conditional_escape(opt["value"])})">
+                <label class="ml-2 text-sm text-gray-700" for="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}">{conditional_escape(opt["label"])}</label>
             </div>
             """
 
         html += "</div>"
 
         if self.help_text:
-            html += f'<p class="mt-1 text-sm text-gray-500">{self.help_text}</p>'
+            html += (
+                f'<p class="mt-1 text-sm text-gray-500">{conditional_escape(self.help_text)}</p>'
+            )
 
         if self.validation_message:
             if self.validation_state == "valid":
-                html += f'<p class="mt-1 text-sm text-green-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-green-600">{conditional_escape(self.validation_message)}</p>'
             else:
-                html += f'<p class="mt-1 text-sm text-red-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-red-600">{conditional_escape(self.validation_message)}</p>'
 
         html += "</div>"
         return html
@@ -596,15 +605,13 @@ class ManyToManySelect(LiveComponent):
     def _render_select_bootstrap(self) -> str:
         """Render as Bootstrap 5 multi-select."""
         options = self.get_options()
-        select_id = f"id_{self.name}"
+        select_id = f"id_{conditional_escape(self.name)}"
 
-        html = f'<div class="mb-3" id="{self.component_id}">'
+        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            html += (
-                f'<label for="{select_id}" class="form-label">{self.label}{required_mark}</label>'
-            )
+            html += f'<label for="{conditional_escape(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
 
         select_classes = ["form-select"]
         if self.validation_state == "invalid":
@@ -614,22 +621,24 @@ class ManyToManySelect(LiveComponent):
 
         disabled = "disabled" if self.disabled else ""
 
-        html += f'<select class="{" ".join(select_classes)}" id="{select_id}" name="{self.name}" multiple size="5" {disabled}>'
+        html += f'<select class="{" ".join(select_classes)}" id="{conditional_escape(select_id)}" name="{conditional_escape(self.name)}" multiple size="5" {disabled}>'
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})">{opt["label"]}</option>'
+            html += f'<option value="{conditional_escape(opt["value"])}" {selected} dj-click="toggle({conditional_escape(opt["value"])})">{conditional_escape(opt["label"])}</option>'
 
         html += "</select>"
 
         if self.help_text:
-            html += f'<div class="form-text">{self.help_text}</div>'
+            html += f'<div class="form-text">{conditional_escape(self.help_text)}</div>'
 
         if self.validation_message:
             feedback_class = (
                 "valid-feedback" if self.validation_state == "valid" else "invalid-feedback"
             )
-            html += f'<div class="{feedback_class}">{self.validation_message}</div>'
+            html += (
+                f'<div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
+            )
 
         html += "</div>"
         return html
@@ -637,13 +646,13 @@ class ManyToManySelect(LiveComponent):
     def _render_select_tailwind(self) -> str:
         """Render as Tailwind multi-select."""
         options = self.get_options()
-        select_id = f"id_{self.name}"
+        select_id = f"id_{conditional_escape(self.name)}"
 
-        html = f'<div class="mb-4" id="{self.component_id}">'
+        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
-            html += f'<label for="{select_id}" class="block text-sm font-medium text-gray-700 mb-1">{self.label}{required_mark}</label>'
+            html += f'<label for="{conditional_escape(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         select_classes = ["block", "w-full", "rounded-md", "border-gray-300", "shadow-sm"]
         if self.validation_state == "invalid":
@@ -653,22 +662,24 @@ class ManyToManySelect(LiveComponent):
 
         disabled = "disabled" if self.disabled else ""
 
-        html += f'<select class="{" ".join(select_classes)}" id="{select_id}" name="{self.name}" multiple size="5" {disabled}>'
+        html += f'<select class="{" ".join(select_classes)}" id="{conditional_escape(select_id)}" name="{conditional_escape(self.name)}" multiple size="5" {disabled}>'
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{opt["value"]}" {selected} dj-click="toggle({opt["value"]})">{opt["label"]}</option>'
+            html += f'<option value="{conditional_escape(opt["value"])}" {selected} dj-click="toggle({conditional_escape(opt["value"])})">{conditional_escape(opt["label"])}</option>'
 
         html += "</select>"
 
         if self.help_text:
-            html += f'<p class="mt-1 text-sm text-gray-500">{self.help_text}</p>'
+            html += (
+                f'<p class="mt-1 text-sm text-gray-500">{conditional_escape(self.help_text)}</p>'
+            )
 
         if self.validation_message:
             if self.validation_state == "valid":
-                html += f'<p class="mt-1 text-sm text-green-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-green-600">{conditional_escape(self.validation_message)}</p>'
             else:
-                html += f'<p class="mt-1 text-sm text-red-600">{self.validation_message}</p>'
+                html += f'<p class="mt-1 text-sm text-red-600">{conditional_escape(self.validation_message)}</p>'
 
         html += "</div>"
         return html
