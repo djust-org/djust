@@ -628,7 +628,7 @@ _PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="
       {% if ex.kwargs_display %}<details class="dc-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
     </div>
     {% empty %}
-    <div class="dc-preview dc-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+    <div class="dc-preview dc-preview--empty">{{ empty_reason }}</div>
     {% endfor %}
   {% endif %}
   {% if more_examples %}
@@ -683,6 +683,7 @@ def component_preview(
     """
     from ..gallery.live_views import render_preview_examples
     from ..gallery.catalogue import playground_options
+    from ..gallery.component_registry import empty_preview_reason
 
     examples = list(examples or [])
     values = dict(values or {})
@@ -752,6 +753,7 @@ def component_preview(
                     # highlighting or the ``dj-copy`` the usage card has.
                     "playground_code_html": _highlighted_python(playground_call),
                     "more_examples": more_examples,
+                    "empty_reason": empty_preview_reason(component_name),
                 }
             )
         )

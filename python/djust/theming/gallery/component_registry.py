@@ -660,6 +660,19 @@ _NO_DEFAULT = "—"
 NOT_SUPPLIED = "NOT_SUPPLIED"
 
 
+def _is_required(param: dict) -> bool:
+    """A caller must pass it: no default, and not ``*args`` / ``**kwargs``.
+
+    A VAR_KEYWORD has no default either, which marked every component's
+    ``**kwargs`` "required" — so both the catalogue and the generated
+    reference told readers they had to pass something called ``kwargs``.
+    """
+    return param.get("default") == _NO_DEFAULT and param.get("kind") not in (
+        "VAR_POSITIONAL",
+        "VAR_KEYWORD",
+    )
+
+
 def _default_source(default: Any) -> str:
     """A parameter's default, as source a reader could type."""
     if default is inspect.Parameter.empty:
@@ -754,7 +767,18 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "alert": [{"message": "Example"}],
         "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
         "approval_gate": [{}],
-        "aspect_ratio": [{}],
+        # A box with nothing inside it had no width in the preview's flex row,
+        # so the ratio drew as nothing at all.
+        "aspect_ratio": [
+            {
+                "content": (
+                    '<div style="width:320px;height:100%;display:grid;place-items:center;'
+                    'background:hsl(var(--muted));border-radius:var(--radius-md,0.375rem)">'
+                    "16 / 9</div>"
+                ),
+                "ratio": "16/9",
+            }
+        ],
         "audit_log": [{}],
         "avatar": [{"initials": "JD", "alt": "Jane Doe", "size": "md"}],
         "badge": [{"label": "Example"}],
@@ -768,8 +792,8 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "breadcrumb": [
             {
                 "items": [
-                    {"label": "Home", "url": "/"},
-                    {"label": "Library", "url": "/library/"},
+                    {"label": "Home", "url": "#"},
+                    {"label": "Library", "url": "#library"},
                     {"label": "Data", "active": True},
                 ]
             }
@@ -777,10 +801,10 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "breadcrumb_dropdown": [
             {
                 "items": [
-                    {"label": "Home", "url": "/"},
-                    {"label": "Library", "url": "/library/"},
-                    {"label": "Data", "url": "/library/data/"},
-                    {"label": "Tables", "url": "/library/data/tables/"},
+                    {"label": "Home", "url": "#"},
+                    {"label": "Library", "url": "#library"},
+                    {"label": "Data", "url": "#library-data"},
+                    {"label": "Tables", "url": "#library-data-tables"},
                     {"label": "Current page"},
                 ],
                 "max_visible": 3,
@@ -982,7 +1006,17 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ),
             }
         ],
-        "error_boundary": [{}],
+        # The healthy state first, then the fallback a failure shows; its Retry
+        # clears the error, as a host's handler would after reloading.
+        "error_boundary": [
+            {"content": '<p style="margin:0">The chart rendered normally.</p>'},
+            {
+                "content": '<p style="margin:0">The chart rendered normally.</p>',
+                "error": "TimeoutError",
+                "fallback": "The chart could not load.",
+                "retry_event": "retry_load",
+            },
+        ],
         "expandable_text": [{}],
         "fieldset": [
             {"legend": "Shipping address", "content": '<label>Street <input type="text"></label>'}
@@ -1169,9 +1203,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
             {
                 "brand": "MyApp",
                 "items": [
-                    {"label": "Home", "href": "/", "active": True},
-                    {"label": "Docs", "href": "/docs/"},
-                    {"label": "Blog", "href": "/blog/"},
+                    {"label": "Home", "href": "#", "active": True},
+                    {"label": "Docs", "href": "#docs"},
+                    {"label": "Blog", "href": "#blog"},
                 ],
             }
         ],
@@ -1236,7 +1270,21 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "popover": [{}],
-        "presence_avatars": [{}],
+        "presence_avatars": [
+            {
+                "users": [
+                    {"name": "Ada Lovelace", "status": "online"},
+                    {"name": "Grace Hopper", "status": "away"},
+                    {"name": "Alan Turing", "status": "online"},
+                ]
+            }
+        ],
+        "prompt_editor": [
+            {
+                "template": "Summarise {{topic}} for {{audience}} in three bullet points.",
+                "variables": {"topic": "djust LiveView", "audience": "a Django developer"},
+            }
+        ],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
         "reactions": [
             {
@@ -1262,9 +1310,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
             {
                 "title": "Workspace",
                 "items": [
-                    {"label": "Dashboard", "href": "/", "active": True},
-                    {"label": "Projects", "href": "/projects/"},
-                    {"label": "Settings", "href": "/settings/"},
+                    {"label": "Dashboard", "href": "#", "active": True},
+                    {"label": "Projects", "href": "#projects"},
+                    {"label": "Settings", "href": "#settings"},
                 ],
             }
         ],
@@ -1292,7 +1340,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "source_citation": [{}],
         "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
         "split_pane": [{}],
-        "sticky_header": [{}],
+        "sticky_header": [
+            {"content": "<strong>Section title</strong> — stays pinned while its section scrolls."}
+        ],
         "tabs": [
             {
                 "tabs": [{"id": "one", "label": "Overview"}, {"id": "two", "label": "Activity"}],
@@ -1370,6 +1420,29 @@ COMPONENT_DESCRIPTION_KEYS = (
 )
 
 
+#: Why a component's page shows no preview, when it cannot. The generic
+#: "needs runtime dependencies or has no examples" was true of none of these:
+#: most render nothing until opened, one is a mixin, one needs a bound form.
+EMPTY_PREVIEW_REASONS: dict[str, str] = {
+    "bottom_sheet": "Renders nothing until opened — pass open=True from your view to show it.",
+    "export_dialog": "Renders nothing until opened — pass open=True from your view to show it.",
+    "image_lightbox": "Renders nothing until opened — pass open=True with images to show it.",
+    "tour": "Renders nothing until started — it draws over the page's own elements.",
+    "form_validation": "Renders a bound Django form field's errors — it needs a form to show anything.",
+    "server_event_toast": (
+        "A LiveView mixin, not a component — it shows toasts your view pushes, "
+        "so there is nothing to render on its own."
+    ),
+}
+
+
+def empty_preview_reason(component_name: str) -> str:
+    """The sentence a catalogue page shows in place of a preview."""
+    return EMPTY_PREVIEW_REASONS.get(
+        component_name, "No preview — this component has no example to render yet."
+    )
+
+
 def describe_component(component_name: str) -> dict:
     """Everything known about one component, as data.
 
@@ -1389,9 +1462,11 @@ def describe_component(component_name: str) -> dict:
     ``examples``
         The kwarg dicts the catalogue previews, usable verbatim in a snippet.
     ``events``
-        Server event names the component's markup emits, in the order they
-        appear. Derived by rendering the first example, which is the only way
-        to see what a component actually emits.
+        Server event names the host view must answer: what the first example's
+        markup emits (minus names the example wrote into that markup itself),
+        then the component's own ``event`` / ``*_event`` parameters, which
+        cover states the example does not show. See
+        :func:`~djust.theming.gallery.catalogue.contract_events`.
     ``style_paths``
         ``[(label, path)]`` — where to override it: the module or template,
         and the stylesheet that defines its classes.
@@ -1409,7 +1484,7 @@ def describe_component(component_name: str) -> dict:
     from .catalogue import (
         build_catalogue_detail_context,
         component_description,
-        component_events,
+        contract_events,
     )
 
     ctx = build_catalogue_detail_context(component_name, render_examples=False)
@@ -1449,7 +1524,7 @@ def describe_component(component_name: str) -> dict:
                 "type": _annotation_name(p.get("annotation")),
                 "default": p.get("default"),
                 "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
-                "required": p.get("default") == _NO_DEFAULT,
+                "required": _is_required(p),
                 "kind": p.get("kind", ""),
             }
             for p in ctx.get("python_params") or []
@@ -1459,7 +1534,7 @@ def describe_component(component_name: str) -> dict:
         PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
     )
 
-    events: list[str] = []
+    html = ""
     if examples:
         try:
             if is_template:
@@ -1469,9 +1544,13 @@ def describe_component(component_name: str) -> dict:
                 html = "".join(e.get("html", "") for e in rendered)
             else:
                 html = render_python_component_example(component_name, dict(examples[0]))
-            events = component_events(html)
-        except Exception:  # noqa: BLE001 — a component that cannot render has no events to report
+        except Exception:  # noqa: BLE001 — a component that cannot render emits nothing to scan
             logger.debug("could not scan events for %s", sanitize_for_log(component_name))
+    # A tag's events are what its markup sends; a class also declares its
+    # events as parameters, which covers states the example does not show.
+    events = contract_events(
+        [] if is_template else params, dict(examples[0]) if examples else {}, html
+    )
 
     style_paths = []
     if ctx.get("template_path"):
@@ -1496,7 +1575,7 @@ def describe_component(component_name: str) -> dict:
                         "type": _annotation_name(p.get("annotation")),
                         "default": p.get("default"),
                         "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
-                        "required": p.get("default") == _NO_DEFAULT,
+                        "required": _is_required(p),
                         "kind": p.get("kind", ""),
                     }
                     for p in signature

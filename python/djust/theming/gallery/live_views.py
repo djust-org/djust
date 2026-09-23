@@ -122,9 +122,39 @@ def _step(delta: int):
     return _shift
 
 
+def _month_step(delta: int):
+    """Move `date_picker`'s month, wrapping December <-> January.
+
+    `month=0` (the default, and what the example passes) means "this month";
+    the generic `_step` turned it into `None` or `-1`, so the arrows did
+    nothing.
+    """
+
+    def _shift(current: Any, _incoming: Any) -> Any:
+        import datetime
+
+        try:
+            month = int(current or 0)
+        except (TypeError, ValueError):
+            month = 0
+        if not 1 <= month <= 12:
+            month = datetime.date.today().month
+        return (month - 1 + delta) % 12 + 1
+
+    # What the usage snippet shows; `demo_stub_sources` cannot probe this one
+    # the way it probes `_step`, because the result depends on today's date.
+    _shift.stub_expr = (  # type: ignore[attr-defined]
+        "self.component.month % 12 + 1" if delta > 0 else "(self.component.month - 2) % 12 + 1"
+    )
+    return _shift
+
+
 def _append_row(current: Any, _incoming: Any) -> Any:
-    # `rows` is a list of `{"value": ...}` dicts (see `form_array`).
-    return list(current or []) + [{"value": ""}]
+    # `rows` is a list of `{"value": ...}` dicts (see `form_array`). With no
+    # rows the component still renders `min` (1 by default) empty ones, so
+    # "add" has to start from that row, not from nothing — appending to an
+    # empty list rendered the same single row again.
+    return (list(current or []) or [{"value": ""}]) + [{"value": ""}]
 
 
 def _add_tag(current: Any, incoming: Any) -> Any:
@@ -179,12 +209,13 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_select": ("value", _text),
     "date_select": ("selected", _text),
     "set_step": ("active", _as_int),
-    "date_prev_month": ("month", _step(-1)),
-    "date_next_month": ("month", _step(1)),
+    "date_prev_month": ("month", _month_step(-1)),
+    "date_next_month": ("month", _month_step(1)),
     "toggle_expand": ("expanded", _flip),
     "toggle_preview": ("preview", _flip),
     "inline_edit": ("editing", _flip),
     "toggle_split_menu": ("is_open", _flip),
+    "toggle_menu": ("open", _flip),
     "toggle_notifications": ("is_open", _flip),
     "toggle_sheet": ("is_open", _flip),
     "close_sheet": ("is_open", lambda _c, _v: False),
@@ -199,6 +230,9 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "approve": ("status", lambda _c, _v: "approved"),
     "reject": ("status", lambda _c, _v: "rejected"),
     "send": ("sent", lambda _c, _v: True),
+    "save_prompt": ("saved", lambda _c, _v: True),
+    # `error_boundary`'s Retry: a host reloads and clears `error`.
+    "retry_load": ("error", lambda _c, _v: ""),
     # Found by re-running the audit after the examples above gained content:
     # giving a component something to show also gives it something to click.
     # `carousel` emits next/prev only once it has slides, `data_table` emits a
@@ -439,7 +473,7 @@ for _event, _effects in _DEMO_EVENTS.items():
 del _descriptor_cls, _event, _effects
 
 
-def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
+def demo_stub_sources(example: Dict[str, Any], params: Optional[set] = None) -> Dict[str, list]:
     """What each hand-hosted demo event does, as the line a handler writes.
 
     ``{event: [(kwarg, python_expression, initial_value), …]}`` — derived
@@ -447,6 +481,12 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
     semantics (`toggle_x` flips, `carousel_next` steps, `close_x` sets
     False, `set_x` takes the wire value, which arrives typed) rather than a
     generic assignment.
+
+    ``params`` is the component's parameter names. A demo effect on a kwarg
+    the component does not have (`dismissed`, `accepted`, `sent`, and
+    `notification_center`'s `is_open`) moves nothing, so it is left out —
+    showing it taught ``self.component.dismissed = True``, an attribute no
+    such component reads. The snippet then writes the generic handler.
     """
 
     out: Dict[str, list] = {}
@@ -454,9 +494,13 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
         pairs = effects if isinstance(effects, list) else [effects]
         stubs = []
         for key, transform in pairs:
+            if params is not None and key not in params:
+                continue
             initial = example.get(key)
             name = getattr(transform, "__name__", "")
-            if transform is _flip:
+            if getattr(transform, "stub_expr", None):
+                expr = transform.stub_expr
+            elif transform is _flip:
                 expr, initial = f"not self.component.{key}", bool(initial)
             elif transform is _as_int or transform is _text:
                 # The wire carries the value typed (ADR-033 D4): no int().
@@ -830,7 +874,13 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # the page's `{{ preview }}` one render. Not per event: an open item
         # would change the table and, with it, force a page render for what
         # is otherwise a preview-only click (ADR-032 D1).
-        from .catalogue import component_events, split_usage, styles_for, usage_with_events
+        from .catalogue import (
+            component_events,
+            contract_events,
+            split_usage,
+            styles_for,
+            usage_with_events,
+        )
 
         ctx.pop("styles", None)
         rendered = self._render_examples()
@@ -839,13 +889,25 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # Usage with its events: what the first example's markup emits, the
         # descriptor's class-level form when there is one, and for the
         # hand-hosted demo events the kwarg each one drives.
-        events = component_events("".join(e["html"] for e in rendered[:1]))
+        first_html = "".join(e["html"] for e in rendered[:1])
+        events = contract_events(
+            self._event_params(component_name, component_type, ctx),
+            examples[0] if examples else {},
+            first_html,
+        )
+        # The snippet answers everything the copied example emits — including
+        # a name the example wrote into its own markup (`loading_overlay`'s
+        # demo button), which is not the component's event but still reaches
+        # the view. Leaving it out made the copied code fail on first click.
+        usage_events = events + [e for e in component_events(first_html) if e not in events]
         ctx["usage_snippet"] = usage_with_events(
             ctx.get("usage_snippet", ""),
-            events,
+            usage_events,
             descriptor_class=descriptor_cls.__name__ if descriptor_cls is not None else "",
             descriptor_event=descriptor_cls.Meta.event if descriptor_cls is not None else "",
-            demo_stubs=demo_stub_sources(examples[0] if examples else {}),
+            demo_stubs=demo_stub_sources(
+                examples[0] if examples else {}, self._param_names(component_type, ctx)
+            ),
             class_name=ctx.get("class_name") or "",
             example=examples[0] if examples else None,
         )
@@ -867,6 +929,31 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
                 code=ctx["usage_parts"]["template"], language="django"
             ).render(),
         }
+
+    @staticmethod
+    def _param_names(component_type: str, ctx: Dict[str, Any]) -> set:
+        """The kwargs the rendered component actually accepts."""
+        if component_type == "template":
+            groups = (ctx.get("required_context") or []) + (ctx.get("optional_context") or [])
+        else:
+            groups = ctx.get("python_params") or []
+        return {p.get("name", "") for p in groups}
+
+    @staticmethod
+    def _event_params(component_name: str, component_type: str, ctx: Dict[str, Any]) -> list:
+        """The class's parameters with their docstring descriptions, for
+        :func:`contract_events` — the same inputs ``describe_component``
+        gives it, so the page and the reference list the same events."""
+        if component_type == "template":
+            return []
+        from .component_registry import _docstring_args, _load_component_class
+
+        cls, _class_name = _load_component_class(component_name)
+        docs = _docstring_args(cls)
+        return [
+            {**p, "doc": p.get("description") or docs.get(p.get("name", ""), "")}
+            for p in ctx.get("python_params") or []
+        ]
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """The rendered examples, as the preview renders them now."""
