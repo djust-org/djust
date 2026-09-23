@@ -11,7 +11,7 @@ djust ships two complementary primitives for data-heavy UI:
 |-----------|---------|----------|
 | `dj-virtual` | Windowed rendering — only the visible slice is in the DOM | Fixed: ~visible-plus-overscan items |
 | `dj-viewport-top` / `dj-viewport-bottom` | Fire a server event when the first/last child scrolls into view | IntersectionObserver (no polling) |
-| Stream `limit=N` | Cap DOM growth for append-only feeds | Prunes from the opposite edge automatically |
+| Stream `limit=N` | Cap DOM growth for append-only feeds | Not yet capped client-side (known issue #2964) |
 
 Use `dj-virtual` when the server knows the full list (or a large slice) and you need steady 60fps scroll on 1K-100K rows. Use `dj-viewport-*` + stream `limit` for chat, log viewers, and activity feeds that load data on-demand.
 
@@ -31,12 +31,16 @@ Use `dj-virtual` when the server knows the full list (or a large slice) and you 
 Required attributes:
 
 - **`dj-virtual="<var_name>"`** — marker; the value is informational (kept for parity with Phoenix conventions).
-- **`dj-virtual-item-height="<px>"`** — fixed pixel height per row. Required — every item must render at this height.
+- **A height mode — pick one:**
+  - **`dj-virtual-item-height="<px>"`** — fixed pixel height per row; every item must render at this height.
+  - **`dj-virtual-variable-height`** — variable heights, measured with `ResizeObserver`.
 - The container must have a **fixed CSS height** and **`overflow: auto`**.
 
 Optional:
 
 - **`dj-virtual-overscan="<N>"`** — extra rows rendered above/below the viewport. Default `3`. Set higher (e.g. `10`) for smoother scroll on slow devices; lower to save DOM.
+- **`dj-virtual-estimated-height="<px>"`** — variable mode only: baseline height for items not yet measured. Default `50`.
+- **`dj-virtual-key-attr="<attr>"`** — variable mode only: the item attribute used as the height-cache key, so cached heights follow their item when the list reorders. Default `data-key`; items without it fall back to their index.
 
 ### How it works
 
@@ -63,9 +67,8 @@ Because the shell is absolutely positioned, the container is made a positioned a
 
 Scope note: the client-side *absorb* fallback is **append-only** (a loose row lands at the tail — correct for chat/feeds). Keyed mid-list inserts, removals and reorders no longer rely on it: since 1.1.0 the differ is `dj-virtual`-aware and emits keyed splice ops, so a server-side insert at position 5 lands at position 5 rather than the tail (`LIVEVIEW_CONFIG['virtual_keyed_ops']`, default **on**; set it to `False` to opt out). Finalize-patch landing for an item scrolled OUT of the current window is still open. For explicit control you can still set `container.__djVirtualItems` to an array of `HTMLElement` before `refreshVirtualList` to replace the pool wholesale.
 
-### Limitations (v0.5.0)
+### Limitations
 
-- **Fixed height only.** Variable-height items (text wrapping, collapsible rows) are planned for v0.5.1 via `ResizeObserver`. For now, set `white-space: nowrap; overflow: hidden; text-overflow: ellipsis;` on cells to force a single line.
 - **No horizontal virtualization** — columns render fully. Keep column count modest.
 - **Keyboard navigation** across the virtual boundary is application-controlled; plumb `scrollIntoView()` calls on focus if you need tab-through-row behavior.
 
@@ -87,7 +90,7 @@ Phoenix 1.0 parity. Fire a server event when the first or last child of a stream
      dj-viewport-bottom="load_newer"
      dj-viewport-threshold="0.1">
   {% for msg in streams.messages %}
-    <div id="msg-{{ msg.id }}">{{ msg.content }}</div>
+    <div id="messages-{{ msg.id }}">{{ msg.content }}</div>
   {% endfor %}
 </div>
 ```
@@ -101,7 +104,7 @@ Attributes:
 ### Firing semantics
 
 - **Once per entry.** After fire, the sentinel child gets `data-dj-viewport-fired="true"` so scroll oscillation won't re-fire.
-- **Re-arm** by calling `djust.resetViewport(container)` from a hook, or — more idiomatically — by **replacing the sentinel child** (which is what normal `stream_insert` / `stream_prune` ops already do).
+- **Re-arm** by calling `djust.resetViewport(container)` from a hook, or — more idiomatically — by **replacing the sentinel child** (for example when a re-render inserts new items at that edge).
 
 ### Event format
 
@@ -111,11 +114,13 @@ container.addEventListener('dj-viewport', (e) => {
 });
 ```
 
-If `window.djust.pushEvent` is wired (WebSocket connected), the named event is also pushed to the server with `{ edge }` params.
+The named event is also sent to the server via `window.djust.handleEvent(event, { edge })`, over whichever transport is active (WebSocket, SSE or HTTP).
 
 ## Stream `limit` — Cap DOM growth
 
-Bidirectional infinite scroll is only useful if the DOM doesn't grow unbounded. The server-side `stream()` method takes a `limit=N` kwarg that emits a `stream_prune` op after inserts:
+Bidirectional infinite scroll is only useful if the DOM doesn't grow unbounded. The server-side `stream()` method takes a `limit=N` kwarg intended to prune the stream after inserts.
+
+> **Known issue: #2964.** At 1.2.0rc10, `limit=` only trims the batch being inserted, server-side. The `stream_prune` op it queues (and the one `stream_prune()` queues) is never delivered to the browser, so DOM growth is **not** capped. The rules below describe the intended behaviour.
 
 ```python
 from djust import LiveView
@@ -144,7 +149,7 @@ Rules:
 - **`at=0`** (prepend) + `limit=N` → prunes from the **bottom**.
 - Explicit control via `self.stream_prune(name, limit=N, edge="top")` / `edge="bottom"`.
 
-The client applies `stream_prune` ops by removing surplus element children from the specified edge.
+Once #2964 is fixed, the client will apply `stream_prune` ops by removing surplus element children from the specified edge.
 
 ## Composing the two
 
@@ -157,18 +162,17 @@ A chat app typically uses all three on one container:
      dj-viewport-top="load_older"
      style="height: 600px; overflow: auto;">
   {% for msg in streams.messages %}
-    <div id="msg-{{ msg.id }}" class="msg">…</div>
+    <div id="messages-{{ msg.id }}" class="msg">…</div>
   {% endfor %}
 </div>
 ```
 
 - `dj-virtual` keeps the DOM at ~15 children even with 500 messages in memory.
 - `dj-viewport-top` fires `load_older` when the user scrolls to the beginning.
-- Server responds with `self.stream("messages", older, at=0, limit=500)` — the prepend + prune keeps the pool bounded, and `dj-virtual` re-renders automatically via the normal stream op pipeline.
+- Server responds with `self.stream("messages", older, at=0, limit=500)`, and `dj-virtual` re-renders automatically after the morph. The prune that should keep the pool bounded does not reach the browser yet (known issue #2964).
 
 ## Performance notes
 
 - **RAF batching** — the scroll handler runs at most once per frame. A rapid fling will coalesce into ~60 repaints per second, not hundreds.
 - **IntersectionObserver** does not poll — it uses browser layout events and is essentially free.
 - **DOM identity** is preserved across scrolls for elements in the pool, so `dj-hook` mounts, attached event listeners, and `dj-model` bindings survive virtualization.
-- The client module adds ~7 KB combined (virtual list + infinite scroll, unminified) to `client.js`.

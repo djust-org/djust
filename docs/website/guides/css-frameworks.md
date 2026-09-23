@@ -111,7 +111,7 @@ python manage.py djust_setup_css tailwind --watch
 | **v4** (recommended) | No config needed | `@import "tailwindcss"; @source "../templates/";` |
 | **v3** | `tailwind.config.js` with `content:` paths | `@tailwind base; @tailwind components; @tailwind utilities;` |
 
-`djust_setup_css` generates v4-style `input.css` by default. For v3, it also creates a `tailwind.config.js`.
+`djust_setup_css` always writes a v4-style `input.css`, and it also writes a v3-style `tailwind.config.js` if none exists. It does not detect your Tailwind version. On Tailwind v3, replace the contents of `input.css` with the three `@tailwind` directives.
 
 ---
 
@@ -201,8 +201,8 @@ bring your own Bootstrap 4 CSS via npm/CDN. djust does not bundle it.
 ### Radio buttons (separate config keys)
 
 Radio inputs use their own config keys rather than reusing the
-checkbox classes (BS4 and BS5 style them differently). Override in the
-adapter or via `LIVEVIEW_CONFIG`:
+checkbox classes (BS4 and BS5 style them differently). Override them in a
+custom adapter, or in `LIVEVIEW_CONFIG` under the framework key (see below):
 
 | Key | Bootstrap 4 default | Bootstrap 5 default |
 |---|---|---|
@@ -213,6 +213,36 @@ adapter or via `LIVEVIEW_CONFIG`:
 If a radio key is not set, djust falls back to the corresponding
 checkbox key — so existing Bootstrap 5 projects don't need to define
 radio classes explicitly.
+
+Top-level keys such as `LIVEVIEW_CONFIG = {'radio_class': ...}` are ignored:
+classes are looked up as `<framework>.<key>`. `LIVEVIEW_CONFIG` is also merged
+shallowly, so setting `'bootstrap4': {...}` replaces the whole Bootstrap 4
+class map. Copy the full default map when you override one key:
+
+```python
+LIVEVIEW_CONFIG = {
+    "css_framework": "bootstrap4",
+    "bootstrap4": {
+        # The full default map, with radio_class changed:
+        "field_class": "form-control",
+        "field_class_invalid": "form-control is-invalid",
+        "select_class": "custom-select",
+        "error_class": "invalid-feedback",
+        "error_class_block": "invalid-feedback d-block",
+        "help_text_class": "form-text text-muted",
+        "label_class": "",
+        "checkbox_class": "custom-control-input",
+        "checkbox_label_class": "custom-control-label",
+        "checkbox_wrapper_class": "custom-control custom-checkbox",
+        "radio_class": "my-radio",
+        "radio_label_class": "custom-control-label",
+        "radio_wrapper_class": "custom-control custom-radio",
+        "field_wrapper_class": "form-group",
+        "button_primary_class": "btn btn-primary",
+        "button_secondary_class": "btn btn-secondary",
+    },
+}
+```
 
 ### Select widgets
 
@@ -233,7 +263,7 @@ a theme switch automatically restyles Bootstrap components without
 editing Bootstrap source:
 
 ```django
-{% load djust %}
+{% load theme_tags %}
 <head>
   …
   {% theme_framework_overrides %}
@@ -243,14 +273,16 @@ editing Bootstrap source:
 Example output (Bootstrap 5, abridged):
 
 ```css
-.btn-primary { background-color: var(--primary); border-color: var(--primary); }
-.form-control { border-color: var(--border); background: var(--background); }
-.alert-info { background: color-mix(in oklch, var(--primary), white 80%); }
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.btn-primary { --bs-btn-bg: hsl(var(--primary)); --bs-btn-border-color: hsl(var(--primary)); --bs-btn-color: hsl(var(--primary-foreground)); }
+.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
 ```
 
-The tag is a no-op when `css_framework='tailwind'` or `None` — Tailwind
-projects manage their palette via `@theme` in `input.css`, so the
-bridge would just duplicate work.
+The tokens are HSL triplets, so every rule wraps them in `hsl(...)`.
+
+The tag emits nothing unless a theme pack is active. It is also a no-op
+when `css_framework='tailwind'` or `None` — Tailwind projects manage their
+palette via `@theme` in `input.css`, so the bridge would just duplicate work.
 
 ---
 
@@ -262,16 +294,17 @@ When `css_framework` is set, djust's `FormMixin` and built-in components automat
 
 ```python
 # In your LiveView
-class ContactView(LiveView, FormMixin):
+class ContactView(FormMixin, LiveView):
     form_class = ContactForm
 ```
 
-With `css_framework='bootstrap5'`, fields render as:
+With `css_framework='bootstrap5'`, a required `EmailField` renders as:
 
 ```html
 <div class="mb-3">
-    <label for="id_email" class="form-label">Email</label>
-    <input type="email" name="email" id="id_email" class="form-control" />
+    <label for="id_email" class="form-label">Email <span class="text-danger">*</span></label>
+    <input name="email" id="id_email" class="form-control" required="required"
+           dj-change="validate_field" type="email" value="" maxlength="320" />
 </div>
 ```
 
@@ -279,9 +312,10 @@ With `css_framework='tailwind'`, fields render as:
 
 ```html
 <div class="mb-4">
-    <label for="id_email" class="block text-sm font-medium text-gray-700">Email</label>
-    <input type="email" name="email" id="id_email"
-           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" />
+    <label for="id_email" class="block text-sm font-medium text-gray-700">Email <span class="text-red-600">*</span></label>
+    <input name="email" id="id_email"
+           class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+           required="required" dj-change="validate_field" type="email" value="" maxlength="320" />
 </div>
 ```
 
@@ -377,8 +411,8 @@ runtime requirement, just a convention worth borrowing.
 
 ## Common Pitfalls
 
-Four ways CSS goes wrong in production. Each has a system check that catches
-it, so `python manage.py check` finds them before a deploy does.
+Four ways CSS goes wrong in production. Three of them have a system check that
+catches them, so `python manage.py check` finds them before a deploy does.
 
 ### Tailwind CDN in production
 
@@ -402,7 +436,8 @@ warns when `output.css` is missing.**
 
 If `tailwind.config.js` content globs don't match the real template
 directories, the build purges classes that are actually used — the utilities
-go missing and the result can be *larger*, not smaller. Use
+go missing and the result can be *larger*, not smaller. No system check
+covers this one. Use
 `djust_setup_css` to auto-detect the directories, or check the globs by hand.
 
 ## CI/CD Integration
@@ -466,16 +501,19 @@ and the input CSS only when they are absent, so pre-create or edit those files
 to change content globs, theme, or plugins — the build respects them and
 prints the command it ran.
 
-**Form-field classes.** Subclass `djust.frameworks.FrameworkAdapter` and
-register it to control the CSS classes djust's form renderers emit:
+**Form-field classes.** The simplest route is to subclass
+`djust.frameworks.BaseAdapter` and override class attributes, as shown in
+[Custom Adapter](#custom-adapter) above. To take over rendering completely,
+subclass `djust.frameworks.FrameworkAdapter` and implement its three abstract
+methods with these signatures:
 
 ```python
 from djust.frameworks import FrameworkAdapter, register_adapter
 
 class MyAdapter(FrameworkAdapter):
-    def render_field(self, field, **attrs): ...
-    def render_errors(self, field): ...
-    def get_field_class(self, field): ...
+    def render_field(self, field, field_name, value, errors, **kwargs): ...
+    def render_errors(self, errors, **kwargs): ...
+    def get_field_class(self, field, has_errors=False): ...
 
 register_adapter("myui", MyAdapter())
 ```

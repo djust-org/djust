@@ -119,9 +119,10 @@ independent paths, so "warn-only" is not the whole story:
 * `LIVEVIEW_CONFIG['strict_serialization'] = True` — opt-in, default `False`
   (`python/djust/serialization.py`).
 * `DEBUG = True` — `LiveView.get_state()` raises `TypeError` for a
-  non-serializable attribute and only logs when `DEBUG` is off
-  (`python/djust/live_view.py:1167-1171`). This one is NOT opt-in, which is
-  why a service instance on `self` surfaces in development as an exception:
+  non-serializable attribute (`python/djust/live_view.py:1240-1241`). Only
+  the test utilities call `get_state()`, so this surfaces in tests, not on
+  the live render path. The render path warns and converts the value to a
+  string unless `strict_serialization` is on:
 
 ```python
 class MyView(LiveView):
@@ -177,7 +178,7 @@ For more patterns and examples, see the [Working with External Services](service
 Every LiveView follows this lifecycle: **mount → refresh → get_context_data → render**. Understanding this pattern is key to writing correct djust code.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 from django.db.models import Q
 
@@ -269,7 +270,7 @@ def select_service(self, service_id="", **kwargs):
 Key rules:
 
 1. **`@event_handler` is required** — without it, the method won't be discoverable as an event handler
-2. **Always include `**kwargs`** — djust sends internal parameters like `_targetElement` that must be absorbed
+2. **Always include `**kwargs`** — the client may send extra params your signature doesn't name (for example `value`, or `dj-value-*` keys), and they must be absorbed
 3. **Provide default values** for all parameters — prevents errors when parameters are missing
 4. **Use `value` for input/change events** — `dj-input` and `dj-change` send the input value as `value`
 
@@ -338,7 +339,8 @@ def search(self, value: str = "", **kwargs):
 def on_scroll(self, scroll_y: int = 0, **kwargs):
     self.scroll_position = scroll_y
 
-# Like button with optimistic UI (instant feedback before server confirms)
+# Like button marked @optimistic (INERT at 1.2.0rc10, #2699: no client-side
+# optimistic update happens; the server round-trip updates the UI)
 @event_handler
 @optimistic
 def like_post(self, post_id: int = 0, **kwargs):
@@ -369,7 +371,7 @@ def expensive_operation(self, **kwargs):
 | ----------------------------- | --------------------------- | -------------- |
 | Search/filter input           | `@debounce(wait=0.5)`       | 300-500ms      |
 | Scroll/resize/mousemove       | `@throttle(interval=0.1)`   | 100-200ms      |
-| Like/toggle/vote              | `@optimistic`               | —              |
+| Like/toggle/vote              | `@optimistic` (INERT, #2699) | —              |
 | Autocomplete/repeated lookups | `@cache(ttl=300)`           | 60-300s TTL    |
 | Multi-component coordination  | one handler + the server re-render (`@client_state` is INERT, #2680) | —              |
 | Destructive/admin actions     | `@permission_required(...)` | Django perms   |
@@ -494,7 +496,7 @@ Use `push_to_view` to push updates from background tasks, signals, or other view
 from djust import push_to_view
 
 # From a Celery task, signal handler, or management command
-push_to_view("dashboard", {"services": get_all_statuses()})
+push_to_view("myapp.views.DashboardView", state={"services": get_all_statuses()})
 ```
 
 ---
@@ -525,14 +527,12 @@ Skip keys for append-only lists, small static lists (<10 items), or lists that a
 
 ### 3. FingerprintMixin for large state
 
-For views with large state dictionaries, `FingerprintMixin` uses MD5 hashes to skip unchanged values — reducing WebSocket bandwidth by 80-90%:
-
-```python
-from djust.optimization.fingerprint import FingerprintMixin
-
-class MyView(FingerprintMixin, LiveView):
-    fingerprinted_assigns = ["services", "logs", "users"]
-```
+`FingerprintMixin` is a helper toolkit, not an automatic optimization. It
+provides `get_changed_assigns()`, `get_cached_section()` and
+`cache_section()`, which hash values so you can detect what changed. Nothing
+in the render or patch path calls them, and a `fingerprinted_assigns`
+attribute is not read by the framework, so adding the mixin on its own saves
+no bandwidth. Use it only if you call those helpers yourself.
 
 ### 4. Temporary assigns for append-only lists
 
@@ -796,26 +796,27 @@ class MyView(LiveView):
 
 ### Loading states
 
+Don't set an `is_loading` flag at the start of a handler and clear it at the
+end. A handler runs to completion before the view renders, so the template
+never sees the flag set and the spinner never appears. Show the loading state
+on the client with `dj-loading.*` instead:
+
 ```python
 class MyView(LiveView):
-    is_loading = state(default=False)
-
     @event_handler
     def load_data(self, **kwargs):
-        self.is_loading = True
-        try:
-            self.data = expensive_api_call()
-        finally:
-            self.is_loading = False
+        self.data = expensive_api_call()
 ```
 
 ```html
-{% if is_loading %}
-    <div class="spinner">Loading...</div>
-{% else %}
-    <div>{{ data }}</div>
-{% endif %}
+<button dj-click="load_data" dj-loading.disable>Load</button>
+<div dj-loading.show style="display:none" class="spinner">Loading...</div>
+<div>{{ data }}</div>
 ```
+
+For work that takes seconds, run it in the background (`@background` or
+`start_async`) and let the handler return at once. See
+[Loading states](loading-states.md).
 
 ---
 
@@ -840,7 +841,7 @@ class LeaseFormView(FormMixin, LiveView):
     def form_valid(self, form):
         lease = form.save()
         self.success_message = "Lease saved!"
-        self.redirect_url = reverse("lease-detail", kwargs={"pk": lease.pk})
+        self.live_redirect(reverse("lease-detail", kwargs={"pk": lease.pk}))
 
     def form_invalid(self, form):
         self.error_message = "Please fix the errors below."
@@ -1050,32 +1051,29 @@ class PaymentView(LiveView):
 ```
 
 **Related:**
-- Runtime check: Raises `TypeError` in DEBUG mode when serialization fails
+- Runtime check: warns and stringifies the value when serialization fails; raises `TypeError` with `strict_serialization=True`
 - System check: `djust.V006` detects service patterns via AST analysis
 - Guide: [Working with External Services](services.md)
 
 ### Missing `dj-root`
 
-**Problem:** LiveView template has `dj-view` but is missing `dj-root`.
+**Not a problem any more:** `dj-root` is optional. Since PR #297 it is
+inferred from `dj-view` on both the client and the server, so a template with
+only `dj-view` works.
 
-**Why it's wrong:**
-- djust requires BOTH attributes to function:
-  - `dj-view`: Identifies the LiveView class (for WebSocket connection)
-  - `dj-root`: Marks the root element for VDOM patching
-- Missing `dj-root` causes confusing error: **"DJE-053: No DOM changes detected"**
-- Template renders correctly on initial load but WebSocket updates fail silently
+- `dj-view`: Identifies the LiveView class (for WebSocket connection)
+- `dj-root`: Marks the root element for VDOM patching (inferred from `dj-view` when absent)
 
-**Solution:**
-Add both attributes to the same root element:
+**Optional:** add `dj-root` on the same element for clarity:
 
 ```html
-<!-- ❌ Don't do this -->
+<!-- Works: dj-root is inferred -->
 <div dj-view="MyView">
     <h1>{{ title }}</h1>
     <p>{{ content }}</p>
 </div>
 
-<!-- ✅ Do this instead -->
+<!-- Also works, and more explicit -->
 <div dj-view="MyView" dj-root>
     <h1>{{ title }}</h1>
     <p>{{ content }}</p>
@@ -1085,12 +1083,12 @@ Add both attributes to the same root element:
 **With template inheritance:**
 
 ```html
-<!-- base.html -->
+<!-- page.html -->
 {% extends "base.html" %}
 
 {% block content %}
 <div dj-view="MyView" dj-root>
-    <!-- CRITICAL: Both attributes on the SAME element -->
+    <!-- If you add dj-root, put it on the SAME element as dj-view -->
     <h1>{{ title }}</h1>
     {% block inner %}{% endblock %}
 </div>
@@ -1101,7 +1099,6 @@ Add both attributes to the same root element:
 - System check: `djust.T002` hints when `dj-root` is absent (INFO severity — it is auto-inferred from `dj-view`)
 - System check: `djust.T005` detects when attributes are on different elements
 - Guide: [Template Requirements](template-requirements.md)
-- Error code: [DJE-053](error-codes.md#dje-053-no-dom-changes)
 
 ### ASGI Configuration Issues
 
@@ -1403,7 +1400,7 @@ When building a djust LiveView:
 
 - [ ] Declare state with `state(default=...)` at the class level
 - [ ] Never store service instances in state — use helper methods instead
-- [ ] Add both `dj-view` and `dj-root` to template root element
+- [ ] Add `dj-view` to the template root element (`dj-root` is optional)
 - [ ] Use `@event_handler` on all event handlers
 - [ ] Include `**kwargs` in all event handlers
 - [ ] Provide default values for all handler parameters

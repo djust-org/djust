@@ -37,7 +37,7 @@ from djust.decorators import event_handler
 
 class AudioPlayerView(LiveView):
     sticky = True
-    sticky_id = "audio-player"  # defaults to class name lowercased
+    sticky_id = "audio-player"  # required for sticky=True embeds (no default)
     template_name = "myapp/audio_player.html"
 
     def mount(self, request, **kwargs):
@@ -67,7 +67,7 @@ The tag validates at render time that ``AudioPlayerView.sticky == True``
 
 ```html
 <div dj-view dj-sticky-view="audio-player" dj-sticky-root
-     data-djust-embedded="child_1">
+     data-djust-embedded="audio-player">
     <!-- AudioPlayerView's rendered HTML -->
 </div>
 ```
@@ -78,8 +78,8 @@ The tag validates at render time that ``AudioPlayerView.sticky == True``
 > on its root, the rendered page ends up with a **nested, duplicate
 > `dj-view`** inside the wrapper — the child's client-side mount breaks and
 > its `dj-click` / `dj-input` events silently don't bind. This is a subtle
-> footgun because a normal *page* view *does* require `dj-view="<path>"` on
-> its root to be mountable. The rule for sticky children is the opposite:
+> footgun because a normal *page* view's root *does* carry `dj-view="<path>"`
+> (stamped automatically on `<div dj-root>`, or written explicitly). The rule for sticky children is the opposite:
 >
 > | View kind | Root `dj-view`? |
 > |---|---|
@@ -141,7 +141,7 @@ Two class attributes control sticky behavior:
 | Attribute | Default | Meaning |
 |---|---|---|
 | `sticky` | `False` | Opt-in. Must be `True` for `{% live_render ... sticky=True %}` to accept this class. |
-| `sticky_id` | `None` (→ class name lowercased) | Stable identifier shared server ↔ client. Keys the stash on the client and the `_sticky_preserved` dict on the server. |
+| `sticky_id` | `None` — **required** for `sticky=True` embeds; `{% live_render ... sticky=True %}` raises `TemplateSyntaxError` if it is unset | Stable identifier shared server ↔ client. Keys the stash on the client and the `_sticky_preserved` dict on the server. |
 
 Why two attributes? The class decides whether preservation is *possible*
 (`sticky = True` means "this view's design supports re-registering on
@@ -192,9 +192,9 @@ own template root declares its own `dj-view` attribute.
 The wrapper that `{% live_render ... sticky=True %}` emits already carries
 `dj-view`. A sticky child that *also* puts `dj-view` on its root produces a
 nested, duplicate `dj-view` inside the wrapper — the child's client-side mount
-breaks and its events silently don't bind. (Normal page views, by contrast,
-*require* `dj-view` on their root — which is exactly why this mistake is so
-easy to make.)
+breaks and its events silently don't bind. (A normal page view's root, by
+contrast, carries `dj-view` — stamped automatically on `<div dj-root>`, or
+written explicitly — which is exactly why this mistake is so easy to make.)
 
 ```
 $ python manage.py check
@@ -245,7 +245,7 @@ The sticky subtree dispatches CustomEvents you can listen to:
 | Event | When | `detail` |
 |---|---|---|
 | `djust:sticky-preserved` | Successful reattach at a slot in the new layout | `{sticky_id}` |
-| `djust:sticky-unmounted` | Sticky was discarded | `{sticky_id, reason}` where `reason` is `'server-unmount'`, `'no-slot'`, or `'auth'` |
+| `djust:sticky-unmounted` | Sticky was discarded | `{sticky_id, reason}` where `reason` is `'server-unmount'` or `'no-slot'` (an auth denial arrives as `'server-unmount'`) |
 
 Events dispatch on the sticky subtree element. Since CustomEvents
 bubble, `document.addEventListener('djust:sticky-preserved', ...)`
@@ -261,8 +261,9 @@ document.addEventListener('djust:sticky-preserved', (e) => {
     // the live DOM (e.g. a chart library that probes its container).
 });
 document.addEventListener('djust:sticky-unmounted', (e) => {
-    if (e.detail.reason === 'auth') {
-        console.log('Sticky', e.detail.sticky_id, 'revoked by auth re-check');
+    // Auth-recheck denials surface as 'server-unmount'.
+    if (e.detail.reason === 'server-unmount') {
+        console.log('Sticky', e.detail.sticky_id, 'unmounted by the server');
     }
 });
 </script>
@@ -280,10 +281,16 @@ for every staged sticky. The helper:
 * Returns `True` for allow, `False` for deny.
 
 A `False` return unmounts the sticky: `_on_sticky_unmount()` is called
-on the instance (default: cancels pending `start_async` tasks), the
+on the instance, the
 child is dropped from the survivor set, and the client receives a
 `djust:sticky-unmounted` event with `reason='server-unmount'` once
 `sticky_hold` arrives.
+
+> **Known issue: #2969.** The default `_on_sticky_unmount()` is meant to
+> cancel pending `start_async` tasks, but it calls a `cancel_async_all()`
+> method that doesn't exist, so it does nothing. Override
+> `_on_sticky_unmount()` and call `self.cancel_async(name)` for each task
+> you started.
 
 ### Why lightweight?
 
@@ -311,19 +318,23 @@ any retained-after-logout edge cases.
 {% extends "base.html" %}
 {% load live_tags %}
 {% block body %}
-    <aside>... sidebar content ...</aside>
-    <main dj-root>
-        {% block page %}{% endblock %}
-        <div dj-sticky-slot="audio-player"></div>
-        <div dj-sticky-slot="notification-center"></div>
-    </main>
-    {# First page render embeds the stickies. Subsequent pages inherit the slots. #}
-    {% if first_visit %}
+    <div dj-root>
+        <aside>... sidebar content ...</aside>
+        <main>
+            {% block page %}{% endblock %}
+        </main>
         {% live_render "myapp.views.AudioPlayerView" sticky=True %}
         {% live_render "myapp.views.NotificationCenterView" sticky=True %}
-    {% endif %}
+    </div>
 {% endblock %}
 ```
+
+The root must be a literal `<div dj-root>`: that is the tag the server
+stamps `dj-view` onto, so a `<main dj-root>` root isn't mountable. Every
+page that extends the shell embeds the stickies. On the first render they
+mount fresh; after a `live_redirect`, `{% live_render %}` finds the
+preserved instance and emits only a slot, so the survivor is re-attached
+without running `mount()` again.
 
 ### Pattern 2: Wizard with sticky preview pane
 
@@ -350,12 +361,13 @@ last state as they navigate forward/back.
 
 ## Limitations
 
-1. **No survival across WS reconnect**. When the WS closes (tab
-   backgrounded long enough for idle timeout, network blip, server
+1. **No survival across WS reconnect by default**. When the WS closes
+   (tab backgrounded long enough for idle timeout, network blip, server
    restart), the sticky dies on the server side and the client's
    stash is cleared. Re-mount happens from scratch on reconnect.
-   In `DEBUG`, the server logs a warning if a sticky's state is
-   non-trivial and the reconnect dropped it.
+   With `enable_state_snapshot = True` on both the sticky child and
+   its parent, the child's state is restored — see
+   [Sticky-Child State Persistence](sticky-child-persistence.md).
 2. **No cross-tab sync**. Two tabs of the same app don't share a
    sticky instance. Each tab has its own WS and its own sticky.
 3. **`<head>` merging is not implemented**. If your sticky needs a
@@ -423,12 +435,12 @@ same view instance. Same for `@background`-decorated handlers.
 
 **Q: What if two pages declare different `sticky_id`s for the same view class?**
 
-They get separate instances. The `sticky_id` is the identity — two
-`{% live_render "MyView" sticky=True %}` with default `sticky_id` both
-resolve to `"myview"` (the class name lowercased), but the
-TemplateSyntaxError on collision prevents that within one template.
-Across two templates, each embedding with its own `sticky_id` means
-each page has its own sticky.
+They can't: `sticky_id` is a class attribute with no default, so one
+view class has exactly one `sticky_id`, and `{% live_render ...
+sticky=True %}` raises `TemplateSyntaxError` if it is unset. Within one
+page, two sticky embeds with the same `sticky_id` also raise
+`TemplateSyntaxError`. To get separate sticky instances, use separate
+subclasses, each with its own `sticky_id`.
 
 **Q: Can I call `self.live_redirect()` from a sticky?**
 
@@ -439,6 +451,6 @@ sticky preserves itself across its own redirect.
 
 **Q: How do I force-unmount a sticky?**
 
-Call `self.cancel_async_all()` and then `self.live_redirect(...)` to
-a page that omits the slot. The server's post-render scan will
+Call `self.cancel_async(name)` for each task you started, then
+`self.live_redirect(...)` to a page that omits the slot. The server's post-render scan will
 drop the sticky and emit `djust:sticky-unmounted reason='no-slot'`.

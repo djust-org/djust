@@ -1,8 +1,9 @@
 # Streaming Initial Render
 
 > **Phase 1 (v0.6.1)** — transport-layer chunked transfer, regex-split-after-render.
-> **Phase 2 PR-A (v0.9.0)** — async render path; the shell chunk now flushes
-> to the wire BEFORE `get_context_data()` runs (real TTFB win on ASGI).
+> **Phase 2 PR-A (v0.9.0)** — async render path (`aget()` + `ChunkEmitter`)
+> on ASGI. The page is still fully rendered before the first chunk is sent;
+> the TTFB win comes from lazy children (PR-B).
 > **Phase 2 PR-B (v0.9.0)** — `{% live_render lazy=True %}` opt-in lazy children.
 > **Phase 2 PR-C (v0.9.0)** — `asyncio.as_completed()` parallel render across
 > lazy children.
@@ -19,25 +20,31 @@ The original v0.6.1 release notes called this feature "streaming initial
 render" but the shipped path was actually a regex-split applied to the
 **already-fully-rendered** HTML string. The chunks landed on the wire
 *after* the entire view had completed `get_context_data()` and template
-render. Time-to-first-byte was unchanged from `HttpResponse`. Phase 2 PR-A
-(v0.9.0, ADR-015) delivers the actual shell-flush-before-render
-semantic via `async def aget()` + `python/djust/http_streaming.py`'s
-`ChunkEmitter`. Phase 1 is retained as the WSGI-deployment fallback —
-WSGI cannot push real chunks before the response is assembled, so on
-WSGI the user gets the cosmetic 3-chunk split with no TTFB win.
+render. Time-to-first-byte was unchanged from `HttpResponse`.
+
+That is still true of the parent view today. On ASGI, `async def aget()`
+first runs the whole sync GET pipeline (`mount()`, `get_context_data()`
+and the full template render) and only then splits the HTML and streams
+it through `python/djust/http_streaming.py`'s `ChunkEmitter`. What does
+overlap the flushed shell is `{% live_render lazy=True %}` children: they
+render *after* the shell and main chunks are on the wire. Phase 1 is
+retained as the WSGI-deployment fallback, where the user gets the
+cosmetic 3-chunk split with no TTFB win.
 
 djust can return a LiveView page as an **HTTP/1.1 chunked-transfer
-response** instead of a single buffered response. **On ASGI deployments
-running v0.9.0 or later**, the browser receives the shell chunk
-(`<!DOCTYPE>` + `<head>` + `<body>` open) as soon as the parent view's
-template is *parsed*, not when it's fully rendered. Intermediate proxies
-that honor chunked encoding relay each chunk as it arrives.
+response** instead of a single buffered response. The parent view is
+fully rendered first; the response is then streamed in chunks, and on
+ASGI any `{% live_render lazy=True %}` children render *after* the shell
+and main chunks are flushed. Slow work in the parent's `mount()` /
+`get_context_data()` still delays the first byte, so move it into a lazy
+child to get a TTFB win. Intermediate proxies that honor chunked encoding
+relay each chunk as it arrives.
 
 ## Deployment requirements
 
-* **ASGI** (Daphne, Uvicorn, Hypercorn) — full Phase-2 PR-A streaming.
-  The shell chunk reaches the wire while body chunks are still being
-  prepared by `arender_chunks()` on the same event loop.
+* **ASGI** (Daphne, Uvicorn, Hypercorn) — Phase-2 streaming. After the
+  parent render, `arender_chunks()` emits the shell and main chunks, then
+  renders lazy children while those chunks are already on the wire.
 * **WSGI** — falls back to Phase-1 cosmetic chunked response. The chunks
   are correct but TTFB is unchanged from non-streaming. `aget()` detects
   the missing event loop via `_is_asgi_context()` and routes to `get()`
@@ -51,33 +58,24 @@ that honor chunked encoding relay each chunk as it arrives.
   - Cloudflare: chunked transfer is supported; no extra config.
   - AWS ALB / GCP LB: chunked transfer supported.
 
-## Foundation for lazy children (PR-B preview)
+## Lazy children
 
-Phase 2 PR-B introduces `{% live_render "..." lazy=True %}` opt-in. The
-tag emits a `<dj-lazy-slot>` placeholder synchronously and registers a
-render thunk on `parent._chunk_emitter`. After the parent shell
-flushes, the emitter runs each thunk and emits a
+`{% live_render "..." lazy=True %}` is opt-in. The tag emits a
+`<dj-lazy-slot>` placeholder synchronously and registers a render thunk
+for the emitter. After the parent's chunks flush, the emitter runs each
+thunk and emits a
 `<template id="djl-fill-X">` chunk + inline `<script>` that the browser
 parses and the client uses to `replaceWith` the slot.
 
-PR-A ships ONLY the foundation (`aget()`, `ChunkEmitter`,
-`arender_chunks()`). PR-B ships the user-facing `lazy=True` API. PR-C
-adds parallelization via `asyncio.as_completed()`. This split-foundation
-shape follows retro #1122.
+Several lazy children render in parallel (`asyncio.as_completed()`).
 
 ---
 
-> **Original Phase-1 caveat (kept for archival reference):** Phase 1
-> doesn't do true server-side overlap — rendering the main content
-> *while* the browser is parsing the shell. Phase 2 PR-A introduces
-> that capability.
-
-This is the djust analog of Next.js
-[`renderToPipeableStream`](https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming):
-opting in flips the HTTP response type from `HttpResponse` to
-`StreamingHttpResponse` with no other API changes. The full Next.js
-experience (shell-first paint during component render) arrives with
-Phase 2.
+This is the djust analog of React's
+[`renderToPipeableStream`](https://react.dev/reference/react-dom/server/renderToPipeableStream)
+(what Next.js streaming uses): opting in flips the HTTP response type
+from `HttpResponse` to `StreamingHttpResponse` with no other API
+changes. Lazy children play the role of Suspense boundaries.
 
 ---
 
@@ -91,31 +89,22 @@ class DashboardView(LiveView):
     streaming_render = True   # ← opt in
 
     def mount(self, request, **kwargs):
-        # Slow work here delays Chunk 2, but Chunk 1 has already
-        # arrived at the browser — CSS is loading, fonts are warming.
-        self.rows = fetch_expensive_rows()
+        # The parent is fully rendered before the first byte is sent, so
+        # slow work here still delays Chunk 1. Put slow sections in a
+        # {% live_render "..." lazy=True %} child to stream them in later.
+        self.rows = fetch_rows()
 ```
 
 That's it. No JS changes, no new template tags, no new URL routing —
 the existing `path("/dashboard/", DashboardView.as_view())` just works.
 
-> **PR-A foundation status (v0.9.0, in flight):** the async-streaming
-> render path (`aget()`, `ChunkEmitter`, `arender_chunks()`) lands as
-> PR-A. **Dispatch wiring** that auto-routes GET → `aget()` when
-> `streaming_render = True` lands together with PR-B
-> (`{% live_render lazy=True %}`), because the user-visible TTFB win
-> arrives at the same time as the user-facing API. Until PR-B merges,
-> setting `streaming_render = True` continues to take the Phase-1
-> regex-split-after-render path documented at the top — the ASGI shell-
-> flush behavior described below activates with PR-B.
-
 ---
 
 ## How it works
 
-When `streaming_render = True`, `LiveView.get()` splits the rendered
-HTML into three chunks at well-defined boundaries and yields each chunk
-to the wire as soon as it's ready:
+When `streaming_render = True`, the rendered HTML is split into three
+chunks at well-defined boundaries and sent in order (followed, on ASGI,
+by any lazy-child fills):
 
 | Chunk | Contents | Browser behavior |
 | --- | --- | --- |
@@ -124,8 +113,8 @@ to the wire as soon as it's ready:
 | **3. Shell-close** | `</body></html>` + trailing markup | Finishes document parse |
 
 Browsers begin DOM construction the moment Chunk 1 arrives, so linked
-stylesheets and `<script defer>` tags are already in-flight while your
-Python code is still computing the view state.
+stylesheets and `<script defer>` tags are already in flight while lazy
+children are still rendering on the server.
 
 The response omits the `Content-Length` header (HTTP chunked transfer
 is implicit) and sets `X-Djust-Streaming: 1` as an observability marker
@@ -138,10 +127,12 @@ panel.
 
 **Good fit:**
 
-- Pages where `mount()` or `get_context_data()` make slow external
-  calls (database aggregations, REST APIs, S3 lookups, LLM calls).
-- Dashboards with large query fan-out — each row-count query adds to
-  time-to-first-byte under the non-streaming path.
+- Pages with slow sections (database aggregations, REST APIs, S3
+  lookups, LLM calls) that you can move into `{% live_render lazy=True %}`
+  children. Slow work left in the parent's `mount()` or
+  `get_context_data()` still delays the first byte.
+- Dashboards with large query fan-out, split into lazy children that
+  render in parallel.
 - Public landing pages where `<link rel="stylesheet">` in `<head>`
   determines Largest Contentful Paint — flushing the head early is a
   measurable LCP win.
@@ -253,36 +244,15 @@ out of the box — no additional configuration is required.
 
 ## Comparison
 
-| Feature | `HttpResponse` (default) | `streaming_render = True` | Next.js `renderToPipeableStream` |
+| Feature | `HttpResponse` (default) | `streaming_render = True` | React `renderToPipeableStream` |
 | --- | --- | --- | --- |
 | Response type | `HttpResponse` | `StreamingHttpResponse` | `ReadableStream` |
 | Transfer encoding | `Content-Length: N` | `Transfer-Encoding: chunked` | `Transfer-Encoding: chunked` |
-| Time-to-first-byte | After render complete | After shell-open ready (~ms) | After shell-open ready (~ms) |
-| Chunks | 1 | 3 (shell / main / close) | N (per Suspense boundary) |
-| Out-of-order render | No | No (Phase 1) | Yes (React Suspense) |
+| Time-to-first-byte | After render complete | After the parent render (lazy children excluded) | After shell-open ready (~ms) |
+| Chunks | 1 | 3 (shell / main / close) + one per lazy child | N (per Suspense boundary) |
+| Out-of-order render | No | Yes, for `{% live_render lazy=True %}` children (ASGI) | Yes (React Suspense) |
 | Opt-in per view | n/a | `streaming_render = True` | `<Suspense>` wrapping |
 | Client-side code needed | None | None | React runtime |
 
-Phase 1 matches the **first-paint** win of `renderToPipeableStream`
-without the Suspense machinery. Phase 2 (planned for v0.6.2) adds
-out-of-order rendering via lazy-child placeholders that stream in after
-the main chunk.
-
----
-
-## Future work — Phase 2 (v0.6.2)
-
-**Lazy-child streaming** extends this to `{% live_render %}` children
-marked `lazy=True`:
-
-1. Parent yields a `<div dj-view dj-lazy>` placeholder inside Chunk 2.
-2. After Chunk 3, the parent continues streaming each lazy child as a
-   `<template data-target="dj-lazy-N">...</template>` + inline
-   `<script>djust.streamFill('dj-lazy-N')</script>` sequence.
-3. A new client module adopts the template content into the target
-   container — equivalent to React Suspense's streaming resolution.
-
-This lets you ship an instant shell with placeholder UI and stream in
-heavy children (charts, tables, LLM output) as they become ready —
-closer parity with `renderToPipeableStream` and React Server
-Components. Tracked on the ROADMAP as v0.6.2 scope.
+Out-of-order rendering comes from lazy children: see
+[Lazy children](#lazy-children) above.

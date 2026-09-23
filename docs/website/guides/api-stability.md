@@ -16,7 +16,7 @@ time. Deprecated APIs survive until at least the next MAJOR release.
 
 This guide is the user-facing walkthrough. For the full, authoritative
 reference — the exact public-surface definition and every rule — see
-[`docs/API_STABILITY.md`](https://github.com/johnrtipton/djust/blob/main/docs/API_STABILITY.md).
+[`docs/API_STABILITY.md`](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md).
 
 ## The 1.0 commitment
 
@@ -41,8 +41,11 @@ The public API — the surface SemVer covers — is:
   (`from djust import X`).
 - The documented decorators in `djust.decorators` — `@event_handler`,
   `@server_function`, `@permission_required`, `@rate_limit`, `@reactive`,
-  `@state`, `@computed`, `@debounce`, `@throttle`, `@optimistic`, `@cache`,
-  `@client_state`, `@background`, `@on_mount`.
+  `@computed`, `@debounce`, `@throttle`, `@optimistic`, `@cache`,
+  `@client_state`, `@background`, `@on_mount`, plus the `state()`
+  descriptor (`count = state(default=0)`). `@optimistic` and
+  `@client_state` are stable *names* but are inert markers today: they
+  have no runtime effect (see #2699 / #2680).
 - The documented public methods and lifecycle hooks of `LiveView`,
   `LiveComponent`, and `Component`.
 - The mixins re-exported from the top-level `djust` package (`FormMixin`,
@@ -74,7 +77,7 @@ outright. A deprecation is announced through all of:
 
 1. A runtime `DeprecationWarning` (visible under `python -W` and in pytest).
 2. A `.. deprecated:: X.Y` marker in the symbol's docstring.
-3. A `### Deprecated` entry in the [changelog](https://github.com/johnrtipton/djust/blob/main/CHANGELOG.md).
+3. A `### Deprecated` entry in the [changelog](https://github.com/djust-org/djust/blob/main/CHANGELOG.md).
 
 Every deprecation **names its replacement** — there is no deprecation without a
 migration path. djust uses plain `DeprecationWarning` with a concrete removal
@@ -98,7 +101,7 @@ version; it does not use `PendingDeprecationWarning`.
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) | 1.1.0 |
 
 Migrating is mechanical in every case — see the
-[full reference](https://github.com/johnrtipton/djust/blob/main/docs/API_STABILITY.md#currently-deprecated-symbols)
+[full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#currently-deprecated-symbols)
 for before/after snippets.
 
 ## Template-syntax deprecations
@@ -110,5 +113,5 @@ today: **T001** (`@click` / `@input` → `dj-click` / `dj-input`) and **T014**
 
 ## See also
 
-- [`docs/API_STABILITY.md`](https://github.com/johnrtipton/djust/blob/main/docs/API_STABILITY.md) — the full policy reference.
-- [System Checks Reference](https://github.com/johnrtipton/djust/blob/main/docs/system-checks.md) — all `djust_check` IDs.
+- [`docs/API_STABILITY.md`](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md) — the full policy reference.
+- [System Checks Reference](https://github.com/djust-org/djust/blob/main/docs/system-checks.md) — all `djust_check` IDs.

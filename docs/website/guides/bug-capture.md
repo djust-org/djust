@@ -11,7 +11,7 @@ description: "Encode state_before + state_after + vdom_patches into a URL fragme
 
 `djust.bug_capture` lets a developer encode the minimum information needed to reproduce a broken event transition — `state_before`, `state_after`, and the `vdom_patches` djust generated — into a single URL-safe string. A teammate (or a maintainer) decodes the string and sees exactly what the framework did with what state. No need to clone your repo; no template files to ship.
 
-> **v1.1 status.** Iter A (this page) ships the data shape, encoder/decoder, and PII-scrub hook. Iter B ([#1562](https://github.com/djust-org/djust/issues/1562), shipped below) adds the read-only replay viewer at `/__djust__/replay/<blob>` and the debug panel's Share button. Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) will add a Redis store for large payloads, a `djust replay` CLI, and a framework-level `time_travel_excluded_fields` class attribute.
+> **Status.** Iters A–C have shipped: Iter A added the data shape, encoder/decoder, and PII-scrub hook; Iter B ([#1562](https://github.com/djust-org/djust/issues/1562)) added the read-only replay viewer at `/__djust__/replay/<blob>` and the debug panel's Share button; Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) added the snapshot store for large payloads, the `djust replay` CLI, and the framework-level `time_travel_excluded_fields` class attribute. All are documented below.
 
 ## When to use this
 
@@ -32,8 +32,8 @@ from djust.bug_capture import encode_view_state, scrub_fields
 
 # `my_view` is the LiveView instance with time_travel_enabled = True
 # that just emitted the broken transition. Patches come straight from
-# render_with_diff() — iter A intentionally does not couple to the
-# render pipeline (iter B's debug-panel button will wire this up).
+# render_with_diff() — encode_view_state does not couple to the
+# render pipeline (the debug panel's Share button does this for you).
 _html, patches, _version = my_view.render_with_diff()
 blob = encode_view_state(
     my_view,
@@ -152,6 +152,8 @@ Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buf
 `patches` is required and must be either the JSON string `render_with_diff()` returns or an already-decoded list of patch dicts. **Why caller-supplied:** iter A intentionally does not couple to the render pipeline — djust's `render_with_diff()` returns patches into the WebSocket / SSE / runtime frame paths without stashing them on the view, so there's no framework attribute to introspect. Iter B's debug-panel Share button (below) calls `render_with_diff()` + this function in one click.
 
 Pass `event_name=...` to pick a specific past event rather than the latest.
+
+Before `scrub` runs, the view's `time_travel_excluded_fields` (a class attribute listing top-level state keys) are always removed and recorded in `scrubbed_fields`, so a missing `scrub` cannot leak them.
 
 ### `scrub_fields(*names) -> Callable[[BugCapture], BugCapture]`
 

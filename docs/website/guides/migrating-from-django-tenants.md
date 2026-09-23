@@ -171,7 +171,7 @@ class ProjectListView(TenantScopedMixin, LiveView):
     tenant_field = "tenant_id"          # default; matches the column above
 
     def mount(self, request, **kwargs):
-        # filtered to request.tenant; empty queryset if no tenant resolved
+        # filtered to the resolved tenant; empty queryset if none resolved
         self.projects = self.get_tenant_queryset()
 
     def get_context_data(self, **kwargs):
@@ -180,19 +180,20 @@ class ProjectListView(TenantScopedMixin, LiveView):
 
 `TenantScopedMixin` also provides `create_for_tenant(**fields)` (stamps `tenant_id` automatically) and `get_tenant_object(pk)` (tenant-scoped single-object lookup). It filters on `self.tenant_field` (default `"tenant_id"`).
 
-**Option C — a tenant-aware manager.** Move the filtering onto the model so *all* queries are scoped by the thread-local tenant. `TenantManager` / `TenantQuerySet` filter by `tenant.raw` (the original model instance) on a relational `tenant` FK by default — pass `tenant_field` to point at your column:
+**Option C — a tenant-aware manager (FK models with a custom resolver only).** Move the filtering onto the model so *all* queries are scoped by the thread-local tenant. `TenantManager` / `TenantQuerySet` filter with `<tenant_field>=get_current_tenant().raw`, where `raw` is the tenant *model instance*. None of the built-in resolvers sets `raw`, so this option needs a relational `tenant` FK **and** a `'custom'` resolver that returns `TenantInfo(tenant_id=..., raw=<tenant instance>)` (see [section 4](#4-settings-migration)):
 
 ```python
 from djust.tenants import TenantQuerySet
 
 
-class Project(TenantScopedModel):
+class Project(models.Model):
+    tenant = models.ForeignKey("yourapp.Organization", on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
 
-    objects = TenantQuerySet.as_manager(tenant_field="tenant_id")
+    objects = TenantQuerySet.as_manager(tenant_field="tenant")
 ```
 
-> **Manager note.** `TenantManager`/`TenantQuerySet` filter by `get_current_tenant().raw`, so they fit best when your resolver attaches the tenant *model instance* as `TenantInfo.raw` and `tenant_field` points at that relation. For the string-`tenant_id` shape used in this guide, Option B (`get_tenant_queryset()`, which filters by `TenantInfo.id`) is the most direct fit. To bypass scoping deliberately, `TenantManager` exposes `unscoped(reason="...")`.
+> **Manager note.** With the string-`tenant_id` column used in this guide and the built-in resolvers, `raw` is `None`, so a manager filtering `tenant_id=None` returns an **empty queryset for every tenant**. Use Option A or B for that shape (Option B's `get_tenant_queryset()` filters by `TenantInfo.id`). To bypass scoping deliberately, `TenantManager` exposes `unscoped(reason="...")`.
 
 ### 3c. Swap the middleware
 
@@ -277,16 +278,7 @@ Suppress C014 only while the migration is *in progress*; remove the suppression 
 
 ### Verifying isolation
 
-After cutting a tenant over, verify no rows leak across `tenant_id` boundaries before trusting the path (the [canary test in section 7](#7-canary-test--no-cross-tenant-row-leaks) automates this) — manually, resolve as tenant A and confirm a tenant-B object is invisible:
-
-```python
-from djust.tenants import set_current_tenant
-from djust.tenants.resolvers import TenantInfo
-
-set_current_tenant(TenantInfo(tenant_id="acme"))
-assert not Project.objects.filter(tenant_id="globex").exists() or \
-    Project.objects.filter(tenant_id="acme").filter(name="globex-only-name").count() == 0
-```
+After cutting a tenant over, verify no rows leak across `tenant_id` boundaries before trusting the path. The [canary test in section 7](#7-canary-test--no-cross-tenant-row-leaks) automates this. The check must run the query through the same scoping code your views use (here, `get_tenant_queryset()`), not through a hand-written `.filter(tenant_id=...)`, which would pass whether or not scoping works.
 
 ---
 
@@ -300,56 +292,46 @@ In that case, do **not** silently stay on the deprecated django-tenants path. [O
 
 ## 7. Canary test — no cross-tenant row leaks
 
-Add a regression test that fails loudly if any tenant-scoped query returns a row belonging to another tenant. This catches a missing `tenant_id` filter on a queryset, a forgotten `unique` → composite migration, or a resolver returning the wrong id. The snippet below uses only verified `djust.tenants` symbols:
+Add a regression test that fails loudly if any tenant-scoped query returns a row belonging to another tenant. This catches a scoping path that doesn't filter by tenant. The queries go through the same `TenantScopedMixin.get_tenant_queryset()` the views use (Option B); if you scope with a manager (Option C), query `Project.objects.all()` instead, with the tenant bound via `set_current_tenant()`. A hand-written `.filter(tenant_id="acme")` would pass whether or not scoping works, so don't use one here. The snippet below uses only verified `djust.tenants` symbols:
 
 <!-- doc-snippet-check: skip -->
 ```python
 # tests/test_tenant_isolation.py
 import pytest
-from djust.tenants import set_current_tenant
+from djust.tenants import TenantScopedMixin
 from djust.tenants.resolvers import TenantInfo
 
 from yourapp.models import Project
+
+
+class _Probe(TenantScopedMixin):
+    # Same scoping code the views use: get_tenant_queryset() filters on
+    # TenantInfo.id via tenant_field (default 'tenant_id').
+    model = Project
+
+    def __init__(self, tenant_id):
+        # bypass request resolution for the test
+        self._tenant = TenantInfo(tenant_id=tenant_id)
+        self._tenant_resolved = True
 
 
 @pytest.fixture
 def two_tenants(db):
     Project.objects.create(tenant_id="acme", name="Acme Roadmap")
     Project.objects.create(tenant_id="globex", name="Globex Roadmap")
-    yield
-    set_current_tenant(None)  # clear thread-local between tests
 
 
 @pytest.mark.django_db
 def test_no_cross_tenant_rows(two_tenants):
-    # Acting as 'acme', a tenant-scoped query must never surface 'globex' rows.
-    set_current_tenant(TenantInfo(tenant_id="acme"))
-    visible = Project.objects.filter(tenant_id="acme")
-    assert visible.count() == 1
-    assert all(p.tenant_id == "acme" for p in visible)
-    # The other tenant's row exists, but is invisible to this scope.
-    assert not visible.filter(name="Globex Roadmap").exists()
-
-
-@pytest.mark.django_db
-def test_scoped_mixin_isolates(two_tenants):
-    # If you use TenantScopedMixin.get_tenant_queryset(), it filters on
-    # TenantInfo.id via the mixin's tenant_field (default 'tenant_id').
-    from djust.tenants import TenantScopedMixin
-
-    class _Probe(TenantScopedMixin):
-        model = Project
-        # bypass request resolution for the test
-        def __init__(self):
-            self._tenant = TenantInfo(tenant_id="acme")
-            self._tenant_resolved = True
-
-    rows = _Probe().get_tenant_queryset()
-    assert rows.count() == 1
-    assert not rows.filter(tenant_id="globex").exists()
+    # Acting as each tenant, the scoped query must never surface the other's rows.
+    for me, other in (("acme", "globex"), ("globex", "acme")):
+        visible = _Probe(me).get_tenant_queryset()
+        assert visible.count() == 1
+        assert all(p.tenant_id == me for p in visible)
+        assert not visible.filter(tenant_id=other).exists()
 ```
 
-> The `_Probe` subclass sets `_tenant` directly only to skip request-based resolution inside a unit test; in production `TenantScopedMixin` populates `self._tenant` automatically from `request.tenant`.
+> The `_Probe` subclass sets `_tenant` directly only to skip request-based resolution inside a unit test. In production, `TenantScopedMixin` populates `self._tenant` before `mount()` by running the configured resolver on the request (`resolve_tenant()`).
 
 Run it after every tenant cutover (and keep it in CI) — a row leak is the one failure mode row-level isolation can have, and a canary makes it impossible to ship silently.
 
@@ -357,5 +339,5 @@ Run it after every tenant cutover (and keep it in CI) — a row leak is the one 
 
 ## See also
 
-- [Multi-Tenant Applications](multi-tenant.md) — the full `djust.tenants` reference (resolvers, state-backend isolation, presence, `TenantMixin`/`TenantScopedMixin`).
+- [Multi-Tenant Applications](multi-tenant.md) — the full `djust.tenants` reference (resolvers, state and presence scoping, `TenantMixin`/`TenantScopedMixin`).
 - The `C014` startup system check (`djust.C014`) warns when a django-tenants + ASGI deploy is missing `TENANT_LIMIT_SET_CALLS`, and its hint links back to this guide.

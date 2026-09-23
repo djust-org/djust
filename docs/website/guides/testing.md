@@ -24,22 +24,32 @@ transport layer.
 
 ## Core methods
 
-- `mount(**params)` — instantiate the view and run `mount()`. Returns `self`.
-- `send_event(name, **params)` — call a handler by name. Returns a dict with
-  `state_before`, `state_after`, `duration_ms`, `success`, `error`.
+- `mount(via_websocket=True, **params)` — instantiate the view and run
+  `mount()`. Returns `self`. The default simulates the WebSocket/SSE mount
+  (the view gets the identity attributes a live connection sets); pass
+  `via_websocket=False` to mount it the way the HTTP GET path does.
+- `send_event(name, raise_on_missing=True, **params)` — call a handler by
+  name. Returns a dict with `state_before`, `state_after`, `duration_ms`,
+  `success`, `error`. An unknown handler raises `NoHandlerFoundError` unless
+  you pass `raise_on_missing=False`. An exception raised *inside* the handler
+  is not re-raised: it comes back as `success=False` with the message in
+  `error`, so assert on `result["success"]`.
 - `assert_state(**expected)` — exact-match assertions on public view attrs.
-- `assert_state_contains(**expected)` — substring match (strings) or subset
-  match (dicts/lists).
+- `assert_state_contains(**expected)` — checks `expected in actual`: a
+  substring for strings, one element for lists, a key for dicts. It is not a
+  subset match (`items=["a"]` fails against `["a", "b"]`).
 - `get_state()` — return a snapshot of public attrs.
 - `render(engine="rust")` — render the view template and return the HTML.
 
 ## Phoenix-parity assertions (v0.5.1)
 
-Seven additional methods cover the rest of the production test surface.
+Eight additional methods cover the rest of the production test surface.
 
 ### `assert_push_event(event_name, params=None)`
 
-Verify the last `send_event` queued a client-bound push event.
+Verify that some handler since `mount()` queued a matching client-bound push
+event. The test client doesn't clear the queue between `send_event` calls, so a
+push from an earlier event also satisfies the assertion.
 
 ```python
 class SaveView(LiveView):
@@ -106,20 +116,31 @@ queue more work require a second call. Matches production consumer semantics.
 ### `follow_redirect()`
 
 After a `live_redirect`, mount the destination view and return a new client
-rooted on it.
+rooted on it. The destination is mounted with the redirect's `params` plus the
+URL kwargs of the resolved path, and with the same `user` the original client
+was built with. Nothing else carries over: logging a user in inside a handler
+does not log the test client in.
 
 ```python
 class LoginView(LiveView):
     @event_handler
     def submit(self, email="", password="", **kwargs):
-        if authenticate(email, password):
-            self.live_redirect("/dashboard/")
+        if check_credentials(email, password):
+            self.live_redirect("/dashboard/", params={"welcome": "1"})
+
+class DashboardView(LiveView):  # routed at /dashboard/
+    def mount(self, request, welcome="", **kwargs):
+        self.welcome = welcome
 
 login_client = LiveViewTestClient(LoginView).mount()
 login_client.send_event("submit", email="a@b.com", password="x")
 dashboard_client = login_client.follow_redirect()
-dashboard_client.assert_state(user_email="a@b.com")
+dashboard_client.assert_state(welcome="1")
 ```
+
+To test a destination that depends on `request.user`, build the first client
+with `LiveViewTestClient(LoginView, user=some_user)`; `follow_redirect()`
+passes that user on.
 
 ### `assert_stream_insert(stream_name, item=None)`
 
@@ -146,6 +167,9 @@ Dict items are matched by subset; other types by equality.
 
 Synthetically deliver a `handle_info` message (the hook `pg_notify` uses).
 Tests pubsub / database-notification handlers without real backend wiring.
+The test client doesn't need a real subscription, so the example below passes,
+but in production a `self.listen()` call in `mount()` never subscribes
+(Known issue: #2962; the workaround is a class-level `_listen_channels`).
 
 ```python
 class OrdersView(LiveView):

@@ -28,24 +28,18 @@ Just add `dj-view` to your root element:
 
 The element with `dj-view` automatically becomes the VDOM root. No additional attributes needed.
 
-### Advanced Case (1% of templates)
+### Explicit `dj-root`
 
-Only use explicit `dj-root` when you need to exclude wrapper elements from VDOM diffing:
+If you add `dj-root` yourself, put it on the **same element** as `dj-view`:
 
 ```html
-<div dj-view="myapp.views.CounterView">
-    <header class="static-metadata">
-        <!-- This is OUTSIDE the VDOM root -->
-        <span>Connected to CounterView</span>
-    </header>
-
-    <div dj-root>
-        <!-- Only THIS section gets VDOM updates -->
-        <p>Count: {{ count }}</p>
-        <button dj-click="increment">+1</button>
-    </div>
+<div dj-root dj-view="myapp.views.CounterView">
+    <p>Count: {{ count }}</p>
+    <button dj-click="increment">+1</button>
 </div>
 ```
+
+Don't put `dj-root` on a separate inner element to keep a wrapper out of VDOM diffing. The client stamps `dj-root` onto every `dj-view` element, while the server diffs from the inner `dj-root`, so the two sides disagree about the root; `djust.T005` warns about this layout. To keep static chrome out of updates, move it outside the `dj-view` element, or mark it `dj-update="ignore"`.
 
 | Attribute | Required | Purpose |
 |-----------|----------|---------|
@@ -68,7 +62,7 @@ When the page loads, the client JS finds this attribute, reads the view class pa
 
 The value must be the **full Python import path** to the LiveView class (e.g., `myapp.views.CounterView`).
 
-**Important**: The element with `dj-view` is automatically the VDOM root unless you explicitly add `dj-root` elsewhere.
+**Important**: The element with `dj-view` is the VDOM root. If you add `dj-root`, put it on the same element (`<div dj-root dj-view="...">`); `djust.T005` warns when they are split.
 
 ### `dj-root` (Optional)
 
@@ -79,11 +73,7 @@ This attribute explicitly marks the root element of the VDOM tree. When an event
 3. Sends only the changed patches to the client
 4. Applies the patches to the DOM
 
-**You rarely need this attribute.** Only use it when:
-- You have static wrapper elements that should not be diffed (performance optimization)
-- You need to exclude metadata or navigation from the update boundary
-
-In 99% of cases, just use `dj-view` and let the framework infer the root automatically.
+**You rarely need this attribute.** It is inferred from `dj-view`, and when you do write it, it belongs on the `dj-view` element itself. It is not a way to exclude wrapper elements from diffing: to keep static content out of updates, move it outside the `dj-view` element or use `dj-update="ignore"`.
 
 ---
 
@@ -100,24 +90,21 @@ In 99% of cases, just use `dj-view` and let the framework infer the root automat
 
 **When to use**: Almost always. The entire element updates on state changes.
 
-### Pattern 2: Explicit Root (Rare)
+### Pattern 2: Static Section Inside the View
 
 ```html
 <div dj-view="myapp.views.DashboardView">
-    <nav class="sidebar">
-        <!-- Static navigation, never changes -->
+    <nav class="sidebar" dj-update="ignore">
+        <!-- Rendered once, then left alone by patches -->
         <ul>...</ul>
     </nav>
 
-    <div dj-root>
-        <!-- Only dashboard content updates -->
-        <h1>{{ title }}</h1>
-        <p>{{ content }}</p>
-    </div>
+    <h1>{{ title }}</h1>
+    <p>{{ content }}</p>
 </div>
 ```
 
-**When to use**: Only when profiling shows wrapper diffing is expensive, or when you have large static sections that never change.
+**When to use**: when a large section inside the view never changes after the first render. Content that doesn't depend on view state at all can live outside the `dj-view` element instead (for example in `base.html`).
 
 ---
 
@@ -198,7 +185,7 @@ Relevant checks:
 | Check ID | What It Detects |
 |----------|-----------------|
 | `djust.T001` | Deprecated `@click` syntax (should be `dj-click`) |
-| `djust.T002` | LiveView template missing `dj-view` or `dj-root` attribute |
+| `djust.T002` | (Info) Template has no explicit `dj-root`. Harmless: `dj-root` is inferred from `dj-view` |
 | `djust.T003` | Wrapper template using `{% include %}` instead of `{{ liveview_content\|safe }}` |
 | `djust.T004` | `document.addEventListener` for djust events (should be `window`) |
 | `djust.T005` | `dj-view` and `dj-root` on different elements (must be on same element) |
@@ -245,21 +232,22 @@ Relevant checks:
 
 ### Multiple LiveViews on One Page
 
-Each LiveView needs its own root element with `dj-view`:
+The client mounts only **one** page-level `dj-view` element (the first one it finds), so two sibling `dj-view` divs do not give you two live views; the second is never mounted. Render one page-level view and embed the others with `{% live_render %}`, which emits the markers the client needs to mount an embedded child:
 
 ```html
 {% extends "base.html" %}
+{% load live_tags %}
 
 {% block content %}
-<div dj-view="myapp.views.HeaderView">
+<div dj-view="myapp.views.DashboardView">
     <h1>Dashboard for {{ user.username }}</h1>
-</div>
 
-<div dj-view="myapp.views.MetricsView">
-    <p>Active users: {{ active_count }}</p>
+    {% live_render "myapp.views.MetricsView" %}
 </div>
 {% endblock %}
 ```
+
+See [Sticky LiveViews](sticky-liveviews.md) for more on `{% live_render %}`.
 
 ---
 

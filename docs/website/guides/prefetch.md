@@ -54,9 +54,9 @@ work.
    eviction — we never hold a `Response` object ourselves.
 4. **Fallback to low-priority `fetch`.** If `link.relList.supports(
    'prefetch')` is false (some older mobile browsers), djust falls
-   back to `fetch(href, {credentials: 'same-origin', priority: 'low'})`
-   and attaches an `AbortController` so `mouseleave` can cancel the
-   in-flight request.
+   back to `fetch(href, {credentials: 'same-origin', priority: 'low'})`.
+   `mouseleave` cancels only the pending 65 ms debounce timer; once a
+   prefetch has started, it is not aborted.
 5. **Per-URL dedupe.** A `Set` stores every URL we've already
    prefetched; subsequent hovers on the same link are no-ops.
    `window.djust._prefetch.clear()` wipes the set on `live_redirect`
@@ -103,10 +103,10 @@ work.
   same-origin guard above, regardless of what the browser would
   actually allow. If you need cross-origin prefetch, use a plain
   `<link rel="prefetch">` in `<head>`.
-- **`javascript:` / `data:` URLs are blocked.** The URL-parsing
-  `try/catch` rejects non-HTTP schemes, and the same-origin check
-  rejects anything that manages to parse but isn't from
-  `location.origin`.
+- **`javascript:` / `data:` URLs are blocked.** Non-HTTP schemes parse
+  to an opaque `null` origin and fail the same-origin check. The
+  URL-parsing `try/catch` only rejects hrefs that can't be parsed at
+  all.
 - **Prefetch is the HTML shell only.** The browser may *additionally*
   preload subresources it discovers via the prefetched document
   (Speculation Rules / Link headers), but djust doesn't call handlers
@@ -136,7 +136,7 @@ shapes of app:
 | Transport           | SW `postMessage({type: 'PREFETCH'})` | `<link rel="prefetch">` injection              |
 | Requires SW         | Yes — no SW → no-op                  | No — works standalone                          |
 | Cache lifecycle     | SW-owned (Cache API)                 | Browser HTTP cache                             |
-| Cancellable         | No (SW fires-and-forgets)            | Yes (`AbortController` on the `fetch` fallback path) |
+| Cancellable         | No (SW fires-and-forgets)            | Only before the 65 ms debounce fires           |
 | Data-saver respected | Yes                                  | Yes                                            |
 
 Most apps will want both: the SW path as a blanket win for users on
