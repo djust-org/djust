@@ -4949,7 +4949,6 @@ class ViewRuntime:
         try:
             return view_class()
         except Exception as exc:
-
             # No instance exists yet: the class owns the policy (ADR-038 D-a).
             response = handle_exception(
                 exc,
