@@ -7,6 +7,8 @@ Simple stateless radio button group with automatic Rust optimization.
 from typing import Optional, List, Dict, Any
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 
 class Radio(Component):
     """
@@ -120,7 +122,7 @@ class Radio(Component):
 
         # Group label
         if self.label:
-            parts.append(f'    <label class="form-label">{self.label}</label>')
+            parts.append(f'    <label class="form-label">{conditional_escape(self.label)}</label>')
 
         # Radio buttons
         for i, option in enumerate(self.options):
@@ -129,7 +131,7 @@ class Radio(Component):
             opt_disabled = option.get("disabled", False)
 
             # Generate unique ID for each radio button
-            radio_id = f"{self.name}_{i}"
+            radio_id = f"{conditional_escape(self.name)}_{i}"
 
             # Build form-check classes
             check_classes = ["form-check"]
@@ -143,8 +145,8 @@ class Radio(Component):
                 'class="form-check-input"',
                 'type="radio"',
                 f'id="{radio_id}"',
-                f'name="{self.name}"',
-                f'value="{opt_value}"',
+                f'name="{conditional_escape(self.name)}"',
+                f'value="{conditional_escape(opt_value)}"',
             ]
 
             # Check if this option is selected
@@ -156,13 +158,13 @@ class Radio(Component):
 
             parts.append(f"        <input {' '.join(attrs)}>")
             parts.append(f'        <label class="form-check-label" for="{radio_id}">')
-            parts.append(f"            {opt_label}")
+            parts.append(f"            {conditional_escape(opt_label)}")
             parts.append("        </label>")
             parts.append("    </div>")
 
         # Help text
         if self.help_text:
-            parts.append(f'    <div class="form-text">{self.help_text}</div>')
+            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
 
         parts.append("</div>")
 

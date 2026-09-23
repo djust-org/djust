@@ -4,10 +4,16 @@ Dropdown component for djust.
 Provides dropdown menus with items and actions.
 """
 
+import re
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
+
+
+# ``data-*`` attribute names: letters, digits, "-" and "_" only.
+_DATA_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass
@@ -131,18 +137,18 @@ class DropdownComponent(LiveComponent):
         }
         direction_class = direction_map.get(self.direction, "dropdown")
 
-        html = f'<div class="btn-group {direction_class}" id="{self.component_id}">'
+        html = f'<div class="btn-group {direction_class}" id="{conditional_escape(self.component_id)}">'
 
-        button_class = f"btn btn-{self.variant} {size_class}".strip()
+        button_class = f"btn btn-{conditional_escape(self.variant)} {size_class}".strip()
 
         if self.split:
             # Split button dropdown
-            html += f'<button type="button" class="{button_class}">{self.label}</button>'
+            html += f'<button type="button" class="{button_class}">{conditional_escape(self.label)}</button>'
             html += f'<button type="button" class="{button_class} dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">'
             html += '<span class="visually-hidden">Toggle Dropdown</span></button>'
         else:
             # Regular dropdown
-            html += f'<button type="button" class="{button_class} dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">{self.label}</button>'
+            html += f'<button type="button" class="{button_class} dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">{conditional_escape(self.label)}</button>'
 
         html += '<ul class="dropdown-menu">'
 
@@ -150,10 +156,10 @@ class DropdownComponent(LiveComponent):
             if item.get("divider"):
                 html += '<li><hr class="dropdown-divider"></li>'
             else:
-                text = item.get("text", "")
-                action = item.get("action", "")
-                icon = item.get("icon", "")
-                item_variant = item.get("variant", "")
+                text = conditional_escape(item.get("text", ""))
+                action = conditional_escape(item.get("action", ""))
+                icon = conditional_escape(item.get("icon", ""))
+                item_variant = conditional_escape(item.get("variant", ""))
                 data = item.get("data", {})
 
                 click_attr = f' dj-click="{action}"' if action else ""
@@ -165,11 +171,13 @@ class DropdownComponent(LiveComponent):
                     import json
 
                     for key, value in data.items():
+                        if not _DATA_KEY_RE.match(str(key)):
+                            continue
                         # Convert value to JSON string for complex types
                         if isinstance(value, (dict, list)):
-                            value_str = json.dumps(value).replace('"', "&quot;")
+                            value_str = conditional_escape(json.dumps(value))
                         else:
-                            value_str = str(value)
+                            value_str = conditional_escape(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
@@ -195,11 +203,11 @@ class DropdownComponent(LiveComponent):
         }
         size_class = size_map.get(self.size, size_map["md"])
 
-        html = f'<div class="relative inline-block text-left" id="{self.component_id}" x-data="{{open: false}}">'
+        html = f'<div class="relative inline-block text-left" id="{conditional_escape(self.component_id)}" x-data="{{open: false}}">'
 
         # Button
         button_class = f"{size_class} {variant_class} font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2"
-        html += f'<button type="button" class="{button_class}" dj-click="open = !open">{self.label}'
+        html += f'<button type="button" class="{button_class}" dj-click="open = !open">{conditional_escape(self.label)}'
         html += """<svg class="-mr-1 ml-2 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
         </svg></button>"""
@@ -212,10 +220,10 @@ class DropdownComponent(LiveComponent):
             if item.get("divider"):
                 html += '<div class="border-t border-gray-100"></div>'
             else:
-                text = item.get("text", "")
-                action = item.get("action", "")
-                icon = item.get("icon", "")
-                item_variant = item.get("variant", "")
+                text = conditional_escape(item.get("text", ""))
+                action = conditional_escape(item.get("action", ""))
+                icon = conditional_escape(item.get("icon", ""))
+                item_variant = conditional_escape(item.get("variant", ""))
                 data = item.get("data", {})
 
                 click_attr = (
@@ -229,10 +237,12 @@ class DropdownComponent(LiveComponent):
                     import json
 
                     for key, value in data.items():
+                        if not _DATA_KEY_RE.match(str(key)):
+                            continue
                         if isinstance(value, (dict, list)):
-                            value_str = json.dumps(value).replace('"', "&quot;")
+                            value_str = conditional_escape(json.dumps(value))
                         else:
-                            value_str = str(value)
+                            value_str = conditional_escape(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
@@ -243,17 +253,17 @@ class DropdownComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML dropdown"""
-        html = f'<div class="dropdown" id="{self.component_id}">'
-        html += f'<button type="button" class="dropdown-toggle button button-{self.variant}">{self.label} ▼</button>'
+        html = f'<div class="dropdown" id="{conditional_escape(self.component_id)}">'
+        html += f'<button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}">{conditional_escape(self.label)} ▼</button>'
         html += '<div class="dropdown-menu">'
 
         for item in self.items:
             if item.get("divider"):
                 html += '<hr class="dropdown-divider">'
             else:
-                text = item.get("text", "")
-                action = item.get("action", "")
-                icon = item.get("icon", "")
+                text = conditional_escape(item.get("text", ""))
+                action = conditional_escape(item.get("action", ""))
+                icon = conditional_escape(item.get("icon", ""))
                 data = item.get("data", {})
 
                 click_attr = f' dj-click="{action}"' if action else ""
@@ -264,10 +274,12 @@ class DropdownComponent(LiveComponent):
                     import json
 
                     for key, value in data.items():
+                        if not _DATA_KEY_RE.match(str(key)):
+                            continue
                         if isinstance(value, (dict, list)):
-                            value_str = json.dumps(value).replace('"', "&quot;")
+                            value_str = conditional_escape(json.dumps(value))
                         else:
-                            value_str = str(value)
+                            value_str = conditional_escape(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text

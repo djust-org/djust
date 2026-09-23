@@ -7,6 +7,8 @@ Use BadgeComponent for interactive badges with state.
 """
 
 from ..base import Component
+
+from django.utils.html import conditional_escape
 from typing import Any
 
 
@@ -148,7 +150,7 @@ class Badge(Component):
 
         pill_class = " rounded-pill" if self.pill else ""
 
-        return f'<span class="badge bg-{variant}{size_class}{pill_class}">{self.text}</span>'
+        return f'<span class="badge bg-{variant}{size_class}{pill_class}">{conditional_escape(self.text)}</span>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS badge"""
@@ -173,13 +175,11 @@ class Badge(Component):
 
         pill_classes = "rounded-full" if self.pill else "rounded"
 
-        return f'<span class="inline-flex items-center font-medium {size_classes} {pill_classes} {variant_classes}">{self.text}</span>'
+        return f'<span class="inline-flex items-center font-medium {size_classes} {pill_classes} {variant_classes}">{conditional_escape(self.text)}</span>'
 
     def _render_plain(self) -> str:
         """Render plain HTML badge"""
-        size_class = f" badge-{self.size}" if self.size != "md" else ""
+        size_class = f" badge-{conditional_escape(self.size)}" if self.size != "md" else ""
         pill_class = " badge-pill" if self.pill else ""
 
-        return (
-            f'<span class="badge badge-{self.variant}{size_class}{pill_class}">{self.text}</span>'
-        )
+        return f'<span class="badge badge-{conditional_escape(self.variant)}{size_class}{pill_class}">{conditional_escape(self.text)}</span>'

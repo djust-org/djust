@@ -7,6 +7,8 @@ Simple stateless select dropdown with automatic Rust optimization.
 from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustSelect  # type: ignore[attr-defined]
 
@@ -140,13 +142,13 @@ class Select(Component):
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
             parts.append(
-                f'    <label for="{self.select_id}" class="form-label">{self.label}{required_mark}</label>'
+                f'    <label for="{conditional_escape(self.select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
             )
 
         # Build select classes
         select_classes = ["form-select"]
         if self.size != "md":
-            select_classes.append(f"form-select-{self.size}")
+            select_classes.append(f"form-select-{conditional_escape(self.size)}")
         if self.validation_state == "valid":
             select_classes.append("is-valid")
         elif self.validation_state == "invalid":
@@ -155,8 +157,8 @@ class Select(Component):
         # Build select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{self.select_id}"',
-            f'name="{self.name}"',
+            f'id="{conditional_escape(self.select_id)}"',
+            f'name="{conditional_escape(self.name)}"',
         ]
         if self.required:
             attrs.append("required")
@@ -172,20 +174,24 @@ class Select(Component):
             opt_value = opt["value"]
             opt_label = opt["label"]
             selected = " selected" if opt_value == self.value else ""
-            parts.append(f'        <option value="{opt_value}"{selected}>{opt_label}</option>')
+            parts.append(
+                f'        <option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
+            )
 
         parts.append("    </select>")
 
         # Help text
         if self.help_text:
-            parts.append(f'    <div class="form-text">{self.help_text}</div>')
+            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
 
         # Validation feedback
         if self.validation_message:
             feedback_class = (
                 "valid-feedback" if self.validation_state == "valid" else "invalid-feedback"
             )
-            parts.append(f'    <div class="{feedback_class}">{self.validation_message}</div>')
+            parts.append(
+                f'    <div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
+            )
 
         parts.append("</div>")
 

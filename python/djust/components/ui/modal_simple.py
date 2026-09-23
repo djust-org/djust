@@ -7,6 +7,8 @@ Simple stateless modal dialog with automatic Rust optimization.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustModal
 
@@ -74,6 +76,11 @@ class Modal(Component):
         dismissable: bool = True,
         show: bool = False,
     ) -> None:
+        # ``body`` and ``footer`` are markup; the Rust renderer emits them as
+        # given, so they are HTML-escaped here unless they were marked safe.
+        body = conditional_escape(body)
+        if footer is not None:
+            footer = conditional_escape(footer)
         # Pass kwargs to parent to create Rust instance
         super().__init__(
             body=body,
@@ -118,12 +125,12 @@ class Modal(Component):
         # Build dialog classes
         dialog_classes = ["modal-dialog"]
         if self.size != "md":
-            dialog_classes.append(f"modal-{self.size}")
+            dialog_classes.append(f"modal-{conditional_escape(self.size)}")
         if self.centered:
             dialog_classes.append("modal-dialog-centered")
 
         parts = [
-            f'<div class="{" ".join(modal_classes)}" id="{self.id}" tabindex="-1" aria-labelledby="{self.id}Label" aria-hidden="true">',
+            f'<div class="{" ".join(modal_classes)}" id="{conditional_escape(self.id)}" tabindex="-1" aria-labelledby="{conditional_escape(self.id)}Label" aria-hidden="true">',
             f'    <div class="{" ".join(dialog_classes)}">',
             '        <div class="modal-content">',
         ]
@@ -132,7 +139,7 @@ class Modal(Component):
         if self.title:
             parts.append('            <div class="modal-header">')
             parts.append(
-                f'                <h5 class="modal-title" id="{self.id}Label">{self.title}</h5>'
+                f'                <h5 class="modal-title" id="{conditional_escape(self.id)}Label">{conditional_escape(self.title)}</h5>'
             )
             if self.dismissable:
                 parts.append(
@@ -142,13 +149,13 @@ class Modal(Component):
 
         # Body
         parts.append('            <div class="modal-body">')
-        parts.append(f"                {self.body}")
+        parts.append(f"                {conditional_escape(self.body)}")
         parts.append("            </div>")
 
         # Add footer if exists
         if self.footer:
             parts.append('            <div class="modal-footer">')
-            parts.append(f"                {self.footer}")
+            parts.append(f"                {conditional_escape(self.footer)}")
             parts.append("            </div>")
 
         parts.extend(
