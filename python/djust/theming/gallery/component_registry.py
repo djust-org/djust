@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from django.utils.html import escape
+from django.utils.safestring import mark_safe
 
 from djust._log_utils import sanitize_for_log
 
@@ -1456,6 +1457,27 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "voice_input": [{"lang": "en-US"}],
     }
 )
+
+
+def _mark_example_markup(value: Any) -> Any:
+    """Mark the example strings that are markup (they start with ``<``) safe.
+
+    Python components HTML-escape their string arguments unless the value is
+    marked safe, so an example that passes markup into a content slot has to
+    pass it the way an app would: through ``mark_safe``. Plain-text example
+    values are left as they are, and are escaped when rendered.
+    """
+    if isinstance(value, str) and value.lstrip().startswith("<"):
+        return mark_safe(value)
+    if isinstance(value, list):
+        return [_mark_example_markup(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _mark_example_markup(v) for k, v in value.items()}
+    return value
+
+
+for _name, _examples in PYTHON_COMPONENT_EXAMPLES.items():
+    PYTHON_COMPONENT_EXAMPLES[_name] = _mark_example_markup(_examples)
 
 
 #: The keys :func:`describe_component` always returns. Pinned as a constant so

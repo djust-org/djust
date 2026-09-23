@@ -1,6 +1,7 @@
 """FormGroup component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -65,4 +66,4 @@ class FormGroup(Component):
         helper_html = (
             f'<span class="form-helper">{html.escape(self.helper)}</span>' if self.helper else ""
         )
-        return f'<div class="{cls}">{label_html}{self.content}{error_html}{helper_html}</div>'
+        return f'<div class="{cls}">{label_html}{conditional_escape(self.content)}{error_html}{helper_html}</div>'

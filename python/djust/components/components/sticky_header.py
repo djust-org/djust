@@ -1,6 +1,7 @@
 """StickyHeader component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -42,5 +43,5 @@ class StickyHeader(Component):
         e_z = html.escape(self.z_index)
         return (
             f'<div class="{cls}" style="position: sticky; top: {e_offset}; z-index: {e_z};">'
-            f"{self.content}</div>"
+            f"{conditional_escape(self.content)}</div>"
         )

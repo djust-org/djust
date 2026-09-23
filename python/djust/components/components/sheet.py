@@ -1,6 +1,7 @@
 """Sheet component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -64,6 +65,6 @@ class Sheet(Component):
             f'<div class="sheet-overlay" {close_attrs}{open_attr}></div>'
             f'<div class="{cls}"{open_attr}>'
             f"{title_html}"
-            f'<div class="sheet-body">{self.content}</div>'
+            f'<div class="sheet-body">{conditional_escape(self.content)}</div>'
             f"</div>"
         )

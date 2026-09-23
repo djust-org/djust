@@ -1,6 +1,7 @@
 """Tabs component."""
 
 import html
+from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any, Optional
@@ -55,5 +56,9 @@ class Tabs(Component):
                 f"{self.event_attrs(self.event, value=tab.get('id', ''))}>{label}</button>"
             )
         nav = f'<nav class="dj-tabs__nav">{"".join(nav_items)}</nav>'
-        pane = f'<div class="dj-tabs__pane">{self.content}</div>' if self.content else ""
+        pane = (
+            f'<div class="dj-tabs__pane">{conditional_escape(self.content)}</div>'
+            if self.content
+            else ""
+        )
         return f'<div class="{cls}">{nav}{pane}</div>'

@@ -1,6 +1,7 @@
 """Toolbar component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -40,4 +41,4 @@ class Toolbar(Component):
             cls += f" dj-toolbar--{html.escape(self.variant)}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        return f'<div class="{cls}" role="toolbar">{self.content}</div>'
+        return f'<div class="{cls}" role="toolbar">{conditional_escape(self.content)}</div>'

@@ -1,6 +1,7 @@
 """Progress bar component for task completion indicators."""
 
 import html
+from django.utils.html import conditional_escape
 from typing import Any, Optional
 
 from djust import Component
@@ -97,10 +98,10 @@ class Progress(Component):
         classes = ["dj-progress"]
 
         if self.variant != "default":
-            classes.append(f"dj-progress-{self.variant}")
+            classes.append(f"dj-progress-{conditional_escape(self.variant)}")
 
         if self.size != "md":
-            classes.append(f"dj-progress-{self.size}")
+            classes.append(f"dj-progress-{conditional_escape(self.size)}")
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))

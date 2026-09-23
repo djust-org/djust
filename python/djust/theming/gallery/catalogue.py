@@ -14,6 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from django.utils.html import escape
+from django.utils.safestring import SafeData
 
 from djust._log_utils import sanitize_for_log
 from djust.theming.contracts import COMPONENT_CONTRACTS
@@ -570,6 +571,24 @@ def split_usage(snippet: str) -> dict:
     return {"view": views_part.replace("# views.py\n", "", 1), "template": template_part}
 
 
+def _py_literal(value: Any) -> str:
+    """``repr(value)``, but a value marked safe is written ``mark_safe(...)``.
+
+    Components HTML-escape string arguments that are not marked safe, so the
+    copied example has to carry the ``mark_safe`` call for markup it passes.
+    """
+    if isinstance(value, SafeData):
+        return f"mark_safe({str.__repr__(str(value))})"
+    if isinstance(value, list):
+        return "[" + ", ".join(_py_literal(v) for v in value) + "]"
+    if isinstance(value, tuple):
+        inner = ", ".join(_py_literal(v) for v in value)
+        return "(" + inner + ("," if len(value) == 1 else "") + ")"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k!r}: {_py_literal(v)}" for k, v in value.items()) + "}"
+    return repr(value)
+
+
 def _usage_snippet(
     component_name: str,
     component_type: str,
@@ -590,7 +609,7 @@ def _usage_snippet(
     # Show the arguments that produce the example's own output, not the
     # signature's defaults: `value=0, label=None` documents nothing a reader can
     # picture, and it is not what the preview above shows.
-    args = ", ".join(f"{k}={v!r}" for k, v in first.items() if not k.startswith("slot_"))
+    args = ", ".join(f"{k}={_py_literal(v)}" for k, v in first.items() if not k.startswith("slot_"))
     slot_args = [k for k in first if k.startswith("slot_")]
 
     if component_type == "template":
@@ -624,7 +643,9 @@ def _usage_snippet(
             "    def mount(self, request, **kwargs):",
         ]
         for key, value in on_view.items():
-            lines.append(f"        self.{key} = {value!r}")
+            lines.append(f"        self.{key} = {_py_literal(value)}")
+        if any("mark_safe(" in line for line in lines):
+            lines.insert(2, "from django.utils.safestring import mark_safe")
         lines += [
             "",
             "",
@@ -648,6 +669,10 @@ def _usage_snippet(
         "# views.py",
         "from djust import LiveView",
         import_line,
+    ]
+    if "mark_safe(" in args:
+        lines.append("from django.utils.safestring import mark_safe")
+    lines += [
         "",
         "",
         "class MyView(LiveView):",

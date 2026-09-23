@@ -1,6 +1,7 @@
 """StatCard component for KPI/metric display."""
 
 import html
+from django.utils.html import conditional_escape
 from typing import Any, Optional
 
 from djust import Component
@@ -94,7 +95,7 @@ class StatCard(Component):
         classes = ["dj-stat-card"]
 
         if self.variant != "default":
-            classes.append(f"dj-stat-card-{self.variant}")
+            classes.append(f"dj-stat-card-{conditional_escape(self.variant)}")
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))
@@ -104,13 +105,16 @@ class StatCard(Component):
         parts = []
 
         if self.icon:
-            parts.append(f'<div class="dj-stat-card-icon">{self.icon}</div>')
+            parts.append(f'<div class="dj-stat-card-icon">{conditional_escape(self.icon)}</div>')
 
         parts.append(f'<div class="dj-stat-card-label">{html.escape(self.label)}</div>')
         parts.append(f'<div class="dj-stat-card-value">{html.escape(self.value)}</div>')
 
         if self.trend:
-            trend_classes = ["dj-stat-card-trend", f"dj-stat-card-trend-{self.trend}"]
+            trend_classes = [
+                "dj-stat-card-trend",
+                f"dj-stat-card-trend-{conditional_escape(self.trend)}",
+            ]
             trend_class_str = " ".join(trend_classes)
             trend_text = html.escape(self.trend_value) if self.trend_value else ""
             parts.append(f'<div class="{trend_class_str}">{trend_text}</div>')

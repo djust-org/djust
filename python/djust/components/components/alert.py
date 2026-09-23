@@ -3,6 +3,7 @@
 import html
 from typing import Any, Optional
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -105,7 +106,7 @@ class Alert(Component):
 
     def _render_custom(self) -> str:
         """Render the alert HTML."""
-        classes = ["dj-alert", f"dj-alert-{self.variant}"]
+        classes = ["dj-alert", f"dj-alert-{conditional_escape(self.variant)}"]
 
         if self.dismissible:
             classes.append("dj-alert-dismissible")
@@ -120,7 +121,7 @@ class Alert(Component):
         parts = []
 
         if self.icon:
-            parts.append(f'<span class="dj-alert-icon">{self.icon}</span>')
+            parts.append(f'<span class="dj-alert-icon">{conditional_escape(self.icon)}</span>')
 
         parts.append(f'<span class="dj-alert-message">{html.escape(self.message)}</span>')
 

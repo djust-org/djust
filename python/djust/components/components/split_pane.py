@@ -1,6 +1,7 @@
 """SplitPane component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -46,8 +47,8 @@ class SplitPane(Component):
         size_prop = "width" if self.direction == "horizontal" else "height"
         return (
             f'<div class="{cls}">'
-            f'<div class="sp-pane sp-pane-1" style="{size_prop}:{self.initial}%">{self.left}</div>'
+            f'<div class="sp-pane sp-pane-1" style="{size_prop}:{conditional_escape(self.initial)}%">{conditional_escape(self.left)}</div>'
             f'<div class="sp-handle sp-handle-{e_dir}"></div>'
-            f'<div class="sp-pane sp-pane-2" style="flex:1">{self.right}</div>'
+            f'<div class="sp-pane sp-pane-2" style="flex:1">{conditional_escape(self.right)}</div>'
             f"</div>"
         )

@@ -1,6 +1,7 @@
 """Spinner component for loading state indicators."""
 
 import html
+from django.utils.html import conditional_escape
 
 from typing import Any, Optional
 
@@ -69,10 +70,10 @@ class Spinner(Component):
         classes = ["dj-spinner"]
 
         if self.size != "md":
-            classes.append(f"dj-spinner-{self.size}")
+            classes.append(f"dj-spinner-{conditional_escape(self.size)}")
 
         if self.variant != "default":
-            classes.append(f"dj-spinner-{self.variant}")
+            classes.append(f"dj-spinner-{conditional_escape(self.variant)}")
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))

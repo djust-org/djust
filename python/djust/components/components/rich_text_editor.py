@@ -1,6 +1,7 @@
 """RichTextEditor component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -65,7 +66,7 @@ class RichTextEditor(Component):
             f"</div>"
             f'<div class="rte-editor" contenteditable="true" '
             f'style="min-height:{e_height}" data-placeholder="{e_placeholder}" '
-            f"{self.event_attrs(self.event, trigger='input')}>{self.value}</div>"
+            f"{self.event_attrs(self.event, trigger='input')}>{conditional_escape(self.value)}</div>"
             f'<input type="hidden" name="{e_name}">'
             f"</div></div>"
         )
