@@ -3890,8 +3890,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle presence-related events from the channel layer.
 
-        These events are broadcasted to all users in a presence group.
+        These events are broadcasted to all users in a presence group. They are
+        forwarded only while this connection has a mounted view; with none (the
+        mount was refused or never happened) the event is dropped.
         """
+        if not self.view_instance:
+            return
         await self.send_json(
             {
                 "type": "presence_event",
@@ -4037,8 +4041,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle a direct push_event from the channel layer (via push_event_to_view).
 
-        Sends the event directly to the client without re-rendering.
+        Sends the event directly to the client without re-rendering. Dropped
+        when this connection has no mounted view, like ``server_push``.
         """
+        if not self.view_instance:
+            return
         await self.send_json(
             {
                 "type": "push_event",
