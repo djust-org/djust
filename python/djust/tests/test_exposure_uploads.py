@@ -385,3 +385,27 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
         "upload_name": "avatar",
     }
     assert [e.ref for e in view._upload_manager.get_entries("avatar")] == ["ref-new"]
+
+
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+def test_explicit_uploads_never_write_resume_state(staged, monkeypatch, policy):
+    """D-g: uploads in flight are not resumed for explicit views, so their
+    resumable writer must not record the upload (client filename, progress) in
+    the resume store at all; nothing would ever read it back."""
+    from djust.tests.test_resumable_uploads_821 import _RecordingInnerWriter
+    from djust.uploads.resumable import ResumableUploadWriter
+
+    store = InMemoryUploadState()
+    writer = ResumableUploadWriter.with_inner(_RecordingInnerWriter, state_store=store)
+    monkeypatch.setattr(UploadPage, "exposure_policy", policy)
+    view = UploadPage()
+    view.allow_upload("avatar", accept=".png", max_entries=3, max_file_size=100000, writer=writer)
+    entry = view._upload_manager.register_entry("avatar", "ref-w", RAW_NAME, "image/png", 10)
+    assert entry is not None
+    view._upload_manager.add_chunk("ref-w", 0, b"0123456789")
+    assert entry.writer_instance is not None, "the writer never received the chunk"
+    stored = store.get("ref-w")
+    if policy == "legacy":
+        assert stored is not None  # control: the resume record is written
+    else:
+        assert stored is None

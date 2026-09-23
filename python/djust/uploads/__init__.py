@@ -800,6 +800,9 @@ class UploadManager:
         self._name_to_refs: Dict[str, List[str]] = {}  # upload_name -> [refs]
         self._temp_dir = temp_dir or tempfile.mkdtemp(prefix="djust_uploads_")
         self._csrf_token: Optional[str] = None
+        # False for an explicit (ADR-038) owner: resumable writers then keep
+        # no resume record. Legacy owners resume as before.
+        self._resume_allowed: bool = True
 
     def configure(
         self,
@@ -878,6 +881,10 @@ class UploadManager:
                     content_type=entry.client_type,
                     expected_size=entry.client_size,
                 )
+                if not self._resume_allowed and hasattr(entry.writer_instance, "_store_available"):
+                    # A resumable writer then runs as a plain one: no resume
+                    # record (client filename, progress) is ever written.
+                    entry.writer_instance._store_available = False
             except Exception as exc:  # noqa: BLE001
                 # Do NOT surface the raw exception message to the client —
                 # writer implementations may embed IAM ARNs, bucket names,
@@ -1328,6 +1335,14 @@ class UploadMixin:
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
             self._upload_manager = UploadManager()
+            # ADR-038 D-g: explicit views never resume uploads in flight, so
+            # their writers must not record resume state that nothing reads.
+            try:
+                from .._exposure import uses_legacy_exposure
+            except ImportError:  # pragma: no cover - loaded outside the package
+                pass  # no LiveView policy exists there; keep the legacy default
+            else:
+                self._upload_manager._resume_allowed = uses_legacy_exposure(self)
         return self._upload_manager
 
     def allow_upload(
