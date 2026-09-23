@@ -23,7 +23,7 @@ from django.utils.html import conditional_escape, escapejs
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
-from djust.components.utils import url_attr
+from djust.components.utils import rich_html, url_attr
 from django.utils.safestring import mark_safe
 
 
@@ -3349,9 +3349,9 @@ def rich_text_editor(
         required = required.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
-    # Editor HTML is rendered as markup only when marked safe (mark_safe /
-    # SafeString, e.g. after sanitizing); plain strings are HTML-escaped.
-    e_value = conditional_escape(value)
+    # Editor HTML keeps its formatting: values marked safe pass through, and
+    # anything else is cleaned to the Markdown allowlist (utils.rich_html).
+    e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
     e_height = conditional_escape(height)

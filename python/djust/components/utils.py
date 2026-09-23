@@ -241,3 +241,20 @@ def url_attr(value: Any, *, image: bool = False) -> str:
             escaped: str = conditional_escape(str(value).strip())
             return escaped
     return safe_url(value)
+
+
+def rich_html(value: Any) -> str:
+    """HTML for a slot whose content is itself HTML, such as an editor's value.
+
+    Values marked safe pass through unchanged. Anything else is cleaned to
+    the Markdown component's tag and attribute allowlist, so stored rich text
+    keeps its formatting while scripts, event-handler attributes and
+    non-http(s)/mailto URLs are removed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, SafeData):
+        return str(value)
+    from .components.markdown import _sanitize
+
+    return _sanitize(str(value))

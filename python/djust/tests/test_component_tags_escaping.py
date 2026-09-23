@@ -27,11 +27,6 @@ def _render(tag_src, **ctx):
 # (id, template, context builder taking the value)
 TEXT_CASES = [
     (
-        "rich_text_editor_value",
-        "{% rich_text_editor value=v %}",
-        lambda v: {"v": v},
-    ),
-    (
         "dashboard_grid_panel_content",
         "{% dashboard_grid panels=panels %}{% enddashboard_grid %}",
         lambda v: {"panels": [{"id": "p1", "title": "T", "content": v}]},

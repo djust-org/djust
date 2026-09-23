@@ -47,7 +47,6 @@ from djust.components.components.progress_circle import ProgressCircle  # noqa: 
 from djust.components.components.resizable_panel import ResizablePanel  # noqa: E402
 from djust.components.components.responsive_image import ResponsiveImage  # noqa: E402
 from djust.components.components.rich_select import RichSelect  # noqa: E402
-from djust.components.components.rich_text_editor import RichTextEditor  # noqa: E402
 from djust.components.components.scroll_area import ScrollArea  # noqa: E402
 from djust.components.components.segmented_progress import SegmentedProgress  # noqa: E402
 from djust.components.components.sheet import Sheet  # noqa: E402
@@ -84,7 +83,6 @@ TEXT_CASES: List[Tuple[str, Factory]] = [
     ("page_header_actions", lambda v: PageHeader(title="T", actions=v)),
     ("popover_content", lambda v: Popover(content=v)),
     ("resizable_panel_content", lambda v: ResizablePanel(content=v)),
-    ("rich_text_editor_value", lambda v: RichTextEditor(value=v)),
     ("scroll_area_content", lambda v: ScrollArea(content=v)),
     ("sheet_content", lambda v: Sheet(content=v)),
     ("sidebar_content", lambda v: Sidebar(content=v)),
