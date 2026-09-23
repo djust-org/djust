@@ -5277,11 +5277,14 @@ class ViewRuntime:
         return rules
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
-        """Refresh only declared client persistence after an authorized event.
+        """Refresh only declared client persistence after an authorized turn.
 
         Null explicitly invalidates a previously cached token. Omission is for
         legacy callers, not a fallback to the last successfully captured state.
-        This helper must not be called from background or child-view rendering.
+        Called for the root view only, after a committed foreground event or a
+        committed server-originated turn (background result, tick, push,
+        NOTIFY), while the turn's authorized request is still attached. Never
+        for child-view rendering: the client stores tokens for the primary view.
         """
         from django.conf import settings
 
@@ -6434,11 +6437,14 @@ class ViewRuntime:
                     return
                 if not await self.commit_explicit_turn(view, source="async"):
                     return
-                await self._render_async_result(event_name)
+                snapshot_fields = await self._explicit_event_snapshot(view)
+                await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
             finally:
                 view.__dict__.pop("_djust_event_request", None)
 
-    async def _render_async_result(self, event_name: Optional[str]) -> None:
+    async def _render_async_result(
+        self, event_name: Optional[str], snapshot_fields: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Re-sync + re-render after background work and emit the result frame.
 
         Shared by the success + error paths of ``_execute_async_task``. Stamps
@@ -6485,5 +6491,8 @@ class ViewRuntime:
                 "event_name": event_name,
                 "source": "async",
             }
+        if snapshot_fields:
+            # An explicit root's refreshed signed snapshot (ADR-038 E3).
+            msg.update(snapshot_fields)
         await self._send_render_frame(msg)
         await self._flush_all_pending()

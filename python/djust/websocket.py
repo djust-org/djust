@@ -1622,6 +1622,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         source: Optional[str] = None,
         ref: Optional[int] = None,
         parameter_contract_snapshot: Optional[Dict[str, Any]] = None,
+        snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -1677,7 +1678,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
         if patches is not None:
-            if self.use_binary and parameter_contract_snapshot is None:
+            if self.use_binary and parameter_contract_snapshot is None and not snapshot_fields:
                 patches_data = msgpack.packb(patches)
                 await self._send_frame(bytes_data=patches_data)
             else:
@@ -1721,6 +1722,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if parameter_contract_snapshot is not None:
                     response.update(parameter_contract_snapshot)
                     self._capture_recovery_contracts(response)
+                if snapshot_fields:
+                    # ADR-038: an explicit root's refreshed signed snapshot.
+                    response.update(snapshot_fields)
                 await self.send_json(response)
                 await self._flush_all_pending()
         else:
@@ -1744,6 +1748,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._attach_debug_payload(response, event_name)
             if parameter_contract_snapshot is not None:
                 response.update(parameter_contract_snapshot)
+            if snapshot_fields:
+                response.update(snapshot_fields)
                 self._capture_recovery_contracts(response)
             await self.send_json(response)
             await self._flush_all_pending()
@@ -1948,12 +1954,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # The released event was authorized at entry; a nonlegacy root's
         # declared state is committed before its frame (ADR-038 E3).
+        snapshot_fields: Dict[str, Any] = {}
         if not uses_legacy_exposure(view):
             runtime = getattr(self, "_runtime", None)
             try:
                 committed = skip_render or (
                     runtime is not None and await runtime.commit_explicit_turn(view, source="event")
                 )
+                if committed and not skip_render and runtime is not None:
+                    snapshot_fields = await runtime._explicit_event_snapshot(view)
             finally:
                 self._end_explicit_turn(view)
             if not committed:
@@ -2020,6 +2029,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 source="event",
                 ref=event_ref,
                 timing={"render": _render_ms},
+                snapshot_fields=snapshot_fields,
             )
         else:
             # VDOM diff returned no patches — send full HTML like the
@@ -2053,6 +2063,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 async_pending=has_async,
                 source="event",
                 ref=event_ref,
+                snapshot_fields=snapshot_fields,
             )
         # Unconditional for the same reason as the noop arm above (#2946).
         await self._dispatch_async_work()
@@ -4871,11 +4882,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         runtime = getattr(self, "_runtime", None)
         from ._exposure import uses_legacy_exposure
 
+        snapshot_fields: Dict[str, Any] = {}
         if not uses_legacy_exposure(view):
             try:
                 committed = runtime is not None and await runtime.commit_explicit_turn(
                     view, source="async"
                 )
+                if committed and runtime is not None:
+                    # The turn changed declared state; refresh the client's
+                    # signed snapshot with it (ADR-038 E3, decided 2026-09-22).
+                    snapshot_fields = await runtime._explicit_event_snapshot(view)
             finally:
                 self._end_explicit_turn(view)
             if not committed or self.view_instance is not view:
@@ -4897,6 +4913,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return None
         if rendered.send_fields and runtime is not None:
             runtime._parameter_contracts_active = True
+        if snapshot_fields:
+            from dataclasses import replace
+
+            rendered = replace(
+                rendered, send_fields={**rendered.send_fields, "snapshot_fields": snapshot_fields}
+            )
         return rendered
 
     async def _run_tick(self, interval_ms: int) -> None:

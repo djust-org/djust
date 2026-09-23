@@ -336,3 +336,31 @@ async def test_hot_reload_render_failure_is_value_free_for_explicit_views(
     else:
         assert "HOTRELOAD_RENDER_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text
+
+
+class SnapshotNotifyView(TurnView):
+    count = state(0, persist="server")
+    navigation = state("initial", persist="client", client=True)
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.navigation = "from-notify"
+        self.count = 1
+
+
+async def test_notify_turn_refreshes_the_client_snapshot():
+    """A NOTIFY turn that changes a ``persist="client"`` field carries the
+    refreshed signed token for the primary view (ADR-038 E3)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        request = await sync_to_async(make_request)()
+        socket, mount_frame = await _connect(request, SnapshotNotifyView)
+        try:
+            await _notify({})
+            frames, _ = await _collect(socket)
+        finally:
+            await socket.disconnect()
+    updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+    assert updates, frames
+    token = updates[-1].get("state_snapshot_signed")
+    assert isinstance(token, str) and token and token != mount_frame.get("state_snapshot_signed")
+    assert updates[-1]["view"] == __name__ + ".SnapshotNotifyView"

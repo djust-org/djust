@@ -61,7 +61,7 @@ class BackgroundView(LiveView):
             self.count = result
 
 
-async def mount(request, view_class):
+async def mount(request, view_class, **extra):
     """Real runtime mount; the event request is reloaded from the DB session."""
     transport = MockTransport()
     transport.build_request = lambda: request
@@ -73,7 +73,12 @@ async def mount(request, view_class):
     runtime = ViewRuntime(transport)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust"]):
         await runtime.dispatch_mount(
-            {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": request.path}
+            {
+                "type": "mount",
+                "view": __name__ + "." + view_class.__name__,
+                "url": request.path,
+                **extra,
+            }
         )
     assert runtime.view_instance is not None, transport.sent
     return runtime, transport
@@ -233,3 +238,40 @@ async def test_url_change_requires_current_authorization():
     assert not [f for f in late if f.get("type") in {"patch", "html_update"}], late
     assert [f.get("code") for f in late if f.get("type") == "error"] == ["permission_denied"]
     assert transport.closed_with == 4403
+
+
+class SnapshotBackgroundView(BackgroundView):
+    count = state(0, persist="server")
+    navigation = state("initial", persist="client", client=True)
+
+    def handle_async_result(self, name, result=None, error=None):
+        HANDLED.append((name, result, error))
+        if error is None:
+            self.navigation = "from-background"
+
+
+async def test_background_result_refreshes_the_client_snapshot():
+    """A server-originated turn that changes a ``persist="client"`` field
+    carries the refreshed signed token on its result frame, so
+    back-navigation restores the post-background value (ADR-038 E3)."""
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, SnapshotBackgroundView)
+    view = runtime.view_instance
+    await runtime.dispatch_event({"type": "event", "event": "spawn", "params": {}})
+    GATE.set()
+    await _drain(view)
+
+    frames = [f for f in _async_frames(transport) if f.get("type") in {"patch", "html_update"}]
+    assert frames, transport.sent
+    token = frames[-1].get("state_snapshot_signed")
+    assert isinstance(token, str) and token, frames[-1]
+    assert frames[-1]["view"] == __name__ + ".SnapshotBackgroundView"
+
+    fresh = await sync_to_async(make_request)(request.session.session_key)
+    restored, _ = await mount(
+        fresh,
+        SnapshotBackgroundView,
+        has_prerendered=True,
+        state_snapshot={"view_slug": frames[-1]["view"], "state_json": token},
+    )
+    assert restored.view_instance.navigation == "from-background"
