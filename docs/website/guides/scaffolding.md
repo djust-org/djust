@@ -28,6 +28,8 @@ This creates:
 | `blog/templates/blog/post_list.html` | List + detail panel with `dj-*` directives |
 | `blog/tests.py` | Basic test scaffold |
 
+The generated template starts with `{% extends "blog/base.html" %}`, and no base template is generated. Create one (see [After Generation](#after-generation)) or edit the `{% extends %}` line.
+
 ## Usage
 
 ```
@@ -144,10 +146,21 @@ Generated templates use djust directives:
 3. Include `yourapp.urls` in your root URL conf
 4. Create the model in `yourapp/models.py`
 5. Run `python manage.py makemigrations && python manage.py migrate`
+6. Create `yourapp/templates/yourapp/base.html` with `{% block title %}` and
+   `{% block content %}` (or change the generated template's `{% extends %}`
+   line). Without it, rendering fails with `TemplateDoesNotExist`. A minimal one:
+
+   ```html
+   <!DOCTYPE html>
+   <html>
+   <head><title>{% block title %}{% endblock %}</title></head>
+   <body>{% block content %}{% endblock %}</body>
+   </html>
+   ```
 
 ## Project and app scaffolding
 
-Beyond per-model CRUD generation, the `djust` CLI ships three commands for
+Beyond per-model CRUD generation, the `djust` CLI ships four commands for
 bootstrapping whole projects and apps:
 
 ```bash

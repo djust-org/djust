@@ -82,6 +82,13 @@ class SalesView(LiveView):
     def set_period(self, value: str = "week", **kwargs):
         self.period = value
 
+    def chart_data(self):
+        # Chart.js `data` object (labels + datasets). Query your own models here.
+        return {
+            "labels": ["Mon", "Tue", "Wed"],
+            "datasets": [{"label": self.period, "data": [3, 5, 2]}],
+        }
+
     def get_context_data(self, **kwargs):
         return {"chart_data_json": json.dumps(self.chart_data())}
 ```
