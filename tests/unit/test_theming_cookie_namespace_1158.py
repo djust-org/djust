@@ -45,7 +45,7 @@ def test_namespaced_cookie_wins_when_namespace_set():
 
     rf = RequestFactory()
     req = rf.get("/")
-    req.COOKIES["djust_org_djust_theme_pack"] = "nyc_core"
+    req.COOKIES["djust_org_djust_theme_pack"] = "aurora"
     # Stale unprefixed cookie from another project on the same domain — must NOT win.
     req.COOKIES["djust_theme_pack"] = "djust"
     req.session = {}
@@ -53,7 +53,7 @@ def test_namespaced_cookie_wins_when_namespace_set():
     mgr = ThemeManager(request=req)
     mgr.config = dict(mgr.config, cookie_namespace="djust_org", enable_client_override=True)
     state = mgr.get_state()
-    assert state.pack == "nyc_core", (
+    assert state.pack == "aurora", (
         f"namespaced cookie must win over stale unprefixed cookie; got pack={state.pack!r}"
     )
 
@@ -68,13 +68,13 @@ def test_namespace_set_falls_back_to_unprefixed_when_namespaced_missing():
     rf = RequestFactory()
     req = rf.get("/")
     # Only the legacy unprefixed cookie is present.
-    req.COOKIES["djust_theme_pack"] = "nyc_core"
+    req.COOKIES["djust_theme_pack"] = "aurora"
     req.session = {}
 
     mgr = ThemeManager(request=req)
     mgr.config = dict(mgr.config, cookie_namespace="djust_org", enable_client_override=True)
     state = mgr.get_state()
-    assert state.pack == "nyc_core", (
+    assert state.pack == "aurora", (
         f"unprefixed fallback must apply when namespaced cookie missing; got pack={state.pack!r}"
     )
 
@@ -87,7 +87,7 @@ def test_no_namespace_reads_unprefixed_default_back_compat():
 
     rf = RequestFactory()
     req = rf.get("/")
-    req.COOKIES["djust_theme_pack"] = "nyc_core"
+    req.COOKIES["djust_theme_pack"] = "aurora"
     req.session = {}
 
     mgr = ThemeManager(request=req)
@@ -95,7 +95,7 @@ def test_no_namespace_reads_unprefixed_default_back_compat():
     mgr.config = dict(mgr.config, enable_client_override=True)
     mgr.config.pop("cookie_namespace", None)
     state = mgr.get_state()
-    assert state.pack == "nyc_core"
+    assert state.pack == "aurora"
 
 
 @pytest.mark.django_db
@@ -108,24 +108,24 @@ def test_two_namespace_isolation():
     rf = RequestFactory()
     req = rf.get("/")
     # Both projects' cookies present in the shared jar.
-    req.COOKIES["a_djust_theme_pack"] = "pack_a"
-    req.COOKIES["b_djust_theme_pack"] = "pack_b"
+    req.COOKIES["a_djust_theme_pack"] = "amber"
+    req.COOKIES["b_djust_theme_pack"] = "bauhaus"
     req.session = {}
 
     mgr_a = ThemeManager(request=req)
     mgr_a.config = dict(mgr_a.config, cookie_namespace="a", enable_client_override=True)
     state_a = mgr_a.get_state()
-    assert state_a.pack == "pack_a", f"namespace 'a' must read 'a_*' cookies; got {state_a.pack!r}"
+    assert state_a.pack == "amber", f"namespace 'a' must read 'a_*' cookies; got {state_a.pack!r}"
 
     # Same request, different ThemeManager configured for namespace 'b'.
     req2 = rf.get("/")
-    req2.COOKIES["a_djust_theme_pack"] = "pack_a"
-    req2.COOKIES["b_djust_theme_pack"] = "pack_b"
+    req2.COOKIES["a_djust_theme_pack"] = "amber"
+    req2.COOKIES["b_djust_theme_pack"] = "bauhaus"
     req2.session = {}
     mgr_b = ThemeManager(request=req2)
     mgr_b.config = dict(mgr_b.config, cookie_namespace="b", enable_client_override=True)
     state_b = mgr_b.get_state()
-    assert state_b.pack == "pack_b", f"namespace 'b' must read 'b_*' cookies; got {state_b.pack!r}"
+    assert state_b.pack == "bauhaus", f"namespace 'b' must read 'b_*' cookies; got {state_b.pack!r}"
 
 
 @pytest.mark.django_db
@@ -138,7 +138,7 @@ def test_namespace_applies_to_all_four_cookies():
     req = rf.get("/")
     req.COOKIES["proj_djust_theme"] = "ios"
     req.COOKIES["proj_djust_theme_preset"] = "rose"
-    req.COOKIES["proj_djust_theme_pack"] = "nyc_core"
+    req.COOKIES["proj_djust_theme_pack"] = "aurora"
     req.COOKIES["proj_djust_theme_layout"] = "sidebar"
     # Stale unprefixed cookies from another project — must NOT bleed in.
     req.COOKIES["djust_theme"] = "material"
@@ -151,7 +151,7 @@ def test_namespace_applies_to_all_four_cookies():
     mgr.config = dict(mgr.config, cookie_namespace="proj", enable_client_override=True)
     state = mgr.get_state()
     # Pack overrides theme + preset (existing behaviour) — assert pack wins.
-    assert state.pack == "nyc_core"
+    assert state.pack == "aurora"
     assert state.layout == "sidebar"
 
 

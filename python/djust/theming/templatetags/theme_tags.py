@@ -28,7 +28,7 @@ from django.http import HttpRequest
 from django.template import Context
 from django.template.loader import render_to_string
 from django.urls import reverse, NoReverseMatch
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.safestring import SafeString, mark_safe
 from django.utils.http import urlencode
 
@@ -333,17 +333,18 @@ def theme_css_link(context: Context) -> SafeString:
     mode = (getattr(state, "resolved_mode", None) or getattr(state, "mode", None) or "").strip()
     preset = (getattr(state, "preset", None) or "").strip()
 
-    parts = []
+    params = {}
     if pack:
-        parts.append(f"p={pack}")
+        params["p"] = pack
     if mode:
-        parts.append(f"m={mode}")
+        params["m"] = mode
     if preset:
-        parts.append(f"r={preset}")
+        params["r"] = preset
 
-    qs = "&".join(parts)
-    full = f"{base_url}?{qs}" if qs else base_url
-    return mark_safe(full)
+    # Query values are URL-encoded and the whole URL is HTML-escaped, so the
+    # result is safe to drop into an ``href="..."`` attribute as-is.
+    full = f"{base_url}?{urlencode(params)}" if params else base_url
+    return escape(full)
 
 
 @register.simple_tag(takes_context=True)
