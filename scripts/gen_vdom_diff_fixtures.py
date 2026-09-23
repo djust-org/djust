@@ -71,9 +71,11 @@ register_with_rust_engine()
 from djust.testing import LiveViewTestClient  # noqa: E402
 
 from tests.livefixtures.inline_whitespace_view import (  # noqa: E402
+    IF_FOR_SHAPES,
     KEYED_LIST_TEMPLATES,
     InlineWhitespaceView,
     keyed_list_view,
+    state_view,
 )
 from tests.livefixtures.kanban_tabs_view import KanbanTabsView  # noqa: E402
 
@@ -264,10 +266,156 @@ def gen_keyed_list_fuzz_2999():
     }
 
 
+def gen_if_for_fuzz_2999():
+    """#2999 review H1/H2: seeded random state changes over templates that put
+    ``{% if %}`` boundaries and ``{% for %}`` loops next to kept spaces —
+    conditional loop items (multi-line and single-line), keyed conditional
+    items, if/else inside a loop, block-or-inline items, nested ifs (single-
+    and multi-line), two ifs between inline siblings — plus a text value that
+    empties and refills (the stale fast-path map) and a separator variable
+    that flips between text and whitespace. Each step's real patch batch must
+    reproduce a fresh render in jsdom, text included."""
+    import random
+
+    rng = random.Random(29990)
+    names = ["alpha", "beta", "gamma", "delta", "eps", "zeta"]
+    errors = ["", "Required", "Invalid email", "Too short", " "]
+    seps = ["x", " ", "", "\n  ", "y", "-"]
+
+    def random_state(n):
+        k = rng.randrange(0, len(names) + 1)
+        picked = rng.sample(names, k)
+        return {
+            "tags": [{"name": t, "visible": rng.random() < 0.6} for t in picked],
+            "a": rng.random() < 0.5,
+            "b": rng.random() < 0.5,
+            "admin": rng.random() < 0.5,
+            "user": rng.choice(["", "ann", "bob"]),
+            "error": rng.choice(errors),
+            "sep": rng.choice(seps),
+            "n": n,
+        }
+
+    shapes = {}
+    for shape, template in IF_FOR_SHAPES.items():
+        state = random_state(0)
+        c = LiveViewTestClient(state_view(template, state))
+        c.mount()
+        egress = c.view_instance._strip_comments_and_whitespace
+        initial_html, _, _ = c.render_with_patches()
+        steps = []
+        for n in range(1, 31):
+            new = random_state(n)
+            # Half the steps change only a few fields, so small diffs (and the
+            # text fast paths) are exercised as well as wholesale changes.
+            if rng.random() < 0.5:
+                keep = dict(state)
+                for key in rng.sample(sorted(new), rng.randrange(1, 3)):
+                    keep[key] = new[key]
+                keep["n"] = n
+                new = keep
+            if shape == "error_message" and n in (2, 3, 4):
+                # Pin the review's exact H1 sequence early in the run.
+                new = dict(new, error=["Required", "", "Invalid email"][n - 2])
+            c.send_event("set_state", **new)
+            html, patches, _ = c.render_with_patches()
+            steps.append({"label": f"step {n}", "patches": patches, "expected_html": egress(html)})
+            state = new
+        shapes[shape] = {"initial_html": egress(initial_html), "steps": steps}
+    return {
+        "scenario": "if_for_fuzz_2999",
+        "description": "Seeded state fuzz over {% if %}/{% for %} shapes next to kept spaces.",
+        "root_selector": ".ws-root",
+        "shapes": shapes,
+    }
+
+
+def gen_normalizer_corpus_2999():
+    """#2999 review M1: the egress normalizer must leave, AS THE CLIENT COUNTS
+    CHILDREN, exactly the nodes the server VDOM has — both on the VDOM's own
+    HTML (the WS frame) and on raw render() output (the initial GET). Records
+    a seeded random corpus of valid-nesting bodies plus hand-picked edge cases
+    (attribute values containing ``<``, ``<image>``, custom elements, svg/math,
+    dj-if markers, NBSP, uppercase tags); the JS test parses every string in
+    jsdom (a real HTML5 parser) and compares significant-child trees with the
+    client's own predicate."""
+    import random
+
+    from djust._rust import RustLiveView
+    from djust.mixins.template import TemplateMixin
+
+    strip = TemplateMixin()._strip_comments_and_whitespace
+    rng = random.Random(2999)
+    inline = ["b", "i", "span", "em", "label", "B", "SPAN", "my-el", "x-badge"]
+    inline_names = {"b", "i", "span", "em", "label", "my-el", "x-badge"}
+    block = ["div", "p", "section"]
+    ws_runs = [" ", "\n  ", "\t", "  \n ", "\r\n"]
+
+    def text():
+        return rng.choice(["x", "hello", "A", "\xa0", "a -&gt; b", "q"])
+
+    def node(depth, inline_only):
+        r = rng.random()
+        if depth > 2 or r < 0.2:
+            return text()
+        if r < 0.28:
+            return rng.choice(['<br>', '<img src="s">', "<input>", '<img alt="a>b">', '<img alt="<3">', "<svg/>", "<wbr>"])
+        if r < 0.34:
+            return rng.choice(["<!-- c -->", "<!--dj-if-->"])
+        if r < 0.38 and depth == 0 and not inline_only:
+            return "<textarea>" + rng.choice(["t", " t ", "\n"]) + "</textarea>"
+        tag = rng.choice(inline if (r < 0.75 or inline_only) else block)
+        kids = seq(depth + 1, inline_only=tag.lower() in inline_names or tag == "p")
+        attr = rng.choice(["", ' title="t"', ' data-x="1>2"', ' data-y="a<b"'])
+        return f"<{tag}{attr}>{kids}</{tag}>"
+
+    def seq(depth, inline_only=False):
+        out = []
+        for _ in range(rng.randint(0, 4)):
+            if rng.random() < 0.6:
+                out.append(rng.choice(ws_runs))
+            out.append(node(depth, inline_only))
+        if rng.random() < 0.5:
+            out.append(rng.choice(ws_runs))
+        return "".join(out)
+
+    hand = [
+        '<p><img alt="<3"> <b>heart</b></p>',
+        '<p><input value="<x"> <b>x</b></p>',
+        '<p><span title="a<b">t</span> <b>q</b></p>',
+        '<p><span title="a> <b">t</span> <b>q</b></p>',
+        "<p><image src=x> <b>y</b></p>",
+        "<p><my-badge>A</my-badge> <my-badge>B</my-badge></p>",
+        "<div><x-card>a</x-card>\n  <x-card>b</x-card></div>",
+        "<p><b>A</b> <svg/> <i>B</i></p>",
+        "<p><b>A</b> <math><mi>x</mi></math> <i>B</i></p>",
+        '<p><b>A</b> <!--dj-if id="if-1"--><i>B</i><!--/dj-if--> <u>C</u></p>',
+        "<p><b>A</b>\xa0<i>B</i> <u>C</u></p>",
+        "<p><B>A</B> <I>B</I></p>",
+        "<div><div>a</div> <div>b</div></div>",
+        "<ul>\n  <li><strong>Lead.</strong> <code>x</code></li>\n  <li>b</li>\n</ul>",
+        "<div><span>a</span> <textarea>t\n t</textarea> <code>c\n c</code> <pre>p</pre> <b>z</b></div>",
+        "<table><tr><td>a</td> <td>b</td></tr></table>",
+    ]
+    bodies = hand + [seq(0) for _ in range(300)]
+    cases = []
+    for body in bodies:
+        view = RustLiveView("<div dj-root>{{ h|safe }}</div>")
+        view.update_state({"h": body})
+        vdom_html, _, _ = view.render_with_diff()
+        raw = f"<div dj-root>{body}</div>"
+        cases.append(
+            {"body": body, "vdom_html": vdom_html, "norm_raw": strip(raw), "norm_vdom": strip(vdom_html)}
+        )
+    return {"scenario": "normalizer_corpus_2999", "cases": cases}
+
+
 SCENARIOS = {
     "vdom_diff_kanban_tabs_1678.json": gen_kanban_tabs_1678,
     "vdom_diff_inline_whitespace_2999.json": gen_inline_whitespace_2999,
     "vdom_diff_keyed_list_fuzz_2999.json": gen_keyed_list_fuzz_2999,
+    "vdom_diff_if_for_fuzz_2999.json": gen_if_for_fuzz_2999,
+    "vdom_normalizer_corpus_2999.json": gen_normalizer_corpus_2999,
 }
 
 
@@ -280,6 +428,8 @@ def main():
         print(f"wrote {path.relative_to(REPO)}")
         for i, step in enumerate(fixture.get("steps", []), 1):
             print(f"  step {i} [{step['label']}]: {_patch_type_counts(step['patches'])}")
+        if "cases" in fixture:
+            print(f"  {len(fixture['cases'])} cases")
         for shape, sub in fixture.get("shapes", {}).items():
             counts = {}
             for step in sub["steps"]:

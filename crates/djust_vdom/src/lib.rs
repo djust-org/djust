@@ -1284,12 +1284,21 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
         }
     }
 
-    // Apply replacements to each affected text node
+    // Compute every node's new text FIRST and only then write them, so a
+    // rejection never leaves the tree half-updated (the caller falls back to a
+    // full parse against this same tree).
+    let mut updates: Vec<(*mut VNode, String)> = Vec::with_capacity(node_replacements.len());
     for (node_idx, mut reps) in node_replacements {
         let (esc_start, _) = escaped_offsets[node_idx];
         let (ptr, _) = text_nodes[node_idx];
-        let node = unsafe { &mut *ptr };
+        let node = unsafe { &*ptr };
         let current_text = node.text.as_deref().unwrap_or("");
+        // #2999: whether a whitespace-only text node exists at all depends on
+        // its neighbours (kept as `" "` between inline siblings, else
+        // dropped) — only the full parse can decide that.
+        if djust_core::html_whitespace::is_html_whitespace_only(current_text) {
+            return false;
+        }
         let mut current_escaped = html_escape(current_text);
 
         reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
@@ -1311,7 +1320,15 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
             );
         }
 
-        node.text = Some(html_unescape(&current_escaped));
+        let new_text = html_unescape(&current_escaped);
+        if djust_core::html_whitespace::is_html_whitespace_only(&new_text) {
+            return false;
+        }
+        updates.push((ptr, new_text));
+    }
+    for (ptr, new_text) in updates {
+        let node = unsafe { &mut *ptr };
+        node.text = Some(new_text);
         node.cached_html = None;
     }
 

@@ -92,10 +92,15 @@ class StreamingMixin:
         }
 
         if html is not None:
+            # Developer-supplied HTML is sent as given (#2999): it may rely on
+            # whitespace (`white-space: pre-wrap` chat output), and it is not
+            # server-VDOM content either way — see _normalize_stream_html.
             op["html"] = html
         else:
             # Re-render the target fragment from current state
-            op["html"] = await self._render_stream_fragment(stream_name, target)
+            op["html"] = self._normalize_stream_html(
+                await self._render_stream_fragment(stream_name, target)
+            )
 
         # Batch or send immediately
         if elapsed >= MIN_STREAM_INTERVAL_S:
@@ -309,6 +314,36 @@ class StreamingMixin:
                 }
             )
         await self._ws_consumer._flush_push_events()
+
+    def _normalize_stream_html(self, html: str) -> str:
+        """Normalize a re-rendered stream fragment like the LiveView template (#2999).
+
+        ``stream_to()`` without ``html`` re-renders the view's template with
+        Django and sends the target's innerHTML, which the client sets with
+        ``innerHTML``. The page itself is rendered from the NORMALIZED template
+        (``_strip_comments_and_whitespace``), so the fragment gets the same
+        pass: otherwise an un-normalized ``{% for %}<div>…</div> {% endfor %}``
+        would put a ``" "`` between two blocks — a node the client counts as a
+        child (it counts text that is exactly ``" "``) and the page never had.
+        The fragment is wrapped in an element while normalizing so whitespace
+        at its edges is treated as the container's first/last child, as the
+        parser would.
+
+        Developer-supplied stream HTML (``stream_to(html=…)``,
+        ``stream_insert``) is sent untouched: it may depend on its whitespace,
+        and stream content is not server-VDOM content either way (it carries
+        no dj-ids; the server's tree never saw it), so a container that
+        receives it must not also be patched by the server — mark it
+        ``dj-update="ignore"``. A " " inside such a container shifts nothing
+        outside it: child indices are per parent.
+        """
+        strip = getattr(self, "_strip_comments_and_whitespace", None)
+        if not html or strip is None:
+            return html
+        wrapped = strip(f"<div>{html}</div>")
+        if wrapped.startswith("<div>") and wrapped.endswith("</div>"):
+            return wrapped[len("<div>") : -len("</div>")]
+        return html
 
     async def _render_stream_fragment(self, stream_name: str, target: Optional[str] = None) -> str:
         """

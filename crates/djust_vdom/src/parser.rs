@@ -314,6 +314,65 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
     Ok(roots)
 }
 
+/// Parse `html` as a fragment the way the CLIENT sees it after inserting it
+/// with `<template>.innerHTML` (`InsertSubtree`): the roots are every node
+/// the browser keeps that `isSignificantChild` counts — elements, dj-if
+/// comments, non-whitespace text and text that is exactly `" "` — with no
+/// neighbour rule applied at the top level (the fragment's neighbours are in
+/// the page, not in the fragment). Nested children follow the normal rules,
+/// which reproduce themselves on VDOM-serialized HTML.
+///
+/// Used by the reference patch model (`patch::apply_patches`) so the Rust
+/// round-trip tests apply `InsertSubtree` exactly as the browser does (#2999).
+pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
+    let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
+    let dom = parse_fragment(
+        RcDom::default(),
+        ParseOpts::default(),
+        context_name,
+        vec![],
+        false,
+    )
+    .from_utf8()
+    .read_from(&mut html.as_bytes())
+    .map_err(|e| DjangoRustError::VdomError(format!("Failed to parse fragment: {e}")))?;
+    let document = dom.document;
+    let doc_children = document.children.borrow();
+    let html_wrapper = doc_children
+        .iter()
+        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if name.local.as_ref() == "html"))
+        .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
+        .clone();
+    drop(doc_children);
+    let mut roots = Vec::new();
+    for child in html_wrapper.children.borrow().iter() {
+        match &child.data {
+            NodeData::Comment { contents } => {
+                let text = contents.to_string();
+                if is_preserved_comment(&text) {
+                    roots.push(VNode {
+                        tag: "#comment".to_string(),
+                        attrs: HashMap::new(),
+                        children: Vec::new(),
+                        text: Some(text),
+                        key: None,
+                        djust_id: None,
+                        cached_html: None,
+                    });
+                }
+            }
+            NodeData::Text { contents } => {
+                let text = contents.borrow().to_string();
+                if text == " " || !is_html_whitespace_only(&text) {
+                    roots.push(VNode::text(text));
+                }
+            }
+            _ => roots.push(handle_to_vnode(child)?),
+        }
+    }
+    Ok(roots)
+}
+
 fn find_root(handle: &Handle) -> Handle {
     // html5ever wraps fragments in <html><head/><body>content</body></html>
     // We want to find the actual content, not the html wrapper.

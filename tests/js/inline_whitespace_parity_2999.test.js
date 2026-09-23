@@ -15,6 +15,9 @@
  *   - the patcher logged no warnings/errors.
  *
  * Part 2 pins the client predicate directly.
+ *
+ * The seeded fixtures (keyed lists; {% if %}/{% for %} shapes) come from the
+ * same generator and are checked the same way after every step.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -148,10 +151,13 @@ describe('#2999 morph around whitespace', () => {
     });
 });
 
-describe('#2999 keyed list reorders across separators: real server patches', () => {
-    const fuzz = JSON.parse(
-        fs.readFileSync('./tests/js/fixtures/vdom_diff_keyed_list_fuzz_2999.json', 'utf-8')
-    );
+for (const [title, file] of [
+    ['keyed list reorders across separators', 'vdom_diff_keyed_list_fuzz_2999.json'],
+    // Review H1/H2: {% if %} boundaries and {% for %} loops next to kept
+    // spaces, nested ifs, a text value that empties and refills.
+    ['{% if %}/{% for %} shapes next to kept spaces', 'vdom_diff_if_for_fuzz_2999.json'],
+]) describe(`#2999 ${title}: real server patches`, () => {
+    const fuzz = JSON.parse(fs.readFileSync(`./tests/js/fixtures/${file}`, 'utf-8'));
 
     for (const [shape, sub] of Object.entries(fuzz.shapes)) {
         it(`${shape}: every step reproduces a fresh render`, async () => {
@@ -183,7 +189,7 @@ describe('#2999 keyed list reorders across separators: real server patches', () 
         });
     }
 
-    it('the fixture exercises forward moves (the case that used to land early)', () => {
+    if (file === 'vdom_diff_keyed_list_fuzz_2999.json') it('the fixture exercises forward moves (the case that used to land early)', () => {
         let forward = 0;
         for (const sub of Object.values(fuzz.shapes)) {
             for (const step of sub.steps) {
@@ -196,7 +202,7 @@ describe('#2999 keyed list reorders across separators: real server patches', () 
     });
 });
 
-describe('#2999 _applyChildPlacements', () => {
+describe('#2999 placements (_applyPatchBatch)', () => {
     it('plain keyed rotation [A..E] -> [C,D,E,A,B] (was "CADBE")', async () => {
         const { window } = createHarnessDom(
             '<div dj-root><ul dj-id="1">' +
@@ -221,5 +227,88 @@ describe('#2999 _applyChildPlacements', () => {
             { type: 'MoveChild', path: [0], d: '1', from: 0, to: 2, child_d: '2' },
         ], root);
         expect(root.querySelector('ul').textContent).toBe('bca');
+    });
+});
+
+describe('#2999 review H1: an error message that clears and comes back', () => {
+    const fuzz = JSON.parse(
+        fs.readFileSync('./tests/js/fixtures/vdom_diff_if_for_fuzz_2999.json', 'utf-8')
+    );
+    const sub = fuzz.shapes.error_message;
+
+    it('shows "Required" -> "" -> "Invalid email" in the client DOM', async () => {
+        const { window, logs } = createHarnessDom(sub.initial_html);
+        const { document } = window;
+        const seen = [];
+        for (const step of sub.steps.slice(0, 4)) {
+            await window.djust.applyPatches(step.patches, document.querySelector('.ws-root'));
+            seen.push(document.querySelector('.error').textContent);
+        }
+        // step 1 is random; steps 2-4 pin the review's sequence.
+        expect(seen.slice(1)).toEqual(['Required', '', 'Invalid email']);
+        const issues = logs.filter(([lvl]) => lvl === 'warn' || lvl === 'error');
+        expect(issues).toEqual([]);
+    });
+
+    it('every step targets a node the server tree has (no SetText into nothing)', () => {
+        // The server's own expected HTML carries the message at every step.
+        for (const [i, step] of sub.steps.slice(1, 4).entries()) {
+            const want = ['Required', '', 'Invalid email'][i];
+            expect(step.expected_html).toContain(`<span class="error" dj-id=`);
+            expect(step.expected_html.includes(`>${want}</span>`)).toBe(true);
+        }
+    });
+});
+
+describe('#2999 normalizer corpus: parsed by jsdom, counted by the client', () => {
+    // Review M1. Each case carries the server VDOM's HTML (the truth), the
+    // normalized raw render() output (initial GET) and the normalized VDOM
+    // HTML (WS frame). Parsed by a real HTML5 parser and walked with the
+    // client's own getSignificantChildren, both must equal the truth. This
+    // is the check `diff_html` could not make: it re-parses with the server
+    // parser, which silently drops a " " the normalizer wrongly kept.
+    const corpus = JSON.parse(
+        fs.readFileSync('./tests/js/fixtures/vdom_normalizer_corpus_2999.json', 'utf-8')
+    );
+    const { window } = createHarnessDom('<div></div>');
+    const { document } = window;
+    const tree = (html) => {
+        const t = document.createElement('div');
+        t.innerHTML = html;
+        const root = t.querySelector('[dj-root]');
+        const walk = (n) => (n.nodeType === 1
+            ? [n.tagName.toLowerCase(), window.djust.getSignificantChildren(n).map(walk)]
+            : n.nodeType === 8 ? ['#comment', n.textContent.trim()]
+                // Node KIND, not content: a kept " " vs a text run. The
+                // normalizer collapses whitespace inside text runs (and a
+                // stripped comment can leave a leading space on one), which
+                // moves no index.
+                : ['#text', n.textContent === ' ' ? 'space' : 'text']);
+        return window.djust.getSignificantChildren(root).map(walk);
+    };
+
+    it('has hand-picked and random cases', () => {
+        expect(corpus.cases.length).toBeGreaterThan(300);
+    });
+
+    it('normalized VDOM HTML (the WS frame) keeps exactly the server nodes', () => {
+        const bad = corpus.cases.filter((c) =>
+            JSON.stringify(tree(c.norm_vdom)) !== JSON.stringify(tree(c.vdom_html)));
+        expect(bad.map((c) => c.body)).toEqual([]);
+    });
+
+    it('normalized raw HTML (the initial GET) matches the server VDOM', () => {
+        const bad = corpus.cases.filter((c) =>
+            JSON.stringify(tree(c.norm_raw)) !== JSON.stringify(tree(c.vdom_html)));
+        // Known gap, documented in the PR: foster parenting moves content out
+        // of a <table> in the tree builder, which a string normalizer can't
+        // see. The mount morph repairs it. None of the corpus hits it.
+        expect(bad.map((c) => c.body)).toEqual([]);
+    });
+
+    it('a " " kept between two blocks WOULD be caught', () => {
+        const truth = '<div dj-root=""><div>a</div><div>b</div></div>';
+        expect(JSON.stringify(tree('<div dj-root=""><div>a</div> <div>b</div></div>')))
+            .not.toBe(JSON.stringify(tree(truth)));
     });
 });

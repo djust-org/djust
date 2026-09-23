@@ -215,13 +215,16 @@ def render_markdown(
     """
     ...
 
-def vdom_inline_level_tags() -> List[str]:
+def collapse_inter_tag_whitespace(html: str, block_tags: List[str]) -> str:
     """
-    The VDOM parser's inline-level tag list (#2999).
+    The egress normalizer's inter-tag whitespace pass (#2999).
 
-    Whitespace between two of these elements (or between one and a text run)
-    is kept as a single ``" "`` text node; whitespace next to anything else is
-    dropped. The egress whitespace normalizer uses the same list.
+    ``html`` has every whitespace run collapsed to one space and its
+    pre/code/textarea/script/style blocks replaced by
+    ``__PRESERVED_BLOCK_<i>__`` placeholders (tag ``block_tags[i]``). Drops a
+    space between two tags unless its nearest sibling on each side is text or
+    an inline-level element (custom elements count as inline) — the VDOM
+    parser's rule.
     """
     ...
 
@@ -1383,7 +1386,7 @@ __all__ = [
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
-    "vdom_inline_level_tags",
+    "collapse_inter_tag_whitespace",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",

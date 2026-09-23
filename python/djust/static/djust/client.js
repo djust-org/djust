@@ -8832,7 +8832,7 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  *   -2: RemoveSubtree (tear down keyed subtrees first)
  *    0: RemoveChild (descending index within same parent)
  *    1: InsertChild + MoveChild — per parent, applied TOGETHER as placements
- *       at their final index (see _applyChildPlacements)
+ *       at their final index
  *    3: MoveSubtree + InsertSubtree (boundary-span ops, INTERLEAVED by
  *       ascending target index — see below)
  *    4: SetText, SetAttribute, other node-targeting patches
@@ -8855,11 +8855,10 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  * correct prefix before a higher-index op resolves against it (the outer
  * boundary is repositioned before the nested insert lands inside it).
  *
- * Child ops (#2999) follow the server's model (patch.rs::apply_patches):
- * per parent, removes by DESCENDING index, then inserts and moves together as
- * placements at their final index — see _applyChildPlacements. Moves applied
- * one at a time against the live list mis-placed forward moves
- * ([a,b,c] -> [b,c,a] came out "bac").
+ * NOTE (#2999): applyPatches no longer applies a batch op-by-op in this
+ * order — see _applyPatchBatch, which places inserts, moves and dj-if spans
+ * together by final index. This sort is kept for callers that apply single
+ * patches themselves.
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
@@ -8918,80 +8917,247 @@ function _sortPatches(patches) {
 }
 window.djust._sortPatches = _sortPatches;
 
-/** Final index of an InsertChild / MoveChild placement. */
+/** Final index of a placement op (#2999). */
 function _placementIndex(patch) {
     return patch.type === 'MoveChild' ? patch.to : patch.index;
 }
 
-/** Key identifying the parent a child op targets. */
-function _childOpParentKey(patch) {
-    return (patch.d || '') + '|' + (patch.path || []).join('/');
+const _PLACEMENT_OPS = new Set(['InsertChild', 'MoveChild', 'InsertSubtree', 'MoveSubtree']);
+
+/**
+ * Remove `child` from `parent` the way a RemoveChild patch does: honour a
+ * dj-remove deferral, and clear a textarea's value when its text goes.
+ */
+function _removeChildNode(parent, child) {
+    const wasTextNode = child.nodeType === Node.TEXT_NODE;
+    if (!wasTextNode
+        && child.nodeType === Node.ELEMENT_NODE
+        && globalThis.djust
+        && typeof globalThis.djust.maybeDeferRemoval === 'function'
+        && globalThis.djust.maybeDeferRemoval(child)) {
+        return;
+    }
+    parent.removeChild(child);
+    if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
+        parent.value = '';
+    }
+}
+
+/** The nodes of a dj-if span, open marker through close marker, or null. */
+function _djIfSpanNodes(id, rootEl) {
+    const open = _findDjIfOpenMarker(String(id || ''), rootEl);
+    if (!open) return null;
+    const close = _findDjIfCloseMarker(open);
+    if (!close) return null;
+    const nodes = [];
+    for (let cur = open; cur; cur = cur.nextSibling) {
+        nodes.push(cur);
+        if (cur === close) break;
+    }
+    return nodes;
 }
 
 /**
- * Apply one parent's InsertChild + MoveChild patches as placements at their
- * FINAL index (`index` / `to`) (#2999). Moved children are resolved, then
- * detached; the children left keep their relative order (the differ
- * guarantees it — reconcile_keyed in diff.rs), so placing inserts and moved
- * children by ascending final index puts each one after exactly its final
+ * Apply one parent's placements — InsertChild, MoveChild, InsertSubtree,
+ * MoveSubtree — each of which carries the FINAL index of what it places
+ * (#2999). Every moved child and moved dj-if span is detached first (an outer
+ * span never carries a nested moved item with it: spans are claimed
+ * innermost-first), then everything is placed by ascending final index. The
+ * differ guarantees that what stays in place is already in final relative
+ * order, so each placement at index `i` lands after exactly its `i` final
  * predecessors. Same model as patch.rs::apply_patches.
- *
- * @returns {{ok: number, failed: number}}
  */
-function _applyChildPlacements(ops, rootEl) {
+function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
+    const preserve = isWhitespacePreserving(parent);
+    const isSig = (n) => isSignificantChild(n, preserve);
+
+    // Claim the nodes each move carries: moved children first, then spans
+    // from the smallest up.
+    const owner = new Map();
+    for (const op of ops) {
+        if (op.type !== 'MoveChild') continue;
+        const child = movedChildOf.get(op);
+        if (child && child.parentNode === parent && !owner.has(child)) owner.set(child, op);
+    }
+    const spans = [];
+    for (const op of ops) {
+        if (op.type !== 'MoveSubtree') continue;
+        const nodes = _djIfSpanNodes(op.id, rootEl);
+        if (nodes && nodes[0].parentNode === parent) spans.push({ op, nodes });
+    }
+    spans.sort((a, b) => a.nodes.length - b.nodes.length);
+    for (const { op, nodes } of spans) {
+        for (const n of nodes) if (!owner.has(n)) owner.set(n, op);
+    }
+    const carried = new Map();
+    for (const n of Array.from(parent.childNodes)) {
+        const op = owner.get(n);
+        if (!op) continue;
+        if (!carried.has(op)) carried.set(op, []);
+        carried.get(op).push(n);
+        parent.removeChild(n);
+    }
+
+    const sig = Array.from(parent.childNodes).filter(isSig);
+    const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
+    for (const op of sorted) {
+        let nodes;
+        if (op.type === 'InsertChild') {
+            const created = createNodeFromVNode(op.node, isInSvgContext(parent));
+            // <select> only accepts <option>/<optgroup>: keep the redirect the
+            // single-patch path applies (inserts the node as a sibling).
+            if (parent.tagName === 'SELECT' && !(created.nodeType === Node.ELEMENT_NODE &&
+                    (created.tagName === 'OPTION' || created.tagName === 'OPTGROUP'))) {
+                tally(applySinglePatch(op, rootEl), op);
+                continue;
+            }
+            nodes = [created];
+        } else if (op.type === 'InsertSubtree') {
+            if (op.id && _findDjIfOpenMarker(String(op.id), rootEl)) {
+                tally(true, op); // idempotent: already present
+                continue;
+            }
+            if (typeof op.html !== 'string' || !op.html) {
+                tally(false, op);
+                continue;
+            }
+            const fragment = _parseSubtreeHtml(op.html);
+            _warnDeadScripts(fragment);
+            nodes = Array.from(fragment.childNodes);
+        } else {
+            nodes = carried.get(op) || [];
+            if (nodes.length === 0) {
+                // A MoveSubtree whose marker is gone is an idempotent no-op; a
+                // MoveChild whose child is gone failed.
+                tally(op.type === 'MoveSubtree', op);
+                continue;
+            }
+        }
+        const at = Math.min(_placementIndex(op), sig.length);
+        // eslint-disable-next-line security/detect-object-injection -- `at` is a clamped integer index
+        const ref = sig[at] || null;
+        const frag = document.createDocumentFragment();
+        for (const n of nodes) frag.appendChild(n);
+        parent.insertBefore(frag, ref);
+        sig.splice(at, 0, ...nodes.filter(isSig));
+        if (op.type === 'InsertChild' && nodes[0].nodeType === Node.TEXT_NODE &&
+                parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
+            parent.value = String(nodes[0].textContent || '');
+        }
+        tally(true, op);
+    }
+}
+
+/**
+ * Apply a patch batch (#2999). The model (patch.rs::apply_patches is the
+ * reference; the Rust round-trip tests check it against the differ):
+ *
+ *   1. Resolve every RemoveChild (by child_d, else its OLD index) and every
+ *      MoveChild's child against the DOM as it is BEFORE the batch — indices
+ *      in those ops are old-tree indices. Resolving an id-less RemoveChild
+ *      after a RemoveSubtree had shifted the list removed the wrong node.
+ *   2. RemoveSubtree (by marker id), then the resolved removals.
+ *   3. Per parent, all placements together (_placeChildren). Inserts used to
+ *      run before MoveSubtree/InsertSubtree, so their final indices resolved
+ *      against a list whose boundaries were not in place yet.
+ *   4. Everything else (SetText, SetAttr, Replace, virtual-list ops, …) in
+ *      emitted order, addressed by final-tree path / dj-id.
+ *
+ * @returns {{ok: number, failed: number, failedIndices: number[]}}
+ */
+function _applyPatchBatch(patches, rootEl) {
     let ok = 0;
     let failed = 0;
-    const tally = (success) => { if (success) ok++; else failed++; };
-    const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
-    const moves = sorted.filter((p) => p.type === 'MoveChild');
-    if (moves.length === 0) {
-        for (const p of sorted) tally(applySinglePatch(p, rootEl));
-        return { ok, failed };
-    }
-    const parent = getNodeByPath(moves[0].path, moves[0].d, rootEl);
-    if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
-        for (const p of sorted) tally(applySinglePatch(p, rootEl));
-        return { ok, failed };
+    const failedIndices = [];
+    const indexOf = new Map(patches.map((p, i) => [p, i]));
+    const tally = (success, p) => {
+        if (success) { ok++; return; }
+        failed++;
+        if (indexOf.has(p)) failedIndices.push(indexOf.get(p));
+    };
+
+    const removeSubtrees = [];
+    const removes = [];
+    const placements = [];
+    const rest = [];
+    for (const p of patches) {
+        if (!p) continue;
+        if (p.type === 'RemoveSubtree') removeSubtrees.push(p);
+        else if (p.type === 'RemoveChild') removes.push(p);
+        else if (_PLACEMENT_OPS.has(p.type)) placements.push(p);
+        else rest.push(p);
     }
 
-    // Resolve every moved child BEFORE detaching any, so a `from` fallback
-    // still indexes the list the server addressed.
-    const before = getSignificantChildren(parent);
-    const resolved = new Map();
-    for (const p of moves) {
-        let child = null;
-        if (p.child_d) {
-            const escaped = CSS.escape(p.child_d);
-            child = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+    // 1. Resolve against the pre-batch DOM.
+    const sigCache = new Map();
+    const sigOf = (parent) => {
+        if (!sigCache.has(parent)) sigCache.set(parent, getSignificantChildren(parent));
+        return sigCache.get(parent);
+    };
+    const childOf = (parent, childD, index) => {
+        if (childD) {
+            const escaped = CSS.escape(childD);
+            const byId = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+            if (byId) return byId;
         }
-        if (!child) child = before[p.from] || null;
-        resolved.set(p, child);
+        // eslint-disable-next-line security/detect-object-injection -- server-provided integer index
+        return (typeof index === 'number' && sigOf(parent)[index]) || null;
+    };
+    const toRemove = [];
+    for (const p of removes) {
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+            tally(false, p);
+            continue;
+        }
+        // A child that is already gone is an idempotent success, as before.
+        const child = childOf(parent, p.child_d, p.index);
+        if (child) toRemove.push([parent, child]);
+        tally(true, p);
     }
-    for (const child of new Set(resolved.values())) {
-        if (child && child.parentNode === parent) parent.removeChild(child);
+    const movedChildOf = new Map();
+    for (const p of placements) {
+        if (p.type !== 'MoveChild') continue;
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (parent && parent.nodeType === Node.ELEMENT_NODE) {
+            movedChildOf.set(p, childOf(parent, p.child_d, p.from));
+        }
     }
 
-    for (const p of sorted) {
-        if (p.type === 'InsertChild') {
-            tally(applySinglePatch(p, rootEl));
-            continue;
-        }
-        const child = resolved.get(p);
-        if (!child) {
-            tally(false);
-            continue;
-        }
-        const refChild = getSignificantChildren(parent)[p.to];
-        if (refChild) {
-            parent.insertBefore(child, refChild);
-        } else {
-            parent.appendChild(child);
-        }
-        tally(true);
+    // 2. Removals.
+    for (const p of removeSubtrees) tally(applyRemoveSubtree(p, rootEl), p);
+    for (const [parent, child] of toRemove) {
+        if (child.parentNode === parent) _removeChildNode(parent, child);
     }
-    return { ok, failed };
+
+    // 3. Placements, per parent in first-seen order.
+    const groups = new Map();
+    for (const p of placements) {
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+            console.warn('[LiveView] %s: parent not found path=%s', String(p.type).slice(0, 20),
+                Array.isArray(p.path) ? p.path.map(Number).join('/') : 'invalid');
+            tally(false, p);
+            continue;
+        }
+        if (!groups.has(parent)) groups.set(parent, []);
+        groups.get(parent).push(p);
+    }
+    for (const [parent, ops] of groups) {
+        try {
+            _placeChildren(parent, ops, movedChildOf, rootEl, tally);
+        } catch (error) {
+            console.error('[LiveView] Error placing children:', error.message || error);
+            tally(false, ops[0]);
+        }
+    }
+
+    // 4. Node patches, emitted order.
+    for (const p of rest) tally(applySinglePatch(p, rootEl), p);
+    failedIndices.sort((x, y) => x - y);
+    return { ok, failed, failedIndices };
 }
-window.djust._applyChildPlacements = _applyChildPlacements;
+window.djust._applyPatchBatch = _applyPatchBatch;
 
 /**
  * Apply a single patch operation.
@@ -9619,225 +9785,13 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     const focusState = saveFocusState(rootEl);
     const autofocusScope = rootEl || document;
 
-    // Sort patches in 4-phase order for correct DOM mutation sequencing
-    _sortPatches(patches);
-
-    // For small patch sets, apply directly without batching overhead
-    if (patches.length <= 10) {
-        let failedCount = 0;
-        const failedIndices = [];
-        const placed = new Set();
-        for (let _pi = 0; _pi < patches.length; _pi++) {
-            // eslint-disable-next-line security/detect-object-injection
-            const patch = patches[_pi];
-            if (placed.has(patch)) continue;
-            if (patch.type === 'InsertChild' || patch.type === 'MoveChild') {
-                // #2999: one parent's inserts + moves apply together.
-                const key = _childOpParentKey(patch);
-                const ops = patches.filter((p) =>
-                    (p.type === 'InsertChild' || p.type === 'MoveChild') &&
-                    _childOpParentKey(p) === key);
-                ops.forEach((p) => placed.add(p));
-                if (_applyChildPlacements(ops, rootEl).failed > 0) {
-                    failedCount++;
-                    failedIndices.push(_pi);
-                }
-                continue;
-            }
-            if (!applySinglePatch(patch, rootEl)) {
-                failedCount++;
-                failedIndices.push(_pi);
-            }
-        }
-        if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
-            // Still handle autofocus even when some patches failed (#617)
-            if (!focusState || !focusState.id) {
-                const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-                if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                    autoFocusEl.focus();
-                }
-            }
-            restoreFocusState(focusState, rootEl);
-            return false;
-        }
-        // Note: updateHooks() and bindModelElements() are called by
-        // reinitAfterDOMUpdate() in the response handler — not here,
-        // to avoid double-scanning the DOM.
-        // Handle autofocus on dynamically inserted elements (#617)
-        // Browser only honors autofocus on initial page load, so we
-        // manually focus the first element with autofocus after a patch.
-        if (!focusState || !focusState.id) {
-            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-            if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                autoFocusEl.focus();
-            }
-        }
-        restoreFocusState(focusState, rootEl);
-        return true;
-    }
-
-    // For larger patch sets, use batching
-    let failedCount = 0;
-    let successCount = 0;
-
-    // id-based patches don't have a `path` field — they locate their target by
-    // marker id. RemoveSubtree (phase -2) tears down keyed subtrees up front.
-    // InsertSubtree + MoveSubtree (phase 3) are DEFERRED together and applied
-    // by ascending target index AFTER the path/index child ops settle — so a
-    // moved outer boundary is repositioned before a nested insert lands inside
-    // it (#1678; see _sortPatches phase doc). They must not enter
-    // groupPatchesByParent, which assumes patch.path exists.
-    const pathPatches = [];
-    const boundarySpanPatches = [];
-    for (const patch of patches) {
-        if (patch.type === 'RemoveSubtree') {
-            // Phase -2: tear down keyed subtrees first.
-            const ok = applySinglePatch(patch, rootEl);
-            if (ok) { successCount++; } else { failedCount++; }
-        } else if (patch.type === 'InsertSubtree' || patch.type === 'MoveSubtree') {
-            // Phase 3: defer — boundary-span ops apply after child ops, by
-            // ascending index (#1666 + #1678).
-            boundarySpanPatches.push(patch);
-        } else {
-            pathPatches.push(patch);
-        }
-    }
-
-    // Group remaining path-based patches by parent for potential batching
-    const patchGroups = groupPatchesByParent(pathPatches);
-
-    for (const [, group] of patchGroups) {
-        // Phase order within a group MUST match the top-level phase order:
-        // RemoveChild → InsertChild+MoveChild placements → other (#2999: the
-        // server's model, patch.rs::apply_patches — see _sortPatches).
-        //
-        // Previously the batching code below ran InsertChild patches (via
-        // DocumentFragment) BEFORE iterating `group` for the RemoveChild
-        // patches — violating phase order. That breaks when a comment/text
-        // child without a dj-id needs removal: the index-based fallback
-        // resolves to the just-inserted content instead of the old child,
-        // and the wrong node gets deleted.  See regression fixtures for
-        // a downstream consumer tab switches (#641).
-        //
-        // Fix: apply the removes FIRST, then the inserts and moves as
-        // placements (batching consecutive inserts when nothing moves), then
-        // the node-targeting patches (SetText, SetAttr, …) — which address
-        // nodes by NEW-tree paths, so they must wait for the structure to
-        // settle. _sortPatches has already sorted the removes within the group
-        // by descending index and the rest by phase.
-        const removePatches = [];
-        const insertPatches = [];
-        const movePatches = [];
-        const laterPatches = [];
-        for (const patch of group) {
-            if (patch.type === 'RemoveChild') removePatches.push(patch);
-            else if (patch.type === 'InsertChild') insertPatches.push(patch);
-            else if (patch.type === 'MoveChild') movePatches.push(patch);
-            else laterPatches.push(patch);
-        }
-
-        // 1. Apply the removes, descending-index-sorted by _sortPatches, so
-        //    they're safe to apply sequentially without index drift.
-        for (const patch of removePatches) {
-            if (applySinglePatch(patch, rootEl)) {
-                successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
-        // 1b. With moves in the group, inserts and moves are placements at
-        //     their final index and must be applied together (#2999).
-        if (movePatches.length > 0) {
-            const res = _applyChildPlacements(insertPatches.concat(movePatches), rootEl);
-            successCount += res.ok;
-            failedCount += res.failed;
-            insertPatches.length = 0;
-        }
-
-        // 2. Batch consecutive inserts via DocumentFragment where possible.
-        //    At this point the DOM is in the "post-remove" state, so index
-        //    fallback for ref_d=None inserts lines up with what the server
-        //    computed against the new VDOM.
-        const batchedInserts = new Set();
-        if (insertPatches.length >= 3) {
-            const consecutiveGroups = groupConsecutiveInserts(insertPatches);
-
-            for (const consecutiveGroup of consecutiveGroups) {
-                if (consecutiveGroup.length < 3) continue;
-
-                const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d, rootEl);
-
-                if (parentNode) {
-                    try {
-                        const fragment = document.createDocumentFragment();
-                        const svgContext = isInSvgContext(parentNode);
-                        for (const patch of consecutiveGroup) {
-                            const newChild = createNodeFromVNode(patch.node, svgContext);
-                            fragment.appendChild(newChild);
-                            successCount++;
-                            batchedInserts.add(patch);
-                        }
-
-                        const children = getSignificantChildren(parentNode);
-                        const firstIndex = consecutiveGroup[0].index;
-                        // eslint-disable-next-line security/detect-object-injection
-                        const refChild = children[firstIndex];
-
-                        if (refChild) {
-                            parentNode.insertBefore(fragment, refChild);
-                        } else {
-                            parentNode.appendChild(fragment);
-                        }
-                    } catch (error) {
-                        console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        successCount -= consecutiveGroup.length;  // undo count
-                        for (const patch of consecutiveGroup) batchedInserts.delete(patch);
-                    }
-                }
-            }
-        }
-
-        // 3. Apply any insert patches that weren't batched (non-consecutive
-        //    groups or group size < 3) individually.
-        for (const patch of insertPatches) {
-            if (batchedInserts.has(patch)) continue;
-            if (applySinglePatch(patch, rootEl)) {
-                successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
-        // 4. Node-targeting patches (SetText, SetAttr, …) once the
-        //    structure has settled.
-        for (const patch of laterPatches) {
-            if (applySinglePatch(patch, rootEl)) {
-                successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-    }
-
-    // Phase 3 (#1666 + #1678): apply boundary-span ops (MoveSubtree +
-    // InsertSubtree) AFTER all path/index child ops above have settled the
-    // surrounding siblings, in ASCENDING target index so a moved outer
-    // boundary is repositioned before a nested insert lands inside it. Each
-    // op's `index` then resolves against the new-frame significant children.
-    boundarySpanPatches.sort(function (a, b) {
-        const ai = typeof a.index === 'number' ? a.index : 0;
-        const bi = typeof b.index === 'number' ? b.index : 0;
-        return ai - bi;
-    });
-    for (const patch of boundarySpanPatches) {
-        if (applySinglePatch(patch, rootEl)) { successCount++; } else { failedCount++; }
-    }
+    // #2999: one model for every batch size — resolve removals against the
+    // pre-batch DOM, remove, place inserts + moves (children and dj-if spans)
+    // per parent by final index, then the node patches. See _applyPatchBatch.
+    const { ok: successCount, failed: failedCount, failedIndices } = _applyPatchBatch(patches, rootEl);
 
     if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded; indices: ${failedIndices.join(', ')})`);
         // Still handle autofocus even when some patches failed (#617)
         if (!focusState || !focusState.id) {
             const autoFocusEl = autofocusScope.querySelector('[autofocus]');

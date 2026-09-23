@@ -175,3 +175,159 @@ fn relocated_space_separator_is_reinserted_not_left_behind() {
         "{patches:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// dj-if boundaries next to kept spaces (#2999 review H2)
+// ---------------------------------------------------------------------------
+
+/// Tiny deterministic xorshift RNG (no extra dev-dependency).
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+/// A template-ish model: inline elements, whitespace runs and `{% if %}`
+/// boundaries (which may nest). Rendered per state the way the template
+/// engine renders it: a visible boundary as `<!--dj-if id=..-->body<!--/dj-if-->`,
+/// a hidden one as the empty marker pair.
+#[derive(Clone)]
+enum Seg {
+    El(&'static str, usize),
+    Ws(&'static str),
+    Block(usize),
+    If(usize, Vec<Seg>),
+}
+
+fn gen_segs(rng: &mut Rng, depth: u32, next_id: &mut usize) -> Vec<Seg> {
+    let mut out = Vec::new();
+    for _ in 0..(1 + rng.below(5)) {
+        if rng.below(2) == 0 {
+            out.push(Seg::Ws([" ", "\n  ", "  "][rng.below(3) as usize]));
+        }
+        match rng.below(10) {
+            0..=4 => out.push(Seg::El(["b", "i", "span", "em"][rng.below(4) as usize], {
+                *next_id += 1;
+                *next_id
+            })),
+            5 => out.push(Seg::Block({
+                *next_id += 1;
+                *next_id
+            })),
+            _ if depth < 2 => {
+                *next_id += 1;
+                let id = *next_id;
+                let body = gen_segs(rng, depth + 1, next_id);
+                out.push(Seg::If(id, body));
+            }
+            _ => out.push(Seg::El("u", {
+                *next_id += 1;
+                *next_id
+            })),
+        }
+    }
+    if rng.below(2) == 0 {
+        out.push(Seg::Ws(" "));
+    }
+    out
+}
+
+fn render(segs: &[Seg], visible: &dyn Fn(usize) -> bool, text: &dyn Fn(usize) -> String) -> String {
+    let mut s = String::new();
+    for seg in segs {
+        match seg {
+            Seg::El(tag, n) => s.push_str(&format!("<{tag}>{}</{tag}>", text(*n))),
+            Seg::Block(n) => s.push_str(&format!("<div>{}</div>", text(*n))),
+            Seg::Ws(w) => s.push_str(w),
+            Seg::If(id, body) => {
+                s.push_str(&format!("<!--dj-if id=\"if-{id}\"-->"));
+                if visible(*id) {
+                    s.push_str(&render(body, visible, text));
+                }
+                s.push_str("<!--/dj-if-->");
+            }
+        }
+    }
+    s
+}
+
+#[test]
+fn seeded_boundary_fuzz_round_trips() {
+    let mut failures = Vec::new();
+    for seed in 1..=400u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut next_id = 0;
+        let segs = gen_segs(&mut rng, 0, &mut next_id);
+        let mut vis: Vec<bool> = (0..=next_id).map(|_| rng.below(2) == 0).collect();
+        let mut texts: Vec<usize> = (0..=next_id).collect();
+        let wrap = |segs: &[Seg], vis: &[bool], texts: &[usize]| {
+            let body = render(segs, &|id| vis[id], &|n| format!("t{}", texts[n]));
+            format!("<div dj-root><section>{body}<em>end</em></section></div>")
+        };
+        let mut old_html = wrap(&segs, &vis, &texts);
+        for _step in 0..6 {
+            for v in vis.iter_mut() {
+                if rng.below(3) == 0 {
+                    *v = !*v;
+                }
+            }
+            if rng.below(2) == 0 {
+                let k = rng.below(texts.len() as u64) as usize;
+                texts[k] += 100;
+            }
+            let new_html = wrap(&segs, &vis, &texts);
+            let (old, new, patches) = diff_pair(&old_html, &new_html);
+            let mut applied = old.clone();
+            apply_patches(&mut applied, &patches);
+            if shape_html(&applied) != shape_html(&new) {
+                failures.push(format!(
+                    "seed {seed}\n old: {old_html}\n new: {new_html}\n got: {}\n patches: {patches:?}",
+                    shape_html(&applied)
+                ));
+                break;
+            }
+            old_html = new_html;
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of 400 seeds failed; first:\n{}",
+        failures.len(),
+        failures.first().cloned().unwrap_or_default()
+    );
+}
+
+#[test]
+fn nested_if_toggle_round_trips() {
+    // The review's H2(b) shape: `{% if a %}<b>A</b> {% if b %}<i>I</i>{% endif %} <u>U</u>{% endif %}<em>n</em>`.
+    let r = |a: bool, b: bool, n: u32| {
+        let inner = if b { "<i>I</i>" } else { "" };
+        let body = if a {
+            format!("<b>A</b> <!--dj-if id=\"if-1\"-->{inner}<!--/dj-if--> <u>U</u>")
+        } else {
+            String::new()
+        };
+        format!("<div dj-root><p><!--dj-if id=\"if-0\"-->{body}<!--/dj-if--><em>{n}</em></p></div>")
+    };
+    let states = [
+        (true, false),
+        (false, false),
+        (true, false),
+        (true, true),
+        (false, true),
+    ];
+    for w in states.windows(2).enumerate() {
+        let (i, pair) = w;
+        assert_round_trip(
+            &r(pair[0].0, pair[0].1, i as u32),
+            &r(pair[1].0, pair[1].1, i as u32 + 1),
+        );
+    }
+}

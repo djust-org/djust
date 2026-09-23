@@ -127,16 +127,14 @@ const node = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
 
 ### Patch Application Order
 
-Child mutations are grouped by parent and applied in a specific order to keep indices stable:
+A patch batch is applied in one model, which the client (`_applyPatchBatch`) and the server's reference `patch::apply_patches` share (#2999):
 
-1. **Subtree removes** -- `RemoveSubtree` patches, located by boundary-marker id
-2. **Removes** -- descending index order (highest index first)
-3. **Inserts and moves, together** -- both carry the child's *final* index (`index` / `to`). Every moved child (resolved by its `djust_id`) is detached first; then inserts and moves are placed by ascending final index. Applying moves one at a time against the live list mis-placed forward moves (`[a,b,c]` → `[b,c,a]` came out `bac`); see #2999.
-4. **Subtree moves and inserts** -- `MoveSubtree` and `InsertSubtree`, interleaved by ascending target index
+1. **Resolve removals first** -- every `RemoveChild` is resolved against the DOM as it was *before* the batch (by `child_d`, else its old index), and so is every `MoveChild`'s child.
+2. **Remove** -- `RemoveSubtree` spans (by boundary-marker id), then the resolved children.
+3. **Place, per parent** -- `InsertChild`, `MoveChild`, `InsertSubtree` and `MoveSubtree` all carry the *final* index of what they place. Every moved child and moved `{% if %}` span is detached first; then everything is placed by ascending final index. The differ guarantees that what stays in place is already in final relative order, so each placement lands after exactly its final predecessors.
+4. **Node patches** -- `SetText`, `SetAttr`, `Replace` and the rest, in emitted order, by dj-id when available, else by final-tree path.
 
-The server-side `patch::apply_patches` uses the same model, and the Rust round-trip tests check it against the differ.
-
-Attribute and text patches are applied last, using ID-based lookup when available.
+The Rust round-trip tests (`apply_patches(old, diff(old, new)) == new`, including seeded `{% if %}` fuzzing) therefore check what the browser does.
 
 ## The Render-Diff Lifecycle
 

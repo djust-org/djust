@@ -857,7 +857,7 @@ fn reconcile_keyed(
             // at its OLD position among children that are being reordered
             // around it. Children that neither move nor get re-inserted must
             // already be in final relative order for the placement model
-            // (patch.rs::apply_patches / the client's _applyChildPlacements)
+            // (patch.rs::apply_patches / the client's _applyPatchBatch)
             // to be exact, so re-create it at its new position instead.
             push_remove_child(old_abs, old_node, ppath, pid, out);
             push_insert_child(new_abs, new_node, ppath, pid, out);
