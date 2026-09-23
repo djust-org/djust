@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-09-23
+
+A maintenance release for the 1.1 line with the fixes from 1.2.0. Review the behaviour changes below before upgrading.
+
+### Security
+
+- **This release and 1.2.0 include fixes for the following advisories**; see each advisory for details:
+  - [GHSA-fccp-5h88-g34j](https://github.com/djust-org/djust/security/advisories/GHSA-fccp-5h88-g34j) (DataTable)
+  - [GHSA-jv2m-fcq9-94xf](https://github.com/djust-org/djust/security/advisories/GHSA-jv2m-fcq9-94xf) (admin_ext)
+  - [GHSA-c44q-w252-mr67](https://github.com/djust-org/djust/security/advisories/GHSA-c44q-w252-mr67) (observability)
+  - [GHSA-hc2m-gvfj-x6r3](https://github.com/djust-org/djust/security/advisories/GHSA-hc2m-gvfj-x6r3) and [GHSA-r372-rrpw-5cgj](https://github.com/djust-org/djust/security/advisories/GHSA-r372-rrpw-5cgj) (components)
+  - [GHSA-j23m-jxwp-m3vq](https://github.com/djust-org/djust/security/advisories/GHSA-j23m-jxwp-m3vq) (theming)
+  - [GHSA-6q7c-hvpc-ff2q](https://github.com/djust-org/djust/security/advisories/GHSA-6q7c-hvpc-ff2q) (presence)
+  - [GHSA-5ffg-p52h-v2ph](https://github.com/djust-org/djust/security/advisories/GHSA-5ffg-p52h-v2ph) (state snapshots)
+  - [GHSA-74vj-mpp4-45cg](https://github.com/djust-org/djust/security/advisories/GHSA-74vj-mpp4-45cg) (sticky live_render)
+  - [GHSA-7fcf-23mf-rhhm](https://github.com/djust-org/djust/security/advisories/GHSA-7fcf-23mf-rhhm) (uploads)
+  - [GHSA-p9vp-rh5f-2cvq](https://github.com/djust-org/djust/security/advisories/GHSA-p9vp-rh5f-2cvq) (template filters; fixed in 1.2.0rc2)
+
 ### Changed
 
 - **djust admin applies the `DjustModelAdmin` permission hooks to every page, save and delete, and the default hooks follow Django's model permissions.** `has_view_permission`, `has_add_permission`, `has_change_permission` and `has_delete_permission` are checked before mount (list, add) or per object (change, delete), and again in `save`, `form_valid`, `confirm_delete` and the `delete_selected` action. The defaults now call `user.has_perm()` with the model's `view_`/`add_`/`change_`/`delete_` codename, as Django's `ModelAdmin` does. **Staff users who aren't superusers now need those permissions**; previously any active staff account had full access. The admin index lists only models the user has some permission on.
