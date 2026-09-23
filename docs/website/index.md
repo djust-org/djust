@@ -38,7 +38,7 @@ How to build specific features.
 |                                                        |                                                           |
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | **[Streaming](guides/streaming.md)**                   | Real-time partial DOM updates for LLM chat and live feeds |
-| **[Declarative Audio](guides/audio.md)** | Opt-in short sound effects without application JavaScript (unreleased) |
+| **[Declarative Audio](guides/audio.md)** | Opt-in short sound effects without application JavaScript (new in 1.2) |
 | **[Streaming Markdown (`{% djust_markdown %}`)](guides/streaming-markdown.md)** | Server-side safe Markdown rendering for streaming LLM output — no client library, no flicker, XSS-safe (v0.7.0) |
 | **[Virtual Lists (`dj-virtual`)](guides/virtual-lists.md)** | Render 1000s of items with only the visible window in the DOM (fixed + variable height) |
 | **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
@@ -125,7 +125,7 @@ Replace JavaScript state patterns with Python decorators.
 
 |                                                                  |                                                                                 |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **[State Management](state/index.md)**                           | `@debounce`, `@throttle`, `@loading`, `@cache`, `@optimistic`, `DraftModeMixin` |
+| **[State Management](state/index.md)**                           | `@debounce`, `@throttle`, `@cache`, `dj-loading` attributes, `DraftModeMixin` (`@optimistic` is inert) |
 | **[Tutorial](../state-management/STATE_MANAGEMENT_TUTORIAL.md)** | Step-by-step product search example                                             |
 | **[Patterns](../state-management/STATE_MANAGEMENT_PATTERNS.md)** | Best practices and anti-patterns                                                |
 | **[Examples](../state-management/STATE_MANAGEMENT_EXAMPLES.md)** | Copy-paste ready code                                                           |
@@ -163,7 +163,7 @@ Complete API documentation.
 |                                               |                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | **[LiveView](api-reference/liveview.md)**     | `on_mount`, `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, `start_async()`, navigation             |
-| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@loading`, `@cache`, `@optimistic`, `@background`, `@permission_required` |
+| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@cache`, `@optimistic` (inert), `@background`, `@permission_required` |
 | **[Components](api-reference/components.md)** | `Component`, `LiveComponent`, built-in components, registry                                             |
 | **[Testing](api-reference/testing.md)**       | `LiveViewTestClient`, `SnapshotTestMixin`, `LiveViewSmokeTest`, `@performance_test`                     |
 
@@ -190,6 +190,6 @@ Rust powers the core rendering engine:
 
 ## Community
 
-- [GitHub](https://github.com/johnrtipton/djust) — Source, issues, PRs
+- [GitHub](https://github.com/djust-org/djust) — Source, issues, PRs
 - [Discord](https://discord.gg/djust) — Chat and support
 - [Changelog](../../CHANGELOG.md) — What's new
