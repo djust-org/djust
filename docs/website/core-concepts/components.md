@@ -115,10 +115,10 @@ from djust.decorators import event_handler
 
 class CounterWidget(LiveComponent):
     template = """
-        <div data-component-id="{{ component_id }}">
-            <button dj-click="decrement" data-component-id="{{ component_id }}">-</button>
+        <div>
+            <button dj-click="decrement">-</button>
             <span>{{ count }}</span>
-            <button dj-click="increment" data-component-id="{{ component_id }}">+</button>
+            <button dj-click="increment">+</button>
         </div>
     """
 
@@ -141,9 +141,9 @@ class CounterWidget(LiveComponent):
 
 **Critical rules:**
 
-- `data-component-id="{{ component_id }}"` on **every** element with `dj-*` events — without it, events route to the parent LiveView instead
+- Events inside a component route to it automatically: the client uses the nearest ancestor with `data-component-id`. Inline `template` components are wrapped in `<div data-component-id="…">` for you. For `template_name` components, put `data-component-id="{{ component_id }}"` once on the root element.
 - Call `self.trigger_update()` after changing state
-- `mount()` and `get_context_data()` are required
+- `mount()` and `get_context_data()` have no-op defaults; override `get_context_data()` to expose state to the template
 
 ### Parent–Child Communication
 
@@ -274,26 +274,27 @@ all_components = list_components()
 
 ## Styling
 
-djust components use CSS custom properties for styling. Customize via:
+djust components use the theme's CSS custom properties for styling. Color tokens are HSL triplets (the CSS wraps them as `hsl(var(--primary))`). Customize via:
 
 ```css
 :root {
-    --dj-primary: #6366f1;
-    --dj-success: #22c55e;
-    --dj-danger: #ef4444;
-    --dj-radius: 8px;
+    --primary: 239 84% 67%;
+    --success: 142 71% 45%;
+    --destructive: 0 84% 60%;
+    --radius: 0.5rem;
 }
 ```
 
-Or install the separate packages for a full design system:
+For the full component library and design system, install the extras:
 
 ```bash
-pip install djust-components djust-theming
+pip install "djust[components,theming]"
 ```
+
+The components live in `djust.components` and theming in `djust.theming`. The standalone `djust-components` and `djust-theming` packages are frozen compatibility shims; see [Migrating from the standalone packages](../guides/migration-from-standalone-packages.md).
 
 ## Known Limitations
 
-- Avoid `{% elif %}` in inline component templates — use separate `{% if %}` blocks instead (Rust template engine limitation)
 - File-based templates (`template_name`) do **not** auto-wrap with `data-component-id`. Add the attribute manually on the root element.
 
 ## Next Steps
