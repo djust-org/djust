@@ -1,6 +1,6 @@
 # ADR-038: Explicit context, persistence, and browser exposure
 
-**Status**: Accepted — gates E1–E6 closed and `exposure_policy="explicit"` activated on the completion PR #2954 (targets 1.3; acceptance is confirmed at that PR's review). ER (retirement) is scheduled post-activation work.
+**Status**: Accepted — gates E1–E6 closed and `exposure_policy="explicit"` activated on the completion PR #2954 (targets 1.3; acceptance is confirmed at that PR's review). ER is closed by the written account in D-z; the deletions are scheduled for the major release that makes `explicit` the default.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -290,31 +290,71 @@ Required evidence:
 
 ## Completion decisions (2026-09-22)
 
-The gap analysis for finishing E1–E6 surfaced choices the gates leave to the
-maintainers. Each is adopted below as the working default for the completion
-work, so every slice tests against a stated contract. Each one is open for
-review on the completion PR; changing one means updating its slice, not just
-this table.
+The gates left these questions open. All are decided. D-a was revised by the
+maintainer; the rest were decided with the reasons given, and each is
+implemented and tested as listed in the ledger's activation review. A later
+change to any of them changes its implementation and tests, not just this
+table.
 
-| # | Question | Adopted default |
-| --- | --- | --- |
-| D-a | Explicit-view errors under DEBUG | **Revised by the maintainer, 2026-09-22.** Under `DEBUG`, errors read like Django's: the technical 500 page, detailed WebSocket/SSE error frames and dev overlay, full logs with tracebacks and the traceback ring. In production (`DEBUG = False`) they are value-free: a generic 500 and error frame, a static log line, and `got_request_exception` sent with a value-free exception. Debug tooling projections and SQL parameter capture stay redacted in both modes. The first default (value-free even under DEBUG) was replaced. |
-| D-b | Service-worker VDOM and shell caches for explicit pages | Not written: explicit pages mark themselves ineligible and the client skips `cacheVdom` and shell capture. |
-| D-c | Presence metadata | Application output under D6 (the app passes it to `track_presence`); the rebroadcast is documented, and `track_presence` stops injecting `username`/`user_id` for explicit views. |
-| D-d | Observability SQL capture | Query parameters are redacted for nonlegacy owners. |
-| D-e | Form input and errors | Not persisted by default; opt-in per field; password-type widgets can never be persisted or appear in debug output. |
-| D-f | `@action` error text | A generic message for explicit views unless the handler raises a declared user-facing exception type. |
-| D-g | Uploads in flight across reconnect | Not preserved; the client re-registers (remount posture). |
-| D-h | Components assigned on the instance | A diagnostic naming the attribute at first explicit render; no automatic discovery. |
-| D-i | Codecs | v1 ships `json-primitives-v1` only. `Decimal`, dates, `UUID` and model references come later; nothing `repr`-based. |
-| D-j | Old or unindexed stored envelopes | Rejected, followed by a remount; session expiry cleans them up. No translation guesses. |
-| D-k | A background result whose authorization was revoked | Dropped; static error and close 4403, as for foreground events. |
-| D-l | Server-originated turns (tick, push, NOTIFY, `url_change`) on explicit views | Persist and refresh the signed snapshot through one shared post-turn commit. |
-| D-m | Lazy, non-sticky and mixed-policy explicit children | Non-sticky explicit children are supported as transient (not persisted) with the identity check. `lazy=True` on an explicit child is refused with a static tag error. Explicit server persistence under a legacy parent stays refused. |
-| D-n | Service-worker state cache lifetime | The worker enforces the snapshot max age on lookup and deletes expired entries; the client clears the state, VDOM and shell caches on identity change or logout. |
-| D-o | Actors under explicit policy | Excluded for v1: `use_actors` combined with `exposure_policy="explicit"` is rejected at configuration time, and the runtime refusals stay as a second line. This amends D6's "actor paths" coverage to "refused". |
-| D-p | Older clients | Explicit views require the client that speaks the `async_complete` batch protocol; mount checks it. |
-| D-q | `DjustLogSanitizerFilter` covers only the `djust` logger (#2947) | Outside ADR-038; tracked in #2947 and not an activation blocker. |
+### Runtime and transport
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| D-a | Explicit-view errors under DEBUG | Errors follow Django. Under `DEBUG` they show full detail: the technical 500 page, detailed WebSocket/SSE error frames and dev overlay, logs with tracebacks, and the traceback ring. In production they are value-free: a generic page or frame, a static log line, and `got_request_exception` sent with a value-free exception. | Maintainer decision. `DEBUG` is a development setting, and developers expect Django's behaviour there. Production, where exposure matters, stays value-free. One rule (`diagnostics_policy_allows`) drives every error site. |
+| D-k | A background result whose authorization was revoked | Dropped, with the foreground denial (a static error and close 4403). | A result computed for a principal who is no longer authorized must not be delivered. Matching the foreground denial gives the client one recovery path. |
+| D-l | Server-originated turns (tick, push, NOTIFY, `url_change`) | Each is authorized against a fresh session before its hook runs. It commits declared state before its frame and refreshes the client snapshot. | Without persistence a reconnect would restore stale state. Without fresh authorization a revoked session would keep receiving renders. The commit follows the foreground event path. |
+| D-r | Client snapshot on server-originated frames | Primary-view `async`/`tick`/`broadcast` frames carry the refreshed token, and the client accepts it. | The turn committed declared state, so back-navigation must not restore a pre-turn value. Frames are serialized under the render lock and the token is captured after the commit, so the last frame always carries the latest state. |
+| D-o | Actors under explicit policy | Excluded: `use_actors` with `"explicit"` is a configuration error, and the runtime refuses as a second line. | Actor render state lives outside the projections this ADR enforces. Supporting it would need its own exposure contract, and no user depends on the combination. |
+| D-p | Older clients | Explicit views need the client that speaks the `async_complete` batch protocol. The bundled client does; no version negotiation is added. | djust ships its client with the framework (no CDN or npm), so server and client versions move together. A negotiation layer would guard against a mismatch the deployment model already prevents. |
+| D-q | `DjustLogSanitizerFilter` covers only the `djust` logger | Outside ADR-038; tracked in #2947. | Log injection concerns control characters, not view values, so it is independent of this policy. |
+
+### Browser storage
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| D-b | Service-worker VDOM and shell caches for explicit pages | Not written. Explicit pages mark themselves ineligible, through a header and a mount-frame field. | Those caches persist rendered HTML at rest with no identity binding. An explicit page opted out of implicit persistence. |
+| D-n | Service-worker state-cache lifetime | The worker enforces the snapshot max age on lookup. The client clears the state, VDOM and shell caches when the HMAC identity marker changes or disappears. This applies to every page. | A stored token outliving the session, or a previous user's cached pages, is the same problem for legacy pages (#2948). The marker never contains a raw id or session key. |
+| D-s | A warm shell cache can briefly show the previous user's page chrome | Accepted and documented. | Explicit pages never enter the shell cache (D-b), so the residue is legacy layout chrome, not explicit view state. Closing it would need a network round trip before serving the shell, which defeats opt-in `instantShell`. Covered with #2948. |
+
+### Framework providers
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| D-c | Presence metadata | The meta is application output. `track_presence` no longer injects `username`/`user_id` for explicit views, and the rebroadcast is documented. | The application chooses what peers see. The framework should not add identity fields the application didn't pass. |
+| D-v | The presence id (`str(user.id)`) that peers receive | Kept. | Peers need a stable id to deduplicate cursors and lists. A user id is an identifier, not view state. Applications that need anonymity override `get_presence_key`. |
+| D-d | Observability SQL parameters | Redacted for nonlegacy owners and restricted scopes. SQL text, tags and timing are kept. | Parameters usually come from view state. The endpoint is DEBUG- and localhost-only, but it is a server-to-browser surface. |
+| D-e | Form input and errors | Not persisted by default. The per-field opt-in is `persisted_form_input(...)`. Password and sensitive fields are refused at configuration, render empty, and are scrubbed from error text. | Form input is exactly the undeclared data ADR-038 exists to keep out of storage. A sensitive field must never be one opt-in away from persistence. |
+| D-f | `@action` error text | A generic "Action failed", unless the handler raises `ActionError`. | Exception text can carry view state or query values. `ActionError` gives developers an explicit, deliberate channel. |
+| D-g | Uploads in flight across reconnect | Not resumed. Resume is refused, and resumable writers keep no resume record for explicit views. | The remount posture is simpler and safer. A resume record that nothing reads (client filename, progress) would be data kept for no purpose. |
+| D-h | Components assigned on the instance | A configuration diagnostic names the attribute at the first explicit render. Components are declared at class level and are transient across reconnects. | Automatic discovery is the reflection this ADR removes. Class-level declaration makes the manifest static and reviewable. |
+| D-m | Lazy, non-sticky and mixed-policy children | Non-sticky explicit children are transient: identity-checked and never persisted. `lazy=True` explicit children are refused before any context is built. Explicit server persistence under a legacy parent is refused. | Lazy fill has no authorization path yet, and refusing is safer than a half-authorized render. Transient children cover the common "embed a widget" case without a persistence contract. |
+| D-t | Tags the Rust renderer does not handle (`dj_activity`, `colocated_hook`, form tags) | Outside ADR-038; tracked in #2958 and documented in the guide. | The gap exists under both policies and is about renderer coverage, not exposure. |
+| D-w | Two same-type sticky children at different depths sharing a view id | The server refuses to route an ambiguous id. There is no render-time check. | Refusing fails closed. A duplicate id is an application bug the client can't address either, and a render-time check would add a tree walk to every render for a rare mistake. |
+
+### Contracts, codecs and schema
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| D-i | Codecs | v1 is JSON primitives only. `Decimal`, dates, `UUID` and model references are refused, never stringified. | Every added codec is a new restore path to secure. Refusing is visible and safe. Storing an id and reloading the object is the pattern D4 asks for anyway. |
+| D-j | Old or unindexed envelopes | Rejected, followed by a remount. A class-level `exposure_schema_version` plus an opt-in, validated `migrate_state` handle deliberate schema changes. | Guessing at old shapes is how undeclared keys come back. An explicit version and hook make any translation a reviewed decision. |
+| D-x | `ProviderContract.tracked` has no reader | Kept as declared metadata. Invalidation uses the conservative change walk (E2-8). | The manifest is the input ADR-037's checks need. Narrowing change detection to declared keys risks dropping updates, which D3 forbids. |
+| D-y | `FormMixin` combined with `WizardMixin` | A provider collision at contract compile. | Both claim `form_data`/`form_choices`. Failing loudly beats one silently shadowing the other. No combination exists in the repository. |
+
+### Retirement
+
+**D-z: the ER schedule.** Every Step R target survives activation. Each one
+still serves legacy views, and legacy remains the default:
+
+- the `_FRAMEWORK_INTERNAL_ATTRS` walk exclusions;
+- `ContextMixin`'s attribute walk;
+- private-attribute persistence;
+- the sensitive-name floor under the walk;
+- the `"legacy"` arm.
+
+The retirement starts when a future major release makes `explicit` the
+default. At that point each target gets its own deletion PR with the reference
+inventory re-run. Step R's exit conditions accept a written account of any
+target that survives; this paragraph is that account for activation.
 
 ## Retirement (Step R — delete)
 

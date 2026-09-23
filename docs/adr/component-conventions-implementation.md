@@ -121,20 +121,25 @@ The harness found two real defects, both fixed:
   view replacement refuses policy changes and invalid configurations. Tests:
   `test_exposure_policy_guard.py`, `test_exposure_hot_swap.py`.
 
-**Limitations carried forward, not blockers:**
-- `persist="client"` fields are refreshed only by foreground events; a
-  background frame persists server state but not the client token.
-- A warm service-worker shell can show the previous user's page chrome on the
-  first navigation after an identity change.
-- The Rust renderer has no handler for `dj_activity`, `colocated_hook` or the
-  form tags in root templates.
-- Resumable-upload state is still written to the resume store for explicit
-  views, although resume is refused.
-- Findings filed separately: #2947 (log sanitizer), #2955 (fixed here),
-  #2956.
+**Open questions, all decided** (see ADR-038's *Completion decisions* for
+each reason):
 
-**ER (retirement) stays open.** Its targets serve legacy views, which remain
-the default, so each is a separate post-activation PR per ADR-038 Step R.
+- **Fixed after the first review:**
+  - server-originated frames now refresh the client snapshot (D-r);
+  - explicit views keep no upload resume records (D-g);
+  - the PWA batch helpers report class names only (#2950);
+  - work a child queues on a sibling is swept (E3-3);
+  - `wrapper_template` failures follow the DEBUG contract.
+- **Accepted and documented:** the warm shell cache can show legacy chrome
+  (D-s); presence ids reach peers (D-v); ambiguous view ids are refused
+  rather than checked at render (D-w).
+- **Outside ADR-038, filed:** #2947, #2955 (fixed here), #2956, #2957,
+  #2958, #2959, #2960, #2961.
+
+**ER (retirement) is scheduled (D-z).** Every Step R target still serves legacy
+views, which remain the default. The deletions start when a future major
+release makes `explicit` the default, one PR per target, with the reference
+inventory re-run.
 
 ## Child lifecycle closure — E3-3 to E3-7 and decision D-m
 
@@ -1484,8 +1489,10 @@ section. The ADR decisions and acceptance sections remain authoritative: this
 checklist groups their requirements, it does not reduce them.
 
 The original four ADRs are 034–037. ADR-038 is their additional exposure-policy
-prerequisite. **ADR-038's gates E1–E6 are closed on the completion branch (#2954) and
-`exposure_policy="explicit"` is activated there; ER (retirement) is scheduled work.
+prerequisite. **ADR-038's gates E1–E6 and ER are closed on the completion branch
+(#2954): `exposure_policy="explicit"` is activated there, and ER is closed by
+the written account in D-z, with the deletions scheduled for the major release
+that makes `explicit` the default.
 ADRs 034–037 are not accepted.**
 No completion percentage or delivery date is inferred from commit/test counts.
 
@@ -1543,7 +1550,10 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
   effort; publish supported backend/provider/codec boundaries and migration
   guidance. Review E1–E5 evidence and dependent API integration before removing
   the constructor guard. No zero-leakage or performance claim without evidence.
-- [ ] **ER — retirement.** Delete the implicit-exposure machinery the explicit
+- [x] **ER — retirement (closed by written account, D-z).** Every target survives
+  activation because it still serves legacy views; ADR-038 D-z records why and
+  schedules the deletions for the major release that makes `explicit` the
+  default. Original gate text: Delete the implicit-exposure machinery the explicit
   policy replaces, per [ADR-038 Step R](038-explicit-context-and-state-exposure.md):
   `_FRAMEWORK_INTERNAL_ATTRS` (`live_view.py:105`) and its six consumers, the
   `get_context_data` attribute walk (`mixins/context.py:215`, `:242`), private
