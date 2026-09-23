@@ -1,7 +1,9 @@
 /** Actual WS/SSE mount reception, with transport/owner-specific public contracts. */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { readFileSync } from 'node:fs';
+// The raw bundle, not the coverage run's instrumented copy: this test splices
+// a hook in at a literal source line, which instrumentation rewrites.
+const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const seam = 'window.djust.collectDjValues = collectDjValues;';
