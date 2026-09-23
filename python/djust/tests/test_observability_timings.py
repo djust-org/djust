@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.timings import (
     _clear_timings,
@@ -118,7 +120,7 @@ def test_empty_buffer_returns_empty_stats():
 def test_endpoint_returns_stats():
     for d in [1, 2, 3]:
         record_handler_timing("CounterView", "increment", d)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = handler_timings_view(rf.get("/"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -130,7 +132,7 @@ def test_endpoint_returns_stats():
 def test_endpoint_handler_name_filter():
     record_handler_timing("A", "one", 5)
     record_handler_timing("A", "two", 15)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = handler_timings_view(rf.get("/?handler_name=one"))
     data = json.loads(resp.content)
     assert data["count"] == 1
@@ -140,13 +142,13 @@ def test_endpoint_handler_name_filter():
 @override_settings(DEBUG=True)
 def test_endpoint_handles_bad_since_ms():
     record_handler_timing("A", "h", 1)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = handler_timings_view(rf.get("/?since_ms=not-a-number"))
     assert resp.status_code == 200
 
 
 @override_settings(DEBUG=False)
 def test_endpoint_404_when_debug_off():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = handler_timings_view(rf.get("/"))
     assert resp.status_code == 404
