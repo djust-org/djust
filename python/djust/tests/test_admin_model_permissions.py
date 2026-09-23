@@ -56,6 +56,17 @@ def _urls(settings):
     settings.ROOT_URLCONF = __name__
 
 
+@pytest.fixture(autouse=True)
+def _fresh_template_dirs():
+    # The HTTP GET tests render djust_admin templates; a directory list cached
+    # by an earlier test (e.g. one that overrode TEMPLATES) would hide them.
+    from djust.utils import clear_template_dirs_cache
+
+    clear_template_dirs_cache()
+    yield
+    clear_template_dirs_cache()
+
+
 @pytest.fixture
 def group(db):
     return Group.objects.create(name="editors")
