@@ -7,7 +7,7 @@ module is loaded for every test in `python/djust/tests/`.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable
 
 import pytest
 
@@ -91,3 +91,18 @@ def generous_save_timeout(monkeypatch):
     from djust import runtime
 
     monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)
+
+
+def observability_request_factory(**defaults: Any) -> Any:
+    """A ``RequestFactory`` whose requests carry the observability token.
+
+    The ``/_djust/observability/`` views only serve requests with the
+    ``X-Djust-Observability-Token`` header; endpoint tests that are not about
+    the access check build their requests with this factory.
+    """
+    from django.test import RequestFactory
+
+    from djust.observability.middleware import TOKEN_META_KEY, get_observability_token
+
+    defaults.setdefault(TOKEN_META_KEY, get_observability_token())
+    return RequestFactory(**defaults)

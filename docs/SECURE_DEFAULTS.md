@@ -272,10 +272,14 @@ non-disclosing 404** (not 403 — a 403 confirms the endpoint exists):
   `AuthenticationMiddleware`) or an anonymous user falls through to the 404.
 
 - **Observability gate** — `python/djust/observability/views.py`, `_gate(request)`
-  (line 90). A sibling ladder: `settings.DEBUG` must be on **AND** the request
-  must be loopback (`is_localhost`); otherwise 404. (Note the second rung here is
-  *localhost*, not an opt-in setting — pick the rung that matches your endpoint's
-  threat model; both return the same non-disclosing 404.) Every endpoint calls
+  A sibling ladder: `settings.DEBUG` must be on, **AND** the request must come
+  straight from a loopback peer with no reverse-proxy headers
+  (`is_direct_local_request`), **AND** it must carry the project's observability
+  token (`has_valid_token`, an HMAC of `SECRET_KEY` sent in
+  `X-Djust-Observability-Token`); otherwise 404. The token rung exists because a
+  proxy on the same host connects from loopback, so the peer address alone
+  cannot prove a request is local. (Pick the rungs that match your endpoint's
+  threat model; all return the same non-disclosing 404.) Every endpoint calls
   `_gate(request)` first and returns its 404 response if non-`None`.
 
 A third instance of the *single-source-the-sequence, fail-closed* shape is the
