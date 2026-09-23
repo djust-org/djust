@@ -274,3 +274,25 @@ class TestParameterNotesAreTrue:
     def test_a_push_event_is_not_described_as_one_the_view_receives(self):
         note = self._types("conversation_thread")["stream_event"]
         assert "pushes" in note and "renames" not in note
+
+
+def test_an_accent_background_always_carries_the_accent_foreground():
+    """`--accent` is a surface token paired with `--accent-foreground`. Forty-
+    nine rules drew the accent with the page's `--foreground` (or none) on
+    it; with a vivid accent (djust.org's pale green) hovered text fell to
+    1.45:1 contrast."""
+    import re
+    from pathlib import Path
+
+    import djust
+
+    root = Path(djust.__file__).parent
+    offenders = []
+    for css in root.rglob("*.css"):
+        text = css.read_text(errors="ignore")
+        for block in re.findall(r"[^{}]*\{[^{}]*\}", text):
+            body = block.split("{", 1)[1]
+            if re.search(r"background(?:-color)?:\s*hsl\(var\(--accent\)\)", body):
+                if "--accent-foreground" not in body:
+                    offenders.append(f"{css.name}: {block.strip()[:90]}")
+    assert not offenders, "\n".join(offenders)

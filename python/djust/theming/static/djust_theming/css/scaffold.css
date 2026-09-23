@@ -1872,7 +1872,7 @@ body::after {
 
 .sidebar-nav .nav-link:hover {
   background: hsl(var(--accent));
-  color: hsl(var(--foreground));
+  color: hsl(var(--accent-foreground));
   text-decoration: none;
 }
 
