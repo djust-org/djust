@@ -4,12 +4,12 @@ slug: multi-tenant
 section: guides
 order: 7
 level: advanced
-description: "Build SaaS apps with TenantMixin, flexible resolution strategies, and per-tenant state isolation"
+description: "Build SaaS apps with TenantMixin, flexible resolution strategies, and tenant-scoped querysets and presence"
 ---
 
 # Multi-Tenant Applications
 
-djust provides comprehensive multi-tenant support for building SaaS applications with complete tenant isolation, flexible resolution strategies, and tenant-scoped data access.
+djust provides comprehensive multi-tenant support for building SaaS applications with row-level tenant isolation, flexible resolution strategies, and tenant-scoped data access.
 
 ## Choosing Your Multi-Tenancy Strategy
 
@@ -25,7 +25,7 @@ This is the recommended and only supported multi-tenancy strategy for djust appl
 - Connection-pool pressure scales with **active sessions**, not events × tenants × middleware passes.
 - Tenant resolution is cacheable in-process or in Redis without needing to compose with database connection state.
 - Single Postgres schema is operationally simpler — one set of migrations, one backup, one set of indexes.
-- It integrates cleanly with djust's state backends, presence, and `TenantMixin` / `TenantScopedMixin`.
+- It integrates cleanly with djust's presence layer and `TenantMixin` / `TenantScopedMixin`.
 
 ### `django-tenants` (schema-per-tenant) — DEPRECATED under djust
 
@@ -34,7 +34,7 @@ This is the recommended and only supported multi-tenancy strategy for djust appl
 Why deprecated:
 
 - **It is a known production footgun under ASGI + LiveView.** Every WebSocket event re-enters `TenantMainMiddleware` → `set_tenant()` → `SET search_path`. LiveView amplifies this dramatically: `tick_interval` polling (typically every 1.5–5s), `push_to_view` re-mounts across all connected sessions, presence updates, and `@notify_on_save` listener re-mounts each re-enter the middleware. Without the `TENANT_LIMIT_SET_CALLS` stopgap (below) this exhausts the Postgres connection pool. [Issue #1556](https://github.com/djust-org/djust/issues/1556) was a real production 503 incident on a djust deploy traceable to this shape.
-- **Schema-per-tenant isolation is not what most multi-tenant SaaS applications actually need.** `tenant_id` filtering at the row level satisfies the typical "users in tenant A cannot see tenant B's data" requirement, and is the model djust's own mixins, state backends, and presence layer integrate with natively.
+- **Schema-per-tenant isolation is not what most multi-tenant SaaS applications actually need.** `tenant_id` filtering at the row level satisfies the typical "users in tenant A cannot see tenant B's data" requirement, and is the model djust's own mixins and presence layer integrate with natively.
 - **The migration path is straightforward** for typical applications: add `tenant_id` columns, write a one-time data migration to copy schema-qualified rows into the shared schema with the right `tenant_id`, swap middleware. See the dedicated step-by-step recipe in **[Migrating from django-tenants](migrating-from-django-tenants.md)** (mental-model translation, data migration, code/settings diffs, rollout, and a cross-tenant-leak canary test).
 
 #### Stopgap (until migration): required settings if you remain on django-tenants
@@ -64,7 +64,7 @@ The remainder of this guide covers `djust.tenants`.
 
 - **Automatic tenant resolution** -- From subdomain, path, headers, session, or custom logic
 - **TenantMixin / TenantScopedMixin** -- Tenant-aware LiveViews with scoped querysets
-- **State backend isolation** -- Tenant-aware Redis and memory backends
+- **Tenant-scoped presence** -- `TenantMixin` prefixes presence keys per tenant
 - **Chained resolution** -- Try multiple strategies with fallback
 - **Template context** -- Automatic tenant injection
 
@@ -91,7 +91,7 @@ from djust.tenants import TenantMixin, TenantScopedMixin
 class DashboardView(TenantScopedMixin, LiveView):
     template_name = 'dashboard.html'
 
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         # self.tenant is automatically available
         self.users_count = self.get_tenant_queryset(User).count()
         self.projects = self.get_tenant_queryset(Project).order_by('-created_at')[:5]
@@ -195,7 +195,7 @@ Base mixin that resolves and injects `self.tenant` and adds it to template conte
 
 ```python
 class MyView(TenantMixin, LiveView):
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         logger.info("Mounted for tenant: %s", self.tenant.name)
 ```
 
@@ -207,7 +207,7 @@ Extends TenantMixin with scoped querysets:
 class ProjectListView(TenantScopedMixin, LiveView):
     model = Project  # used as the default for the helpers below
 
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         self.projects = self.get_tenant_queryset()
 
     def get_project(self, project_id):
@@ -304,19 +304,27 @@ class OnboardingView(TenantMixin, LiveView):
             self.set_tenant(request.user.organization.slug)
 ```
 
-## State Backend Isolation
+## View state and tenants
 
-```python
-# settings.py
-DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareRedisBackend'
-# or
-DJUST_STATE_BACKEND = 'djust.tenants.backends.TenantAwareMemoryBackend'
-```
+There is no tenant-aware *state* backend. `DJUST_STATE_BACKEND` (or
+`DJUST_CONFIG['STATE_BACKEND']`) accepts only `'redis'` (or a `redis://` URL)
+and `'memory'`; **any other value, including a dotted path to a class, silently
+falls back to the in-process memory backend**. Don't point it at the classes in
+`djust.tenants.backends`: those are *presence* backends, not state backends.
+
+View state is keyed by the user's session and the page path, not by tenant, so
+two users never share view state, whichever tenant they belong to. The keys
+don't include the tenant id, though. If one session can reach several tenants
+on the **same URL** (a header or session resolver, or `set_tenant()`), don't
+rely on the state cache to separate them: include the tenant in the URL, or
+re-derive tenant data in the event handler. `TenantMixin.get_state_key_prefix()`
+returns `tenant:<id>`, but no built-in state backend calls it at this release;
+it is a hook for your own storage (see
+[#2973](https://github.com/djust-org/djust/issues/2973)).
 
 ## Tenant-Aware Presence
 
-The state backends above isolate view state per tenant. Presence is separate
-and has its own tenant-aware backends, in `djust.tenants.backends`:
+Presence has its own tenant-aware backends, in `djust.tenants.backends`:
 
 ```python
 from djust.tenants.backends import (
@@ -331,30 +339,54 @@ from djust.tenants.backends import (
 gives the two backend classes their key prefixing, so use one of those rather
 than mixing it in yourself.
 
-To scope presence for the whole project, point the config at a tenant-aware
-backend:
+**`PresenceMixin` views: `TenantMixin` already scopes them.** `TenantMixin`
+overrides `get_presence_key()` to return `tenant:<id>:<key>`, so two tenants'
+users land in different presence groups. List `TenantMixin` (or
+`TenantScopedMixin`) **before** `PresenceMixin` in the bases, otherwise
+`PresenceMixin.get_presence_key()` wins and the prefix is lost:
 
 ```python
-# settings.py
-DJUST_CONFIG = {
-    "PRESENCE_BACKEND": "djust.tenants.backends.TenantAwareRedisBackend",
-}
+from djust import LiveView
+from djust.presence import PresenceMixin
+from djust.tenants import TenantMixin
+
+class CollaborationView(TenantMixin, PresenceMixin, LiveView):  # TenantMixin first
+    presence_key = "lobby"   # stored as tenant:<id>:lobby
 ```
 
-Or scope it per view, when only some pages are tenant-scoped:
+**Per-tenant backend objects.** For code that talks to presence directly, use
+`get_tenant_presence_backend(tenant_id)`. It returns a cached, tenant-scoped
+backend with the standard presence API (join / leave / list / count /
+heartbeat). Call it where you need it rather than storing it on the view: a
+backend object in public view state is a non-serializable service instance.
 
 ```python
 from djust.tenants.backends import get_tenant_presence_backend
 
 class CollaborationView(TenantMixin, LiveView):
-    def mount(self, request, **kwargs):
-        # Takes the tenant id as a string; returns an object with the standard
-        # presence API (join / leave / list / count / heartbeat).
-        self.presence = get_tenant_presence_backend(self.tenant.id)
+    def _presence(self):
+        return get_tenant_presence_backend(self.tenant.id)
 ```
 
-Without this, presence is project-wide — two tenants' users would see each
-other in the same room.
+**Choosing the backend.** `PRESENCE_BACKEND` takes a short name, not a dotted
+path. Set it to `'redis'` for a multi-process deploy: both the global presence
+registry (used by `PresenceMixin`) and `get_tenant_presence_backend()` then use
+Redis:
+
+```python
+# settings.py
+DJUST_CONFIG = {
+    "PRESENCE_BACKEND": "redis",
+    "PRESENCE_REDIS_URL": "redis://localhost:6379/2",
+}
+```
+
+Any other value **silently falls back to in-process memory**, which isn't
+shared between workers. That includes a dotted path such as
+`'djust.tenants.backends.TenantAwareRedisBackend'`, and `'tenant_redis'`, which
+`get_tenant_presence_backend()` accepts but the global registry used by
+`PresenceMixin` does not
+([#2973](https://github.com/djust-org/djust/issues/2973)).
 
 ## Template Context
 
@@ -379,18 +411,38 @@ Tenant info is automatically available in templates:
 - **Validate URL access** to prevent cross-tenant data access:
 
 ```python
+from django.core.exceptions import PermissionDenied
+from django.urls import Resolver404, resolve
+
+
 class TenantAccessMixin:
-    """Deny a URL whose tenant is not the active one."""
+    """Deny a URL whose tenant_slug is not the request's tenant.
+
+    Combine with TenantMixin / TenantScopedMixin (it uses resolve_tenant()).
+    """
 
     def check_permissions(self, request):
-        tenant_slug = self.kwargs.get("tenant_slug")
+        # self.kwargs is not set on the WebSocket mount path; read the URL
+        # kwargs from the request path, which works on every transport.
+        try:
+            tenant_slug = resolve(request.path_info).kwargs.get("tenant_slug")
+        except Resolver404:
+            tenant_slug = None
         if tenant_slug is None:
             return True
-        tenant = getattr(self, "_tenant", None)
+        # check_permissions() runs BEFORE TenantMixin resolves the tenant on
+        # the WebSocket/SSE paths, so self._tenant may still be None here.
+        tenant = self._tenant or self.resolve_tenant(request)
         if tenant is None or tenant.id != tenant_slug:
             raise PermissionDenied("Access denied")
         return True
 ```
+
+> **`check_permissions()` runs before `TenantMixin` resolves the tenant.** In
+> the pre-mount sequence, auth (including `check_permissions()`) is step 1 and
+> tenant resolution is step 3, so on the WebSocket and SSE paths `self._tenant`
+> is still `None` inside the hook. Resolve the tenant yourself there, as above.
+> A hook that only reads `self._tenant` denies every WebSocket mount.
 
 **Use `check_permissions()`, not a `dispatch()` override.** It runs inside the
 shared pre-mount sequence (`run_pre_mount_auth`, `auth/core.py`) that every
@@ -403,19 +455,28 @@ loads unprotected and nothing raises. `login_required` and
 ## Testing
 
 ```python
-from djust.tenants import set_current_tenant
+from djust.tenants import TenantScopedMixin
 from djust.tenants.resolvers import TenantInfo
 from django.test import RequestFactory
 
 
 def test_tenant_scoped_query(db):
-    # Set the thread-local tenant, then assert tenant-scoped filtering.
-    set_current_tenant(TenantInfo(tenant_id='acme'))
-    try:
-        projects = Project.objects.filter(tenant_id='acme')
-        assert projects.count() == 2
-    finally:
-        set_current_tenant(None)  # clear thread-local between tests
+    # Query through the same scoping code the views use, and check the
+    # other tenant's rows are absent. (A hand-written
+    # .filter(tenant_id='acme') would pass whether or not scoping works.)
+    Project.objects.create(tenant_id='acme', name='A')
+    Project.objects.create(tenant_id='globex', name='G')
+
+    class _Probe(TenantScopedMixin):
+        model = Project
+
+        def __init__(self):
+            self._tenant = TenantInfo(tenant_id='acme')
+            self._tenant_resolved = True
+
+    projects = _Probe().get_tenant_queryset()
+    assert projects.count() == 1
+    assert not projects.filter(tenant_id='globex').exists()
 
 
 def test_view_with_tenant():
@@ -423,7 +484,9 @@ def test_view_with_tenant():
     request.tenant = TenantInfo(tenant_id='test', name='Test Org')
     view = DashboardView()
     view.setup(request)
-    view.tenant = request.tenant  # TenantMixin reads this off the request
+    # In production TenantMixin runs the configured resolver on the request
+    # (resolve_tenant()) before mount(); here we set the tenant directly.
+    view.tenant = request.tenant
     assert view.tenant.id == 'test'
 ```
 

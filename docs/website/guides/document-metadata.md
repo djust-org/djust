@@ -96,6 +96,7 @@ def select_article(self, article_id: int = 0, **kwargs):
 - **Open Graph and Twitter tags** (names starting with `og:` or `twitter:`) use `<meta property="..." content="...">`
 - If a matching `<meta>` tag already exists in the document, its `content` attribute is updated
 - If no matching tag exists, a new `<meta>` element is appended to `<head>`
+- Because `twitter:` keys are matched on `property=`, write any initial Twitter tags in your template as `<meta property="twitter:card" ...>`. A conventional `<meta name="twitter:card">` tag isn't matched, so the update appends a duplicate `property=` tag instead of changing it.
 
 ### Setting Initial Meta Tags (HTTP)
 

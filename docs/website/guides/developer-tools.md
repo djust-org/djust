@@ -28,10 +28,10 @@ djust doctor
 ============
 
   [VERSIONS]
-  OK    djust 0.4.0
+  OK    djust 1.2.0rc10
   OK    Python 3.12.4
   OK    Django 5.1.2
-  OK    Rust extension loaded (0.4.0)
+  OK    Rust extension loaded (1.2.0rc10)
 
   [INFRASTRUCTURE]
   OK    Django Channels 4.0.0
@@ -101,17 +101,11 @@ Server-side errors sent to the client include extra fields in DEBUG mode:
 
 | Field | Content |
 |-------|---------|
-| `debug_detail` | Unsanitized error message (full exception text) |
 | `traceback` | Last 3 stack frames |
-| `hint` | Actionable suggestion for fixing the issue |
 
-For example, if a LiveView class is not found during mount, the error response includes a hint listing all available LiveView classes in the module:
+The error frame format also reserves `debug_detail` (unsanitized error text) and `hint` (an actionable suggestion) fields, but at 1.2.0rc10 no code path populates them, so you will not see them in practice.
 
-```
-Available LiveView classes in myapp.views: CounterView, ChatView, DashboardView
-```
-
-These fields are **never sent in production** -- they are stripped when `DEBUG=False`.
+The `traceback` field is **never sent in production** -- it is stripped when `DEBUG=False`.
 
 ### VDOM Patch Error Messages
 
@@ -122,7 +116,7 @@ When a VDOM patch fails to find its target node, the client logs now include:
 - **Parent element** tag and ID for context
 - **Suggested causes** -- third-party DOM modification, `{% if %}` block changes, conditional rendering mismatches
 
-In DEBUG mode, a collapsed console group shows the full patch object:
+In DEBUG mode with `globalThis.djustDebug = true` set in the browser console, a collapsed console group shows the full patch object and the suggested causes. With `DEBUG=True` alone the group is empty:
 
 ```
 [LiveView] Patch failed (replace): node not found at path=0/2/1, dj-id=counter-display
@@ -183,10 +177,12 @@ The latency simulator pairs naturally with djust's loading directives:
 ```html
 <!-- This spinner will be visible for the simulated delay -->
 <button dj-click="save" dj-loading.disable>
-    <span dj-loading.hide>Save</span>
-    <span dj-loading.show style="display:none">Saving...</span>
+    <span dj-loading.for="save" dj-loading.hide>Save</span>
+    <span dj-loading.for="save" dj-loading.show style="display:none">Saving...</span>
 </button>
 ```
+
+The inner spans need `dj-loading.for="save"`: a loading directive takes its event from its own element and never from an ancestor's `dj-click`.
 
 Set latency to 500ms or higher to visually verify that:
 

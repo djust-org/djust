@@ -10,7 +10,7 @@ description: "The security audit command: what it checks and how to read its out
 # `djust_audit` — Security Audit Command
 
 `djust_audit` is djust's all-in-one security and configuration audit tool.
-It runs as a Django management command and operates in five modes:
+It runs as a Django management command and operates in six modes:
 
 1. **Default mode** — introspect every LiveView and LiveComponent in the
    project and report what they expose, what decorators protect them, and
@@ -27,6 +27,9 @@ It runs as a Django management command and operates in five modes:
    five security anti-patterns (IDOR, unauthenticated mutation, SQL
    string formatting, open redirects, unsafe `mark_safe`/`|safe`). Emits
    stable [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx).
+6. **`--a11y` mode** — scan templates for accessibility problems
+   (Y001–Y004). Every finding is a warning: the scan never fails in
+   normal mode, and fails under `--strict` when any finding exists.
 
 The configuration-level static checks (A0xx codes) also run via Django's
 normal check pipeline (`manage.py check --tag djust`) — `djust_audit`
@@ -105,6 +108,7 @@ python manage.py djust_audit --ast --ast-no-templates
 | `--ast-path <path>` | str | Root directory for `--ast` (default: current working directory). |
 | `--ast-exclude <path> [...]` | list | Path prefixes (relative to `--ast-path`) to skip during `--ast` scanning. |
 | `--ast-no-templates` | switch | Skip `.html` template files in `--ast` mode (Python only). |
+| `--a11y` | switch | Run the accessibility (Y001–Y004) template audit. |
 
 ## Modes explained
 
@@ -231,6 +235,8 @@ than missed findings for a linter that runs on every push.
   wrapping an f-string, a `.format()` call, or a `%` binary-op.
 - **X006 / X007** — a light regex scan of `.html` files that flags
   `{{ var|safe }}` and `{% autoescape off %}` blocks for review.
+- **X008 — IDOR-shaped detail view without an object-permission
+  lifecycle override** (warning).
 
 **Suppression**: add `# djust: noqa X001` (or the relevant code) on
 the offending line. Bare `# djust: noqa` suppresses every `djust.X`
@@ -245,10 +251,10 @@ expressions for templates.
 - The scanner cannot follow values across function calls. If the user
   input is sanitised in a helper two files away, that's invisible
   here — annotate with `# djust: noqa` and move on.
-- P005 only catches `mark_safe`/`SafeString` on the immediate argument.
+- X005 only catches `mark_safe`/`SafeString` on the immediate argument.
   Multi-step construction (build a string into a variable then pass
   it) slips through.
-- P003 only scans the first positional argument; `.extra(where=[...])`
+- X003 only scans the first positional argument; `.extra(where=[...])`
   with kwargs is not inspected.
 - Templates are scanned by regex, not by Django's template compiler —
   inline tags and comments that look like `{{ var|safe }}` inside
@@ -266,7 +272,7 @@ schemes.
 
 ## CI integration
 
-A typical CI job runs all five modes:
+A typical CI job runs the gating modes:
 
 ```yaml
 # .github/workflows/security.yml
@@ -329,6 +335,8 @@ jobs:
 | 0 | Success — no findings in strict mode, or no errors in non-strict mode. |
 | 1 | At least one finding at error (or warning, in `--strict` mode). |
 | 2 | Invalid input — missing permissions file, bad YAML, bad `--header` format. |
+
+Default mode and `--permissions` exit non-zero only under `--strict`: without it, even error-severity permissions deviations exit 0. `--live` and `--ast` exit 1 on any error-severity finding even without `--strict`. `--a11y` exits 1 only under `--strict`.
 
 ## See also
 

@@ -35,7 +35,7 @@ Every LiveView template needs these two things:
 |---|---|---|
 | `{% load live_tags %}` | Yes | Load djust template tag library |
 | `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~64 KB gz) into every LiveView response |
-| `dj-view="myapp.views.CounterView"` | Yes | On `<body>` — literal dotted path to your LiveView class |
+| `dj-view="myapp.views.CounterView"` | No | Injected automatically onto `<div dj-root>` for LiveView pages; set it by hand only for non-LiveView pages that embed a view |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 
 ---
@@ -85,7 +85,7 @@ Every LiveView template needs these two things:
 
 | Attribute | Description |
 |---|---|
-| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-feedback="text"` | Button text shown for 1.5s after copy (default: `"Copied!"`) |
 | `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
 | `dj-copy-event="handler"` | Server event fired after successful copy |
 
@@ -142,7 +142,7 @@ Every LiveView template needs these two things:
 <div dj-keydown="on_key" tabindex="0"></div>
 ```
 
-Supported key modifiers: `.enter`, `.escape`, `.space`
+Supported key modifiers: `.enter`, `.escape`, `.space`, `.tab`, `.backspace`, `.delete`, `.arrowup`/`.up` (and the same for down, left and right), or any single character (e.g. `.k`)
 
 ### Window & Document Events
 
@@ -150,9 +150,9 @@ Supported key modifiers: `.enter`, `.escape`, `.space`
 |---|---|---|
 | `dj-window-keydown="handler"` | `window` | `keydown` |
 | `dj-window-keyup="handler"` | `window` | `keyup` |
-| `dj-window-scroll="handler"` | `window` | `scroll` (150ms throttle) |
+| `dj-window-scroll="handler"` | `window` | `scroll` (unthrottled — fires on every event; keep the handler cheap or rate-limit server-side) |
 | `dj-window-click="handler"` | `window` | `click` |
-| `dj-window-resize="handler"` | `window` | `resize` (150ms throttle) |
+| `dj-window-resize="handler"` | `window` | `resize` (unthrottled — fires on every event) |
 | `dj-document-keydown="handler"` | `document` | `keydown` |
 | `dj-document-keyup="handler"` | `document` | `keyup` |
 | `dj-document-click="handler"` | `document` | `click` |
@@ -200,7 +200,7 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 
 | Attribute | Description |
 |---|---|
-| `dj-patch="url"` | Replace `dj-root` content via AJAX (no full reload) |
+| `dj-patch="url"` | Update the URL (pushState) and send it to the current view's `handle_params` over the WebSocket — no page reload, same view |
 | `dj-navigate="url"` | Client-side navigation (history push) |
 | `dj-prefetch` | Prefetch link target on hover / touch — warms HTTP cache before click (v0.7.0) |
 
@@ -295,7 +295,7 @@ Both classes are removed on intentional disconnect (e.g., TurboNav navigation). 
 
 ```css
 /* Dim content when disconnected */
-body.dj-disconnected dj-root { opacity: 0.5; }
+body.dj-disconnected [dj-root] { opacity: 0.5; }
 
 /* Show an offline banner */
 .offline-banner { display: none; }
@@ -364,7 +364,7 @@ window.djust.pageLoading.enabled = false;
 Or hide via CSS:
 
 ```css
-.djust-page-loading-bar { display: none !important; }
+#djust-page-loading-bar { display: none !important; }
 ```
 
 Navigation lifecycle events and CSS class for page transitions:
@@ -392,23 +392,27 @@ Loading state directives apply CSS classes or show/hide elements while a server 
 
 | Directive | Description |
 |---|---|
-| `dj-loading` | Toggle `djust-loading` class on the element itself |
-| `dj-loading.class:foo` | Add class `foo` while loading |
+| `dj-loading="event_name"` | Shorthand for `.for` + `.show`: the element is hidden until `event_name` is in flight |
+| `dj-loading.for="event_name"` | Tie any element's loading modifiers to a named event (otherwise the element's own `dj-*` event is used) |
+| `dj-loading.show` | Show element while loading (optionally `="flex"` etc.). Add `style="display: none"` so it starts hidden |
 | `dj-loading.hide` | Hide element while loading |
-| `dj-loading.show` | Show element only while loading (spinner pattern) |
 | `dj-loading.disable` | Disable element while loading |
-| `dj-loading.target=#id` | Apply loading state to `#id` instead of current element |
+| `dj-loading.class="opacity-50"` | Add the class(es) in the value while loading |
+
+The element that triggered the event also gets the `djust-loading` class automatically while
+its request is in flight. An element with no `dj-*` event attribute needs `dj-loading.for`
+(or the `dj-loading="event_name"` shorthand), or it is never registered.
 
 ```html
 <!-- Button disables itself while request is in flight -->
 <button dj-click="save" dj-loading.disable>Save</button>
 
-<!-- Spinner appears only during loading -->
+<!-- Spinner appears only while "generate" is running -->
 <button dj-click="generate">Generate</button>
-<div dj-loading.show.target=#gen-btn id="spinner">Loading...</div>
+<div dj-loading="generate">Loading...</div>
 
 <!-- Loading overlay on a card -->
-<div dj-loading.class:opacity-50>
+<div dj-loading.for="refresh" dj-loading.class="opacity-50">
     {{ content }}
 </div>
 ```
@@ -420,11 +424,11 @@ Loading state directives apply CSS classes or show/hide elements while a server 
 ### `data-*` attributes
 
 ```html
-<!-- data-* attributes are coerced to their natural type -->
+<!-- data-* values arrive as strings unless you add a type suffix -->
 <button dj-click="select_item"
-        data-item-id="{{ item.id }}"
-        data-price="{{ item.price }}"
-        data-active="true">
+        data-item-id:int="{{ item.id }}"
+        data-price:float="{{ item.price }}"
+        data-active:bool="true">
     Select
 </button>
 ```
@@ -432,9 +436,9 @@ Loading state directives apply CSS classes or show/hide elements while a server 
 Handler receives: `select_item(self, item_id=42, price=9.99, active=True)`
 
 Type coercion rules:
-- `"true"` / `"false"` → `bool`
-- Numeric strings → `int` or `float`
-- Everything else → `str`
+- Without a suffix, a `data-*` value is passed as a `str` (`data-item-id="42"` → `item_id="42"`).
+- Suffixes coerce on the client: `:int`, `:float`, `:bool`, `:json`, `:list`.
+- Alternatively, annotate the handler (`def select_item(self, item_id: int = 0, price: float = 0.0, active: bool = False, **kwargs)`) and djust coerces by the type hints.
 
 ### `dj-value-*` attributes
 
@@ -510,10 +514,11 @@ Use `data-key` or `dj-key` on list items whenever the list can reorder or items 
 ```
 
 ```javascript
-djust.hooks.chart = {
-    mounted(el)   { initChart(el); },
-    updated(el)   { updateChart(el); },
-    destroyed(el) { destroyChart(el); },
+window.djust.hooks.chart = {
+    // Callbacks take no arguments; the element is this.el
+    mounted()   { initChart(this.el); },
+    updated()   { updateChart(this.el); },
+    destroyed() { destroyChart(this.el); },
 };
 ```
 
@@ -667,22 +672,29 @@ Rust template engine without forking the parser:
 
 | Variety | Returns | Use when |
 |---|---|---|
-| `register_tag_handler(name, handler)` | HTML string | The tag emits content (`{% url %}`, `{% static %}`) |
-| `register_block_tag_handler(name, handler)` | HTML wrapping the inner block | The tag wraps content (`{% upper %}…{% endupper %}`) |
+| `register_tag_handler(name, handler)` | String (escaped unless `mark_safe`) | The tag emits content (`{% url %}`, `{% static %}`) |
+| `register_block_tag_handler(name, end_tag, handler)` | HTML wrapping the inner block; handler is `.render(args, content, context)` | The tag wraps content (`{% upper %}…{% endupper %}`) |
 | `register_assign_tag_handler(name, handler)` | `dict[str, Any]` merged into the context | The tag mutates the context for sibling nodes (`{% assign x=expr %}`) |
 
+Each handler is an object with a `render` method, not a bare function. `args` is a
+list of the tag's arguments, already resolved against the context. A plain `str`
+return is HTML-escaped, so wrap markup you've made safe in `mark_safe`:
+
 ```python
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from djust._rust import register_tag_handler
 
-def hello_tag(args, context):
-    name = args.get("name", "world")
-    return f"<p>Hello, {name}!</p>"
+class HelloTag:
+    def render(self, args, context):
+        name = args[0] if args else "world"
+        return mark_safe(f"<p>Hello, {escape(name)}!</p>")
 
-register_tag_handler("hello", hello_tag)
+register_tag_handler("hello", HelloTag())
 ```
 
 ```django
-{% hello name="Alice" %}
+{% hello "Alice" %}
 ```
 
 Overhead is ~100–500 ns per call (PyO3 boundary). Built-in tags
@@ -696,9 +708,7 @@ Django types pass through the Rust template engine without manual
 
 | Django type | Renders as |
 |---|---|
-| `datetime.datetime` | ISO 8601 — works with `\|date:"Y-m-d H:i"` |
-| `datetime.date` | ISO 8601 |
-| `datetime.time` | `HH:MM:SS` |
+| `datetime.datetime` / `datetime.date` / `datetime.time` | Rendered as Django does (localized `DATETIME_FORMAT` / `DATE_FORMAT` / `TIME_FORMAT`); use `\|date:"Y-m-d H:i"` / `\|time` for explicit formats |
 | `decimal.Decimal` | string (preserves precision; pair with `\|floatformat`) |
 | `uuid.UUID` | string |
 | `FieldFile` (FileField / ImageField) | object — call `.url`, `.name`, `.size` directly |
@@ -737,16 +747,18 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 | `urlencode` | `?q={{ query\|urlencode }}` |
 | `linebreaks` | `{{ bio\|linebreaks }}` |
 | `linebreaksbr` | `{{ bio\|linebreaksbr }}` |
-| `urlize` | `{{ text\|urlize }}` — do **not** add `\|safe` (handles own escaping) |
+| `urlize` | `{{ text\|urlize }}` — no `\|safe` needed (handles own escaping) |
 
 **Number**
 
 | Filter | Example |
 |---|---|
 | `floatformat:N` | `{{ price\|floatformat:2 }}` → `"9.99"` |
-| `intcomma` | `{{ count\|intcomma }}` → `"1,234"` |
 | `filesizeformat` | `{{ bytes\|filesizeformat }}` → `"1.2 MB"` |
 | `pluralize` | `{{ count }} item{{ count\|pluralize }}` |
+
+`intcomma` (`{{ count|intcomma }}` → `"1,234"`) is not a built-in: it comes from
+`django.contrib.humanize`. Add that app to `INSTALLED_APPS` and `{% load humanize %}`.
 
 **Date/Time**
 
@@ -754,7 +766,7 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 |---|---|
 | `date:"Y-m-d"` | `{{ created\|date:"Y-m-d" }}` |
 | `time:"H:i"` | `{{ ts\|time:"H:i" }}` |
-| `timesince` | `{{ created\|timesince }}` → `"3 days ago"` |
+| `timesince` | `{{ created\|timesince }}` → `"3 days"` (write `{{ created\|timesince }} ago`) |
 | `timeuntil` | `{{ expires\|timeuntil }}` |
 
 **List/Dict**
@@ -789,33 +801,6 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 
 ## Common Pitfalls
 
-### One-sided `{% if %}` in class attributes
-
-**Problem:** Using `{% if %}` without `{% else %}` inside an HTML attribute can confuse djust's branch-aware div-depth counter, causing VDOM patching misalignment.
-
-```html
-<!-- WRONG: one-sided if inside class attribute -->
-<div class="card {% if active %}active{% endif %}">
-```
-
-**Fix:** Use a separate attribute or a full `{% if/else %}` expression:
-
-```html
-<!-- CORRECT: full if/else -->
-<div class="card {% if active %}active{% else %}{% endif %}">
-
-<!-- ALSO CORRECT: move the conditional outside -->
-{% if active %}
-<div class="card active">
-{% else %}
-<div class="card">
-{% endif %}
-    ...
-</div>
-```
-
-This limitation applies specifically to class and other attribute values — `{% if %}` blocks in element content work fine.
-
 ### Form field values during VDOM patch
 
 djust's VDOM preserves text input values during patches by default. However, if the server re-renders a field with a different `value=` attribute, the new server value wins. To preserve a field that the user is actively editing, use `dj-update="ignore"` on its container:
@@ -826,32 +811,19 @@ djust's VDOM preserves text input values during patches by default. However, if 
 </div>
 ```
 
-### Double-escaping HTML filters
+### `|safe` after HTML-producing filters
 
-`urlize`, `urlizetrunc`, and `unordered_list` are in djust's `safe_output_filters` whitelist — the Rust engine automatically marks their output as safe without requiring `|safe`. **Do not** pipe them through `|safe` or you'll double-escape:
+`urlize`, `urlizetrunc`, and `unordered_list` are in djust's `safe_output_filters` whitelist — the Rust engine automatically marks their output as safe without requiring `|safe`. Adding `|safe` after them is redundant but harmless (it does not double-escape):
 
 ```html
-<!-- WRONG: double-escapes the output -->
-{{ text|urlize|safe }}
-
-<!-- CORRECT: djust's Rust engine auto-marks urlize output as safe -->
+<!-- Enough: djust's Rust engine auto-marks urlize output as safe -->
 {{ text|urlize }}
+
+<!-- Redundant, same output -->
+{{ text|urlize|safe }}
 ```
 
 *Note:* Standard Django achieves this via `SafeData` type-checking. djust implements it as an explicit whitelist, so users coming from Django don't need `|safe` with these filters.
-
-### `{% elif %}` in inline templates
-
-`{% elif %}` is not supported in `template_string` / `template =` inline templates. Use separate `{% if %}` blocks:
-
-```html
-<!-- WRONG in inline templates -->
-{% if a %}...{% elif b %}...{% endif %}
-
-<!-- CORRECT -->
-{% if a %}...{% endif %}
-{% if not a and b %}...{% endif %}
-```
 
 ---
 
@@ -869,9 +841,9 @@ Event attributes:
 Window/document scoping:
   dj-window-keydown               (keydown on window)
   dj-window-keyup                 (keyup on window)
-  dj-window-scroll                (scroll on window, 150ms throttle)
+  dj-window-scroll                (scroll on window, unthrottled)
   dj-window-click                 (click on window)
-  dj-window-resize                (resize on window, 150ms throttle)
+  dj-window-resize                (resize on window, unthrottled)
   dj-document-keydown             (keydown on document)
   dj-document-keyup               (keyup on document)
   dj-document-click               (click on document)
@@ -884,7 +856,7 @@ Rate limiting (HTML attributes):
 
 Copy enhancements:
   dj-copy="#selector"             (copy element textContent)
-  dj-copy-feedback="Done!"        (custom feedback text, 2s)
+  dj-copy-feedback="Done!"        (custom feedback text, 1.5s)
   dj-copy-class="btn-success"     (custom CSS class, 2s)
   dj-copy-event="handler"         (server event after copy)
 
@@ -893,12 +865,13 @@ Submit protection:
   dj-lock                         (block event until server responds)
 
 Loading directives:
-  dj-loading                      (toggle djust-loading class)
-  dj-loading.class:foo            (add class foo)
+  dj-loading="event"              (hidden; shown while event runs)
+  dj-loading.for="event"          (tie modifiers to a named event)
+  dj-loading.class="foo"          (add class foo)
   dj-loading.hide                 (hide while loading)
-  dj-loading.show                 (show only while loading)
+  dj-loading.show                 (show while loading; start hidden)
   dj-loading.disable              (disable while loading)
-  dj-loading.target=#id           (apply to target element)
+  .djust-loading                  (auto class on the triggering element)
 
 UI feedback:
   dj-cloak                        (hide until WS/SSE mount completes)
@@ -927,14 +900,14 @@ Document metadata (Python-side, no template directive):
   self.page_meta = {"key": "value"}    (update/create <meta> tags)
 
 VDOM identity:
-  dj-view="myapp.views.CounterView"      (on body — required, literal dotted path)
+  dj-view="myapp.views.CounterView"      (auto-injected onto <div dj-root>)
   dj-root                         (reactive region — required)
   data-key / dj-key               (stable list identity)
   dj-update="ignore"              (opt out of patching)
   dj-hook="name"                  (JS lifecycle hooks)
 
 Data passing:
-  data-*                          (typed kwargs to handlers)
+  data-*                          (string kwargs; data-x:int etc. to coerce)
   dj-value-*                      (extra value kwargs)
   dj-target="#selector"           (scoped DOM updates)
 ```

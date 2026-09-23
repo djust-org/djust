@@ -14,9 +14,11 @@ snapshot of the view's public state *before* and *after* the handler
 runs. From the browser debug panel you can scrub back through the
 history, jump to any past state, and replay forward from that point — with optional branching so you can try alternate handler params without losing the original timeline. Think Redux DevTools, but for Django LiveViews and with zero client-side state store.
 
-Gated on `DEBUG=True` **and** per-view opt-in. Zero cost in
-production — when the opt-in is off, the event dispatch path runs
-without instrumentation.
+Recording is enabled per view with `time_travel_enabled = True`;
+jumping, replay and the debug panel additionally require `DEBUG=True`.
+When the opt-in is off, the event dispatch path runs without
+instrumentation. Recording itself is **not** gated on `DEBUG` (see
+[Limitations](#limitations)), so don't ship the attribute switched on.
 
 ## Quick start
 
@@ -45,7 +47,7 @@ class CounterView(LiveView):
 
 1. Open your app in a browser with `DEBUG=True`.
 2. Click a few times to fire the `increment` handler.
-3. Press `Ctrl+D` (or click the debug-bar icon) to open the debug
+3. Press `Ctrl+Shift+D` (`Cmd+Shift+D` on macOS) to open the debug
    panel, then switch to the **Time Travel** tab.
 4. Click any past event in the timeline — the server restores the
    captured `state_before` (or `state_after`), and the page re-renders
@@ -117,10 +119,13 @@ LIVEVIEW_CONFIG = {
 - **Non-JSON values are silently skipped.** Store primitives /
   dicts / lists in public attributes. ORM instances should be stored
   as serialized dicts or fetched by PK inside the handler.
-- **Dev only.** `DEBUG=False` silently disables the jump receiver at
-  the consumer layer. The class attribute is still safe to leave on
-  in shared codebases — production just won't allocate the buffer
-  because the consumer rejects jumps before touching it.
+- **Jumping is dev only; recording is not.** `DEBUG=False` silently
+  disables the jump and replay receivers at the consumer layer and stops
+  events being pushed to the panel. But a view with
+  `time_travel_enabled = True` still allocates the buffer and records
+  state snapshots (including any PII in public attributes) on every
+  event in production. Don't ship the attribute enabled, or tie it to
+  the setting: `time_travel_enabled = settings.DEBUG`.
 
 ## Forward replay
 
@@ -132,8 +137,8 @@ what happens *after* the handler runs with different parameters, use
 from djust.time_travel import replay_event
 
 # Replay event at index 3 from its state_before snapshot, but with
-# different params. Opens a branched timeline — the original history
-# is preserved.
+# different params. The original entries are preserved; the replay is
+# recorded as a new entry.
 replay_event(
     view,
     snapshot=snapshots[3],
@@ -146,20 +151,23 @@ replay_event(
 identical parameters, which is useful for re-running a handler that had
 a network timeout or side-effect failure.
 
-`record_replay=True` writes the new `state_after` into a **branch** of
-the ring buffer, leaving the original event's snapshot untouched. You
-can open multiple branches from the same snapshot by calling
-`replay_event()` with different `override_params`.
+`record_replay=True` (the default) appends a new entry for the replay to
+the same ring buffer, leaving the original event's snapshot untouched.
+`record_replay=False` runs a dry replay that changes the view without
+recording it. Calling `replay_event()` from Python does not allocate a
+branch id; branch ids come from replays started in the debug panel.
 
-### Branches and the branched timeline panel
+### Branches in the debug panel
 
-The debug panel's **Time Travel** tab shows branches as a tree. Each
-branch is labeled with the `override_params` that produced it. Clicking
-any branch node jumps the view to that snapshot.
+In the debug panel's **Time Travel** tab, each row has a ⏵ replay
+button. Replaying from an entry that isn't the latest switches the
+tab's branch badge from `main` to a new `branch-N` id. The panel shows
+this single badge, not a tree of branches.
 
 Branches are **in-memory only** — they disappear on page refresh or
-server restart. To persist a branch for a regression test, use
-`time_travel.save_fixture()` (see [Testing](testing.md)).
+server restart, and there is no API to save one. To capture a branch for
+a regression test, reproduce it with `LiveViewTestClient` (`send_event`
+with the override params); see [Testing](testing.md).
 
 ### Per-component snapshots
 
@@ -171,8 +179,8 @@ restored.
 
 Component snapshots are enabled automatically when
 `time_travel_enabled = True` on the parent view — no per-component
-opt-in required. The debug panel shows a component selector dropdown
-when the page has more than one LiveComponent.
+opt-in required. In the debug panel, rows that captured component state
+get a "▶ N comp" toggle that expands per-component ↶ restore buttons.
 
 ## Comparison
 
@@ -188,9 +196,10 @@ when the page has more than one LiveComponent.
 
 ## Security notes
 
-- Both recording and jumping are DEBUG-gated at the WebSocket
-  consumer. A production client cannot coerce the server into
-  restoring state by sending `time_travel_jump` frames.
+- Jumping and replay are DEBUG-gated at the WebSocket consumer. A
+  production client cannot coerce the server into restoring state by
+  sending `time_travel_jump` frames. **Recording is not DEBUG-gated**:
+  an opted-in view records snapshots in production too.
 - Restoration uses `safe_setattr`, matching the v0.6.0 state-snapshot
   hardening — dunder keys and anything failing the
   `SAFE_ATTRIBUTE_PATTERN` regex are rejected.

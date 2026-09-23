@@ -1,6 +1,6 @@
 # State Management Tutorial
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **Inert.** `@optimistic` and `@client_state` are INERT at 1.2.0rc10. `@optimistic` stamps metadata the shipped client never applies, so no optimistic update or revert happens (#2699). `@client_state` stamps metadata nothing in the shipped client reads (#2680), and the `StateBus` it named was deleted in #2680. A handler carrying either decorator behaves exactly like an undecorated one, so this tutorial does not use them.
 
 **Level**: Intermediate
 **Duration**: 30-45 minutes
@@ -14,10 +14,10 @@ This tutorial walks through building a real-world Product Search feature step-by
 - [Prerequisites](#prerequisites)
 - [Part 1: Basic LiveView](#part-1-basic-liveview)
 - [Part 2: Add Debouncing](#part-2-add-debouncing)
-- [Part 3: Add Optimistic Updates](#part-3-add-optimistic-updates)
+- [Part 3: A Note on Optimistic Updates](#part-3-a-note-on-optimistic-updates)
 - [Part 4: Add Response Caching](#part-4-add-response-caching)
 - [Part 5: Add Loading States](#part-5-add-loading-states)
-- [Part 6: Add Filters with StateBus](#part-6-add-filters-with-statebus)
+- [Part 6: Add Filters](#part-6-add-filters)
 - [Complete Example](#complete-example)
 - [Next Steps](#next-steps)
 
@@ -27,7 +27,6 @@ A Product Search page with:
 
 - **Real-time search** as user types
 - **Debounced requests** (wait for user to stop typing)
-- **Optimistic updates** (instant feedback)
 - **Response caching** (avoid redundant searches)
 - **Loading indicators** (show progress)
 - **Coordinated filters** (category + search work together)
@@ -57,15 +56,15 @@ A Product Search page with:
 ```
 
 **User Experience:**
-- User types "l" → UI updates instantly (optimistic)
-- User types "la" → Previous request cancelled (debounced)
+- User types "l" → the input shows it natively; no request yet
+- User types "la" → the pending send is postponed (debounced)
 - User types "laptop" → Wait 500ms, then search server
 - Server returns → Update results (42 products)
 - User types "laptop" again → Cached response (no server request)
 
 ## Prerequisites
 
-1. **djust installed** (version 0.4.0+)
+1. **djust installed** (1.2.0 or later; handler-level `@debounce`/`@throttle` need 1.2.0rc3+)
 2. **Django project** with djust configured
 3. **Product model** (or similar)
 
@@ -93,6 +92,7 @@ Let's start with a simple LiveView without any decorators.
 ```python
 # views.py
 from djust import LiveView
+from djust.decorators import event_handler
 from .models import Product
 
 class ProductSearchView(LiveView):
@@ -103,8 +103,10 @@ class ProductSearchView(LiveView):
         self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
-    def search(self, query: str = "", **kwargs):
-        """Handle search input."""
+    @event_handler  # Required: undecorated handlers are rejected by default
+    def search(self, value: str = "", **kwargs):
+        """Handle search input. dj-input sends the text as `value`."""
+        query = value
         self.query = query
 
         if query:
@@ -132,11 +134,11 @@ class ProductSearchView(LiveView):
 <html>
 <head>
     <title>Product Search</title>
-    {% load djust %}
-    {% djust_head %}
+    {% load live_tags %}
+    {% djust_client_config %}
 </head>
 <body>
-    <div class="container">
+    <div class="container" dj-root>
         <h1>Product Search</h1>
 
         <div class="search-box">
@@ -166,7 +168,6 @@ class ProductSearchView(LiveView):
         </div>
     </div>
 
-    {% djust_body %}
 </body>
 </html>
 ```
@@ -192,12 +193,12 @@ python manage.py runserver
 
 **Result:**
 - ✅ Typing triggers search
-- ❌ Every keystroke sends server request (slow!)
+- ⚠️ A request goes out whenever typing pauses for 300ms (text inputs are debounced by 300ms at the element level by default)
 - ❌ No feedback while loading
-- ❌ Searches for "laptop" sent 6 times (l-a-p-t-o-p)
+- ❌ A slow typist can still send several searches for "laptop"
 
 **Problems:**
-1. **Too many requests**: Typing "laptop" sends 6 server requests
+1. **More requests than needed**: A 300ms pause is short, so partial words like "lap" get searched
 2. **No loading feedback**: User doesn't know if search is running
 3. **Redundant searches**: Same query searched multiple times
 
@@ -205,16 +206,16 @@ Let's fix these issues step by step.
 
 ## Part 2: Add Debouncing
 
-**Problem**: Every keystroke sends a server request.
+**Problem**: The default 300ms element-level debounce fires on short pauses mid-word.
 
-**Solution**: Use `@debounce` to wait until user stops typing.
+**Solution**: Use `@debounce` to wait longer before sending. (`dj-debounce="500"` on the input does the same per element; `@debounce(wait=0.5, max_wait=2)` also forces a send during continuous typing.)
 
 ### Step 2.1: Add @debounce Decorator
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce  # ← Import decorator
+from djust.decorators import event_handler, debounce  # ← Import decorator
 from .models import Product
 
 class ProductSearchView(LiveView):
@@ -224,9 +225,11 @@ class ProductSearchView(LiveView):
         self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
+    @event_handler
     @debounce(wait=0.5)  # ← Wait 500ms after last keystroke
-    def search(self, query: str = "", **kwargs):
+    def search(self, value: str = "", **kwargs):
         """Handle search input (debounced)."""
+        query = value
         self.query = query
 
         if query:
@@ -253,8 +256,8 @@ python manage.py runserver
 
 **Result:**
 - ✅ Typing "laptop" sends **1 request** (after 500ms silence)
-- ✅ Server load reduced by 83%
-- ❌ UI doesn't update until server responds (feels slow)
+- ✅ Fewer searches for partial words
+- ❌ Results don't update until the server responds
 
 **What Changed:**
 - `@debounce(wait=0.5)` automatically delays the server request
@@ -270,90 +273,19 @@ User types "lap"   → Client resets timer
 User types "lapt"  → Client resets timer
 User types "lapto" → Client resets timer
 User types "laptop" → Client resets timer
-500ms silence      → Client sends search("laptop")
+500ms silence      → Client sends search(value="laptop")
 ```
 
-## Part 3: Add Optimistic Updates
+## Part 3: A Note on Optimistic Updates
 
-**Problem**: UI doesn't update until server responds (feels slow).
+**Problem**: Results don't update until the server responds.
 
-**Solution**: Use `@optimistic` to update UI instantly.
+Earlier versions of this tutorial added `@optimistic` here. At 1.2.0rc10 `@optimistic` is **inert**: it records metadata, but the shipped client never applies an optimistic update or a revert (#2699). Adding it changes nothing, so this tutorial leaves it out.
 
-### Step 3.1: Add @optimistic Decorator
+You don't need it for this page anyway:
 
-```python
-# views.py
-from djust import LiveView
-from djust.decorators import debounce, optimistic  # ← Import optimistic
-from .models import Product
-
-class ProductSearchView(LiveView):
-    template_name = 'products/search.html'
-
-    def mount(self, request, **kwargs):
-        self.query = ""
-        self.results = Product.objects.filter(in_stock=True)[:20]
-
-    @debounce(wait=0.5)
-    @optimistic  # ← Apply optimistic updates
-    def search(self, query: str = "", **kwargs):
-        """Handle search input (debounced + optimistic)."""
-        self.query = query
-
-        if query:
-            self.results = Product.objects.filter(
-                name__icontains=query,
-                in_stock=True
-            )[:20]
-        else:
-            self.results = Product.objects.filter(in_stock=True)[:20]
-
-    def get_context_data(self, **kwargs):
-        return {
-            'query': self.query,
-            'results': self.results,
-            'count': self.results.count()
-        }
-```
-
-### Step 3.2: Test Optimistic Updates
-
-```bash
-python manage.py runserver
-```
-
-**Result:**
-- ✅ Input value updates **instantly** (no delay)
-- ✅ Server request still debounced (500ms)
-- ✅ Feels like native app
-
-**What Changed:**
-- `@optimistic` makes the client update the input field immediately
-- Server still processes the search after 500ms
-- If server response differs, UI corrects itself
-
-**Flow:**
-
-```
-User types "l"
-  → Client updates input to "l" instantly (optimistic)
-  → Client starts 500ms timer
-
-User types "laptop"
-  → Client updates input to "laptop" instantly
-  → Client resets timer
-
-500ms silence
-  → Client sends search("laptop")
-  → Server processes search
-  → Server sends results
-  → Client updates results list
-```
-
-**Why This Works:**
-- Optimistic updates are **heuristic-based** (client guesses)
-- For input fields, guess is simple: `input.value = event.value`
-- Server sends corrective patches if guess was wrong
+- The input already shows what the user typed, natively, with no server round-trip.
+- The results can only come from the server, so there is nothing to guess client-side. Part 5 adds a loading indicator so the wait is visible.
 
 ## Part 4: Add Response Caching
 
@@ -366,7 +298,7 @@ User types "laptop"
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, optimistic, cache  # ← Import cache
+from djust.decorators import event_handler, debounce, cache  # ← Import cache
 from .models import Product
 
 class ProductSearchView(LiveView):
@@ -376,11 +308,12 @@ class ProductSearchView(LiveView):
         self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
+    @event_handler
     @debounce(wait=0.5)
-    @optimistic
-    @cache(ttl=60, key_params=["query"])  # ← Cache for 60 seconds
-    def search(self, query: str = "", **kwargs):
-        """Handle search input (debounced + optimistic + cached)."""
+    @cache(ttl=60, key_params=["value"])  # ← Cache for 60 seconds, keyed on the text
+    def search(self, value: str = "", **kwargs):
+        """Handle search input (debounced + cached)."""
+        query = value
         self.query = query
 
         if query:
@@ -413,38 +346,41 @@ python manage.py runserver
 
 **What Changed:**
 - `@cache(ttl=60)` stores responses in client-side cache
-- `key_params=["query"]` uses query value as cache key
-- Cache key: `"search:laptop"`, `"search:mouse"`, etc.
+- `key_params=["value"]` keys the cache on the typed text (the `value` param `dj-input` sends)
+- Cache key: `search:value="laptop"`, `search:value="mouse"`, etc.
 
 **Cache Behavior:**
 
 ```
 User searches "laptop"
-  → Client checks cache for "search:laptop" → Miss
+  → Client checks cache for search:value="laptop" → Miss
   → Client sends server request
   → Server responds with results
   → Client stores in cache (TTL: 60s)
   → Client displays results
 
 User searches "mouse"
-  → Client checks cache for "search:mouse" → Miss
+  → Client checks cache for search:value="mouse" → Miss
   → Client sends server request
   → (cached separately)
 
 User searches "laptop" again
-  → Client checks cache for "search:laptop" → Hit!
-  → Client displays cached results (no server request)
+  → Client checks cache for search:value="laptop" → Hit!
+  → Client replays the cached patches (no server request)
 ```
+
+**On a cache hit the handler does NOT run.** Any `self.*` it sets (here `self.query` and `self.results`) keeps its previous value on the server. Use `@cache` only on handlers whose result depends solely on their parameters, and not on handlers whose state other handlers read. Part 6 runs into exactly this and drops `@cache` from `search`.
 
 **Cache Invalidation:**
 - Automatic after TTL (60 seconds)
-- Manual: `window.responseCache.clear()`
+- Cleared on every page mount or navigation (the cache lives in page memory only)
+- Manual: `window.djust.clearCache()` or `window.djust.invalidateCache('search')`
 
 ## Part 5: Add Loading States
 
 **Problem**: User doesn't know when search is running.
 
-**Solution**: Use `@loading` attribute to show loading indicator.
+**Solution**: Use the `dj-loading.*` attributes to show a loading indicator.
 
 ### Step 5.1: Update Template
 
@@ -454,8 +390,8 @@ User searches "laptop" again
 <html>
 <head>
     <title>Product Search</title>
-    {% load djust %}
-    {% djust_head %}
+    {% load live_tags %}
+    {% djust_client_config %}
     <style>
         .loading { opacity: 0.6; pointer-events: none; }
         .search-box { position: relative; }
@@ -469,11 +405,11 @@ User searches "laptop" again
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" dj-root>
         <h1>Product Search</h1>
 
-        <!-- Add @loading attribute -->
-        <div class="search-box" @loading>
+        <!-- Add the .loading class while a "search" event is in flight -->
+        <div class="search-box" dj-loading.class="loading" dj-loading.for="search">
             <input
                 type="text"
                 dj-input="search"
@@ -501,7 +437,6 @@ User searches "laptop" again
         </div>
     </div>
 
-    {% djust_body %}
 </body>
 </html>
 ```
@@ -519,7 +454,8 @@ python manage.py runserver
 - ✅ Search completes → `.loading` class removed
 
 **What Changed:**
-- `@loading` attribute automatically adds/removes `.loading` class
+- `dj-loading.class="loading"` adds the `loading` class while the event named by `dj-loading.for="search"` is in flight, and removes it when the response arrives
+- The input that fired the event also gets a `djust-loading` class automatically, which you can style directly
 - CSS handles visual feedback
 - No JavaScript required!
 
@@ -527,7 +463,7 @@ python manage.py runserver
 
 ```
 User types "laptop"
-  → Client applies optimistic update (input changes)
+  → The input shows the text natively
   → 500ms debounce timer starts
   → Timer expires
   → Client adds .loading class to <div>
@@ -538,18 +474,18 @@ User types "laptop"
   → Client applies patches
 ```
 
-## Part 6: Add Filters with StateBus
+## Part 6: Add Filters
 
 **Problem**: Category filter and search box need to work together.
 
-**Solution**: Use `@client_state` to share state between handlers.
+**Solution**: Keep both filters as view state and have each handler re-run one shared search. One server render then updates the results for both.
 
 ### Step 6.1: Add Category Filter
 
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, optimistic, cache, client_state
+from djust.decorators import event_handler, debounce
 from .models import Product
 
 class ProductSearchView(LiveView):
@@ -567,31 +503,28 @@ class ProductSearchView(LiveView):
         self.category = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
-    @debounce(wait=0.5)
-    @optimistic
-    @cache(ttl=60, key_params=["query", "category"])  # ← Cache by both params
-    @client_state(keys=["query", "category"])  # ← Share state via StateBus
-    def search(self, query: str = "", category: str = "", **kwargs):
-        """Handle search input."""
-        self.query = query
-        self.category = category
-
-        # Build filter
+    def _run_search(self):
+        """Filter by the current query AND category. Not an event handler."""
         filters = {'in_stock': True}
-        if query:
-            filters['name__icontains'] = query
-        if category:
-            filters['category'] = category
+        if self.query:
+            filters['name__icontains'] = self.query
+        if self.category:
+            filters['category'] = self.category
 
         self.results = Product.objects.filter(**filters)[:20]
 
-    @client_state(keys=["category"])  # ← Publish category changes
-    def update_category(self, category: str = "", **kwargs):
-        """Handle category selection."""
-        self.category = category
+    @event_handler
+    @debounce(wait=0.5)  # No @cache: update_category reads self.query (see Part 4)
+    def search(self, value: str = "", **kwargs):
+        """Handle search input."""
+        self.query = value
+        self._run_search()
 
-        # Trigger search with current query
-        self.search(query=self.query, category=category)
+    @event_handler
+    def update_category(self, value: str = "", **kwargs):
+        """Handle category selection. dj-change sends the choice as `value`."""
+        self.category = value
+        self._run_search()
 
     def get_context_data(self, **kwargs):
         return {
@@ -611,8 +544,8 @@ class ProductSearchView(LiveView):
 <html>
 <head>
     <title>Product Search</title>
-    {% load djust %}
-    {% djust_head %}
+    {% load live_tags %}
+    {% djust_client_config %}
     <style>
         .loading { opacity: 0.6; pointer-events: none; }
         .search-box { position: relative; }
@@ -627,10 +560,10 @@ class ProductSearchView(LiveView):
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" dj-root>
         <h1>Product Search</h1>
 
-        <div class="search-box" @loading>
+        <div class="search-box" dj-loading.class="loading" dj-loading.for="search">
             <input
                 type="text"
                 dj-input="search"
@@ -671,12 +604,11 @@ class ProductSearchView(LiveView):
         </div>
     </div>
 
-    {% djust_body %}
 </body>
 </html>
 ```
 
-### Step 6.3: Test StateBus
+### Step 6.3: Test the Filters
 
 ```bash
 python manage.py runserver
@@ -686,27 +618,25 @@ python manage.py runserver
 - ✅ Change category → Search updates automatically
 - ✅ Type in search box → Results filtered by category
 - ✅ Both filters work together
-- ✅ Cached by both query + category
 
 **What Changed:**
-- `@client_state(keys=["query", "category"])` publishes state to StateBus
-- When category changes, search handler receives update
-- Cache key includes both parameters
+- `self.query` and `self.category` are ordinary view state, kept on the server between events
+- Each handler updates its own filter, then calls `self._run_search()`, so one server render updates the results for both
+- `search` no longer has `@cache`. A cache hit would skip the handler, leaving `self.query` stale for the next `update_category`, and a key on the text alone would replay results for the wrong category
 
-**StateBus Flow:**
+**Flow:**
 
 ```
 User selects "Electronics" category
-  → update_category("electronics") called
-  → Publishes category="electronics" to StateBus
-  → StateBus notifies search handler
-  → search(query=current, category="electronics") called
-  → Results filtered
+  → update_category(value="electronics") called
+  → self.category = "electronics"
+  → _run_search() filters by self.query + self.category
+  → Server re-renders; results patched
 
 User types "laptop"
-  → search(query="laptop", category="electronics") called
-  → Results filtered by both
-  → Cached as "search:laptop:electronics"
+  → search(value="laptop") called (after the 500ms debounce)
+  → self.query = "laptop"
+  → _run_search() filters by both
 ```
 
 ## Complete Example
@@ -716,17 +646,15 @@ Here's the final, fully-featured Product Search view:
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import debounce, optimistic, cache, client_state
+from djust.decorators import event_handler, debounce
 from .models import Product
 
 class ProductSearchView(LiveView):
     """
     Product search with:
     - Debounced search (500ms delay)
-    - Optimistic updates (instant feedback)
-    - Response caching (60 second TTL)
     - Loading states (visual feedback)
-    - Coordinated filters (StateBus)
+    - Coordinated filters (shared view state)
     """
     template_name = 'products/search.html'
 
@@ -737,6 +665,7 @@ class ProductSearchView(LiveView):
         ('clothing', 'Clothing'),
         ('home', 'Home & Garden'),
     ]
+    SORTS = ('name', 'price', '-price')  # Allowlist: never pass raw input to order_by()
 
     def mount(self, request, **kwargs):
         """Initialize state."""
@@ -745,52 +674,42 @@ class ProductSearchView(LiveView):
         self.sort = "name"
         self.results = Product.objects.filter(in_stock=True).order_by(self.sort)[:20]
 
-    @debounce(wait=0.5)  # Wait 500ms after last keystroke
-    @optimistic           # Update UI instantly
-    @cache(ttl=60, key_params=["query", "category", "sort"])  # Cache responses
-    @client_state(keys=["query", "category", "sort"])  # Share state
-    def search(self, query: str = "", category: str = "", sort: str = "name", **kwargs):
-        """
-        Handle search with filters.
-
-        Decorators apply automatically:
-        - User types → optimistic update (instant)
-        - 500ms silence → debounced send
-        - Cache check → return cached if hit
-        - Server processes → update results
-        """
-        self.query = query
-        self.category = category
-        self.sort = sort
-
-        # Build filter
+    def _run_search(self):
+        """Apply the current query, category and sort. Not an event handler."""
         filters = {'in_stock': True}
-        if query:
-            filters['name__icontains'] = query
-        if category:
-            filters['category'] = category
+        if self.query:
+            filters['name__icontains'] = self.query
+        if self.category:
+            filters['category'] = self.category
 
-        # Apply sort
-        self.results = Product.objects.filter(**filters).order_by(sort)[:20]
+        self.results = Product.objects.filter(**filters).order_by(self.sort)[:20]
 
-    @client_state(keys=["category"])
-    def update_category(self, category: str = "", **kwargs):
+    @event_handler
+    @debounce(wait=0.5)  # Wait 500ms after last keystroke
+    def search(self, value: str = "", **kwargs):
+        """Handle search input. dj-input sends the text as `value`."""
+        self.query = value
+        self._run_search()
+
+    @event_handler
+    def update_category(self, value: str = "", **kwargs):
         """Handle category selection."""
-        self.category = category
-        self.search(query=self.query, category=category, sort=self.sort)
+        self.category = value
+        self._run_search()
 
-    @client_state(keys=["sort"])
-    def update_sort(self, sort: str = "name", **kwargs):
+    @event_handler
+    def update_sort(self, value: str = "name", **kwargs):
         """Handle sort selection."""
-        self.sort = sort
-        self.search(query=self.query, category=self.category, sort=sort)
+        self.sort = value if value in self.SORTS else "name"
+        self._run_search()
 
+    @event_handler
     def clear_filters(self, **kwargs):
         """Clear all filters."""
         self.query = ""
         self.category = ""
         self.sort = "name"
-        self.results = Product.objects.filter(in_stock=True).order_by('name')[:20]
+        self._run_search()
 
     def get_context_data(self, **kwargs):
         """Return context for template."""
@@ -812,8 +731,8 @@ class ProductSearchView(LiveView):
 <html>
 <head>
     <title>Product Search</title>
-    {% load djust %}
-    {% djust_head %}
+    {% load live_tags %}
+    {% djust_client_config %}
     <style>
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .search-box { position: relative; margin: 20px 0; }
@@ -846,10 +765,10 @@ class ProductSearchView(LiveView):
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" dj-root>
         <h1>Product Search</h1>
 
-        <div class="search-box" @loading>
+        <div class="search-box" dj-loading.class="loading" dj-loading.for="search">
             <input
                 type="text"
                 dj-input="search"
@@ -903,7 +822,6 @@ class ProductSearchView(LiveView):
         </div>
     </div>
 
-    {% djust_body %}
 </body>
 </html>
 ```
@@ -919,9 +837,7 @@ class ProductSearchView(LiveView):
 **Performance:**
 
 - **Server requests**: 1 per query (after 500ms silence)
-- **Cache hit rate**: ~40% (typical for search)
-- **Perceived latency**: 0ms (optimistic updates)
-- **Bundle size**: 7.1 KB (gzipped client.js)
+- **Bundle size**: ~60 KB gzipped (`client.min.js`, served automatically)
 
 ## Next Steps
 
@@ -930,10 +846,9 @@ class ProductSearchView(LiveView):
 You've built a fully-featured Product Search with:
 
 - ✅ Debounced search (500ms delay)
-- ✅ Optimistic updates (instant feedback)
-- ✅ Response caching (60 second TTL)
+- ✅ Response caching (60 second TTL, Part 4) and when not to use it (Part 6)
 - ✅ Loading indicators (visual feedback)
-- ✅ Coordinated filters (StateBus)
+- ✅ Coordinated filters (shared view state)
 - ✅ **Zero custom JavaScript**
 
 ### Learn More
@@ -961,37 +876,42 @@ You've built a fully-featured Product Search with:
        form_class = ProductForm
    ```
 
-2. **Add Real-Time Updates**
+2. **Add a Favorite Toggle**
    ```python
-   @optimistic
+   @event_handler
    def toggle_favorite(self, product_id: int = 0, **kwargs):
-       # Instant UI update, server validates
+       # Send the id from the template: dj-click="toggle_favorite" dj-value-product_id="{{ product.id }}"
+       # (@optimistic would be inert here, #2699)
        pass
    ```
 
 3. **Add Autocomplete**
    ```python
+   @event_handler
    @debounce(wait=0.3)
-   @cache(ttl=300)
-   def autocomplete(self, query: str = "", **kwargs):
-       self.suggestions = Product.objects.filter(
-           name__icontains=query
-       ).values_list('name', flat=True)[:5]
+   @cache(ttl=300, key_params=["value"])
+   def autocomplete(self, value: str = "", **kwargs):
+       self.suggestions = list(Product.objects.filter(
+           name__icontains=value
+       ).values_list('name', flat=True)[:5])
    ```
 
 4. **Add Infinite Scroll**
    ```python
+   from djust.decorators import event_handler, throttle
+
+   @event_handler
    @throttle(interval=1.0)
-   def load_more(self, page: int = 1, **kwargs):
-       self.page = page
+   def load_more(self, **kwargs):
+       self.page += 1  # Track the page on the server; initialise self.page in mount()
        # Load next page
    ```
+   Trigger it from the template with `dj-viewport-top`/`dj-viewport-bottom` (see the infinite-scroll docs).
 
 ### Questions?
 
-- **Discord**: [Join our community](https://discord.gg/djust)
-- **GitHub**: [Open an issue](https://github.com/yourusername/djust/issues)
-- **Docs**: [Read the full docs](https://djust.readthedocs.io)
+- **GitHub**: [Open an issue](https://github.com/djust-org/djust/issues)
+- **Docs**: [Read the full docs](https://docs.djust.org)
 
 ---
 

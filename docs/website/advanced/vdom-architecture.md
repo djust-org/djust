@@ -28,11 +28,12 @@ Python LiveView           Rust VDOM (PyO3)           Browser
 
 ## Rust Crate Structure
 
-The VDOM lives in `crates/djust_vdom/` and is organized into three modules:
+The VDOM lives in `crates/djust_vdom/` and is organized into these modules:
 
 - **`parser.rs`** -- Parses HTML into a `VNode` tree using `html5ever`. Filters out HTML comment nodes and whitespace-only text nodes so the server VDOM matches the browser DOM.
 - **`diff.rs`** -- Compares two `VNode` trees and emits a minimal list of `Patch` operations. Supports both indexed (positional) and keyed child diffing.
 - **`patch.rs`** -- Applies patches to a `VNode` tree (used server-side in tests). The browser applies patches via JavaScript.
+- **`lis.rs`** -- Longest-increasing-subsequence computation used by keyed diffing to emit the fewest `MoveChild` patches.
 
 ## The VNode Tree
 
@@ -40,16 +41,17 @@ Every element, text node, and attribute is represented as a `VNode`:
 
 ```rust
 pub struct VNode {
-    pub tag: Option<String>,       // "div", "span", etc. (None for text)
-    pub text: Option<String>,      // Text content (None for elements)
-    pub attrs: HashMap<String, String>,
+    pub tag: String,               // "div", "span", etc.
+    pub attrs: HashMap<String, String>,  // serialized in sorted key order
     pub children: Vec<VNode>,
+    pub text: Option<String>,      // Text content (None for elements)
     pub key: Option<String>,       // For keyed list diffing
     pub djust_id: Option<String>,  // Compact base62 ID for O(1) lookup
+    pub cached_html: Option<String>, // Cached HTML for dj-update="ignore" subtrees (not serialized)
 }
 ```
 
-Each element node receives a compact `djust_id` (base62-encoded, e.g. `"1a"`, `"2B"`) during parsing. These IDs are stamped as `data-dj-id` attributes in the HTML sent to the browser, enabling O(1) element lookup during patch application.
+Each element node receives a compact `djust_id` (base62-encoded, e.g. `"1a"`, `"2B"`) during parsing. These IDs are stamped as `dj-id` attributes in the HTML sent to the browser, enabling O(1) element lookup during patch application.
 
 ## Parsing: HTML to VNode
 
@@ -84,6 +86,11 @@ let patches: Vec<Patch> = diff(&old_vdom, &new_vdom);
 | `InsertChild` | Insert a new child at an index         |
 | `RemoveChild` | Remove a child at an index             |
 | `MoveChild`   | Move a child from one index to another |
+| `RemoveSubtree` | Remove a keyed `{% if %}` subtree (the range between its boundary markers) |
+| `InsertSubtree` | Insert a keyed `{% if %}` subtree, with its boundary markers, at a parent and index |
+| `MoveSubtree` | Move a keyed `{% if %}` subtree to a new position |
+
+The enum also has `VirtualUpdate`, `VirtualInsert`, `VirtualMove` and `VirtualRemove`, which address keyed items in a `dj-virtual` container by key rather than by index.
 
 Every patch carries both a `path` (index-based array) and a `d` (djust_id) field. The client tries ID-based resolution first for O(1) lookup, falling back to path traversal.
 
@@ -110,7 +117,7 @@ Patches are serialized as JSON and sent over WebSocket. The client-side JavaScri
 
 ```javascript
 // ID-based resolution (primary, O(1)):
-const node = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+const node = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
 
 // Path-based traversal (fallback):
 // Walks childNodes, filtering out comment and whitespace-only text nodes
@@ -121,9 +128,11 @@ const node = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
 
 Child mutations are grouped by parent and applied in a specific order to keep indices stable:
 
-1. **Removes** -- descending index order (highest index first)
-2. **Inserts** -- ascending index order (lowest index first)
+1. **Subtree removes** -- `RemoveSubtree` patches, located by boundary-marker id
+2. **Removes** -- descending index order (highest index first)
 3. **Moves** -- resolved by `djust_id` of the child being moved
+4. **Inserts** -- ascending index order (lowest index first)
+5. **Subtree moves and inserts** -- `MoveSubtree` and `InsertSubtree`, interleaved by ascending target index
 
 Attribute and text patches are applied last, using ID-based lookup when available.
 
@@ -223,40 +232,23 @@ For subtrees managed by external JavaScript (chart libraries, rich text editors,
 
 ## Known Pitfalls
 
-### One-Sided `{% if %}` in Attribute Values
+### `{% if %}` in Attribute Values
 
-djust's template preprocessor counts `{% if %}` / `{% endif %}` pairs to track div depth during rendering. When `{% if %}` appears inside an HTML **attribute value** without a matching `{% else %}`, the depth counter can fall out of sync, causing VDOM patching misalignment after the first render where the branch evaluates to false.
+A one-sided `{% if %}` inside an HTML attribute value is supported (#380). When the condition is false, the renderer emits an empty string there rather than a placeholder comment, so this renders correctly:
 
 ```html
-{# WRONG: one-sided if inside class attribute #}
 <div class="card {% if active %}active{% endif %}">
     ...
 </div>
 ```
 
-**Fix:** Use a full `{% if/else %}` pair inside the attribute, or move the conditional outside the tag:
-
-```html
-{# CORRECT: full if/else inside attribute #}
-<div class="card {% if active %}active{% else %}{% endif %}">
-
-{# ALSO CORRECT: conditional wraps the entire tag #}
-{% if active %}
-<div class="card active">
-{% else %}
-<div class="card">
-{% endif %}
-    ...
-</div>
-```
-
-This limitation applies only to attribute values. `{% if %}` blocks in element text content work correctly.
+Avoid the opposite pattern: opening the same element in two `{% if %}`/`{% else %}` branches with a single shared closing tag. Keep conditionals inside the attribute value instead.
 
 ### Form Field Value Preservation
 
 djust's VDOM preserves the live value of `<input>`, `<textarea>`, and `<select>` elements during patches. If the user has typed into a field and the server re-renders that field with the same `value=` attribute, the user's draft is kept.
 
-However, if the server sends a **different** `value=`, the server value wins. This is intentional — it allows server-side validation to correct invalid input.
+If the server sends a **different** `value=`, it replaces the field's live value only when the field does not have focus. The focused field keeps what the user is typing, even when the server value differs.
 
 To prevent djust from patching a form field entirely (e.g., a rich text editor), wrap it in `dj-update="ignore"`:
 

@@ -147,8 +147,13 @@ When a user runs this action:
 3. Returns an `HttpResponseRedirect` to
    `/admin/djust-progress/<job_id>/`, which is served by
    `BulkActionProgressWidget`.
-4. The progress page polls `progress.current / total / message / log`
-   every 500 ms and re-renders the progress bar, status, and log.
+4. The progress page starts a background loop that copies
+   `progress.current / total / message / log` from the job every 500 ms.
+   **Known limitation:** the page does not re-render on each tick. It
+   re-renders when the loop returns, which is about 30 seconds after the
+   job completes (the loop waits that long before clearing the job), or
+   when the user clicks **Cancel**. Live per-tick updates are not
+   implemented yet.
 5. If the user clicks **Cancel**, both `done=True` and
    `cancelled=True` flip on the job, and the polling loop exits on
    the next tick.
@@ -186,7 +191,7 @@ When a user runs this action:
 
 `@admin_action_with_progress(permissions=[...])` stamps an
 `allowed_permissions` attribute on the wrapped action function.
-**`DjustModelAdmin.run_action` enforces this server-side** — before
+**The admin change-list view's `run_action` handler enforces this server-side** — before
 dispatching the action it calls `request.user.has_perms(allowed)` and
 raises `PermissionDenied` if the user lacks any declared perm. This
 closes the gap where Django's default `has_*_permission` methods
@@ -208,14 +213,14 @@ run the action; the progress page is never created.
 
 ### Known limitations
 
-> **Single-worker only (v0.7.0).** The process-local `_JOBS` dict that
+> **Single-worker only.** The process-local `_JOBS` dict that
 > backs `BulkActionProgressWidget` is not shared across workers. If
 > your deployment has `gunicorn --workers 4` (or uvicorn with
 > `--workers > 1`), the progress-page redirect may land on a different
 > worker than the one running the background thread — producing a "Job
 > not found or expired." error.
 >
-> **Workarounds for v0.7.0:**
+> **Workarounds:**
 >
 > - Run a single ASGI worker (`--workers 1`) on the service handling
 >   admin traffic.
@@ -224,12 +229,10 @@ run the action; the progress page is never created.
 > - Don't use `@admin_action_with_progress` for workflows that need to
 >   survive worker crashes.
 >
-> **v0.7.1 plans** to back `_JOBS` with the project's channel layer
-> (same broker as `NotificationMixin.listen()`), making multi-worker
-> deploys work out of the box without changes to your action code.
-> A `djust.A073` system check fires at startup any time an admin site
-> has a `@admin_action_with_progress`-decorated action, so this
-> limitation is impossible to miss during `manage.py check`.
+> Multi-worker job routing is not implemented; `_JOBS` is process-local.
+> A `djust.A073` informational check fires at `manage.py check` when an
+> admin site has an `@admin_action_with_progress` action **and**
+> `DJUST_ASGI_WORKERS > 1`. With the default of 1 it stays silent.
 
 Other edge cases worth knowing:
 
@@ -300,6 +303,9 @@ or run a single ASGI worker. v0.7.1 will back this with a channel
 layer.
 ```
 
+The message's "v0.7.1 will back this" is out of date: multi-worker job
+routing is still not implemented.
+
 An informational notice — NOT an error. A073 is gated on the
 `DJUST_ASGI_WORKERS` setting: it only fires when you set
 `DJUST_ASGI_WORKERS > 1` in your Django settings (so single-worker
@@ -311,9 +317,10 @@ you're running a single worker.
 DJUST_ASGI_WORKERS = 4  # This tells djust.A073 you're multi-worker.
 ```
 
-See the "Known limitations" section above for the options. You can
-also silence this check with `DJUST_CONFIG = {"suppress_checks":
-["A073"]}` once you've picked a mitigation.
+See the "Known limitations" section above for the options. Once you've
+picked a mitigation, silence the check with Django's
+`SILENCED_SYSTEM_CHECKS = ["djust.A073"]`. (djust's own
+`DJUST_CONFIG["suppress_checks"]` list does not apply to A073.)
 
 ### Defense-in-depth — `DJUST_LIVE_RENDER_ALLOWED_MODULES`
 
@@ -336,7 +343,7 @@ which modules the admin can reach through the live-render machinery.
 | Add widgets to a list page | custom `change_list_template` + JS | `change_list_widgets = [LiveView, …]` |
 | Bulk action with progress | none built-in | `@admin_action_with_progress` + live page |
 | Permission-filter widgets | manual template conditional | `permission_required` on widget class |
-| Multi-worker job routing | not applicable (no background jobs) | v0.7.0: single-worker; v0.7.1: channel layer |
+| Multi-worker job routing | not applicable (no background jobs) | single-worker only (process-local `_JOBS`) |
 
 v0.7.0 is intentionally a **small** addition to an already-shipped
 admin.  If `DjustAdminSite` doesn't fit your project, you can still

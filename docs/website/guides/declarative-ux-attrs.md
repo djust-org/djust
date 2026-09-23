@@ -92,7 +92,9 @@ That's it. Appending a new `<div class="msg">` scrolls the container to the bott
 
 ## `dj-track-static`
 
-Production-critical for zero-downtime deploys. Without it, clients on long-lived WebSocket connections silently run stale JavaScript after you ship new code.
+Intended to warn clients on long-lived WebSocket connections that they are running stale JavaScript after you ship new code.
+
+> **Known issue: #2966.** At 1.2.0rc10, `dj-track-static` cannot detect a server deploy. On reconnect it re-reads the `src`/`href` of the same elements it snapshotted at page load, and nothing ever sends the client the new asset URLs (there is no server-side comparison either). After a deploy the `<script>`/`<link>` tags in `<head>` keep their old URLs, so neither `dj:stale-assets` nor the `"reload"` behaviour fires. The check only fires if a VDOM patch rewrites a tracked element's `src`/`href` in place inside the LiveView root. Don't rely on it for deploy detection until the fix ships.
 
 Phoenix parity: this is `phx-track-static`, renamed for djust.
 
@@ -116,7 +118,7 @@ The `{% djust_track_static %}` tag is purely a discoverability convenience — t
 ### Behavior
 
 1. On page load, djust snapshots the `src` / `href` of every `[dj-track-static]` element.
-2. On every WebSocket reconnect, it re-queries and compares against the snapshot.
+2. On every WebSocket reconnect (the socket's `onopen`, before the reconnect mount returns any HTML), it re-reads the current `src` / `href` of those same snapshotted elements and compares them against the snapshot. It does not re-query the document.
 3. If any URL changed, djust dispatches a `dj:stale-assets` CustomEvent on `document`:
 
 ```js
@@ -151,33 +153,33 @@ Declarative CSS enter/leave transitions. Phoenix `JS.transition` parity. Runs a 
 ### Quick start
 
 ```html
-<!-- Fades in from 0 to 100 opacity over 300 ms (Tailwind) -->
-<div dj-transition="opacity-0 transition-opacity-300 opacity-100">
+<!-- Fades in from 0 to 100 opacity over 300 ms.
+     .fade-active { transition: opacity 300ms } lives in your CSS. -->
+<div dj-transition="opacity-0 fade-active opacity-100">
     Hello
 </div>
 ```
 
-The attribute value is **three space-separated class tokens**:
+The attribute value is normally **three space-separated class tokens**, one class per phase. A fourth or later token is silently discarded, so a phase cannot carry two classes (e.g. `transition-opacity duration-300`); put the transition on a single custom class instead. A two-token value is rejected. A single-class form (`dj-transition="fade-in"`) is also accepted: the class is applied on the next frame and the module waits for `transitionend`.
 
 | Phase | Class | Timing |
 |---|---|---|
 | 1 (start) | first token | applied synchronously when the attribute appears |
-| 2 (active) | second token | applied on the next animation frame (transition begins) |
-| 3 (end) | third token | applied on the next animation frame (final state) |
+| 2 + 3 (active, end) | second and third tokens | on the next animation frame the start class is removed and the active and end classes are added together |
 
-On `transitionend` the phase-2 class is removed; phase-3 stays as the final-state class. A 600 ms fallback timeout cleans up phase-2 if `transitionend` never fires (e.g. `display: none` during the animation).
+On `transitionend` the active class is removed; the end class stays as the final-state class. A fallback timeout cleans up the active class if `transitionend` never fires (e.g. `display: none` during the animation). It is the element's computed transition duration plus delay, plus 50 ms, or 600 ms if no transition is defined.
 
 ### Re-triggering from JS
 
 Any change to the attribute value re-runs the sequence:
 
 ```js
-el.setAttribute('dj-transition', 'scale-0 transition-transform-200 scale-100');
+el.setAttribute('dj-transition', 'scale-0 grow-active scale-100');
 ```
 
 ### Interop with existing CSS frameworks
 
-Works with any class-based CSS framework — Tailwind (`transition-*` / `duration-*`), Bootstrap 5 (`fade` / `show`), or hand-rolled classes. The attribute only orchestrates the class application; it doesn't ship any CSS itself.
+Works with any class-based CSS, as long as each phase is a single class: Bootstrap 5 (`fade` / `show`), hand-rolled classes, or a Tailwind setup where the active phase is one custom class (Tailwind's own `transition-opacity duration-300` pair is two classes and doesn't fit one token). The attribute only orchestrates the class application; it doesn't ship any CSS itself.
 
 ### Scope
 
@@ -329,7 +331,7 @@ Opt in by adding `dj-flip` to the parent container:
 ```html
 <ul dj-flip>
     {% for item in items %}
-        <li id="item-{{ item.pk }}">{{ item.name }}</li>
+        <li dj-key="item-{{ item.pk }}">{{ item.name }}</li>
     {% endfor %}
 </ul>
 ```
@@ -343,7 +345,7 @@ The technique:
 
 ### Prerequisites
 
-- **Children need stable IDs.** The Rust VDOM diff only emits `MoveChild` patches (which preserve DOM identity) when it can match old and new children by key. Give each `<li>` / `<tr>` / card a stable `id="…"` attribute — typically `id="item-{{ item.pk }}"`. Without a stable key, reorders fall back to delete+insert and FLIP correctly no-ops (there's no "old node" to animate from).
+- **Children need stable keys.** The Rust VDOM diff only emits `MoveChild` patches (which preserve DOM identity) when it can match old and new children by key, and it takes the key only from `dj-key` or `data-key`, not from `id`. Give each `<li>` / `<tr>` / card a stable `dj-key="…"` (or `data-key`) — typically `dj-key="item-{{ item.pk }}"`. Without a key, a reorder is diffed as in-place attribute and text changes, the DOM nodes don't move, and FLIP has nothing to animate.
 
 ### Tunables
 
@@ -367,7 +369,7 @@ Enter, leave, and reorder are three separate animation moments. Use `dj-transiti
 ```html
 <ul dj-transition-group="fade-in | fade-out" dj-flip>
     {% for task in tasks %}
-        <li id="task-{{ task.pk }}">{{ task.title }}</li>
+        <li dj-key="task-{{ task.pk }}">{{ task.title }}</li>
     {% endfor %}
 </ul>
 ```
@@ -420,17 +422,21 @@ Override the default look by writing your own `.djust-skeleton` rules in your si
 
 ### Integrating with `start_async` / `@background`
 
-The skeleton integrates with the existing [async work patterns](loading-states.md) — render it inside a branch conditional on `self.async_pending` or a named loading flag:
+The skeleton integrates with the existing [async work patterns](loading-states.md) — render it inside a branch conditional on a named loading flag (e.g. `self.loading`). Set the flag in the synchronous handler, so the first render shows the skeleton, and start the slow work separately:
 
 ```python
 class ReportView(LiveView):
     @event_handler
-    @background
     def generate_report(self, **kwargs):
         self.loading = True
+        self.start_async(self._build)
+
+    def _build(self):
         self.report = fetch_slow_report()
         self.loading = False
 ```
+
+Don't set the flag inside a `@background` handler: `@background` runs the whole method body in the async callback, so `loading = True` and `loading = False` happen before any render and the skeleton never appears.
 
 ```django
 {% if loading %}
@@ -497,7 +503,7 @@ Result: the toast fades + slides into view without any JS or declarative attribu
 
 | | `@starting-style` | `dj-transition` |
 |---|---|---|
-| Browser support | Chrome 117+, Safari 17.5+, Firefox 129+ | Any browser with `transition` support (IE10+) |
+| Browser support | Chrome 117+, Safari 17.5+, Firefox 129+ | Any evergreen browser |
 | Where you write it | In your CSS stylesheet | On the HTML element as an attribute |
 | Runtime cost | Zero JS | Small JS module (`41-dj-transition.js`) |
 | Per-element customization | Requires a unique class or selector | Inline attribute token list |
@@ -564,7 +570,7 @@ flips the modal's open state declaratively without writing a hook.
 | Value | Effect |
 |---|---|
 | `dj-dialog="open"`  | calls `dialog.showModal()` |
-| `dj-dialog="close"` | calls `dialog.close()` |
+| `dj-dialog="close"` (or `"closed"`) | calls `dialog.close()` |
 
 ### Behavior
 
@@ -575,22 +581,31 @@ already-open dialog is a no-op (idempotent). Non-`<dialog>` elements
 carrying the attribute are silently ignored — the attribute does not
 upgrade arbitrary elements into modals.
 
-### Pairing with `dj-ignore-attrs`
+### Syncing client-side closes back to the server — `dj-dialog-close-event`
 
-When the user dismisses a `<dialog>` by pressing Escape, the browser
-flips the `open` attribute on its own. If the server hasn't yet
-re-rendered with `modal_open=False`, the next VDOM patch could
-accidentally re-open the dialog. Add `dj-ignore-attrs="open"` to mark
-the `open` attribute as client-owned so VDOM `SetAttr` skips it:
+The dialog only reacts when the `dj-dialog` attribute itself changes.
+When the user dismisses it client-side (Escape, a `method="dialog"`
+button, or `dialog.close()` from JS), the server still has
+`modal_open=True`. The next `open_modal` click sets it to `True` again,
+which produces no attribute change, so the dialog **stays closed**.
+
+Add `dj-dialog-close-event="<handler>"` to send a server event on the
+native `close` event, and reset the flag there:
 
 ```html
 <dialog dj-dialog="{{ modal_open|yesno:'open,close' }}"
-        dj-ignore-attrs="open">…</dialog>
+        dj-dialog-close-event="close_modal">…</dialog>
+```
+
+```python
+@event_handler
+def close_modal(self, **kwargs):
+    self.modal_open = False
 ```
 
 ### Scope
 
-`python/djust/static/djust/src/35-dj-dialog.js` (~80 LOC). 8 JSDOM
+`python/djust/static/djust/src/35-dj-dialog.js` (~130 LOC). 13 JSDOM
 tests in `tests/js/dj_dialog.test.js`.
 
 ---
@@ -624,13 +639,16 @@ the browser's native form-submit (full page navigation, no AJAX):
 
 ```python
 class CheckoutView(LiveView):
-    def handle_event_pay(self):
+    @event_handler
+    def pay(self, **kwargs):
         result = stripe.PaymentIntent.create(...)
         if result.ok:
             self.trigger_submit('#stripe-form')   # client posts the form natively
 ```
 
 ```django
+<button dj-click="pay">Pay</button>
+
 <form id="stripe-form" action="https://checkout.stripe.com/..." method="POST"
       dj-trigger-action>
     <input type="hidden" name="token" value="{{ stripe_token }}">
@@ -656,9 +674,11 @@ family still works alongside it.
 
 ### Scope
 
-`python/djust/static/djust/src/34-form-polish.js` (~90 LOC) +
+`python/djust/static/djust/src/34-form-polish.js` (~120 LOC) +
 `self.trigger_submit()` in `python/djust/mixins/push_events.py`.
-11 JSDOM tests in `tests/js/form_polish.test.js`, 4 Python tests
+The `dj-loading="event"` shorthand lives in
+`python/djust/static/djust/src/10-loading-states.js`.
+14 JSDOM tests in `tests/js/form_polish.test.js`, plus Python tests
 covering the push-event shape.
 
 ---
@@ -692,7 +712,7 @@ class ChatView(LiveView):
 ```html
 <!-- …but the focused textarea keeps the sent text without this attribute -->
 <textarea name="composer" dj-force-value
-          dj-keydown="send.enter">{{ composer }}</textarea>
+          dj-keydown.enter="send">{{ composer }}</textarea>
 ```
 
 `dj-force-value` opts that field **in** to server-authoritative value syncing:

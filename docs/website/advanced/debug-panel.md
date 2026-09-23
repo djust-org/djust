@@ -40,13 +40,13 @@ A full-width bottom dock can cover bottom-anchored app UI -- a chat input, stick
 
 The floating toggle button automatically moves out from under the open panel and returns to the bottom-right corner when the panel closes.
 
-You can also set the initial dock programmatically:
+You can also change the dock programmatically. The panel is created automatically as `window.djustDebugPanel`, so use its `setDock()` method:
 
 ```javascript
-new DjustDebugPanel({ position: 'right' });  // 'bottom' | 'left' | 'right'
-// or at runtime:
-window.djustDebugPanel.setDock('right');
+window.djustDebugPanel.setDock('right');  // 'bottom' | 'left' | 'right'
 ```
+
+Don't construct a second `new DjustDebugPanel(...)` on a page where the panel was already auto-initialized: that adds a duplicate toggle button, panel and keyboard handler. A per-view dock saved in `localStorage` also overrides any initial dock.
 
 ## Event Handlers Tab
 
@@ -91,7 +91,7 @@ search | 45.2ms | 4:32:15 PM   [Click to expand]
 
 ### Key Features
 
-- **Circular buffer**: Retains the last 50 events (configurable)
+- **Circular buffer**: Retains the last 100 events (configurable via `window.djustDebugPanel.config.maxHistory`)
 - **Filter by name**: Substring search to find specific events
 - **Filter by status**: Show all, errors only, or successes only
 - **Copy JSON**: Copy event data for use in unit tests
@@ -188,16 +188,21 @@ Event Handlers shows:
 
 ```python
 # Before: 52 patches, 8.2ms
-def filter_items(self, value: str = ""):
+@event_handler
+def filter_items(self, value: str = "", **kwargs):
     self.filter_value = value
     self.items = self._get_filtered()
     self.count = len(self.items)
     self.message = f"{self.count} items"
 
 # After: 3 patches, 1.1ms
-def filter_items(self, value: str = ""):
+@event_handler
+def filter_items(self, value: str = "", **kwargs):
     self.filter_value = value
     self._refresh_items()
+
+def _refresh_items(self):
+    self._items = self._get_filtered()
 
 def get_context_data(self, **kwargs):
     self.items = self._items
@@ -243,8 +248,8 @@ def test_save_property(self):
 ### Reducing Panel Overhead
 
 ```javascript
-// Reduce history size (default: 50)
-window.djustDebugPanel.maxHistory = 20;
+// Reduce history size (default: 100)
+window.djustDebugPanel.config.maxHistory = 20;
 
 // Or clear history manually via the "Clear" buttons
 ```

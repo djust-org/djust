@@ -16,7 +16,7 @@ djust provides a presence system for tracking which users are currently viewing 
 - **PresenceMixin** -- Track user presence in any LiveView with join/leave callbacks
 - **CursorTracker** -- Track and broadcast live cursor positions
 - **LiveCursorMixin** -- Combined presence + cursor tracking in a single mixin
-- **Automatic heartbeat** -- Stale presences are cleaned up after timeout
+- **Stale-presence cleanup** -- Presences with no heartbeat for 60 seconds are pruned (see the known issue under [Best Practices](#best-practices): the client does not send heartbeats yet)
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ That's the entire surface. `online_count` is set as an instance attribute
 (so djust's diff dirty-tracking emits patches when it changes) and the
 broadcast fans out to other sessions automatically. Open the page in two
 browser tabs — both chips show `2 online`. Close one — the other drops to
-`1 online` within the heartbeat window.
+`1 online` when the closed tab's WebSocket disconnects.
 
 > **Note: HTTP vs WebSocket mounts.** `track_presence()` is a no-op
 > during the HTTP-prerender phase of the page load — presence only
@@ -88,8 +88,8 @@ class DocumentView(PresenceMixin, LiveView):
 <div class="presence-bar">
     {{ online_count }} users online
     {% for p in presences %}
-        <span class="avatar" style="background: {{ p.color }}">
-            {{ p.name.0 }}
+        <span class="avatar" style="background: {{ p.meta.color }}">
+            {{ p.meta.name.0 }}
         </span>
     {% endfor %}
 </div>
@@ -115,20 +115,30 @@ class DemoView(PresenceMixin, LiveView):
 Authenticated users always use `request.user.id` regardless of the flag
 — logged-in tabs still collapse to one identity (intentional).
 
+Each presence record is `{"id": <user id>, "joined_at": <timestamp>, "meta": <the dict you passed to track_presence>}`, so your metadata lives under `meta`.
+
 ### 3. Handle Join/Leave Events
+
+These callbacks run on the view that is itself joining or leaving, not on the
+other users' sessions. Use them for per-session work such as a welcome message:
 
 ```python
 class DocumentView(PresenceMixin, LiveView):
     def handle_presence_join(self, presence):
         self.push_event("flash", {
-            "message": f"{presence['name']} joined"
+            "message": f"Welcome, {presence['meta']['name']}"
         })
 
     def handle_presence_leave(self, presence):
         self.push_event("flash", {
-            "message": f"{presence['name']} left"
+            "message": f"Goodbye, {presence['meta']['name']}"
         })
 ```
+
+To react when *other* users join or leave (for example to flash "Alice
+joined" to everyone else), override `_on_presence_change`, which fires on peer
+sessions, call `super()._on_presence_change(**kwargs)`, and diff
+`list_presences()` against the list you saw last time.
 
 ## PresenceMixin API
 
@@ -161,8 +171,8 @@ class DocumentView(PresenceMixin, LiveView):
 
 | Callback | When Called |
 |----------|------------|
-| `handle_presence_join(presence)` | A user joins the group |
-| `handle_presence_leave(presence)` | A user leaves the group |
+| `handle_presence_join(presence)` | This view's own `track_presence()` joins the group (runs on the joining session only) |
+| `handle_presence_leave(presence)` | This view's own `untrack_presence()` leaves the group (runs on the leaving session only) |
 | `_on_presence_change(**kwargs)` *(v1.0.0rc12+)* | Auto-fires on every other session when this view's `track`/`untrack` runs. Default body refreshes `online_count`. Override to do additional work; call `super()._on_presence_change(**kwargs)` to preserve the count refresh. |
 
 ## CursorTracker
@@ -249,8 +259,8 @@ class ChatView(PresenceMixin, LiveView):
     <ul class="user-list">
         {% for user in online_users %}
         <li>
-            <img src="{{ user.avatar }}" alt="{{ user.name }}">
-            <span>{{ user.name }}</span>
+            <img src="{{ user.meta.avatar }}" alt="{{ user.meta.name }}">
+            <span>{{ user.meta.name }}</span>
         </li>
         {% endfor %}
     </ul>
@@ -259,8 +269,18 @@ class ChatView(PresenceMixin, LiveView):
 
 ## Best Practices
 
-- **Heartbeat**: Default interval is 30 seconds, timeout is 60 seconds. A user is stale if no heartbeat is received within the timeout.
+- **Heartbeat**: A presence is stale, and pruned by the next `list_presences()` / count refresh, if no heartbeat arrives within 60 seconds (`PRESENCE_TIMEOUT`). **Known issue: #2968** — the client never sends the `presence_heartbeat` message, so at rc10 users drop out of the list about 60 seconds after joining even while still connected. Until it is fixed, refresh the heartbeat yourself (see the workaround below the list).
 - **Cursor timeout**: Positions expire after 10 seconds. Use `CursorTracker` for high-frequency cursor updates.
 - **Presence keys**: Use descriptive, hierarchical keys like `"document:{doc_id}"` or `"room:{room_id}"`. Format variables resolve from view attributes.
-- **Cleanup**: Presences are removed automatically on WebSocket disconnect. Stale presences (missed heartbeats) are cleaned periodically.
-- **Backend selection**: Use the memory backend for development, Redis for multi-server production deployments. Configure via `djust.backends.registry`.
+- **Cleanup**: Presences are removed automatically on WebSocket disconnect. Stale presences (missed heartbeats) are pruned when the group is next listed or counted.
+- **Backend selection**: Use the memory backend for development, Redis for multi-server production deployments. Configure via `DJUST_CONFIG['PRESENCE_BACKEND']` (`'memory'` or `'redis'`) and `PRESENCE_REDIS_URL`.
+
+Heartbeat workaround for #2968, refreshing from a tick:
+
+```python
+class DocumentView(PresenceMixin, LiveView):
+    tick_interval = 30_000  # ms
+
+    def handle_tick(self):
+        self.update_presence_heartbeat()
+```

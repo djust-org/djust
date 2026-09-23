@@ -27,7 +27,7 @@ class EditorView(LiveView):
         self.set_layout("layouts/app.html")
 ```
 
-Any template that renders through Django's template loader works — `set_layout` just queues the path. The layout is rendered with the view's `get_context_data()` so template variables resolve the same way they do for the initial page render.
+Any template that renders through Django's template loader works — `set_layout` just queues the path. The layout is rendered with the view's `get_context_data()` only. No request is attached, so context-processor variables (`request`, `user`, `csrf_token`, `messages`, `perms`) are unavailable, and a layout that uses them renders differently than it did at page load. Pass anything the layout needs through `get_context_data()`.
 
 ## How it works
 
@@ -38,10 +38,10 @@ Any template that renders through Django's template loader works — `set_layout
 Because the live `[dj-root]` element is the **same DOM node** before and after the swap, everything attached to it survives:
 
 - `<input>` values currently being typed
-- Scroll position inside scrollable containers
-- Focused element (and cursor position)
 - `dj-hook` instances and their internal state
 - Third-party JS libraries (charts, maps, editors) that stored references to nodes inside the root
+
+Focus and scroll position are **not** preserved. The root is briefly detached from the document during the move, so the browser drops focus (it returns to `<body>`) and resets the scroll offset of containers inside the root. The swap does not save or restore them; if you need either, restore it from a `djust:layout-changed` listener.
 
 ## Listening for the swap
 
@@ -75,7 +75,7 @@ document.addEventListener('djust:layout-changed', (e) => {
 ## Errors
 
 - **Template not found** — logged as a warning (`djust.websocket`), swap is skipped. The WebSocket stays alive; the view continues normally with the current layout.
-- **Template rendering error** — same handling: logged with traceback, swap skipped.
+- **Template rendering error** — with `DEBUG=True` the exception is re-raised so it surfaces during development. With `DEBUG=False` it is logged with a traceback and the swap is skipped.
 - **No `[dj-root]` in the incoming HTML** — client refuses the swap and logs a console warning. This usually means the new layout template doesn't include a `<div dj-root></div>` placeholder — add one.
 
 ## See also

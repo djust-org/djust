@@ -16,7 +16,7 @@ djust ships a small, opt-in service worker (SW) that adds two reliability / perc
 
 Both features are **opt-in** and **independent**. Neither is active unless you register the SW explicitly.
 
-> **Status**: v0.5.0. In-memory buffer only (IndexedDB deferred to v0.6). Shell/main extraction uses a regex — see [Limitations](#limitations).
+> **Status**: The reconnection buffer is in-memory only (IndexedDB persistence is not implemented). Shell/main extraction uses a regex — see [Limitations](#limitations).
 
 ---
 
@@ -84,7 +84,7 @@ The middleware is **mostly ordering-safe** — it only reads the request header 
 - Sets `X-Djust-Main-Only-Response: 1` on transformed responses so clients can distinguish them.
 - Leaves streaming responses untouched.
 
-> **⚠ Ordering caveat with `GZipMiddleware`.** If you use Django's `GZipMiddleware`, place `DjustMainOnlyMiddleware` **above it** in the `MIDDLEWARE` list (so it runs first on the outgoing response). `MIDDLEWARE` executes in reverse order on responses, so "above" = "runs later on responses." If the truncation runs AFTER gzip compression, the `Content-Encoding: gzip` header stays but the bytes have been modified in place, producing a broken response the client cannot decode. Rule of thumb: any middleware that modifies `response.content` must run before any middleware that encodes/compresses it.
+> **⚠ Ordering caveat with `GZipMiddleware`.** If you use Django's `GZipMiddleware`, place `DjustMainOnlyMiddleware` **below it** in the `MIDDLEWARE` list, so it trims the response before GZip compresses it. `MIDDLEWARE` executes in reverse order on responses, so "below" = "runs earlier on responses." If the middleware sits above `GZipMiddleware`, it sees already-compressed bytes, fails to decode them as UTF-8, and passes the full page through untrimmed — the shell client then puts a whole page inside `<main>`. Rule of thumb: any middleware that modifies `response.content` must run before any middleware that encodes/compresses it.
 
 ### 3. Ensure your layout has a `<main>` element
 
@@ -180,11 +180,16 @@ then the live WebSocket mount reply reconciles any drift via the
 normal VDOM patch path. The user sees content the instant the route
 changes; the network round-trip is hidden behind the perceived paint.
 
-Enable in two places — the registration call AND your settings:
+Enable it in the registration call:
 
 ```js
 djust.registerServiceWorker({ vdomCache: true });
 ```
+
+The `DJUST_VDOM_CACHE_*` settings below are validated by the C301–C303
+system checks, but they are not currently sent to the service worker:
+the SW uses its built-in defaults (30-minute TTL, 50 entries), which
+happen to match the setting defaults.
 
 ```python
 # settings.py
@@ -198,38 +203,40 @@ negative TTL) fails fast at `manage.py check`:
 
 | Check ID  | Severity | Fires when |
 |---|---|---|
-| `djust.C301` | error | `DJUST_VDOM_CACHE_TTL_SECONDS` is non-positive or > 1 day |
-| `djust.C302` | error | `DJUST_VDOM_CACHE_MAX_ENTRIES` is non-positive or > 10 000 |
-| `djust.C303` | warning | `DJUST_VDOM_CACHE_ENABLED = True` without the SW registered with `vdomCache: true` |
+| `djust.C301` | error | `DJUST_VDOM_CACHE_TTL_SECONDS` ≤ 0 |
+| `djust.C302` | error | `DJUST_VDOM_CACHE_MAX_ENTRIES` < 1 |
+| `djust.C303` | info | `DJUST_VDOM_CACHE_ENABLED = False` |
 
-Cache scope is **per origin + per URL** with the `Vary: Cookie` and
-`Vary: Accept-Language` headers honored — different users / locales
-don't see each other's snapshots.
+Entries are keyed by URL only, within one browser profile; `Vary`
+headers are not honored. If the signed-in user or the language changes
+in the same browser, a cached snapshot from before the change can be
+shown until the live mount corrects it.
 
 ### LiveView state snapshots
 
-A view that opts in stamps a JSON-serializable copy of its public
-state on the SW each time the user navigates **away**. On a back
-navigation, the SW returns that snapshot and the server calls
-`_restore_snapshot(state)` instead of `mount()`. Form values, scroll
-position, expanded/collapsed sections — all preserved without
-embedding state in the URL or refetching it.
+For a view that opts in, the server signs a snapshot of the view's
+public state when the view mounts, and the client replays it on
+back-navigation: the server then calls `_restore_snapshot(state)`
+instead of `mount()`. State changed by events after mount is **not**
+included, and scroll position is not view state, so neither is
+restored.
 
 ```python
 class CartView(LiveView):
     enable_state_snapshot = True
 
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         self.items = list(request.user.cart_items.values('id', 'qty'))
 
     def _restore_snapshot(self, state: dict) -> None:
-        # state is the dict the client captured on `djust:before-navigate`.
+        # state is the signed snapshot taken when the view mounted.
         # Trust nothing — re-validate any IDs against the database.
         self.items = state.get('items', [])
 
     def _should_restore_snapshot(self, request) -> bool:
-        # Override to reject stale snapshots. Default returns True for any
-        # snapshot < 5 minutes old. Return False to fall back to mount().
+        # Override to reject snapshots. The default returns True; snapshot
+        # age is enforced separately by DJUST_STATE_SNAPSHOT_MAX_AGE
+        # (default 3600 s). Return False to fall back to mount().
         return super()._should_restore_snapshot(request)
 ```
 

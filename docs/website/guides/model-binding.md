@@ -9,11 +9,11 @@ description: "Bind form inputs to server state with dj-model, .lazy, and .deboun
 
 # Two-Way Model Binding
 
-djust's `dj-model` directive automatically syncs form input values with server-side view attributes. Every time an input changes, the server updates and re-renders -- no event handler boilerplate needed.
+djust's `dj-model` directive automatically syncs form input values with server-side view attributes. Every time an input changes, the server stores the new value on the view -- no event handler boilerplate needed. The sync itself does **not** re-render the page; see [When the page updates](#when-the-page-updates).
 
 ## What You Get
 
-- **`dj-model`** -- Bind any form input to a view attribute with real-time sync
+- **`dj-model`** -- Bind any form input to a view attribute; the value syncs on every change
 - **`dj-model.lazy`** -- Sync on blur instead of every keystroke
 - **`dj-model.debounce-N`** -- Debounce by N milliseconds for search-as-you-type
 - **Automatic type coercion** -- Strings are converted to match the existing attribute type
@@ -71,7 +71,13 @@ class SearchView(LiveView):
 {% endfor %}
 ```
 
-That is it. Every time an input changes, djust sends an `update_model` event, the attribute is updated, and the view re-renders.
+Every time an input changes, djust sends an `update_model` event and sets the attribute.
+
+### When the page updates
+
+`update_model` does **not** re-render. It skips the render on purpose, so the input the user is typing in isn't disturbed. The new value shows up in the next render that some *other* event triggers. In the example above, the `results` list only changes when another event (a button click, a form submit) runs.
+
+To re-render on each change (live search, validation as you type), use an event directive instead of `dj-model`: `dj-input="handler"` (with `dj-debounce="N"`) or `dj-change="handler"`, and have the handler set the attribute. The examples below show both patterns.
 
 ## Modifiers
 
@@ -95,6 +101,17 @@ Debounce by N milliseconds. The update fires only after the user stops typing.
 <!-- 500ms debounce -->
 <input type="text" dj-model.debounce-500="address">
 ```
+
+> **Modifier fields must be listed in `allowed_model_fields`.** The automatic
+> allowlist only recognises the plain `dj-model="<field>"` spelling. Fields bound
+> with `dj-model.lazy` or `dj-model.debounce-N` are **not** picked up, so the
+> server rejects their updates (it logs a "mass-assignment guard" warning) unless
+> you list them explicitly:
+>
+> ```python
+> class ProfileView(LiveView):
+>     allowed_model_fields = ["email", "bio", "search_query", "address"]
+> ```
 
 > **The `.debounce-N` / `.lazy` in-name modifier is `dj-model`-only.** Only
 > `dj-model` parses these suffixes from the attribute *name*. Event directives —
@@ -148,7 +165,9 @@ The ModelBindingMixin enforces these rules:
 - Fields like `template_name`, `request`, `session`, and other internals are blocked
 - Only attributes that already exist on the view can be updated
 - `allowed_model_fields` is **fail-closed**: a field is bindable only if it
-  appears as `dj-model` in the rendered template source, or is listed here.
+  appears as plain `dj-model="<field>"` in the rendered template source, or is
+  listed here. The modifier spellings (`dj-model.lazy=…`, `dj-model.debounce-N=…`)
+  are not auto-detected, so list those fields here.
   Leaving it as `None` means "template-derived only" — never "everything"
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
   `session`, `kwargs`, `args`, `use_actors` and `temporary_assigns`
@@ -164,12 +183,22 @@ class AdminView(LiveView):
 
 ## Example: Search-as-you-Type
 
+Live results need a re-render on each (debounced) change, so this uses
+`dj-input` with `dj-debounce` rather than `dj-model`:
+
 ```python
+from djust import LiveView
+from djust.decorators import event_handler
+
 class ProductSearch(LiveView):
     template_name = 'product_search.html'
 
     def mount(self, request, **kwargs):
         self.query = ""
+
+    @event_handler()
+    def search(self, value: str = "", **kwargs):
+        self.query = value
 
     def get_context_data(self, **kwargs):
         results = []
@@ -181,7 +210,7 @@ class ProductSearch(LiveView):
 ```
 
 ```html
-<input type="text" dj-model.debounce-300="query" placeholder="Search products...">
+<input type="text" dj-input="search" dj-debounce="300" value="{{ query }}" placeholder="Search products...">
 
 <div class="results">
     {% for product in results %}
@@ -197,12 +226,19 @@ class ProductSearch(LiveView):
 
 ## Example: Form with Validation
 
-`dj-model` with the modifiers doing the work — debounced while typing, lazy on
-blur — and validation run in `get_context_data` so it reflects every keystroke:
+`dj-model` stores the values; validation runs in `get_context_data`, so it
+reflects the values as of the latest render. Because `dj-model` does not
+re-render, the errors appear when another event renders the page -- here,
+the form submit:
 
 ```python
+from djust import LiveView
+from djust.decorators import event_handler
+
 class RegistrationForm(LiveView):
     template_name = "register.html"
+    # Modifier bindings are not auto-allowlisted; list them.
+    allowed_model_fields = ["username", "email", "password", "agree_terms"]
 
     def mount(self, request, **kwargs):
         self.username = ""
@@ -219,6 +255,12 @@ class RegistrationForm(LiveView):
             self.errors["email"] = "Invalid email address"
         if self.password and len(self.password) < 8:
             self.errors["password"] = "Must be at least 8 characters"
+
+    @event_handler()
+    def register(self, **kwargs):
+        self.validate()
+        if not self.errors and self.agree_terms:
+            ...  # create the account
 
     def get_context_data(self, **kwargs):
         self.validate()
@@ -245,21 +287,31 @@ class RegistrationForm(LiveView):
 </form>
 ```
 
-`debounce-300` waits for a pause in typing before syncing, so validation does
-not fire on every character. `lazy` syncs on blur instead of on input.
+`debounce-300` waits for a pause in typing before syncing the value, and `lazy`
+syncs on blur instead of on input. Neither re-renders by itself; the submit
+does. For errors that update while typing, use `dj-input="…" dj-debounce="300"`
+with a handler that sets the field.
 
 ## Example: Multi-Select Filter
 
 A `<select multiple>` binds to a list. The list arrives as one value and is
-coerced to the attribute's existing type:
+coerced to the attribute's existing type. `dj-model` doesn't re-render, so the
+filtered list refreshes when the user clicks **Apply** (any event would do):
 
 ```python
+from djust import LiveView
+from djust.decorators import event_handler
+
 class FilterView(LiveView):
     template_name = "filter.html"
 
     def mount(self, request, **kwargs):
         self.selected_tags = []
         self.sort_by = "name"
+
+    @event_handler()
+    def apply_filters(self, **kwargs):
+        pass  # the bound values are already set; this event re-renders
 
     def get_context_data(self, **kwargs):
         items = Item.objects.all()
@@ -278,14 +330,16 @@ class FilterView(LiveView):
     <option value="name">Name</option>
     <option value="-created">Newest</option>
 </select>
+
+<button dj-click="apply_filters">Apply</button>
 ```
 
 ## Combining with Event Handlers
 
-`dj-model` works alongside `dj-click`, `dj-submit`, and other directives. The binding updates state; event handlers trigger actions.
+`dj-model` works alongside `dj-click`, `dj-submit`, and other directives. The binding updates state; event handlers trigger actions and the re-render.
 
 ```html
-<input type="text" dj-model.debounce-300="query">
+<input type="text" dj-model.debounce-300="query">  <!-- list "query" in allowed_model_fields -->
 <button dj-click="search">Search</button>
 
 <form dj-submit="save">
@@ -297,6 +351,6 @@ class FilterView(LiveView):
 ## Best Practices
 
 - Use **`dj-model.lazy`** for expensive operations (database queries, API calls) to avoid running on every keystroke.
-- Use **`dj-model.debounce-300`** for search inputs where you want real-time feedback with limited server calls.
+- For search inputs with live results, use **`dj-input="…"` with `dj-debounce="300"`**: `dj-model` alone never re-renders.
 - Use plain **`dj-model`** for cheap local state like checkboxes and toggles.
-- For security-sensitive views, always set `allowed_model_fields` to an explicit list.
+- For security-sensitive views, always set `allowed_model_fields` to an explicit list. It is required anyway for fields bound with `.lazy` / `.debounce-N`.
