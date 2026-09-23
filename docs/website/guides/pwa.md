@@ -45,16 +45,18 @@ djust provides built-in PWA support for offline-first applications with automati
 
 ```python
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.pwa.mixins import PWAMixin, OfflineMixin
 
 class MyView(OfflineMixin, LiveView):
     template_name = 'app.html'
 
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         # No enable call: inheriting OfflineMixin is what enables offline mode.
         self.items = self.storage.get('items', [])
 
-    def add_item(self, name):
+    @event_handler()
+    def add_item(self, name: str = "", **kwargs):
         created = self.create_offline('Item', {'name': name})
         self.items.append(created)
         self.storage.set('items', self.items)
@@ -66,6 +68,24 @@ class MyView(OfflineMixin, LiveView):
 ```bash
 python manage.py generate_sw
 ```
+
+> **Known issue: #2967.** At rc10 `generate_sw` crashes on every invocation:
+> its own `--version` option clashes with Django's built-in `--version`
+> (`argparse.ArgumentError: argument --version: conflicting option string`).
+> Until it is fixed, serve the service worker from a view instead:
+>
+> ```python
+> # urls.py
+> from djust.pwa import service_worker_view
+>
+> urlpatterns = [
+>     path("sw.js", service_worker_view),
+>     # ...
+> ]
+> ```
+>
+> `service_worker_view` reads the `DJUST_CONFIG['PWA_*']` keys described
+> below.
 
 ## PWA Mixins
 
@@ -116,7 +136,7 @@ properties raise `AttributeError`.
 |--------|-------------|
 | `sync_queue` | Property — the pending `SyncQueue`; enqueue via `create_offline()` / `update_offline()` / `delete_offline()` |
 | `sync_manager` | Property — the `SyncManager` that runs the sync |
-| `sync_<verb>_<Model>(action_data)` | Your hook, e.g. `sync_create_Item`; **case-sensitive** (built as `f"sync_create_{action.model}"`) |
+| `sync_create_<Model>(data)`, `sync_update_<Model>(obj_id, data)`, `sync_delete_<Model>(obj_id)` | Your hooks, e.g. `sync_create_Item`; return truthy on success. **Case-sensitive** (built as `f"sync_create_{action.model}"`) |
 
 ## Template Tags
 
@@ -173,8 +193,17 @@ Visual offline status banner:
 
 ## Service Worker Configuration
 
-Configuration lives in `DJUST_CONFIG` as **flat `PWA_*` keys** — there is no
-`DJUST_PWA` dict setting:
+There are two settings surfaces, and which one applies depends on the consumer:
+
+- **`DJUST_CONFIG` flat `PWA_*` keys** (below) are read by `PWAMixin.get_pwa_config()`,
+  `PWAManifestGenerator` / `manifest_view`, and `ServiceWorkerGenerator` /
+  `service_worker_view`. The two views only take effect once you route them in
+  `urls.py`.
+- **Plain Django settings `DJUST_PWA_*`** are what the template tags
+  (`{% djust_pwa_head %}`, `{% djust_pwa_manifest %}`) and `generate_sw` read.
+  They do **not** read `DJUST_CONFIG`.
+
+There is no `DJUST_PWA` dict setting.
 
 ```python
 # settings.py
@@ -192,7 +221,7 @@ DJUST_CONFIG = {
 
     # Service worker
     "PWA_CACHE_NAME": "djust-v1",
-    "PWA_CACHE_STRATEGY": "cache-first",  # or "network-first"
+    "PWA_CACHE_STRATEGY": "cache_first",  # or "network_first" / "stale_while_revalidate"
     "PWA_PRECACHE_URLS": ["/static/css/app.css", "/static/js/app.js"],
     "PWA_OFFLINE_PAGE": "/offline/",
     "PWA_CACHE_DURATION": 86400,
@@ -201,11 +230,11 @@ DJUST_CONFIG = {
 }
 ```
 
-The template tag arguments (`{% djust_pwa_head name="My App" theme_color="#007bff" %}`)
-override the corresponding keys for one page.
+Unknown `PWA_CACHE_STRATEGY` values silently fall back to `cache_first`.
 
-A handful of manifest values can also be set as plain Django settings, which
-the tags fall back to when no argument is passed: `DJUST_PWA_NAME`,
+The template tags take their values from their arguments
+(`{% djust_pwa_head name="My App" theme_color="#007bff" %}`) and fall back to
+these plain Django settings when an argument is not passed: `DJUST_PWA_NAME`,
 `DJUST_PWA_SHORT_NAME`, `DJUST_PWA_DESCRIPTION`, `DJUST_PWA_THEME_COLOR`,
 `DJUST_PWA_BACKGROUND_COLOR`.
 
@@ -216,7 +245,7 @@ the project:
 
 ```python
 DJUST_CONFIG = {
-    "PWA_OFFLINE_STORAGE": "indexeddb",  # or "localstorage" / "sessionstorage"
+    "PWA_OFFLINE_STORAGE": "indexeddb",  # or "localstorage"
 }
 ```
 
@@ -237,21 +266,24 @@ separate data **on the same backend**. To change where data is stored, set
 
 ```python
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.pwa.mixins import OfflineMixin
 
 class TodoView(OfflineMixin, LiveView):
     template_name = 'todos.html'
 
-    def mount(self, request):
+    def mount(self, request, **kwargs):
         self.todos = self.storage.get('todos', [])
 
-    def add_todo(self, text):
+    @event_handler()
+    def add_todo(self, text: str = "", **kwargs):
         todo = self.create_offline('Todo', {'text': text, 'done': False})
         self.todos.append(todo)
         self.storage.set('todos', self.todos)
         self.sync_when_online()
 
-    def toggle_todo(self, todo_id):
+    @event_handler()
+    def toggle_todo(self, todo_id: str = "", **kwargs):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
@@ -262,6 +294,11 @@ class TodoView(OfflineMixin, LiveView):
 
 ## Management Commands
 
+> **Known issue: #2967.** None of these invocations work at rc10: `generate_sw`
+> crashes while building its argument parser (see
+> "Generate the Service Worker" above). Use
+> `service_worker_view` until it is fixed.
+
 ```bash
 # Basic generation
 python manage.py generate_sw
@@ -269,8 +306,8 @@ python manage.py generate_sw
 # Custom output path
 python manage.py generate_sw --output static/custom-sw.js
 
-# Include static file collection
-python manage.py generate_sw --collect-static
+# Include static files in the cache
+python manage.py generate_sw --cache-static
 
 # Custom version
 python manage.py generate_sw --version 2.1.0
@@ -281,7 +318,7 @@ python manage.py generate_sw --version 2.1.0
 1. Add `{% load djust_pwa %}` to your base template
 2. Include `{% djust_pwa_head %}` in your `<head>`
 3. Mix `PWAMixin` or `OfflineMixin` into your LiveViews
-4. Run `python manage.py generate_sw`
+4. Serve the service worker: route `djust.pwa.service_worker_view` at `/sw.js` (`python manage.py generate_sw` is broken at rc10, see #2967)
 5. Deploy with HTTPS (required for service workers in production)
 
 ## Browser Support
@@ -296,7 +333,7 @@ python manage.py generate_sw --version 2.1.0
 ## Best Practices
 
 - Service workers require HTTPS in production (localhost is exempt for development).
-- Use `network-first` strategy for dynamic content and `cache-first` for static assets.
+- Use the `network_first` strategy for dynamic content and `cache_first` for static assets.
 - Validate data in the sync queue before sending to the server.
 - Consider authentication token expiry when designing offline flows.
 - Test offline behavior in Chrome DevTools (Application > Service Workers > Offline).
