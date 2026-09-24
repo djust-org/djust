@@ -270,8 +270,12 @@ _SETATTR_WHITELIST = {
     # descriptor arms in the dirty fingerprint and private-state save (plus
     # the #3042 review follow-ups: ``_holds_model``, the lazy-safe type check). Still
     # the same two sites.
-    ("live_view.py", 1605),
-    ("live_view.py", 1607),
+    # +44 (1605/1607 → 1649/1651) by #3046: ``_shadows_component_method`` and
+    # the method-shadow skip in ``restore_components_snapshot``, plus the
+    # DANGEROUS_ATTRIBUTES screen in ``_restore_private_state``. Still the same
+    # two DynamicLiveView developer-dict sites.
+    ("live_view.py", 1649),
+    ("live_view.py", 1651),
 }
 
 

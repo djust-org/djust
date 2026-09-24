@@ -148,7 +148,120 @@ def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
         return False
 
     consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+    # The view this task ticks for, so a failed mount stops only its own task
+    # (#3027). The runtime holds the mounting view when this runs.
+    runtime = getattr(consumer, "_runtime", None)
+    try:
+        consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
+    except AttributeError:
+        # A custom task factory whose tasks take no new attributes: the
+        # failed-mount hook then cancels whatever tick the consumer holds.
+        pass
     return True
+
+
+_DOCUMENT_HEAD_RE = re.compile(r"<head\b[^>]*>(.*?)</head\s*>", re.IGNORECASE | re.DOTALL)
+_DOCUMENT_TITLE_RE = re.compile(r"<title\b[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
+
+
+def _head_title_inner(markup: Optional[str]) -> Optional[str]:
+    """The raw inner text of the ``<title>`` inside ``markup``'s ``<head>``.
+
+    Only the ``<head>`` is searched, so an SVG ``<title>`` in the body never
+    counts."""
+    if not markup:
+        return None
+    head = _DOCUMENT_HEAD_RE.search(markup)
+    if head is None:
+        return None
+    match = _DOCUMENT_TITLE_RE.search(head.group(1))
+    return None if match is None else match.group(1)
+
+
+def document_title(html: Optional[str]) -> Optional[str]:
+    """The text of the ``<title>`` inside rendered ``html``'s ``<head>``.
+
+    Entities are decoded (the client assigns ``document.title``, a text sink)
+    and whitespace is collapsed the way the browser does for a title.
+    """
+    inner = _head_title_inner(html)
+    if inner is None:
+        return None
+    import html as html_lib
+
+    text = " ".join(html_lib.unescape(inner).split())
+    return text or None
+
+
+def _view_document_source(view: Any) -> Optional[str]:
+    """The view's page template source with inheritance flattened, or None."""
+    inline = getattr(view, "template", None)
+    if inline:
+        return str(inline)
+    template_name = getattr(view, "template_name", None)
+    if not template_name:
+        return None
+    from django.template import loader
+
+    source = loader.get_template(template_name).template.source
+    if "{% extends" in source or "{%extends" in source:
+        from ._rust import resolve_template_inheritance
+        from .utils import get_template_dirs
+
+        return str(resolve_template_inheritance(template_name, get_template_dirs()))
+    return str(source)
+
+
+def _queued_title(view: Any) -> bool:
+    """Whether ``view`` has a ``page_title`` command waiting to be sent."""
+    pending = getattr(view, "_pending_page_metadata", None)
+    if not isinstance(pending, list):
+        return False
+    return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
+
+
+def navigation_title(view: Any) -> Optional[str]:
+    """The ``<title>`` the destination page would have on a full load (#3036).
+
+    ``live_redirect`` mounts the destination view and swaps only its
+    ``dj-root``, so the tab kept the previous page's title unless the view set
+    ``page_title``. This renders just the ``<title>`` element of the view's
+    page template (``{% block title %}`` included) with the values the mount
+    render just used, instead of rendering the whole page shell, which could
+    run ``{% live_render %}`` and other tags with side effects.
+
+    Conservative by design: returns ``None`` (the title is left alone, as it
+    was before) when the template has no ``<head><title>``, when the title
+    uses ``{{ block.super }}`` (flattened inheritance loses the parent block),
+    when a variable it reads is not a value the view holds, or when anything
+    fails. Never raises.
+    """
+    try:
+        inner = _head_title_inner(_view_document_source(view))
+        if inner is None or "block.super" in inner:
+            return None
+        if "{" not in inner:
+            return document_title(f"<head><title>{inner}</title></head>")
+        from ._rust import extract_template_variables, render_template
+        from .serialization import normalize_django_value
+
+        immutables = getattr(view, "_prev_context_immutables", None) or {}
+        context: Dict[str, Any] = {}
+        for name in extract_template_variables(inner):
+            if name in immutables:
+                context[name] = immutables[name]
+            elif not name.startswith("_") and name in getattr(view, "__dict__", {}):
+                value = view.__dict__[name]
+                if callable(value):
+                    return None
+                context[name] = normalize_django_value(value)
+            else:
+                return None
+        rendered = render_template(inner, context)
+        return document_title(f"<head><title>{rendered}</title></head>")
+    except Exception:  # noqa: BLE001 — a title must never break navigation
+        logger.debug("navigation title unavailable for %s", type(view).__name__, exc_info=True)
+        return None
 
 
 # ------------------------------------------------------------------ #
@@ -1582,6 +1695,33 @@ class WSConsumerTransport:
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
 
+    @property
+    def capture_document_title(self) -> bool:
+        """True while the consumer mounts a ``live_redirect`` destination
+        (#3036), so the runtime records the page's document ``<title>``."""
+        return bool(getattr(self._consumer, "_live_redirect_mounting", False))
+
+    async def on_mount_failed(self, view: Any) -> None:
+        """Stop the tick task ``on_view_mounted`` started for a view whose
+        mount then failed (#3027). Only a task still ticking for THIS view is
+        cancelled; a later mount on the socket owns its own task."""
+        consumer = self._consumer
+        task = getattr(consumer, "_tick_task", None)
+        if task is None or task.done():
+            return
+        ticking_for = getattr(task, "_djust_tick_view", None)
+        if ticking_for is not None and ticking_for is not view:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — the loop logs its own errors
+            logger.debug("tick task ended with an error after a failed mount", exc_info=True)
+        if getattr(consumer, "_tick_task", None) is task:
+            consumer._tick_task = None
+
     async def _leave_view_groups(self) -> None:
         """Leave the view / presence / db_notify groups ``on_view_mounted`` joined.
 
@@ -2114,6 +2254,10 @@ class ViewRuntime:
         # constructs inline. Type kept ``Any`` to avoid circular import
         # with ``djust.renderers``; runtime use-site will cast.
         self.renderer_factory = renderer_factory
+        # #3036: the destination page's <title>, recorded after the mount
+        # render when the transport asks for it (``capture_document_title``,
+        # WS: during a live_redirect mount). See ``navigation_title``.
+        self.mount_document_title: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -2187,6 +2331,7 @@ class ViewRuntime:
         # validates again defensively.
         from .security.mount import is_view_path_allowed, validate_mount_url
 
+        self.mount_document_title = None
         page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
         # has_prerendered (ADR-022 Iter 3 Phase 3.0): the client signals it already
@@ -2601,6 +2746,7 @@ class ViewRuntime:
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
 
         # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
@@ -2690,6 +2836,7 @@ class ViewRuntime:
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
             await self.transport.send(response)
+            await self._on_mount_failed(view_instance)
             return
 
         # ---- Initial render ----
@@ -2731,6 +2878,7 @@ class ViewRuntime:
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
                     )
                     await self.transport.send(response)
+                    await self._on_mount_failed(view_instance)
                     return
 
         if not actor_mounted:
@@ -2759,7 +2907,16 @@ class ViewRuntime:
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
+
+        # #3036: a live_redirect mount records the destination page's
+        # <title>; the WS consumer sends it when the view queued none.
+        # Skipped when the view already queued its own title, which wins.
+        if getattr(self.transport, "capture_document_title", False) and not _queued_title(
+            view_instance
+        ):
+            self.mount_document_title = await sync_to_async(navigation_title)(view_instance)
 
         # ---- Post-render mount hook (#1917, Finding B residual) ----
         # ``on_mount_render_ready`` runs AFTER the render produced ``html`` but
@@ -4488,6 +4645,30 @@ class ViewRuntime:
             return True
 
         return None
+
+    async def _on_mount_failed(self, view_instance: Any) -> None:
+        """Tell the transport that a mount it already set up has failed (#3027).
+
+        ``on_view_mounted`` runs before ``mount()``: on WS it starts the view's
+        tick task. When ``mount()``, ``handle_params()``, the actor mount or the
+        initial render then raises, the error frame goes out but the
+        half-mounted view stays on the runtime (later frames on the socket
+        still see it, unchanged here), and the tick kept calling
+        ``handle_tick`` on it every beat. ``on_mount_failed`` stops that work.
+        getattr-guarded like the other mount hooks, so a transport without it
+        (SSE has no tick) and duck-typed test fakes are unaffected. Never
+        raises: a cleanup failure must not replace the error frame already
+        sent.
+        """
+        hook = getattr(self.transport, "on_mount_failed", None)
+        if hook is None:
+            return
+        try:
+            result = hook(view_instance)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — cleanup after an error already reported
+            logger.exception("on_mount_failed hook raised")
 
     async def _finalize_mount_auth(self, verdict: str) -> None:
         """Apply the transport-level finalization of a blocking mount-auth verdict.

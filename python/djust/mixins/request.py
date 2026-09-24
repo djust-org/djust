@@ -829,6 +829,32 @@ class RequestMixin:
 
             self._save_components_to_session(request, updated_context)
 
+            # A handler (view or ``component_id`` route) that set
+            # ``self._skip_render = True`` asked for no render this turn. The
+            # WebSocket / SSE routes resolve that through
+            # ``_resolve_skip_render`` (#2834, #2924); the HTTP fallback never
+            # consulted it, so the same flag rendered here and was never reset
+            # (#3038, the #1646 parallel-path class). The state above is already
+            # saved, so the next render diffs from the last one the client has.
+            # The answer is an empty patch list with no ``version``: nothing was
+            # rendered, so the client's VDOM cursor must not move. Side channels
+            # (flash, page metadata) still go out, as they do with the WS noop.
+            # No ``cache_request_id``: the WS/SSE noop carries none, so a
+            # skipped turn is never stored as an ``@cache`` hit on any transport.
+            from ..websocket import _resolve_skip_render
+
+            if _resolve_skip_render(self):
+                skip_response: Dict[str, Any] = {"patches": []}
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        skip_response["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        skip_response["_page_metadata"] = meta_commands
+                return JsonResponse(skip_response)
+
             # Apply context processors so the render includes auth context
             # (user, perms, messages, etc.). Without this, template conditionals
             # like {% if user.is_authenticated %} evaluate to false and the HTTP
