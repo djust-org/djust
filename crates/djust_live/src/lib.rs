@@ -19,6 +19,7 @@ pub mod model_serializer;
 
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
+use djust_core::html_whitespace::is_html_whitespace_only;
 use djust_core::{Context, RenderEnv, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
@@ -893,6 +894,21 @@ impl RustLiveViewBackend {
             let html = if has_loop_placeholders {
                 // Match ONLY this render's nonce-bearing sentinel tag (#1970).
                 let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+                // The per-node fragment cache holds this render's REDUCED
+                // fragments; expand them too. A later PARTIAL render reuses
+                // cached fragments verbatim but has no manifest for them, so a
+                // placeholder left in the cache reached a full parse as a real
+                // `<dj-pc-…>` element (and it skewed the fragment text map's
+                // byte offsets, which assume fragments concatenate to the full
+                // html). Fragments concatenate to `reduced_html`, so their
+                // placeholders are the manifest's, in order.
+                let open = format!("<{sentinel_tag} ");
+                let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
+                for frag in self.node_html_cache.iter_mut() {
+                    if frag.contains(&open) {
+                        *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                    }
+                }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
             } else {
                 reduced_html.clone()
@@ -926,9 +942,25 @@ impl RustLiveViewBackend {
                     // Use the fragment text map to produce patches directly.
                     // First verify all fragments have mappings, then apply.
                     if let Some(ref frag_map) = self.fragment_text_map {
-                        let all_mapped = text_changes
-                            .iter()
-                            .all(|(idx, _, _)| frag_map.contains_key(idx));
+                        // #2999: a text node that would become — or was —
+                        // whitespace-only is dropped or collapsed to `" "` by
+                        // a full parse depending on its neighbours, so its
+                        // node may not exist (or may not be where the map
+                        // says); let the full parse handle it. And never emit
+                        // a SetText whose target isn't a text node in the
+                        // current VDOM: the map could be stale, and a patch
+                        // the server's own tree didn't take would leave the
+                        // server rendering old content forever.
+                        let all_mapped = text_changes.iter().all(|(idx, old_text, new_text)| {
+                            !is_html_whitespace_only(old_text)
+                                && !is_html_whitespace_only(new_text)
+                                && frag_map.get(idx).is_some_and(|(path, _)| {
+                                    self.last_vdom
+                                        .as_ref()
+                                        .and_then(|v| get_vdom_node(v, path))
+                                        .is_some_and(|n| n.is_text())
+                                })
+                        });
                         if all_mapped {
                             let mut vdom = self.last_vdom.take().unwrap();
                             let mut patches = Vec::new();
@@ -1176,6 +1208,15 @@ impl RustLiveViewBackend {
             // Match each plain-text fragment to a VDOM text node by BYTE POSITION
             // in the assembled HTML (#1617 — content equality is insufficient when
             // a variable is adjacent to literal template text).
+            //
+            // #2999: a full parse can change structure (a text node that went
+            // whitespace-only disappears), so the map built against the old
+            // tree is stale — rebuild it. Before this reset, a fragment that
+            // emptied and refilled kept being patched at a path that no
+            // longer existed.
+            if took_full_parse {
+                self.fragment_text_map = None;
+            }
             if self.fragment_text_map.is_none() && !self.node_html_cache.is_empty() {
                 if let (Some(ref vdom), Some(ref full_html)) = (&self.last_vdom, &self.last_html) {
                     self.fragment_text_map = Some(build_fragment_text_map(
@@ -1298,6 +1339,21 @@ impl RustLiveViewBackend {
             let html = if has_loop_placeholders {
                 // Match ONLY this render's nonce-bearing sentinel tag (#1970).
                 let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+                // The per-node fragment cache holds this render's REDUCED
+                // fragments; expand them too. A later PARTIAL render reuses
+                // cached fragments verbatim but has no manifest for them, so a
+                // placeholder left in the cache reached a full parse as a real
+                // `<dj-pc-…>` element (and it skewed the fragment text map's
+                // byte offsets, which assume fragments concatenate to the full
+                // html). Fragments concatenate to `reduced_html`, so their
+                // placeholders are the manifest's, in order.
+                let open = format!("<{sentinel_tag} ");
+                let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
+                for frag in self.node_html_cache.iter_mut() {
+                    if frag.contains(&open) {
+                        *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                    }
+                }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
             } else {
                 reduced_html.clone()
@@ -1456,6 +1512,9 @@ impl RustLiveViewBackend {
 
             self.last_vdom = Some(new_vdom);
             self.version += 1;
+            // #2999: the tree may have changed shape; the fragment→text-node
+            // map is rebuilt by the next full-parse render_with_diff.
+            self.fragment_text_map = None;
 
             Ok((hydrated_html, patches_bytes, self.version))
         })
@@ -1886,9 +1945,19 @@ impl RustLiveViewBackend {
         // Match ONLY this render's nonce-bearing sentinel tag (#1970 security):
         // a `|safe` item rendering a literal `<dj-pc ...>` (no nonce) is NOT
         // matched, so it is never stripped/dropped here.
-        let tag = sentinel_tag;
         // Placeholder entries in document order.
         let mut ph_iter = manifest.iter().filter(|m| m.placeholder);
+        Self::expand_loop_placeholders(reduced_html, &mut ph_iter, sentinel_tag)
+    }
+
+    /// Expand every `<{sentinel_tag} …></{sentinel_tag}>` in `reduced_html`,
+    /// in document order, with the next entries of `ph_iter`.
+    fn expand_loop_placeholders<'m>(
+        reduced_html: &str,
+        ph_iter: &mut impl Iterator<Item = &'m djust_templates::loop_cache::ManifestEntry>,
+        sentinel_tag: &str,
+    ) -> String {
+        let tag = sentinel_tag;
         let mut out = String::with_capacity(reduced_html.len());
         let mut rest = reduced_html;
         let open = format!("<{tag} ");
@@ -2679,6 +2748,18 @@ fn render_template_with_dirs(
         }
         Ok(rendered?)
     })
+}
+
+/// The egress normalizer's inter-tag whitespace pass (#2999).
+///
+/// Drops the space between two tags unless both neighbours are inline — the
+/// same rule the VDOM parser applies — so the normalized WS frame and
+/// initial-GET HTML hold exactly the whitespace nodes the server VDOM has.
+/// Called by `TemplateMixin._strip_comments_and_whitespace`; see
+/// `djust_core::html_whitespace::collapse_inter_tag_whitespace`.
+#[pyfunction]
+fn collapse_inter_tag_whitespace(html: &str, block_tags: Vec<String>) -> String {
+    djust_core::html_whitespace::collapse_inter_tag_whitespace(html, &block_tags)
 }
 
 /// Compute diff between two HTML strings
@@ -4335,7 +4416,19 @@ fn try_text_region_fast_path(
     new_text.push_str(new_mid);
     new_text.push_str(&old_text[end_in_text..]);
 
+    // #2999: whether a whitespace-only text node survives the parse depends on
+    // its neighbours (kept as `" "` between inline siblings, dropped
+    // otherwise). The fast path cannot see neighbours, so leave that to the
+    // full parse.
+    if is_html_whitespace_only(&new_text) {
+        return None;
+    }
+
     // Clone the old VDOM and apply the edit in place.
+    // Never patch a node the current VDOM doesn't hold as text (#2999).
+    if !get_vdom_node(old_vdom, &path).is_some_and(|n| n.is_text()) {
+        return None;
+    }
     let mut new_vdom = old_vdom.clone();
     {
         let node = get_vdom_node_mut(&mut new_vdom, &path)?;
@@ -4816,21 +4909,45 @@ fn collect_vdom_text_nodes(
     current_path: &mut Vec<usize>,
     entries: &mut Vec<(Vec<usize>, String, String)>,
 ) {
-    // Only collect true text nodes. Comment nodes also have `text` set
-    // (to store the comment body), so filter by `is_text()` to avoid
-    // miscounting — e.g. `<!--dj-if-->` placeholders would otherwise
-    // shift every subsequent text ordinal by one.
-    if node.is_text() {
-        if let Some(ref text) = node.text {
-            let djust_id = node.djust_id.clone().unwrap_or_default();
-            entries.push((current_path.clone(), text.clone(), djust_id));
-        }
-    }
     for (i, child) in node.children.iter().enumerate() {
         current_path.push(i);
-        collect_vdom_text_nodes(child, current_path, entries);
+        // Only collect true text nodes. Comment nodes also have `text` set
+        // (to store the comment body), so filter by `is_text()` to avoid
+        // miscounting — e.g. `<!--dj-if-->` placeholders would otherwise
+        // shift every subsequent text ordinal by one.
+        if child.is_text() {
+            if let Some(ref text) = child.text {
+                // #2999: a whitespace-only text node outside a
+                // whitespace-preserving parent is a kept inter-inline space
+                // (always `" "`). `scan_html_text_runs` never emits a run for
+                // whitespace-only text outside `pre`/`code`/`textarea`, so
+                // counting these here would break the 1:1 run↔node mapping
+                // and disable both text fast paths. Leaving them out also
+                // means no fast path ever targets one — a change to such a
+                // node goes through the full parse, which re-applies the
+                // collapse rule.
+                let preserving_parent = matches!(
+                    node.tag.as_str(),
+                    "pre" | "code" | "textarea" | "script" | "style"
+                );
+                if preserving_parent || !is_html_whitespace_only(text) {
+                    let djust_id = child.djust_id.clone().unwrap_or_default();
+                    entries.push((current_path.clone(), text.clone(), djust_id));
+                }
+            }
+        } else {
+            collect_vdom_text_nodes(child, current_path, entries);
+        }
         current_path.pop();
     }
+}
+
+fn get_vdom_node<'a>(vdom: &'a VNode, path: &[usize]) -> Option<&'a VNode> {
+    let mut node = vdom;
+    for &i in path {
+        node = node.children.get(i)?;
+    }
+    Some(node)
 }
 
 fn get_vdom_node_mut<'a>(vdom: &'a mut VNode, path: &[usize]) -> Option<&'a mut VNode> {
@@ -5001,6 +5118,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
+    m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;

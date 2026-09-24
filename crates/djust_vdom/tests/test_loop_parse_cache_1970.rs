@@ -249,7 +249,10 @@ fn literal_unnonced_dj_pc_is_not_spliced() {
 fn gate_off_bare_prefix_would_match_user_content() {
     let reduced = "<ul><li dj-key=\"2\"><dj-pc h=\"ffff\"></dj-pc>X</li></ul>";
     let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
-    subtrees.insert(0xffff, parse_item("<span>HIJACKED</span>"));
+    // A block-level root: since #2999 the splice refuses inline-level boundary
+    // roots (see `splice_refuses_inline_boundary_roots_2999`), which is not
+    // what this test is about.
+    subtrees.insert(0xffff, parse_item("<div>HIJACKED</div>"));
     let mut tree = parse_html_continue(reduced).unwrap();
     // Pass the BARE prefix "dj-pc" (the pre-nonce vulnerable behavior).
     let found = splice_loop_placeholders(&mut tree, &subtrees, 0, "dj-pc").unwrap();
@@ -259,4 +262,55 @@ fn gate_off_bare_prefix_would_match_user_content() {
     );
     // The nonce path (SENTINEL) would NOT have matched it (proven above), so the
     // nonce is load-bearing.
+}
+
+// ---------------------------------------------------------------------------
+// #2999: whitespace between inline siblings is a kept " " node, and whether a
+// run at an item's edge is kept depends on the item's neighbours. A cached,
+// separately-parsed item cannot see them, so the splice only accepts items
+// whose first and last roots are block-level elements.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn splice_refuses_inline_boundary_roots_2999() {
+    // Full parse of `<p><b>x</b> <i>item</i> <u>y</u></p>` keeps both spaces;
+    // a spliced `<i>` could not reproduce them (the reduced page's `dj-pc-*`
+    // neighbour is block-level), so the splice must refuse and let
+    // render_with_diff fall back to a full parse.
+    for item in ["<i>item</i>", "<div>a</div> <span>b</span>", "text only"] {
+        let reduced = format!("<p><b>x</b> <{SENTINEL} h=\"1\"></{SENTINEL}> <u>y</u></p>");
+        let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
+        subtrees.insert(1, parse_item(item));
+        let mut tree = parse_html_continue(&reduced).unwrap();
+        assert!(
+            splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL).is_err(),
+            "item {item:?} has an inline/text boundary root and must be refused"
+        );
+    }
+}
+
+#[test]
+fn splice_of_block_items_matches_full_parse_whitespace_2999() {
+    // Block-level item roots: every whitespace run at an item edge has a block
+    // neighbour in the full parse too, so the spliced tree equals it.
+    let item_a = "\n  <li><b>a</b> <i>1</i></li>\n";
+    let item_b = "\n  <li><b>b</b> <i>2</i></li>\n";
+    let full = format!("<div dj-root><ul>{item_a}{item_b}</ul></div>");
+    reset_id_counter();
+    let full_tree = parse_html(&full).unwrap();
+
+    let reduced = format!(
+        "<div dj-root><ul><{SENTINEL} h=\"1\"></{SENTINEL}><{SENTINEL} h=\"2\"></{SENTINEL}></ul></div>"
+    );
+    let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
+    subtrees.insert(1, parse_item(item_a.trim()));
+    subtrees.insert(2, parse_item(item_b.trim()));
+    let mut tree = parse_html_continue(&reduced).unwrap();
+    let found = splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL).unwrap();
+    assert_eq!(found, 2);
+    assert_eq!(tree.to_html(), full_tree.to_html());
+    assert!(
+        full_tree.to_html().contains("</b> <i"),
+        "the inner inline space is kept on both paths"
+    );
 }

@@ -598,7 +598,30 @@ y = 2</code>"#;
 
 #[test]
 fn test_whitespace_filtered_outside_pre() {
-    // Outside of whitespace-preserving elements, whitespace-only nodes should be filtered
+    // Outside of whitespace-preserving elements, indentation between
+    // BLOCK-level siblings (and leading/trailing whitespace) is filtered.
+    let html = r#"<div>
+    <div>A</div>
+    <div>B</div>
+</div>"#;
+
+    let vdom = parse_html(html).unwrap();
+
+    assert_eq!(
+        vdom.children.len(),
+        2,
+        "Div should have 2 children (block children only, whitespace filtered)"
+    );
+    assert_eq!(vdom.children[0].tag, "div");
+    assert_eq!(vdom.children[1].tag, "div");
+}
+
+#[test]
+fn test_whitespace_between_inline_siblings_kept_as_one_space() {
+    // #2999: between two INLINE siblings the whitespace is the space between
+    // two words — a browser renders this as "A B". It is kept, collapsed to a
+    // single " " text node; the leading/trailing indentation is still dropped.
+    // (Before #2999 this test asserted 2 children, i.e. it encoded the bug.)
     let html = r#"<div>
     <span>A</span>
     <span>B</span>
@@ -606,14 +629,11 @@ fn test_whitespace_filtered_outside_pre() {
 
     let vdom = parse_html(html).unwrap();
 
-    // The div should only have the 2 span elements, whitespace filtered out
-    assert_eq!(
-        vdom.children.len(),
-        2,
-        "Div should have 2 children (spans only, whitespace filtered)"
-    );
+    assert_eq!(vdom.children.len(), 3, "span, \" \", span");
     assert_eq!(vdom.children[0].tag, "span");
-    assert_eq!(vdom.children[1].tag, "span");
+    assert!(vdom.children[1].is_text());
+    assert_eq!(vdom.children[1].text.as_deref(), Some(" "));
+    assert_eq!(vdom.children[2].tag, "span");
 }
 
 #[test]

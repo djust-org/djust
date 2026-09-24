@@ -258,6 +258,28 @@ pub fn splice_loop_placeholders(
     Ok(found)
 }
 
+/// Can a cached item's roots stand in for its `<dj-pc>` placeholder without
+/// changing the whitespace a full parse would keep (#2999)?
+///
+/// The parser keeps a whitespace run only when its nearest neighbour on BOTH
+/// sides is inline (text or an inline-level element). An item is parsed alone,
+/// so whitespace at its edges is dropped there, and in the reduced page the
+/// `dj-pc-*` sentinel is block-level, so whitespace next to it is dropped too.
+/// Both agree with the full parse exactly when the item's first and last roots
+/// are block-level elements: then every edge whitespace run has a block
+/// neighbour in the full parse as well. An inline, text or comment boundary
+/// root makes the result depend on the neighbours, so the splice is refused
+/// and `render_with_diff` falls back to a full parse.
+fn roots_are_whitespace_splice_safe(roots: &[VNode]) -> bool {
+    let block_element = |n: &VNode| {
+        !n.is_text() && !n.is_comment() && !djust_core::html_whitespace::is_inline_level_tag(&n.tag)
+    };
+    match (roots.first(), roots.last()) {
+        (Some(first), Some(last)) => block_element(first) && block_element(last),
+        _ => false,
+    }
+}
+
 /// Recurse into `node`'s children, replacing `<dj-pc>` placeholder elements with
 /// their cached subtree roots. A placeholder can ONLY appear as a child (the
 /// loop emits it among sibling items), never as the diff root, so we operate on
@@ -288,6 +310,12 @@ fn splice_children_placeholders(
             let roots = subtrees
                 .get(&hash)
                 .ok_or_else(|| format!("no cached parsed subtree for hash {hash:x}"))?;
+            if !roots_are_whitespace_splice_safe(roots) {
+                return Err(format!(
+                    "cached subtree for hash {hash:x} has an inline, text or comment \
+                     boundary root; whitespace around it depends on its neighbours (#2999)"
+                ));
+            }
             for root in roots {
                 new_children.push(root.clone());
             }
@@ -1256,12 +1284,21 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
         }
     }
 
-    // Apply replacements to each affected text node
+    // Compute every node's new text FIRST and only then write them, so a
+    // rejection never leaves the tree half-updated (the caller falls back to a
+    // full parse against this same tree).
+    let mut updates: Vec<(*mut VNode, String)> = Vec::with_capacity(node_replacements.len());
     for (node_idx, mut reps) in node_replacements {
         let (esc_start, _) = escaped_offsets[node_idx];
         let (ptr, _) = text_nodes[node_idx];
-        let node = unsafe { &mut *ptr };
+        let node = unsafe { &*ptr };
         let current_text = node.text.as_deref().unwrap_or("");
+        // #2999: whether a whitespace-only text node exists at all depends on
+        // its neighbours (kept as `" "` between inline siblings, else
+        // dropped) — only the full parse can decide that.
+        if djust_core::html_whitespace::is_html_whitespace_only(current_text) {
+            return false;
+        }
         let mut current_escaped = html_escape(current_text);
 
         reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
@@ -1283,7 +1320,15 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
             );
         }
 
-        node.text = Some(html_unescape(&current_escaped));
+        let new_text = html_unescape(&current_escaped);
+        if djust_core::html_whitespace::is_html_whitespace_only(&new_text) {
+            return false;
+        }
+        updates.push((ptr, new_text));
+    }
+    for (ptr, new_text) in updates {
+        let node = unsafe { &mut *ptr };
+        node.text = Some(new_text);
         node.cached_html = None;
     }
 

@@ -1,7 +1,8 @@
 /**
  * Tests for 4-phase patch sorting in applyPatches.
  *
- * Verifies that patches are ordered: RemoveChild → MoveChild → InsertChild → SetText/SetAttr
+ * Verifies that patches are ordered: RemoveChild → InsertChild/MoveChild placements
+ * (by final index, #2999) → SetText/SetAttr
  * and that RemoveChild patches on the same parent are sorted in descending index order.
  * Regression test for Issue #142, #198.
  */
@@ -35,17 +36,25 @@ describe('Patch sorting — 4-phase ordering', () => {
         ]);
     });
 
-    it('should order MoveChild between RemoveChild and InsertChild', () => {
+    // #2999: inserts and moves are PLACEMENTS at their final index and share
+    // one phase, ordered by that index per parent (`index` / `to`) — the
+    // server's model (patch.rs::apply_patches); applyPatches then applies one
+    // parent's placements together via _applyChildPlacements. This used to
+    // pin Remove → Move → Insert, the order under which a forward keyed move
+    // landed one slot early ([a,b,c] -> [b,c,a] came out "bac").
+    it('should order RemoveChild before InsertChild/MoveChild placements, by final index', () => {
         const patches = [
-            { type: 'InsertChild', path: [0], index: 0, node: {} },
             { type: 'MoveChild', path: [0], from: 1, to: 3 },
+            { type: 'InsertChild', path: [0], index: 0, node: {} },
             { type: 'RemoveChild', path: [0], index: 5 },
+            { type: 'MoveChild', path: [0], from: 4, to: 1 },
         ];
 
         _sortPatches(patches);
         expect(patches.map(p => p.type)).toEqual([
-            'RemoveChild', 'MoveChild', 'InsertChild'
+            'RemoveChild', 'InsertChild', 'MoveChild', 'MoveChild'
         ]);
+        expect(patches.slice(1).map(p => (p.type === 'MoveChild' ? p.to : p.index))).toEqual([0, 1, 3]);
     });
 
     it('should sort same-parent RemoveChild in descending index order', () => {

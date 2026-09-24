@@ -109,6 +109,17 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
     return None
 
 
+# ---------------------------------------------------------------------------
+# #2999: whitespace between inline-level siblings
+# ---------------------------------------------------------------------------
+
+# HTML whitespace (space, tab, LF, FF, CR). NOT ``\s``: Python's ``\s`` also
+# matches NBSP and the other Unicode spaces, which the Rust parser (and the
+# browser) treat as content.
+_HTML_WS_RUN_RE = re.compile(r"[ \t\n\r\f]+")
+_BLOCK_TAG_RE = re.compile(r"<([A-Za-z][^\s/>]*)")
+
+
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
     and various HTML extraction/stripping helpers."""
@@ -478,39 +489,33 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # Normalize whitespace
-        html = re.sub(r"\s+", " ", html)
-        html = re.sub(r">\s+<", "><", html)
+        # Normalize whitespace: collapse every run of HTML whitespace to one
+        # space (#2999: HTML whitespace only — NBSP and other Unicode spaces
+        # are content to the Rust parser and the browser, so ``\s`` was wrong).
+        html = _HTML_WS_RUN_RE.sub(" ", html)
 
-        # #1737: collapse whitespace between a tag boundary and a preserved
-        # (<pre>/<code>/<textarea>) block too, so this Python normalizer
-        # matches the Rust ``render_with_diff()`` whitespace pass exactly.
-        # Rust's parser drops every whitespace-only text node that is a direct
-        # child of a non-whitespace-preserving element (parser.rs:520-531), so
-        # the inter-element whitespace around — and BETWEEN — preserved blocks
-        # is removed: ``</div> <pre>`` → ``</div><pre>``,
-        # ``</textarea> </div>`` → ``</textarea></div>``, AND
-        # ``</textarea> <pre>`` → ``</textarea><pre>`` (preserved↔preserved).
-        # The placeholder-substitution above hides those boundaries from the
-        # ``>\s+<`` rule (the placeholder doesn't start with ``<``), so collapse
-        # them explicitly. Without this the initial-GET dj-root keeps
-        # whitespace-only text nodes around preserved blocks that the first WS
-        # frame lacks, re-opening the first-hydration whitespace mismatch
-        # (#1724 / #1737). Whitespace INSIDE a preserved block is untouched
-        # (it's hidden behind the placeholder and restored verbatim below), and
-        # whitespace adjacent to actual TEXT (e.g. ``before <pre>``) is left as
-        # a single space — Rust keeps it because that text node is not
-        # whitespace-only.
-        #
-        # (1) literal-tag → preserved   and   (2) preserved → literal-tag:
-        html = re.sub(r">\s+(__PRESERVED_BLOCK_\d+__)", r">\1", html)
-        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+<", r"\1<", html)
-        # (3) preserved → preserved: collapse whitespace between two adjacent
-        # preserved blocks. The lookahead (not a consuming group) lets a run of
-        # 3+ adjacent blocks collapse every gap in a single pass — a consuming
-        # ``\1...\2`` form would swallow the middle block and miss its trailing
-        # gap.
-        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+(?=__PRESERVED_BLOCK_\d+__)", r"\1", html)
+        # Then drop the space between two tags — and around/between preserved
+        # blocks (#1737), whose placeholders hide their ``<`` — unless it sits
+        # between two inline-level siblings, where it is the space between two
+        # words (#2999: ``<b>A</b> <i>B</i>`` must not read "AB"). This is the
+        # Rust parser's rule (``build_children`` in
+        # ``crates/djust_vdom/src/parser.rs``): whitespace-only text is dropped
+        # unless its nearest neighbour on each side is text or an inline-level
+        # element, in which case it is kept as one ``" "`` node. The
+        # placeholder cases matter for ``</strong> <code>`` — the ``<code>``
+        # block is a placeholder here. Whitespace INSIDE a preserved block is
+        # untouched (it's hidden behind the placeholder and restored verbatim
+        # below), and whitespace adjacent to actual TEXT (e.g.
+        # ``before <pre>``) is part of that text node and is left alone.
+        # The decision lives in Rust, next to the parser's own rule
+        # (djust_core::html_whitespace), so the two can't drift.
+        from djust._rust import collapse_inter_tag_whitespace
+
+        block_tags = []
+        for block in preserved_blocks:
+            m = _BLOCK_TAG_RE.match(block)
+            block_tags.append(m.group(1).lower() if m else "")
+        html = collapse_inter_tag_whitespace(html, block_tags)
 
         # Restore preserved blocks
         for i, block in enumerate(preserved_blocks):

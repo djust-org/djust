@@ -215,6 +215,19 @@ def render_markdown(
     """
     ...
 
+def collapse_inter_tag_whitespace(html: str, block_tags: List[str]) -> str:
+    """
+    The egress normalizer's inter-tag whitespace pass (#2999).
+
+    ``html`` has every whitespace run collapsed to one space and its
+    pre/code/textarea/script/style blocks replaced by
+    ``__PRESERVED_BLOCK_<i>__`` placeholders (tag ``block_tags[i]``). Drops a
+    space between two tags unless its nearest sibling on each side is text or
+    an inline-level element (custom elements count as inline) — the VDOM
+    parser's rule.
+    """
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -1373,6 +1386,7 @@ __all__ = [
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
+    "collapse_inter_tag_whitespace",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",

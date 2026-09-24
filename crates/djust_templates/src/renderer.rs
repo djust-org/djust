@@ -3448,8 +3448,11 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                 // `render_with_diff` parses + caches). Either way the
                                 // manifest records the item so `render_with_diff` can
                                 // reconstruct the full HTML and validate the splice.
+                                // Foster-safe AND block-level first root (#2999).
                                 let foster_safe =
-                                    crate::loop_cache::item_html_is_foster_safe(&item_html);
+                                    crate::loop_cache::item_html_is_parse_cache_eligible(
+                                        &item_html,
+                                    );
                                 let parse_hit = foster_safe
                                     && crate::loop_cache::with_active_cache(|cache| {
                                         cache.has_parsed(hash)
