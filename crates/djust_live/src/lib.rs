@@ -4527,6 +4527,31 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
     None
 }
 
+/// True when an open tag's body (the bytes between `<` and `>`) carries a
+/// `dj-root` or `dj-view` ATTRIBUTE: the name must be preceded by ASCII
+/// whitespace and followed by whitespace, `=`, `/` or the end of the tag.
+/// A bare prefix match also accepted `dj-view-transitions` (a `<body>`
+/// attribute) and `dj-viewport-top`, and missed a tab or newline before the
+/// name — disagreeing with the Python twin's `(?<![A-Za-z0-9_-])dj-root
+/// (?=[\s=>/])` and with `find_liveview_root`'s exact attribute-name
+/// comparison (#2892, #1646).
+fn tag_has_root_marker(tag_body: &[u8]) -> bool {
+    const MARKERS: [&[u8]; 2] = [b"dj-root", b"dj-view"];
+    let n = 7; // both markers are 7 bytes
+    if tag_body.len() < n + 1 {
+        return false;
+    }
+    (1..=tag_body.len() - n).any(|p| {
+        tag_body[p - 1].is_ascii_whitespace()
+            && MARKERS
+                .iter()
+                .any(|m| tag_body[p..p + n].eq_ignore_ascii_case(m))
+            && tag_body
+                .get(p + n)
+                .is_none_or(|&c| c.is_ascii_whitespace() || c == b'=' || c == b'/')
+    })
+}
+
 /// Locate the byte offset in `html` immediately after the opening tag
 /// of the first element bearing a `dj-root` or `dj-view` attribute.
 /// Returns None if no such element is found.
@@ -4570,18 +4595,22 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
             i = j + 1;
             continue;
         }
-        let has_marker = tag_body
-            .windows(8)
-            .any(|w| w.eq_ignore_ascii_case(b" dj-root") || w.eq_ignore_ascii_case(b" dj-view"));
-        if !has_marker {
+        if !tag_has_root_marker(tag_body) {
             i = j + 1;
             continue;
         }
         let name_end = tag_body
             .iter()
-            .position(|&c| c == b' ' || c == b'\t' || c == b'\n' || c == b'/' || c == b'>')
+            .position(|&c| c.is_ascii_whitespace() || c == b'/' || c == b'>')
             .unwrap_or(tag_body.len());
         let name = tag_body[..name_end].to_ascii_lowercase();
+        // A root on <html>/<head>/<body> is not a root the VDOM's
+        // `find_root` (which searches INSIDE <body>) can agree on; the Python
+        // twin (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
+        if matches!(name.as_slice(), b"html" | b"head" | b"body") {
+            i = j + 1;
+            continue;
+        }
         break (j + 1, name);
     };
 
@@ -5399,6 +5428,40 @@ mod dj_root_content_range_2663 {
     fn unterminated_script_runs_to_eof_and_returns_none() {
         let html = "<div dj-root><script>// <div dj-root>";
         assert_eq!(find_dj_root_content_range(html), None);
+    }
+
+    #[test]
+    fn non_div_root_is_found_and_balanced_by_its_own_name() {
+        let html =
+            "<body><section dj-root><section>x</section><p>y</p></section><b>after</b></body>";
+        assert_eq!(
+            inner(html),
+            Some("<section>x</section><p>y</p>"),
+            "root may be any element (#2892)"
+        );
+    }
+
+    #[test]
+    fn view_prefixed_attributes_are_not_the_root_marker() {
+        // `<body dj-view-transitions>` precedes the real root; a prefix match
+        // selected <body> and started the text scan in the wrong place.
+        let html = "<html><body dj-view-transitions><nav>N</nav>\
+                    <main dj-view=\"a.B\"><p>x</p></main><div dj-viewport-top=\"t\"></div></body></html>";
+        assert_eq!(inner(html), Some("<p>x</p>"));
+    }
+
+    #[test]
+    fn marker_after_tab_or_newline_is_found() {
+        assert_eq!(inner("<div\tdj-root><p>a</p></div>"), Some("<p>a</p>"));
+        assert_eq!(
+            inner("<div\ndj-view=\"a.B\"><p>a</p></div>"),
+            Some("<p>a</p>")
+        );
+    }
+
+    #[test]
+    fn root_on_body_is_not_selected() {
+        assert_eq!(inner("<body dj-root><p>a</p></body>"), None);
     }
 }
 

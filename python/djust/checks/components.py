@@ -14,6 +14,7 @@ from typing import Any, Optional
 from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
+from djust.mixins.template import _DJ_VIEW_RE as _TEMPLATE_DJ_VIEW_RE
 from djust.checks.utils import (
     DjustError,
     DjustInfo,
@@ -44,17 +45,15 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
 
 _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
 
-# V012 (#1803) — match a REAL ``<div ... dj-view ...>`` opening tag (a
-# standalone ``dj-view`` attribute), not the bare substring ``_DJ_VIEW_RE``
-# uses. Anchoring to an actual tag with the negative-lookbehind / lookahead
-# guards (mirrors ``mixins/template.py:_DJ_VIEW_RE``) means prose / comment
-# text that merely mentions ``dj-view`` (e.g. the "do not add another
+# V012 (#1803) — match a REAL ``<tag ... dj-view ...>`` opening tag (a
+# standalone ``dj-view`` attribute on ANY element, #2892), not the bare
+# substring. This IS the renderer's root-detection pattern
+# (``mixins/template.py:_DJ_VIEW_RE``) rather than a copy of it, so the check
+# and the render path cannot drift on what counts as a root (#1646). Prose /
+# comment text that merely mentions ``dj-view`` (e.g. the "do not add another
 # ``dj-view`` here" note in the sticky example template) does NOT false-match —
 # only an authored attribute on a real element does.
-_DJ_VIEW_TAG_RE = re.compile(
-    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
-    re.IGNORECASE,
-)
+_DJ_VIEW_TAG_RE = _TEMPLATE_DJ_VIEW_RE
 
 # V012 (#1803) — comment regions to strip before the ``<div ... dj-view ...>``
 # root scan. A sticky-child template commonly documents the wrapper it lives

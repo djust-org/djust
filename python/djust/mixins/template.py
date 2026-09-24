@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+from html import escape as _html_escape
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..utils import get_template_dirs
@@ -24,38 +25,76 @@ logger = logging.getLogger(__name__)
 # PR review: avoid re.compile() on every request).
 # ---------------------------------------------------------------------------
 
-# Match ``<div ... dj-root ...>`` as a standalone attribute name.
-# The (?=[\s=>/]) lookahead ensures the character immediately AFTER ``dj-root``
-# is whitespace, ``=``, ``>``, or ``/`` — so ``dj-root-other``, ``dj-rooted``,
-# ``data-dj-root``, etc. do NOT match. \b alone is unreliable because ``-``
-# is a non-word character and ``dj-root-foo`` has a \b between ``t`` and ``-``.
+# Match a real root OPEN tag carrying ``dj-root`` as a standalone attribute
+# name, on ANY element (#2892 — ``<main>``/``<section>``/``<article>`` are the
+# semantically right choice for a page's content region, and the div-only
+# pattern silently skipped the initial-GET normalisation for them).
+#
+# * Group 1 is the element name; ``_find_closing_tag_pos`` balances that name.
+# * ``html`` / ``head`` / ``body`` are excluded: the Rust VDOM's ``find_root``
+#   (``crates/djust_vdom/src/parser.rs``) searches INSIDE ``<body>``, so a root
+#   on those elements can never agree with the WS frame. The render path warns
+#   about such a root instead (``_warn_unmatched_root``).
+# * The (?=[\s=>/]) lookahead ensures the character immediately AFTER
+#   ``dj-root`` is whitespace, ``=``, ``>``, or ``/`` — so ``dj-root-other``,
+#   ``dj-rooted``, ``data-dj-root``, etc. do NOT match. \b alone is unreliable
+#   because ``-`` is a non-word character and ``dj-root-foo`` has a \b between
+#   ``t`` and ``-``.
+#
+# The Rust twin that must agree on what a root is:
+# ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (#1646).
+_ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[\s/>]))([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])"
 _DJ_ROOT_RE = re.compile(
-    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>",
+    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>",
     re.IGNORECASE,
 )
 
-# Match ``<div ... dj-view ...>`` as a standalone attribute name. Used as a
-# FALLBACK to ``_DJ_ROOT_RE`` in ``render_full_template``: when a template
-# declares only ``dj-view`` (the auto-inferred-dj-root case, see PR #297) and
-# no literal ``dj-root`` attribute, the dj-root replacement step must still
-# find the root div in the page shell — otherwise it falls through to
-# returning the un-normalized ``_full_template`` render, leaving HTML comments
-# and as-authored whitespace in the initial-GET dj-root that the WS
-# (``render_with_diff``) frame has already stripped. That structural mismatch
-# is what triggers the first-hydration ``morphChildren`` re-render / flash
-# (#1737). Same standalone-attribute lookahead semantics as ``_DJ_ROOT_RE``.
+# Same as ``_DJ_ROOT_RE`` for ``dj-view``. Used as a FALLBACK to
+# ``_DJ_ROOT_RE``: when a template declares only ``dj-view`` (the
+# auto-inferred-dj-root case, see PR #297) and no literal ``dj-root``
+# attribute, the dj-root replacement step must still find the root element in
+# the page shell — otherwise it falls through to returning the un-normalized
+# ``_full_template`` render, leaving HTML comments and as-authored whitespace
+# in the initial-GET dj-root that the WS (``render_with_diff``) frame has
+# already stripped. That structural mismatch is what triggers the
+# first-hydration ``morphChildren`` re-render / flash (#1737), and — when the
+# VDOM itself was built from the wrong subtree — the per-event patch failures
+# of #2892. The attribute-name boundary also keeps ``<body
+# dj-view-transitions>`` and ``dj-viewport-*`` from matching.
 _DJ_VIEW_RE = re.compile(
-    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
+    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
     re.IGNORECASE,
 )
+
+# Any tag carrying a dj-root / dj-view attribute, INCLUDING the elements the
+# two patterns above exclude. Only used to decide whether a page that yielded
+# no usable root was trying to declare one (``_warn_unmatched_root``).
+_ANY_ROOT_ATTR_RE = re.compile(
+    r"<[A-Za-z][^>]*?(?<![A-Za-z0-9_-])dj-(?:root|view)(?=[\s=>/])",
+    re.IGNORECASE,
+)
+
+# Within a root open tag: the ``dj-root`` attribute including any value (the
+# ``dj-view`` stamp goes right after it), and a ``dj-view`` attribute.
+_DJ_ROOT_ATTR_RE = re.compile(
+    r"""(?<![A-Za-z0-9_-])dj-root(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""",
+    re.IGNORECASE,
+)
+_DJ_VIEW_ATTR_RE = re.compile(r"(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])", re.IGNORECASE)
+
+# An EMPTY root element used as a placeholder in a ``wrapper_template``
+# (``<div dj-root></div>``, or the same on any element / with other attributes).
+_EMPTY_ROOT_PLACEHOLDER_RE = re.compile(
+    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>\s*</\1\s*>",
+    re.IGNORECASE,
+)
+
+# View classes already warned about an unusable root (one warning per class
+# per process — the render path runs on every GET).
+_UNMATCHED_ROOT_WARNED: "set[str]" = set()
 
 # Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
 _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
-
-# The extraction helpers' historical (looser) opening-tag patterns — hoisted so
-# they can be searched through ``_search_dj_root_open`` like every other sink.
-_LOOSE_DJ_ROOT_RE = re.compile(r"<div\s+[^>]*dj-root[^>]*>", re.IGNORECASE)
-_LOOSE_DJ_VIEW_RE = re.compile(r"<div\s+[^>]*dj-view[^>]*>", re.IGNORECASE)
 
 # Match a full ``<script>...</script>`` block. Used to mask script contents
 # before searching for ``</body>`` so a literal ``</body>`` in a JS string
@@ -107,6 +146,19 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
         if m:
             return m
     return None
+
+
+def _root_tag_name(html: str, match: "re.Match[str]") -> str:
+    """The element name of a root open tag found by ``_search_dj_root_open``.
+
+    Read from the ORIGINAL string by position (the match ran over a
+    length-preserving masked copy, whose group text must not be used)."""
+    return html[match.start(1) : match.end(1)].lower()
+
+
+def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tuple[None, None]":
+    """``(close_start, close_end)`` of the element whose open tag is ``match``."""
+    return TemplateMixin._find_closing_tag_pos(html, match.end(), _root_tag_name(html, match))
 
 
 # ---------------------------------------------------------------------------
@@ -583,12 +635,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         dj_root_open_start = dj_root_match.start()
         dj_root_open_end = dj_root_match.end()
 
-        # Find the matching </div> for <div dj-root> using shared logic.
-        # _find_closing_div_pos handles balanced div nesting AND (since
-        # #2663) masks script/style/comment raw text, so the script-mask +
-        # </body> search the Phase-1 splitter does is redundant here — the
-        # chunk boundary is the closing-</div>, not the </body>.
-        result = TemplateMixin._find_closing_div_pos(full_html, dj_root_open_end)
+        # Find the matching close tag for the dj-root element using shared
+        # logic. _find_closing_tag_pos balances nesting of the root's own
+        # element name (#2892) AND (since #2663) masks script/style/comment
+        # raw text, so the script-mask + </body> search the Phase-1 splitter
+        # does is redundant here — the chunk boundary is the root's close
+        # tag, not the </body>.
+        result = _find_root_close(full_html, dj_root_match)
         if result[1] is None:
             # Malformed HTML (no closing </div> for dj-root). Fall back to
             # a single chunk so we never produce broken output.
@@ -855,14 +908,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         is auto-inferred from dj-view (see PR #297).
         """
         # Find the opening tag for [dj-root], falling back to [dj-view]
-        opening_match = _search_dj_root_open(html, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
+        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return html
 
         start_pos = opening_match.end()
 
-        result = TemplateMixin._find_closing_div_pos(html, start_pos)
+        result = _find_root_close(html, opening_match)
         if result[0] is not None:
             return html[start_pos : result[0]]
         return html
@@ -874,15 +927,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
         is auto-inferred from dj-view (see PR #297).
         """
-        opening_match = _search_dj_root_open(template, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
+        opening_match = _search_dj_root_open(template, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return template
 
         start_pos = opening_match.start()
-        inner_start_pos = opening_match.end()
 
-        result = TemplateMixin._find_closing_div_pos(template, inner_start_pos)
+        result = _find_root_close(template, opening_match)
         if result[1] is not None:
             return template[start_pos : result[1]]
         return template
@@ -893,14 +945,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = _search_dj_root_open(template, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
+        opening_match = _search_dj_root_open(template, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return template
 
         start_pos = opening_match.end()
 
-        result = TemplateMixin._find_closing_div_pos(template, start_pos)
+        result = _find_root_close(template, opening_match)
         if result[0] is not None:
             return template[start_pos : result[0]]
         return template
@@ -909,8 +961,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def _find_closing_div_pos(
         template: str, inner_start: int
     ) -> "tuple[int, int] | tuple[None, None]":
+        """Find the ``</div>`` that closes the div opened just before
+        ``inner_start``. The ``div`` case of :meth:`_find_closing_tag_pos`."""
+        return TemplateMixin._find_closing_tag_pos(template, inner_start, "div")
+
+    @staticmethod
+    def _find_closing_tag_pos(
+        template: str, inner_start: int, tag: str
+    ) -> "tuple[int, int] | tuple[None, None]":
         """
-        Find the </div> that closes the div opened just before inner_start.
+        Find the ``</tag>`` that closes the ``<tag>`` opened just before
+        inner_start, balancing nested elements of the SAME name (#2892 — the
+        root may be any element, not only a ``<div>``).
 
         Returns (close_start, close_end) or (None, None) if not found.
 
@@ -935,24 +997,31 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             )
         ]
 
+        # The name must end at a tag boundary: ``<section-x>`` (a custom
+        # element) is not a ``<section>``. ``<div\b`` alone matched
+        # ``<div-foo>``.
+        name = re.escape(tag)
+        open_re = re.compile(r"<%s(?=[\s/>])" % name, re.IGNORECASE)
+        close_re = re.compile(r"</%s\s*>" % name, re.IGNORECASE)
+
         branch_stack: list[int] = []
         depth = 1
         pos = inner_start
 
         while depth > 0 and pos < len(template):
-            open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
+            open_match = open_re.search(template, pos)
             # Tolerate whitespace before '>' (``</div >`` / ``</div\n>``). A
             # plain ``</div>`` missed those, over-counting depth so the close
             # was never found — the close-side twin of the #1749 open-side
             # under-count. ``close_match.end()`` consumes the full tag incl.
             # trailing whitespace, so splice points stay correct. (#1751)
-            close_match = re.search(r"</div\s*>", template[pos:], re.IGNORECASE)
+            close_match = close_re.search(template, pos)
 
             if close_match is None:
                 break
 
-            close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float("inf")
+            close_pos = close_match.start()
+            open_pos = open_match.start() if open_match else float("inf")
             next_pos = min(open_pos, close_pos)  # type: ignore[type-var]
 
             # Process any flow-control tags that fall before the next div tag.
@@ -974,12 +1043,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 depth += 1
                 # open_pos < close_pos (an int) implies open_pos is the real
                 # int match position, never the float("inf") sentinel.
-                pos = int(open_pos) + 4
+                pos = int(open_pos) + 1 + len(tag)
             else:
                 depth -= 1
                 if depth == 0:
-                    return close_pos, pos + close_match.end()
-                pos = close_pos + 6
+                    return close_pos, close_match.end()
+                pos = close_match.end()
 
         return None, None
 
@@ -989,15 +1058,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = _search_dj_root_open(html, _LOOSE_DJ_ROOT_RE, _LOOSE_DJ_VIEW_RE)
+        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return html
 
         start_pos = opening_match.start()
-        inner_start_pos = opening_match.end()
 
-        result = TemplateMixin._find_closing_div_pos(html, inner_start_pos)
+        result = _find_root_close(html, opening_match)
         if result[1] is not None:
             liveview_div = html[start_pos : result[1]]
             stripped_div = self._strip_comments_and_whitespace(liveview_div)
@@ -1177,32 +1245,94 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # frame (modulo the dj-id attrs the client stamps on, per #1610).
             dj_root_match = _search_dj_root_open(shell_html, _DJ_ROOT_RE, _DJ_VIEW_RE)
             if dj_root_match:
-                # Start of the <div dj-root...> opening tag
+                # Start of the root element's opening tag (any element, #2892)
                 tag_start = dj_root_match.start()
-                # End of the opening tag (past the >)
-                after_open = dj_root_match.end()
-                # Find the matching </div> via the shared scanner instead of a
-                # duplicate hand-rolled depth loop. _find_closing_div_pos is
-                # multi-line-safe on the open side (``<div\b`` — subsumes the
-                # #1750 open-tag fix) and whitespace-tolerant on the close side
-                # (``</div\s*>`` — #1751). The rendered shell carries no
-                # ``{% %}`` tags, so the helper's if/else branch handling is
-                # inert here; this is purely the balanced-div scan. Removing the
-                # second scanner closes the parallel-path-drift gap (#1646) that
-                # let the open-side bug exist in one copy and not the other.
-                _close_start, close_end = TemplateMixin._find_closing_div_pos(
-                    shell_html, after_open
-                )
+                # Find the matching close tag via the shared scanner instead of
+                # a duplicate hand-rolled depth loop. _find_closing_tag_pos is
+                # multi-line-safe on the open side (#1750) and
+                # whitespace-tolerant on the close side (#1751), and balances
+                # the root's own element name (#2892). The rendered shell
+                # carries no ``{% %}`` tags, so the helper's if/else branch
+                # handling is inert here; this is purely the balanced scan.
+                # Removing the second scanner closes the parallel-path-drift
+                # gap (#1646) that let the open-side bug exist in one copy and
+                # not the other.
+                _close_start, close_end = _find_root_close(shell_html, dj_root_match)
                 if close_end is not None:
                     result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
                     result = self._inject_handler_metadata(result, request=request)
                     return result
 
-            # Fallback: dj-root not found in shell (shouldn't happen)
+            # Fallback: no usable root in the shell. Harmless for a page with
+            # no root at all; for a page that DECLARES one it means the
+            # normalisation was skipped and every patch will miss (#2892) —
+            # say so instead of degrading silently.
+            self._warn_unmatched_root(shell_html, found=dj_root_match is not None)
             shell_html = self._inject_handler_metadata(shell_html, request=request)
             return shell_html
         else:
             return self.render(request)
+
+    @staticmethod
+    def _stamp_dj_view(html: str, view_path: str) -> str:
+        """Add ``dj-view="<view_path>"`` to every real ``dj-root`` open tag that
+        has no ``dj-view`` of its own, so the client knows what to mount (#2981).
+
+        The attribute goes right after ``dj-root`` (and its value, if any), so
+        the one spelling the old literal replace handled — ``<div dj-root>`` —
+        still renders byte-identically as ``<div dj-root dj-view="...">``.
+        Tags inside ``<script>``/``<style>`` bodies and HTML comments are text
+        and are left alone (#2663).
+        """
+        attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
+        masked = _mask_raw_text(html)
+        parts = []
+        last = 0
+        for m in _DJ_ROOT_RE.finditer(masked):
+            tag = html[m.start() : m.end()]
+            if _DJ_VIEW_ATTR_RE.search(tag):
+                continue
+            root_attr = _DJ_ROOT_ATTR_RE.search(tag)
+            if root_attr is None:  # pragma: no cover — _DJ_ROOT_RE guarantees it
+                continue
+            insert_at = m.start() + root_attr.end()
+            parts.append(html[last:insert_at])
+            parts.append(attr)
+            last = insert_at
+        if not parts:
+            return html
+        parts.append(html[last:])
+        return "".join(parts)
+
+    @staticmethod
+    def _replace_root_placeholder(html: str, content: str) -> str:
+        """Replace every empty root placeholder element in a rendered
+        ``wrapper_template`` with ``content`` (any element name, any other
+        attributes — the old literal only knew ``<div dj-root></div>``)."""
+        return _EMPTY_ROOT_PLACEHOLDER_RE.sub(lambda _m: content, html)
+
+    def _warn_unmatched_root(self, shell_html: str, found: bool) -> None:
+        """Log once per view class when the page declares a dj-root/dj-view
+        root that the initial-GET normalisation could not use (#2892)."""
+        if not found and not _ANY_ROOT_ATTR_RE.search(_mask_raw_text(shell_html)):
+            return  # No root declared: a plain fragment page, nothing to say.
+        label = "%s.%s" % (type(self).__module__, type(self).__qualname__)
+        if label in _UNMATCHED_ROOT_WARNED:
+            return
+        _UNMATCHED_ROOT_WARNED.add(label)
+        reason = (
+            "its closing tag was not found"
+            if found
+            else "it is on <html>, <head> or <body>, which is not supported"
+        )
+        logger.warning(
+            "[LiveView] %s: the page declares a dj-root/dj-view root but %s. "
+            "The initial render was NOT normalised to match the WebSocket frame, "
+            "so patches will fail and fall back to full re-renders. Put dj-root "
+            "on an element inside <body> with a matching close tag (#2892).",
+            label,
+            reason,
+        )
 
     def _set_shell_sidecar(
         self,
