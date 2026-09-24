@@ -262,8 +262,11 @@ _SETATTR_WHITELIST = {
     # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
     # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
     # import in live_view.py.
-    ("live_view.py", 1417),
-    ("live_view.py", 1419),
+    # +8 (1417/1419 → 1425/1427) by #2969/#2919: ``_async_running`` and the
+    # sticky-kwargs bookkeeping names added to ``_FRAMEWORK_INTERNAL_ATTRS``.
+    # Still the same two DynamicLiveView developer-dict sites.
+    ("live_view.py", 1425),
+    ("live_view.py", 1427),
 }
 
 
