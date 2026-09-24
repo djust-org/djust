@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-09-24
+
+A security release for the 1.1 line.
+
+### Security
+
+- **This release and 1.2.1 include a fix for [GHSA-vq5h-rg2r-wfm5](https://github.com/djust-org/djust/security/advisories/GHSA-vq5h-rg2r-wfm5)** (React component props); see the advisory for details.
+
 ### Fixed
 
 - **React component props are serialised as real JSON and fully escaped.** A capitalised component tag such as `<Greeting who="{{ name }}" />` wrote its props into `data-react-props` with only `"` escaped, so a value with an apostrophe, backslash or control character produced JSON the client could not parse. The template renderer, the hydration pass and `ReactComponentRegistry.render()` now build the JSON with a real encoder and entity-escape the attribute value; readers decode it as before (`dataset.reactProps`). The hydration pass no longer re-resolves `{{ var }}` inside prop values the renderer has already resolved, so a context value that itself reads `{{ other }}` stays literal. Entities in literal props now reach the client as written: `label="Tom &amp;amp; Jerry"` arrives as `Tom &amp;amp; Jerry`, where it used to arrive decoded once.
