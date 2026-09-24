@@ -262,8 +262,12 @@ _SETATTR_WHITELIST = {
     # in ``_get_private_state`` and ``_capture_components_snapshot`` grew the file.
     # +1 (1391/1393 → 1392/1394) by #2900: the ``fingerprints_by_content``
     # import in live_view.py.
-    ("live_view.py", 1417),
-    ("live_view.py", 1419),
+    # +157 (1417/1419 → 1574/1576) by v1.2.1-7 (#2956/#2912/#2896/#2959): the
+    # ``_descriptor_fields`` / ``restore_components_snapshot`` helpers and the
+    # descriptor arms in the dirty fingerprint and private-state save. Still
+    # the same two sites.
+    ("live_view.py", 1574),
+    ("live_view.py", 1576),
 }
 
 

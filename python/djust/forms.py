@@ -395,12 +395,24 @@ class FormMixin:
             self.form_errors = {}
             self._form_instance = form
 
+            # A ``reset_form()`` inside ``form_valid`` raises
+            # ``_should_reset_form``; clear it first so a reset made by THIS
+            # hook can be told apart from one still pending from earlier.
+            reset_pending = getattr(self, "_should_reset_form", False)
+            self._should_reset_form = False
+
             # Call form_valid hook
             if hasattr(self, "form_valid"):
                 self.form_valid(form)
 
-            # Sync form_data from saved instance so VDOM reflects new values
-            self._sync_form_data(form)
+            if self._should_reset_form:
+                # form_valid reset the form: syncing the submitted values
+                # back into form_data would undo the reset (#2974).
+                pass
+            else:
+                # Sync form_data from saved instance so VDOM reflects new values
+                self._sync_form_data(form)
+            self._should_reset_form = self._should_reset_form or reset_pending
         else:
             self.is_valid = False
 
@@ -439,8 +451,15 @@ class FormMixin:
                 continue
             self.form_data[field_name] = val if val is not None else ""
 
+    @event_handler
     def reset_form(self, **kwargs: Any) -> None:
-        """Reset form to initial state"""
+        """Reset the form to its initial state.
+
+        An event handler, so a template can call it directly
+        (``dj-click="reset_form"``), and safe to call from ``form_valid``:
+        ``submit_form`` does not sync the submitted values back over a reset
+        (#2974).
+        """
         # reset_form() writes every attribute below EXCEPT form_choices, so an
         # unmounted view would still be missing that one (#2667).
         self._ensure_form_state()
