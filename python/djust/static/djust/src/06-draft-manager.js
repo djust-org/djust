@@ -152,9 +152,23 @@ function initDraftMode() {
     });
 
     // Check for draft clear flag
-    if (draftRoot.hasAttribute('data-draft-clear')) {
-        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
-        globalDraftManager.clearDraft(draftKey);
-        draftRoot.removeAttribute('data-draft-clear');
-    }
+    applyDraftClearFlag();
+}
+
+/**
+ * Clear the draft of every draft root carrying `data-draft-clear`, then drop
+ * the flag. `DraftModeMixin.clear_draft()` sets it on the NEXT render, which
+ * usually arrives as a patch or morph after an event (a successful submit), not
+ * as a page load — so this runs after every DOM update (reinitAfterDOMUpdate)
+ * as well as at init (#2971).
+ */
+function applyDraftClearFlag() {
+    document.querySelectorAll('[data-draft-enabled][data-draft-clear]').forEach(function (root) {
+        const key = root.getAttribute('data-draft-key');
+        if (key) {
+            if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+            globalDraftManager.clearDraft(key);
+        }
+        root.removeAttribute('data-draft-clear');
+    });
 }

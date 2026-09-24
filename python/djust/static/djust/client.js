@@ -1423,8 +1423,9 @@ class LiveViewWebSocket {
                     // HTTP content).
                     try {
                         if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
-                                ? window.location.pathname
+                                ? window.location.pathname + window.location.search
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
@@ -3611,11 +3612,25 @@ function initDraftMode() {
     });
 
     // Check for draft clear flag
-    if (draftRoot.hasAttribute('data-draft-clear')) {
-        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
-        globalDraftManager.clearDraft(draftKey);
-        draftRoot.removeAttribute('data-draft-clear');
-    }
+    applyDraftClearFlag();
+}
+
+/**
+ * Clear the draft of every draft root carrying `data-draft-clear`, then drop
+ * the flag. `DraftModeMixin.clear_draft()` sets it on the NEXT render, which
+ * usually arrives as a patch or morph after an event (a successful submit), not
+ * as a page load — so this runs after every DOM update (reinitAfterDOMUpdate)
+ * as well as at init (#2971).
+ */
+function applyDraftClearFlag() {
+    document.querySelectorAll('[data-draft-enabled][data-draft-clear]').forEach(function (root) {
+        const key = root.getAttribute('data-draft-key');
+        if (key) {
+            if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+            globalDraftManager.clearDraft(key);
+        }
+        root.removeAttribute('data-draft-clear');
+    });
 }
 
 function _collectFormData(container) {
@@ -6321,6 +6336,8 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // A clear_draft() from an event handler arrives in a patch (#2971).
+    applyDraftClearFlag();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
@@ -11805,7 +11822,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar we started above.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 return;
             }
@@ -11818,7 +11835,7 @@ window.djust.getActiveStreams = getActiveStreams;
             // Stop the page-loading bar we started above; the full nav
             // will trigger the browser's own progress indicator.
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                window.djust.pageLoading.stop?.();
+                window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
             }
             window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
@@ -11873,7 +11890,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 // will trigger the browser's own progress indicator (matches
                 // the cross-origin branch's stop semantics).
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             } else {
@@ -11882,7 +11899,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar — we are not navigating.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
             }
             return;
@@ -11891,6 +11908,11 @@ window.djust.getActiveStreams = getActiveStreams;
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
+        // The page being left, read BEFORE pushState moves location to the
+        // destination: its state snapshot is captured under this key
+        // (pathname + query, #2949). Read after pushState it named the
+        // destination, so the capture below found no snapshot to store.
+        const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -11935,7 +11957,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // public state to the SW cache BEFORE this URL leaves.
         try {
             window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                detail: { fromUrl: fromUrl, toUrl: newUrl.pathname },
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
@@ -12098,7 +12120,8 @@ window.djust.getActiveStreams = getActiveStreams;
                 // the DOM shortly after.
                 try {
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
-                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        // Keyed by pathname + query, as 03-websocket.js caches it (#2949).
+                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname + url.search);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
@@ -12118,7 +12141,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 let stateSnapshot = null;
                 try {
                     if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
-                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname + url.search);
                     } else if (window.djust && window.djust._pendingStateSnapshot) {
                         // Back-compat fallback — if the older async-race
                         // slot happens to be populated, honor it.
@@ -13689,8 +13712,10 @@ window.djust.bindModelElements = bindModelElements;
                 await window.djust.handleEvent(event, params);
             }
         } finally {
-            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.stop) {
-                try { window.djust.pageLoading.stop(); } catch (_) {}
+            // pageLoading exposes start/finish — there is no stop(), so the
+            // old `.stop` check left the bar at 90% forever (#2965).
+            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.finish) {
+                try { window.djust.pageLoading.finish(); } catch (_) {}
             }
         }
     }
@@ -16903,13 +16928,18 @@ globalThis.djust.djStickyScroll = {
 //   <script dj-track-static="reload" src="..."></script>
 //
 // Behavior:
-//   On the FIRST djust:ws-reconnected event the snapshot is empty, so
-//   the first connect seeds it. On every subsequent reconnect, each
-//   [dj-track-static] element's src/href is compared against the
-//   initial snapshot. If any differ, dispatch a dj:stale-assets
-//   CustomEvent (detail = { changed: [...urls] }). If any of the
-//   changed elements carried dj-track-static="reload", call
-//   window.location.reload() instead.
+//   The page-load snapshot records each [dj-track-static] element's
+//   src/href. On every djust:ws-reconnected event:
+//     1. each tracked element still in the page is compared with its
+//        snapshot URL (catches a patch that rewrote one in place);
+//     2. otherwise the page is re-fetched (GET, same origin, no redirects
+//        followed) and its [dj-track-static] URLs are compared with the
+//        snapshot. A new deploy changes them there, never in the running
+//        page's <head> — without this step a deploy was never detected
+//        (#2966).
+//   If anything changed, dispatch a dj:stale-assets CustomEvent
+//   (detail = { changed: [...urls] }). If a changed asset carries
+//   dj-track-static="reload", call window.location.reload() instead.
 
 // #880: Using `Map` (not `WeakMap`) deliberately: the reconnect-diff step
 // iterates ALL tracked elements to compare snapshot URLs with current URLs.
@@ -16954,7 +16984,7 @@ function _checkStale() {
         const currentUrl = _urlOf(el);
         if (currentUrl !== oldUrl) {
             changed.push(currentUrl);
-            if ((el.getAttribute('dj-track-static') || '').trim() === 'reload') {
+            if (_isReloadAsset(el)) {
                 shouldReload = true;
             }
         }
@@ -16962,10 +16992,78 @@ function _checkStale() {
     return { changed: changed, shouldReload: shouldReload };
 }
 
-function _onWsReconnected() {
-    const result = _checkStale();
-    if (!result) return;  // First connect — snapshot was just seeded.
-    if (result.changed.length === 0) return;
+function _isReloadAsset(el) {
+    return (el.getAttribute('dj-track-static') || '').trim() === 'reload';
+}
+
+/**
+ * Compare the tracked assets of a freshly fetched copy of the page with the
+ * page-load snapshot (#2966). ``html`` is the page source. Returns
+ * ``{changed, shouldReload}`` — ``changed`` lists URLs the server now serves
+ * that the running page did not load.
+ */
+function _compareWithServerPage(html) {
+    const empty = { changed: [], shouldReload: false };
+    if (!_djTrackStaticSnapshot || _djTrackStaticSnapshot.size === 0) return empty;
+    let doc;
+    try {
+        doc = new DOMParser().parseFromString(html, 'text/html');
+    } catch (_e) {
+        return empty;
+    }
+    const served = Array.from(doc.querySelectorAll('[dj-track-static]'));
+    // A page with no tracked assets (an error page, a different layout) says
+    // nothing about a deploy.
+    if (served.length === 0) return empty;
+    const loaded = new Set(_djTrackStaticSnapshot.values());
+    const servedUrls = new Set(served.map(_urlOf));
+    const changed = [];
+    let shouldReload = false;
+    served.forEach(function (el) {
+        const url = _urlOf(el);
+        if (url && !loaded.has(url) && changed.indexOf(url) === -1) {
+            changed.push(url);
+            if (_isReloadAsset(el)) shouldReload = true;
+        }
+    });
+    if (changed.length > 0) {
+        // A "reload" asset the server no longer serves also asks for a reload.
+        _djTrackStaticSnapshot.forEach(function (oldUrl, el) {
+            if (_isReloadAsset(el) && !servedUrls.has(oldUrl)) shouldReload = true;
+        });
+    }
+    return { changed: changed, shouldReload: shouldReload };
+}
+
+let _serverCheckInFlight = false;
+
+function _fetchAndCompare() {
+    if (_serverCheckInFlight) return Promise.resolve(null);
+    if (!_djTrackStaticSnapshot || _djTrackStaticSnapshot.size === 0) return Promise.resolve(null);
+    if (typeof window === 'undefined' || typeof window.fetch !== 'function') return Promise.resolve(null);
+    _serverCheckInFlight = true;
+    return window.fetch(window.location.href, {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        // A redirect (for example to a login page) would compare another
+        // page's assets: skip the check instead.
+        redirect: 'manual',
+        headers: { 'Accept': 'text/html' },
+    }).then(function (response) {
+        if (!response || !response.ok || response.redirected || response.type === 'opaqueredirect') {
+            return null;
+        }
+        return response.text().then(_compareWithServerPage);
+    }).catch(function () {
+        return null;
+    }).finally(function () {
+        _serverCheckInFlight = false;
+    });
+}
+
+function _reportStale(result) {
+    if (!result || result.changed.length === 0) return;
     if (result.shouldReload) {
         window.location.reload();
         return;
@@ -16973,6 +17071,18 @@ function _onWsReconnected() {
     document.dispatchEvent(new CustomEvent('dj:stale-assets', {
         detail: { changed: result.changed },
     }));
+}
+
+function _onWsReconnected() {
+    const result = _checkStale();
+    if (!result) return null;  // First connect — snapshot was just seeded.
+    if (result.changed.length > 0) {
+        _reportStale(result);
+        return null;
+    }
+    // The running page's <head> never changes on a deploy: ask the server
+    // for the page it would serve now (#2966).
+    return _fetchAndCompare().then(_reportStale);
 }
 
 function _installDjTrackStatic() {
@@ -16996,6 +17106,7 @@ globalThis.djust.djTrackStatic = {
     _snapshotAssets,
     _checkStale,
     _onWsReconnected,
+    _compareWithServerPage,
     _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
 };
 
@@ -18504,10 +18615,12 @@ globalThis.djust.djTransitionGroup = {
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        const pathname = fromUrl
+        // #2949: ``fromUrl`` is a cache key (pathname + query); the route
+        // map is keyed by pathname alone.
+        const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
-                : '/');
+                : '/')).split('?')[0].split('#')[0];
         const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
         // `pathname` is derived from user-controllable URL state — walk
         // own entries via Object.entries instead of indexing with the
@@ -18547,9 +18660,10 @@ globalThis.djust.djTransitionGroup = {
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
+        // #2949: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
-                ? window.location.pathname
+                ? window.location.pathname + window.location.search
                 : '/');
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
@@ -18571,7 +18685,7 @@ globalThis.djust.djTransitionGroup = {
         const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
         const url = (typeof window !== 'undefined' && window.location)
-            ? window.location.pathname
+            ? window.location.pathname + window.location.search
             : '/';
         bridge.lookupState(url).then(function (reply) {
             if (!reply || !reply.hit) {

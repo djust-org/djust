@@ -119,7 +119,7 @@
                 }
                 // Stop the page-loading bar we started above.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 return;
             }
@@ -132,7 +132,7 @@
             // Stop the page-loading bar we started above; the full nav
             // will trigger the browser's own progress indicator.
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                window.djust.pageLoading.stop?.();
+                window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
             }
             window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
@@ -187,7 +187,7 @@
                 // will trigger the browser's own progress indicator (matches
                 // the cross-origin branch's stop semantics).
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             } else {
@@ -196,7 +196,7 @@
                 }
                 // Stop the page-loading bar — we are not navigating.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
             }
             return;
@@ -205,6 +205,11 @@
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
+        // The page being left, read BEFORE pushState moves location to the
+        // destination: its state snapshot is captured under this key
+        // (pathname + query, #2949). Read after pushState it named the
+        // destination, so the capture below found no snapshot to store.
+        const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -249,7 +254,7 @@
         // public state to the SW cache BEFORE this URL leaves.
         try {
             window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                detail: { fromUrl: fromUrl, toUrl: newUrl.pathname },
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
@@ -412,7 +417,8 @@
                 // the DOM shortly after.
                 try {
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
-                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        // Keyed by pathname + query, as 03-websocket.js caches it (#2949).
+                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname + url.search);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
@@ -432,7 +438,7 @@
                 let stateSnapshot = null;
                 try {
                     if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
-                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname + url.search);
                     } else if (window.djust && window.djust._pendingStateSnapshot) {
                         // Back-compat fallback — if the older async-race
                         // slot happens to be populated, honor it.
