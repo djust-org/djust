@@ -247,13 +247,15 @@ class PostProcessingMixin:
         Post-process HTML to hydrate React component placeholders.
         """
         from ..react import react_components
+        import html as html_module
         import json as json_module
 
         pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
 
         def replace_component(match: "re.Match[str]") -> str:
             component_name = match.group(1)
-            props_json = match.group(2)
+            # The renderer entity-escapes the attribute value.
+            props_json = html_module.unescape(match.group(2))
             children = match.group(3)
 
             try:
@@ -261,27 +263,19 @@ class PostProcessingMixin:
             except json_module.JSONDecodeError:
                 props = {}
 
-            context = self.get_context_data()
-            resolved_props = {}
-            for key, value in props.items():
-                if isinstance(value, str) and "{{" in value and "}}" in value:
-                    var_match = re.search(r"\{\{\s*(\w+)\s*\}\}", value)
-                    if var_match:
-                        var_name = var_match.group(1)
-                        if var_name in context:
-                            resolved_props[key] = context[var_name]
-                        else:
-                            resolved_props[key] = value
-                    else:
-                        resolved_props[key] = value
-                else:
-                    resolved_props[key] = value
+            # The template renderer already resolved `{{ var }}` props from
+            # the view context. Don't resolve again here: a resolved value is
+            # user data, and one that reads `{{ other }}` must stay literal.
+            resolved_props = props
 
             renderer = react_components.get(component_name)
 
             if renderer:
                 rendered_content = renderer(resolved_props, children)
-                resolved_props_json = json_module.dumps(resolved_props).replace('"', "&quot;")
+                # Single-quoted attribute: escape `'` too, not only `"`.
+                resolved_props_json = html_module.escape(
+                    json_module.dumps(resolved_props), quote=True
+                )
                 return f"<div data-react-component=\"{component_name}\" data-react-props='{resolved_props_json}'>{rendered_content}</div>"
             else:
                 return match.group(0)
