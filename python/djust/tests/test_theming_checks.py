@@ -424,6 +424,22 @@ class TestCheckContextProcessor:
         assert len(errors) == 1
         assert errors[0].id == "djust_theming.E001"
 
+    def test_e001_is_a_warning_not_an_error(self):
+        """#3028: the processor is optional ({% theme_head %} works without it),
+        so a missing processor must not block management commands. Django
+        refuses to run a command on ERROR-level messages; a WARNING is shown
+        and the command proceeds. The id is unchanged so existing
+        SILENCED_SYSTEM_CHECKS entries keep matching."""
+        from django.core import checks
+
+        from djust.theming.checks import check_context_processor
+
+        with patch.object(settings, "TEMPLATES", []):
+            (message,) = check_context_processor(app_configs=None)
+        assert message.level == checks.WARNING
+        assert not message.is_serious()
+        assert message.id == "djust_theming.E001"
+
     def test_e001_passes_when_context_processor_present(self):
         """E001 passes when theme_context is in context_processors."""
         from djust.theming.checks import check_context_processor

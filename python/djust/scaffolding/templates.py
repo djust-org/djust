@@ -200,7 +200,8 @@ LIVEVIEW_ALLOWED_MODULES = [
 ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
 
 # ``djust.theming`` powers the starter page's theme switcher. Omitted with
-# ``--bare``. The context processor is required by djust_theming.E001.
+# ``--bare``. The context processor supplies the {{ theme_head }} variables
+# (djust_theming.E001 warns when it is missing; the tags work without it).
 # (#2874) No SILENCED_SYSTEM_CHECKS here: the shipped presets are
 # warning-clean under djust_theming.W001 as of the #2874 reconciliation.
 THEMING_SETTINGS = ""

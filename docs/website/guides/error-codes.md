@@ -1478,11 +1478,13 @@ These are registered by the `djust.theming` app under Django's `compatibility` t
 
 ### djust_theming.E001: theme_context processor missing
 
-**Severity**: Error
+**Severity**: Warning (an Error before 1.2.1; the id keeps its `E` prefix so existing `SILENCED_SYSTEM_CHECKS` entries still match)
 
-**What causes it**: "djust.theming.context_processors.theme_context is not in any TEMPLATES backend's context_processors list. Theme template variables (theme_head, theme_switcher, etc.) will not be available."
+The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% theme_panel %}` work without it; it only supplies the `{{ theme_head }}`-style variables, and it pre-renders the theme chunks on every request that uses a `RequestContext`. If your templates use only the tags, silence the check instead of adding the processor.
 
-**Fix**: Add `"djust.theming.context_processors.theme_context"` to `TEMPLATES[0]['OPTIONS']['context_processors']`.
+**What causes it**: "djust.theming.context_processors.theme_context is not in any TEMPLATES backend's context_processors list. Theme template variables (theme_head, theme_switcher, etc.) will not be available; the {% theme_head %} / {% theme_switcher %} tags still work."
+
+**Fix**: Add `"djust.theming.context_processors.theme_context"` to `TEMPLATES[0]['OPTIONS']['context_processors']` if templates use the `{{ theme_head }}` variables, or add `"djust_theming.E001"` to `SILENCED_SYSTEM_CHECKS` if they use only the tags.
 
 ---
 
