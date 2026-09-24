@@ -1,1 +1,0 @@
-- Dispose owned explicit child subtrees during replacement and teardown, clearing nested registrations, pending work and waiters. Implement view-owned `cancel_async_all()` with shared-runtime/WebSocket task tracking and stale-completion suppression; already-running synchronous side effects cannot be rolled back. The explicit-exposure prototype remains gated.

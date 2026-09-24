@@ -1,1 +1,0 @@
-- Give reactive `state()` fields typed instance access and independent mutable defaults; add lazy `default_factory` support. Explicit exposure and persistence policies remain proposed, not enabled by this change.

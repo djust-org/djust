@@ -1,1 +1,0 @@
-- Add a bounded, separately signed client-snapshot codec and guarded runtime mount/restore integration for explicitly declared client-persistence fields; explicit exposure remains disabled pending event refresh and full transport/provider coverage.

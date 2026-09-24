@@ -1,1 +1,0 @@
-- Refuse direct debug reset/eval for guarded explicit-policy views and reapply explicit debug permissions when exporting historical bug captures; legacy history is not exported under the explicit policy.
