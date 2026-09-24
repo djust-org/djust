@@ -33,6 +33,8 @@ from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 from djust.uploads import UploadMixin
 from djust.uploads.storage import InMemoryUploadState, get_default_store, set_default_store
 
+from .conftest import observability_request_factory
+
 RAW_NAME = "RAWDIR_SENTINEL/../photo_SAFE.png"
 SAFE_NAME = "photo_SAFE.png"
 WRITER_SENTINEL = "WRITER_SENTINEL"
@@ -270,7 +272,10 @@ async def test_explicit_upload_entries_never_reach_state_destinations(staged, rf
         register_view("exposure-upload-test", view)
         try:
             response = await sync_to_async(view_assigns)(
-                rf.get("/debug/", {"session_id": "exposure-upload-test"})
+                # The endpoint serves only token-bearing requests (b5ed46f2a).
+                observability_request_factory().get(
+                    "/debug/", {"session_id": "exposure-upload-test"}
+                )
             )
         finally:
             unregister_view("exposure-upload-test")
@@ -350,14 +355,28 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
     view.allow_upload("avatar", accept=".png", max_entries=3, max_file_size=100000)
     consumer = _consumer(view)
 
+    from djust.uploads import resumable
+
+    consulted = []
+    original = resumable.resolve_resume_request
+
+    def spy(**kwargs):
+        consulted.append(kwargs["upload_id"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(resumable, "resolve_resume_request", spy)
     await consumer._handle_upload_resume({"type": "upload_resume", "ref": "ref-resume"})
     reply = consumer.send_json.await_args.args[0]
     assert reply["type"] == "upload_resumed" and reply["ref"] == "ref-resume"
     if policy == "legacy":
-        # Control: legacy resumes from the state store.
-        assert reply["status"] == "resumed"
-        assert reply["bytes_received"] == 65536
+        # Control: legacy consults the resumable state store. Since #2972 a
+        # resume also needs the upload's live writer parked in this process;
+        # a bare state entry (no writer) answers not_found.
+        assert consulted == ["ref-resume"]
+        assert reply["status"] == "not_found"
     else:
+        # D-g: the state store is never consulted for an explicit view.
+        assert consulted == []
         assert reply == {
             "type": "upload_resumed",
             "ref": "ref-resume",

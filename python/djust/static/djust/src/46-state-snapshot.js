@@ -28,8 +28,8 @@
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        // ADR-038 E3-8: cache keys carry the query string; the route map
-        // is keyed by pathname alone.
+        // #2949 / ADR-038 E3-8: ``fromUrl`` is a cache key (pathname + query);
+        // the route map is keyed by pathname alone.
         const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
@@ -72,7 +72,7 @@
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
-        // ADR-038 E3-8: the capture key is pathname + query.
+        // #2949 / ADR-038 E3-8: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname + window.location.search

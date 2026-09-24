@@ -403,7 +403,7 @@ class ExposureContract:
                 if name in seen:
                     continue
                 seen.add(name)
-                if not isinstance(descriptor, StateProperty):
+                if not issubclass(type(descriptor), StateProperty):  # lazy-safe
                     continue
                 policy = descriptor.exposure
                 if owner is not view_class and policy != FieldExposure():

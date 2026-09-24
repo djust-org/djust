@@ -12,7 +12,9 @@ class NotificationCenter(Component):
     Args:
         notifications: list of dicts with keys: id, message, time, unread
         unread_count: number of unread notifications
-        open_event, mark_read_event, clear_event: dj-click events"""
+        open_event, mark_read_event, clear_event: dj-click events
+        is_open: whether the dropdown is shown; flip it in your
+            ``open_event`` handler (``self.bell.is_open = not self.bell.is_open``)"""
 
     #: ADR-033 D3: the walked state keys; ``notifications`` (the data) compares by
     #: identity, so reassign it to re-render — never a per-node walk per click.
@@ -26,9 +28,11 @@ class NotificationCenter(Component):
         mark_read_event: str = "mark_notification_read",
         clear_event: str = "clear_notifications",
         custom_class: str = "",
+        is_open: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
+            is_open=is_open,
             notifications=notifications,
             unread_count=unread_count,
             open_event=open_event,
@@ -43,11 +47,16 @@ class NotificationCenter(Component):
         self.mark_read_event = mark_read_event
         self.clear_event = clear_event
         self.custom_class = custom_class
+        self.is_open = is_open
 
     def _render_custom(self) -> str:
         """Render the notificationcenter HTML."""
         notifications = self.notifications or []
         cls = "notif-center"
+        # The dropdown is `display: none` in the stylesheet and nothing else
+        # ever showed it: the bell sent `open_event` and the list stayed shut.
+        if self.is_open:
+            cls += " notif-center--open"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         badge_html = (

@@ -1,6 +1,7 @@
 """Tag/Chip component for labels and categorization."""
 
 import html
+from django.utils.html import conditional_escape
 from typing import Any, Optional
 
 from djust import Component
@@ -88,10 +89,10 @@ class Tag(Component):
         classes = ["dj-tag"]
 
         if self.variant != "default":
-            classes.append(f"dj-tag-{self.variant}")
+            classes.append(f"dj-tag-{conditional_escape(self.variant)}")
 
         if self.size != "md":
-            classes.append(f"dj-tag-{self.size}")
+            classes.append(f"dj-tag-{conditional_escape(self.size)}")
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))

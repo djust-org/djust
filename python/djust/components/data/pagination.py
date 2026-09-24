@@ -5,6 +5,7 @@ Provides pagination controls for navigating through data sets.
 """
 
 from typing import Dict, Any, List
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 from ..base import LiveComponent
 from ...decorators import event_handler
@@ -70,9 +71,9 @@ class PaginationComponent(LiveComponent):
         """``dj-click`` for one of this component's own page controls, paired
         with ``data-component-id`` so the click routes to THIS component and not
         the parent view (#2776 — same shape as ``TableComponent.sort_by``)."""
-        attrs = f' dj-click="{event}" data-component-id="{self.component_id}"'
+        attrs = f' dj-click="{conditional_escape(event)}" data-component-id="{conditional_escape(self.component_id)}"'
         for key, value in data.items():
-            attrs += f' data-{key}="{value}"'
+            attrs += f' data-{key}="{conditional_escape(value)}"'
         return attrs
 
     @event_handler()
@@ -157,13 +158,11 @@ class PaginationComponent(LiveComponent):
         align_map = {"left": "", "center": "justify-content-center", "right": "justify-content-end"}
         align_class = align_map.get(self.alignment, "justify-content-center")
 
-        html = f'<div id="{self.component_id}">'
+        html = f'<div id="{conditional_escape(self.component_id)}">'
 
         # Page info
         if self.show_page_info:
-            html += (
-                f'<div class="text-muted mb-2 text-{self.alignment}">{self._get_page_info()}</div>'
-            )
+            html += f'<div class="text-muted mb-2 text-{conditional_escape(self.alignment)}">{conditional_escape(self._get_page_info())}</div>'
 
         # Pagination controls
         pagination_class = f"pagination {size_class} {align_class}".strip()
@@ -224,7 +223,7 @@ class PaginationComponent(LiveComponent):
         }
         size_class = size_map.get(self.size, size_map["md"])
 
-        html = f'<div id="{self.component_id}">'
+        html = f'<div id="{conditional_escape(self.component_id)}">'
 
         # Page info
         if self.show_page_info:
@@ -235,7 +234,7 @@ class PaginationComponent(LiveComponent):
                 if self.alignment == "right"
                 else "text-center"
             )
-            html += f'<div class="text-gray-600 mb-2 {info_align}">{self._get_page_info()}</div>'
+            html += f'<div class="text-gray-600 mb-2 {info_align}">{conditional_escape(self._get_page_info())}</div>'
 
         # Pagination controls
         html += f'<nav class="flex {align_class}" aria-label="Pagination">'
@@ -322,11 +321,13 @@ class PaginationComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML pagination"""
-        html = f'<div class="pagination-container text-{self.alignment}" id="{self.component_id}">'
+        html = f'<div class="pagination-container text-{conditional_escape(self.alignment)}" id="{conditional_escape(self.component_id)}">'
 
         # Page info
         if self.show_page_info:
-            html += f'<div class="pagination-info">{self._get_page_info()}</div>'
+            html += (
+                f'<div class="pagination-info">{conditional_escape(self._get_page_info())}</div>'
+            )
 
         # Pagination controls
         html += '<div class="pagination">'

@@ -385,6 +385,27 @@ issue or be explicitly closed with a reason.
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Open | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) |
 | 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: —  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
+| 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
+| 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
+| 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
+| 349 | A skip-render `server_push` answers with a `noop` that acknowledges nothing and can stop an in-flight event's loading state | PR #3035 | #3034 | Open | 1.3 (removes a frame). Split from #3001 |
+| 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: the script goes before the masked real `</body>` (else `</html>`) |
+| 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Closed | pattern: redos. Fixed in PR #3053 (`[^<>]*` tags); `_split_for_streaming`'s own mask (22 s) now uses the shared masker |
+| 352 | The HTTP-POST fallback ignores `_skip_render` on the view and component routes | PR #3039 | #3038 | Open | pattern: parallel-path-drift. Predates #3039; #2924 fixed the runtime `component_id` route only |
+| 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
+| 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Closed | pattern: flaky-test. Fixed in PR #3052: the assertion is render-scoped. The cause was process-wide phase counters, not a stale flag (it is reset in a `finally`) |
+| 355 | Dependabot #157: autobahn 24.4.2 stays in `uv.lock` for Python 3.10 (no patched release supports 3.10) | PR #3047 | Dependabot #157 | Open | Owner decision: dismiss as tolerable risk (daphne never enables permessage-deflate), or clear it when 3.10 support is dropped |
+| 356 | `{% live_form %}` / `{% live_field %}` / `{% live_errors %}` render their markup HTML-escaped on both engines (plain `str` returned to a `simple_tag`) | PR #3042 | #3043 | Closed | Fixed in PR #3053: `SafeString` from `as_live*`, `format_html_join` in `live_errors`, adapters escape `for=`/class; hostile values tested |
+| 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: bridged; djust's own bridged tags share one `RenderContext` per render (`library_render_scope`), third-party tags stay per call |
+| 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: `djust_core::raw_text` shared by `write_html` and `text_node_value` |
+| 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Items 1–2 fixed in PR #3052 (method-shadow skip, dangerous-key screen). Item 3, the replay nonce/TTL, is 1.3 |
+| 361 | Offline indicator (`show_when="offline"`) and offline banner never show; indicator text never switches | PR #3052 | #3051 | Closed | Fixed in PR #3057 (1.2.1, non-breaking: class names, data attributes and tag arguments unchanged). Visibility is `dj-offline-show` CSS on the body class; `52-offline-state.js` swaps text and status class |
+| 362 | `theme_context` pre-renders theme chunks on every request (~23 ms in djustlive) | PR #3052 | #3028 | Open | 1.3. E001 became a Warning in 1.2.1. Make the processor lazy, or fire the check only when the variables are used |
+| 363 | Live navigation keeps the previous page's `<head>` assets and outside-root scripts; `{{ block.super }}` titles are not updated | PR #3052 | #3036 | Open | 1.3. The title from `{% block title %}` shipped in 1.2.1. Head diffing or a track-static-style full-load fallback needs a wire addition |
+| 360 | Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× | PR #3042 | #2918 | Open | 1.3. Memoising diverges on side-effecting parents; the lazy `block` object across the Rust→Python boundary is the likely fix |
+| 364 | `{% badge %}` BEM classes (`dj-badge--*`, `dj-badge__*`) have no CSS; other BEM component templates may share the drift | PR #3053 | #3025 | Open | 1.3. Documented as unstyled in 1.2.1; shipping CSS changes how pages look (#2993 precedent) |
+| 365 | dj-root vs dj-view root precedence differs between Python (dj-root first) and the Rust VDOM (first of either) | PR #3053 | #3031 | Open | pattern: parallel-path-drift. 1.3. Aligning to Python moved a dj-view-only parent's VDOM root into an embedded dj-root child (reverted in review); needs a rule that skips embedded/sticky child roots |
+| 366 | Root locators diverge from the HTML tokenizer on malformed markup (unquoted value with a quote, bogus comments, unterminated tags, quoted `</tag>` in the close walk) | PR #3053 | #3054 | Open | pattern: parallel-path-drift. Pre-existing; needs markup rendered with the `safe` filter or `mark_safe` to reach |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -454,6 +475,465 @@ Five instances across three of these buckets, each caught by a human or reviewer
 
 - [ ] A mechanical gate tying a completed ROADMAP bucket to a `RETRO.md` entry — tracked in Action Tracker #341 (GitHub #2848)
 - [ ] Mechanical checks for false/stale claims in changelog fragments and PR bodies — tracked in Action Tracker #342 (GitHub #2849)
+
+## v1.2.1-1 — CSRF on socket-rendered pages (PR #3017)
+
+**Date**: 2026-09-24
+**Scope**: Two issues about CSRF on pages the socket renders. #2998: the socket mount rebuilt the view's request with `RequestFactory`, which carried no cookies and never ran `CsrfViewMiddleware`, so `{% csrf_token %}` minted a secret the browser never received and every form posted after `dj-navigate` got a 403. #2987: the CSRF meta tags went before the first `</head>` string and the debug CSS before every one, including a `</head>` inside a `<script>` string or comment. One PR, #3017, squash-merged as `f614e800d`.
+**Tests at close**: 18 cases in `python/djust/tests/test_csrf_socket_render_2998.py`, 8 new cases in `tests/unit/test_csrf_meta_injection.py`, a sticky-survivor case in `tests/unit/test_sticky_preserve.py`. Full Python suite: 30,924 passed / 947 skipped. With the fix reverted, 14 of the new tests fail. Retro: https://github.com/djust-org/djust/pull/3017#issuecomment-5805775601
+
+### What We Learned
+
+**1. Reuse the existing masker before writing a new HTML-position regex.** The first scanner was a bespoke regex; Security Check found it quadratic on unterminated regions. The fix reused #2663's `_mask_raw_text`, and Code Review then found `[^>]*>` still quadratic on tags that never close. The first perf test appended `</body></html>`, which gave the old regex a `>` to stop at and hid the bug. A perf test for a tag scanner needs input with no closing `>` after the run.
+
+**2. A never-raise helper needs a positive-outcome test in every mode.** The first `CSRF_USE_SESSIONS` attempt raised `SynchronousOnlyOperation` on the event loop, and `bind_csrf_cookie`, which never raises by design, swallowed it. Only the session-mode socket test's 403 showed the failure. `abind_csrf_cookie` now hops to a thread only in that mode.
+
+**3. Three independent wiring sweeps agreed.** Self-Review, Code Review and Re-Review each grepped every request-rebuild site on their own and reached the same list (runtime `_build_request` for WS and SSE, the live_redirect sticky staging, `live_render` children inheriting the parent's request). For a "one missed site is a partial fix" issue that is the right bar.
+
+### Insights
+- v1.2.1-3 (#3023) depends on the same raw-text masker; #3019 (the masker is quadratic on many `<script` tags with no `>`) belongs with that work.
+- Merging `origin/main` early and again before merge kept the concurrent v1.2.1-12 merge conflict-free.
+
+### Review Stats
+
+| Metric | #3017 |
+|---|---|
+| Tests added | 18 + 8 Python, 1 sticky case |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (quadratic regexes: Security Check, then Code Review), both fixed pre-merge |
+| CI failures | 0 (the pre-push EINVAL flake cost two local retries) |
+| Findings by pattern class | `redos` ×2, `unverified-claim` ×1 |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+- [ ] The handler-metadata script is still injected before every `</body>` string (same class as #2987). Tracked in Action Tracker #350 (GitHub #3018).
+- [ ] The #2663 raw-text masker is quadratic on many `<script` tags with no `>`. Tracked in Action Tracker #351 (GitHub #3019).
+
+## v1.2.1-12 — Components and theming CSS (PR #3016)
+
+**Date**: 2026-09-24
+**Scope**: Four component issues, each shipping its non-breaking part. #3008: the `CodeBlock` Copy button had no behaviour; it now carries `dj-copy` pointing at its own `<code>`. #2996 parts 1–2: `.dj-btn` and badge label fallbacks use the paired `--*-foreground` token instead of literal white, and empty rating stars use full `--muted-foreground` (≥ 3:1 on every preset). #2993 docs part: Alert, Progress and Avatar are documented as unstyled. #2985 1.2.1 part: four component scripts register their hook, silencing the false "No hook registered" warning. One PR, #3016, squash-merged as `1ca268c90`.
+**Tests at close**: 34 cases in `python/djust/components/tests/test_components_css_2996_2993_3008.py`, 20 in `tests/js/component_script_hooks_2985.test.js`. Full local runs: 31,021 Python passed / 947 skipped, 1,971 JS. With the fix reverted, 18 of the original 22 Python and 8 of the original 16 JS tests fail. Retro: https://github.com/djust-org/djust/pull/3016#issuecomment-5805649220
+
+### What We Learned
+
+**1. Guard every reader of the state, not just the registry you write.** Self-Review missed that `_getHookDefs()` merges `window.DjustHooks` under `window.djust.hooks`, so an app's `DjustHooks.Countdown` would have been shadowed. Code Review caught it (🔴). This is `parallel-path-drift`: the fix enumerated its own call sites, not every place the state lives.
+
+**2. Measure the contrast instead of adopting the issue's number.** The suggested `/ 0.55` passes on djust.org's palette only; measured over 136 presets × 2 modes, 187 of 214 non-exempt pairs still failed. Full `--muted-foreground` inherits a 3:1 guarantee from the existing 4.5:1 `CONTRAST_PAIRS` gate, and the test recomputes it for every preset.
+
+**3. An audit's scope is every shipped file of that kind.** The literal-white audit covered `components-classes.css` but not `components.css` (`.dj-ribbon`) or `scaffold.css`; the fix pass grepped every shipped `*.css`.
+
+### Insights
+- A test that pins an escaped value must check the value still works for its consumer: `dj-copy="#snip&quot;1"` rendered, but it is an invalid selector.
+- A browser check found what unit tests couldn't: the default preset's `--destructive-foreground` is dark, so literal white had been wrong even on the default theme.
+
+### Review Stats
+
+| Metric | #3016 |
+|---|---|
+| Tests added | 34 Python + 20 JS |
+| 🔴 Findings | 1 (`DjustHooks` precedence, Code Review), fixed pre-merge |
+| 🟡 Findings | 2 (explicit `id` selector, remaining literal-white labels), both fixed pre-merge |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×2, `test-gap` ×1 |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+None filed: every 🟡 was fixed in the PR. The 1.3 parts stay open on #2996 (part 3), #2993 (stylesheet) and #2985 (the missing hooks).
+## v1.2.1-5 — runtime and client batch: v1.2.1-5, -6, -10 and -11 (PR #3039)
+
+**Date**: 2026-09-24
+**Scope**: Four drain buckets in one PR, one commit per bucket, squash-merged as `cca46bb90`. v1.2.1-5 (runtime routing, mount, sticky): #2962 `listen()` in `mount()` joins the NOTIFY group; #2924 `_skip_render` on the `component_id` route; #2969 `cancel_async_all()`; #2919 (1.2.1 part: warn on changed sticky kwargs); #2961 SQL capture from sync handlers. v1.2.1-6 (realtime): #2968 the ping refreshes presence; #3002 (V004 skips `handle_*`); #3003 (document the 4429 disconnect); #3007 (drop phantom schema hooks). v1.2.1-10 (client JS): #2965 page-loading bar; #2971 `clear_draft()` from a handler; #2949 (snapshot keys carry the query); #2964 stream `limit=` caps the page; #2966 moved to 1.3. v1.2.1-11: #2957 PWA sync handlers; #2972 resumable uploads survive a WebSocket drop; #2967 `generate_sw --sw-version`.
+**Tests at close**: `python/djust/tests/test_runtime_lifecycle_v121_5.py`, `test_realtime_v121_6.py`, `test_client_behaviour_v121_10.py`, `test_uploads_v121_11.py`, `tests/js/client-behaviour-v121-10.test.js`, plus V004 cases in `python/tests/test_checks.py`. Every new test failed with its fix reverted. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3039#issuecomment-5807402405
+
+### What We Learned
+
+**1. After merging a sibling bucket, look for new helpers on the path you change.** The #2969 fix made the runtime honour `cancel_async()` for a running task, but did not port `_settle_cancelled_async`, which v1.2.1-2 (#3035) had added to the consumer twin an hour earlier. A cancelled task's event never ended its loading state (a regression against main), and the PR's own test asserted it. Code Review caught it (🔴).
+
+**2. A client request to a LiveView URL is a mount.** The first #2966 fix re-fetched the page on reconnect to read the deployed asset URLs. Self-Review showed that a GET re-runs `mount()` and overwrites the session state the HTTP fallback restores from, and after a deploy every client would do it at once (🔴). The correct design needs a mount-frame field, so #2966 moved to 1.3 with a design comment.
+
+**3. Reproducers find what triage misses.** Writing the tests first surfaced four bugs no issue listed: `live_redirect` captured no snapshot (it read the source URL after `pushState`); the runtime ignored running-task cancels; four `live_redirect` abort paths shared #2965's missing `stop()`; and upload resume could never complete, because the new view never registered the resumed ref. The #2972 fix therefore parks the live writer rather than only keeping its state.
+
+### Insights
+- A server-owned attribute that the client removes (`data-draft-clear`) makes the DOM disagree with the server VDOM, so a second identical render sends no patch. The stable shape is a push event for the live path plus a WeakSet for the patch path.
+- Security Check found a client-controlled key reaching a fallback lookup (`model="create_Task"`). Keep action and model-wide handler tables separate whenever a lookup key comes from the client.
+
+### Review Stats
+
+| Metric | #3039 |
+|---|---|
+| Issues | 17: 11 closed, 5 split (1.2.1 part landed), 1 moved to 1.3 (#2966) |
+| 🔴 Findings | 2 (#2966 GET: Self-Review; cancelled-task loading state: Code Review), both resolved pre-merge |
+| 🟡 Findings | 9 across Self-Review, Security Check and Code Review; 8 fixed, 1 filed (#3038) |
+| CI failures | 1 (a presence test raced the heartbeat against the pong; fixed) |
+| Findings by pattern class | `parallel-path-drift` ×4, `unverified-claim` ×3, security ×3 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] HTTP-POST fallback ignores `_skip_render`. Tracked in Action Tracker #352 (GitHub #3038).
+- [ ] `dj-track-static` deploy detection (1.3). Tracked in Action Tracker #353 (GitHub #2966).
+
+## v1.2.1-6 — Realtime / multiplayer correctness and DX (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-10 — Client JS behaviour (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-11 — Offline sync, uploads, PWA command (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-4 — security hygiene + scaffolding/CLI/config batch: v1.2.1-4 and -13 (PR #3047)
+
+**Date**: 2026-09-24
+**Scope**: Two drain buckets and one Dependabot alert in one PR, one commit per bucket, squash-merged as `614a464ab`. v1.2.1-4 (security hygiene): #2947 the log sanitizer is attached to every `djust.*` logger at `ready()`; #2973 (part 1: `tenant_redis`/`tenant_memory` in the presence registry, tenant prefix in either base order, `djust.C019`); #2878 (PVR intake + advisory publication runbook in `SECURITY.md`). v1.2.1-13 (scaffolding, CLI, config): #2889 (part 1: scaffold writes `"djust"`, `djust.V015`); #2983 deploy doctor sqlite; #2982 `deploy <slug> --from-git`; #2883 (C016 context-processor case); #2884 (part 1: stale comment); #2984 (part 1: `jit_serialization=False`, `djust.C018`); #3006 advisory cache re-check after an hour; #3013 lazy `fragment_text_map`; #3014 one dj-if marker map per patch batch. Dependabot #157 (autobahn): no lock change possible, documented in a security fragment.
+**Tests at close**: `tests/unit/test_log_sanitizer_child_loggers_2947.py`, `tests/unit/test_tenant_presence_2973.py`, `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`, `tests/js/dj_if_marker_index_3014.test.js`, plus 3 Rust cases in `fast_path_flag_tests` (`crates/djust_live/src/lib.rs`). The #3014 scan-count cases fail on main (50 and 5 scans against 1). CI green at the merge head after one flaky shard (#3048). Retro: https://github.com/djust-org/djust/pull/3047#issuecomment-5807944518
+
+### What We Learned
+
+**1. Base a check on what triggers the failure, not on what triage listed.** The plan's C020 fired on installed djust apps. But every scaffold installs `djust.theming` for the theme switcher, so every existing project would have been warned. The shipped check (V015) walks the URLconf and fires only for routed djust LiveViews, which is the case that actually breaks.
+
+**2. A per-batch cache needs every producer in the batch, not the obvious one.** #3014's map registered markers from InsertSubtree fragments only. The Code Review found that an InsertChild node can carry dj-if markers too (🟡). The fix registers those, and a new test fails without it.
+
+**3. Making a documented setting real is still an upgrade for someone.** `tenant_redis` used to fall back to in-process memory without a word; now it really uses Redis. The Code Review asked for an upgrade note (🟡, added to the fragment).
+
+### Insights
+- The check-id uniqueness canary (#2070) caught the first cut of #2883, which emitted `djust.C016` from a helper function. Helpers now return data, and the warning stays in the owning check.
+- Python applies a logger's filters only to records logged on that logger. The documented "every framework message is sanitized" had been false since the filter shipped. A shared, idempotent helper (the same shape as #2973's presence key) is how both fixes close their parallel paths.
+
+### Review Stats
+
+| Metric | #3047 |
+|---|---|
+| Issues | 12: 8 closed, 4 split (1.2.1 part landed), 0 moved to 1.3 |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (Code Review), both fixed pre-merge |
+| 🟢 Findings | 2: 1 fixed, 1 declined (a cosmetic duplicate-filter race) |
+| CI failures | 1 flaky benchmark shard, passed on rerun, filed #3048 |
+| Findings by pattern class | `parallel-path-drift` ×1, upgrade-note ×1 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] Flaky crossing assertion. Tracked in Action Tracker #354 (GitHub #3048).
+- [ ] Dependabot #157 on the Python 3.10 lock entry. Tracked in Action Tracker #355.
+
+## v1.2.1-13 — Scaffolding, CLI, config and checks (PR #3047)
+
+Shipped in the security hygiene + scaffolding batch with v1.2.1-4, one commit per bucket. The retro, review stats and open items are in the v1.2.1-4 entry above.
+
+## v1.2.1-14 — template and rendering follow-ups (PR #3053)
+
+**Date**: 2026-09-24
+**Scope**: 11 issues filed during the v1.2.1 drain or by users since, one commit per group. Squash-merged as `4547866c7`.
+- #3018: the handler-metadata script is injected once, before the page's real `</body>` (else `</html>`).
+- #3019: the raw-text masker is linear. `_split_for_streaming`'s own mask (22 s on 32 000 unclosed `<script>`) now uses it.
+- #3020: T018 skips string/number literals and filter names in `if`/`elif`/`while`.
+- #3024: third-party inclusion tags render in LiveView templates without the djust backend.
+- #3025 (split): `{% badge %}` is documented as shipping no CSS. The CSS and the BEM class audit are 1.3.
+- #3026: `highlight_code` keeps spaces between bare words.
+- #3030: the Python root search walks tags like the Rust locator. Both walkers, and the Rust close walk, treat `<` as a tag start only before a letter, `/` or `!`.
+- #3031 moved to 1.3 (reverted in review).
+- #3043: `live_form` / `live_field` / `live_errors` render markup; user values stay escaped.
+- #3044: `live_input`, `djust_skeleton`, `djust_track_static` bridge in root templates. djust's own bridged tags share one `RenderContext` per render.
+- #3045: one raw-text element list (`djust_core::raw_text`) for the VDOM serializer and the text fast path.
+
+**Tests at close**:
+- `python/djust/tests/test_body_close_and_masker_3018_3019.py`
+- `python/djust/tests/test_root_locator_parity_3030.py`, with Rust cases in `dj_root_content_range_2663`
+- `python/tests/test_checks_t018_literals_3020.py`
+- `python/tests/test_inclusion_tag_django_backend_3024.py` (Django parity)
+- `python/djust/components/tests/test_badge_unstyled_3025.py`
+- `python/djust/tests/test_live_form_tags_safe_3043.py` (Django parity, hostile values)
+- `python/djust/tests/test_live_tags_bridged_3044.py` (Django parity) and `python/tests/test_bridge_render_context_scope_3044.py`
+- the raw-text serializer cases in `crates/djust_vdom/src/lib.rs`
+
+The pre-push hook ran the full pytest and cargo suites on each push. Re-Review: 291 targeted pytest + 18 Rust. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3053#issuecomment-5808771912
+
+### What We Learned
+
+**1. Before sharing per-render state across bridged calls, check what the node cache keys on.** The first `library_render_scope` gave every bridged node one `RenderContext`. The bridge caches one node per argument tuple, so a stateful third-party tag merged its state across sites and loop iterations (`A1 B2 L3L4L5` instead of 1.2.0's `A1 B1 L1L1L1`). Only djust's own bridged tags share it now, and a test pins the third-party behaviour.
+
+**2. "Make the two sides agree" is non-breaking only if the side you change was wrong for every layout.** #3031 moved the VDOM to Python's precedence. A `dj-view`-only parent embedding a `{% live_render %}` child with its own `dj-root` then rooted the VDOM in the child, and parent updates stopped patching. The Rust side had been right for that layout. This is the same class as #3042's and #3052's lesson 1: test a change through the layouts its consumers use.
+
+**3. Measure a filed perf bug before scoping it.** #3019 named one masker. Measuring found a second, worse one (`_split_for_streaming`, 22 s) with the same `[^>]*` shape.
+
+### Insights
+- The Python walker had to copy the Rust walker's tag-start rule to agree with it. The HTML tokenizer's own rule (`<` + letter, `/`, `!`) was the one both could adopt. It also fixed a Rust close-walk miss (`a < b` inside the root).
+- `mark_safe` / `SafeString` are `Any` to mypy in this repo's strict islands, so typed locals are needed to return them from `-> str` functions.
+
+### Review Stats
+
+| Metric | #3053 |
+|---|---|
+| Issues | 11: 9 closed, 1 split (#3025), 1 moved to 1.3 (#3031) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1 (Code Review: shared render context for third-party tags), fixed pre-merge |
+| 🟢 Findings | 4: 3 fixed (close walk, nested-scope test, `hl-w` before a newline), 1 filed (#3054) |
+| Re-Reviews | 1, passed |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×3, `behaviour-change` ×1 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] `{% badge %}` CSS and the BEM class audit (1.3). Tracked in Action Tracker #364 (GitHub #3025).
+- [ ] dj-root vs dj-view precedence (1.3). Tracked in Action Tracker #365 (GitHub #3031).
+- [ ] Root locators on malformed markup. Tracked in Action Tracker #366 (GitHub #3054).
+
+## v1.2.1-15 — runtime and client follow-ups (PR #3052)
+
+**Date**: 2026-09-24
+**Scope**: Seven issues filed during the v1.2.1 drain, one commit each. Squash-merged as `3d27eb32a`.
+- #3027: a view whose `mount()` (or `handle_params()`, actor mount or initial render) raises no longer keeps its tick task running.
+- #3028 (split): `djust_theming.E001` is a Warning. The lazy processor is 1.3.
+- #3036 (split): live navigation sets the tab title from the destination's `{% block title %}`, and the navigation guide says what live navigation keeps. `<head>` asset diffing is 1.3.
+- #3038: the HTTP-POST fallback honours `_skip_render` for view and component events.
+- #3041: the client sets `body.djust-online` / `djust-offline`, so the `dj-offline-*` directives work.
+- #3046 (split): component and private-state restores are screened. The replay nonce/TTL is 1.3.
+- #3048: the `presenter_reverse` crossing assertion is render-scoped.
+
+**Tests at close**:
+- `python/djust/tests/test_mount_failure_stops_tick_3027.py`
+- `python/djust/tests/test_live_redirect_title_3036.py`
+- `python/djust/tests/test_http_skip_render_3038.py`
+- `python/djust/tests/test_restore_hardening_3046.py`
+- `tests/js/offline-body-classes-3041.test.js`
+- the per-call attribution test in `tests/benchmarks/test_model_backed_table_2532.py`
+
+Pre-push ran the selected pytest set (7,792 tests on the first push) and npm test. CI was green at the merge head. Retro: https://github.com/djust-org/djust/pull/3052#issuecomment-5808602648
+
+### What We Learned
+
+**1. Check which template a render used before reading the page from it.** #3036's first version read `<title>` out of the mount render's HTML. For the VDOM, `get_template()` returns only the `dj-root` template, so that HTML never has a `<head>`. The helper's unit tests passed while the feature did nothing. Only the end-to-end redirect test showed it. The shipped version renders just the page template's `<title>` element. This is the same class as #3042's lesson 1.
+
+**2. Line-pinned structural tests belong in the targeted set.** Pre-push failed on the `_SETATTR_WHITELIST` line numbers (`live_view.py` grew 44 lines above them) and on the template-bound normaliser inventory (a new `normalize_django_value` call in `runtime.py`). Both follow from the diff's shape and were missing from the targeted runs.
+
+**3. A count assertion must measure what it is about.** `text_change < attr_change` is a property of one render call. The counters were process-wide phase totals, so a second render in the window made it `302 < 302`. The tracker's guess, a stale thread-local flag, was wrong: the flag is reset in a `finally`.
+
+### Review Stats
+
+| Metric | #3052 |
+|---|---|
+| Issues | 7: 4 closed, 3 split (#3028, #3036, #3046), 0 moved to 1.3 |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (Code Review): HTTP skip carried `cache_request_id` (`@cache` stored an empty turn); the title rendered even when `page_title` was queued. Both fixed pre-merge |
+| 🟢 Findings | 4. 3 fixed (task-attribute guard, plan names, bench frame-time cutoff); 1 kept on purpose (redundant `DANGEROUS_ATTRIBUTES` screen) |
+| Re-Reviews | 1, passed |
+| CI failures | 0 (one pre-push failure on two structural pins, fixed before the first push) |
+| Findings by pattern class | `parallel-path-drift` ×1 (the `@cache` skip), `unverified-claim` ×1 (the #3036 first design) |
+
+### Process Improvements Applied
+None in this batch. IDEA: have `scripts/select-tests.py` pick line-pinned structural tests (whitelists, module inventories) when their pinned module changes.
+
+### Open Items
+- [x] Offline indicator and banner. Action Tracker #361 (GitHub #3051), fixed in PR #3057.
+- [ ] Lazy `theme_context` (1.3). Tracked in Action Tracker #362 (GitHub #3028).
+- [ ] `<head>` diffing on live navigation (1.3). Tracked in Action Tracker #363 (GitHub #3036).
+- [ ] Snapshot replay nonce/TTL (1.3). Tracked in Action Tracker #359 (GitHub #3046).
+
+## v1.2.1-15 follow-up — offline indicator and banner (PR #3057)
+
+**Date**: 2026-09-24
+**Scope**: #3051, found while fixing #3041 in #3052. Squash-merged as `4a0478948`.
+- `{% djust_offline_indicator show_when="offline" %}` and `djust/pwa/offline_banner.html` show while offline. The inline `display: none` is gone. The indicator's own `<style>` hides it unless `body.djust-offline`, and the banner adds `dj-offline-show`.
+- `src/52-offline-state.js` swaps each indicator's text and `djust-status-*` class at startup, on `online` / `offline`, and after every DOM update.
+- The `dj-offline-show` directive rule also matches `body:not(.djust-offline)`, so those elements no longer flash visible before the client runs.
+- Class names, data attributes and tag arguments are unchanged.
+
+**Tests at close**:
+- `tests/js/offline-indicator-3051.test.js` (7)
+- `tests/unit/test_pwa_offline_indicator_3051.py` (12)
+- Two updated assertions in `tests/unit/test_pwa.py`
+- A Playwright check in Chrome with `context.set_offline`
+
+Pre-push ran the full hook set and CI was green on both heads. Retro: https://github.com/djust-org/djust/pull/3057#issuecomment-5809096890
+
+### What We Learned
+
+**1. Check a behaviour claim against the selector.** #3052's guide text and its #3041 fragment said `dj-offline-show` elements "never appeared" before 1.2.1. They were in fact always visible, because the only rule hid them under `body.djust-online`, which nothing set. This PR repeated the claim until the Code Review caught it. It is the same `unverified-claim` class as the #3036 first design in #3052.
+
+**2. Test the CSS in a real browser as well as in jsdom.** The Chrome check rendered the real tag output with the built `client.js`, both with the client and with it blocked. It confirmed the no-flash behaviour that jsdom's partial cascade could only approximate.
+
+### Review Stats
+
+| Metric | #3057 |
+|---|---|
+| Issues | 1 closed (#3051) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1: the pre-1.2.1 `dj-offline-show` claim in the guide and the #3041 fragment. Fixed pre-merge |
+| 🟢 Findings | 2. Fixed: the client never toggles `djust-offline-indicator` itself. Declined: the JS test copies the tag CSS, but the pytest pins the rule text |
+| Re-Reviews | 1, passed |
+| CI failures | 0 |
+| Findings by pattern class | `unverified-claim` ×1, `parallel-path-drift` ×1 (🟢) |
+
+### Process Improvements Applied
+None.
+
+### Open Items
+None. This closes Action Tracker #361, and v1.2.1-15 has no open rows.
+
+## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
+
+**Date**: 2026-09-24
+**Scope**: Three drain buckets in one PR, one commit per bucket, squash-merged as `8bb04dacb`.
+- v1.2.1-7 (LiveView state):
+  - #2956: dirty tracking sees `state()` fields.
+  - #2912: dirty tracking sees class-level component state.
+  - #2896: the signed snapshot restores `__components__` through one helper shared with time-travel.
+  - #2959: public `state()` slots and `_reactive_state` leave the private session; a model-holding slot stays.
+  - #2974: `reset_form` is an `@event_handler` and survives `form_valid`.
+- v1.2.1-8 (VDOM):
+  - #2898: the text fast paths send decoded text.
+  - #3012: the client counts whitespace directly inside `pre`/`code`/`textarea`, as `build_children` does.
+  - #2997: a regression fixture; it was already fixed by #3009.
+- v1.2.1-9 (Rust renderer):
+  - #2890: `{% verbatim %}` inside an extended block.
+  - #2958: five `live_tags` tags bridge through Django's nodes in root templates.
+  - #2918 moved to 1.3.
+
+**Tests at close**:
+- `tests/unit/test_view_state_v1_2_1_7.py`
+- `tests/js/vdom_correctness_v1_2_1_8.test.js`, with three new real-patch fixtures from `scripts/gen_vdom_diff_fixtures.py`
+- `python/djust/tests/test_rust_renderer_v1_2_1_9.py`
+- Rust cases in `fast_path_flag_tests` (`crates/djust_live/src/lib.rs`) and `inheritance.rs`
+
+Targeted runs: pytest 13,116, vitest 385, `make test-rust` 2,529. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3042#issuecomment-5808112085
+
+### What We Learned
+
+**1. Test a "now works in X" fix through X.** The first #2958 tests handed `view` to a bare `RustLiveView` context, but a root LiveView's Rust context cannot carry the view. So the form tags printed their "no as_live()" comment in every real page (Code Review 🟡). The next test checked `"id_name" in html`, which escaped markup also passes (Re-Review). The shipped test renders a real `FormMixin` view through `render_with_diff` and compares each section with the Django engine's render of the same view.
+
+**2. A fast path that re-implements the parser must use the parser's table.** The first #2898 fix left only `script`/`style` bodies undecoded. html5ever also keeps `noscript` (scripting is on), `xmp`, `iframe`, `noembed`, `noframes` and `plaintext` as raw text, and under `svg`/`math` the same names decode. Self-Review proved the gap against `diff_html` (🔴). The fast path now falls back to the full parse under foreign content.
+
+**3. "The other path carries it" needs checking value by value.** #2959's precondition checked that the public restore sets `state()` through the descriptor. It did not check that the public path keeps every value the private one does. A Django model is flattened to a dict in the public state, but the private path re-hydrates it (#1994), so a model-holding slot still goes to the private session.
+
+### Insights
+- #2898 was wider than filed: plain auto-escaped text (`"plain"` → `"a & b"`) reached the page as `a &amp; b` through the fragment fast path. Only the reproducer showed it.
+- #2890: re-wrapping text in `{% verbatim %}` cannot round-trip a body that ends in `{%`, because it fuses with the end tag. `{% templatetag openbrace %}` for every `{` can.
+
+### Review Stats
+
+| Metric | #3042 |
+|---|---|
+| Issues | 11: 10 closed, 0 split, 1 moved to 1.3 (#2918) |
+| 🔴 Findings | 1 (Self-Review, raw-text elements in #2898), fixed pre-merge |
+| 🟡 Findings | 4 (Self-Review 2, Security 1, Code Review 1), all fixed pre-merge |
+| Re-Reviews | 2: the first failed on #2958's claim (narrowed; the escaping is pre-existing, #3043), the second passed |
+| CI failures | 0 |
+| Findings by pattern class | `unverified-claim` ×2, `parallel-path-drift` ×2 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] Form tags escape their markup. Tracked in Action Tracker #356 (GitHub #3043).
+- [ ] Three more `live_tags` tags without a Rust handler. Tracked in Action Tracker #357 (GitHub #3044).
+- [ ] `write_html` and raw-text elements. Tracked in Action Tracker #358 (GitHub #3045).
+- [ ] Restore hardening. Tracked in Action Tracker #359 (GitHub #3046).
+- [ ] Bridged tags under an armed `block.super` (1.3). Tracked in Action Tracker #360 (GitHub #2918).
+
+## v1.2.1-8 — VDOM diff correctness (PR #3042)
+
+Shipped in the state and rendering batch with v1.2.1-7, one commit per bucket. The retro, review stats and open items are in the v1.2.1-7 entry above.
+
+## v1.2.1-9 — Rust template renderer gaps (PR #3042)
+
+Shipped in the state and rendering batch with v1.2.1-7, one commit per bucket. The retro, review stats and open items are in the v1.2.1-7 entry above.
+
+## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
+
+**Date**: 2026-09-23
+**Scope**: Five issues in the WebSocket consumer's server-originated turns.
+- #3000: a socket closed while an event was in flight never reached `disconnect()`, leaving a zombie session.
+- #2945: a `tick_interval` shorter than the mount time never ticked.
+- #3001: a `server_push` that found the session busy was dropped.
+- #2955: `start_async` queued in a tick, push or notify turn never ran.
+- #2963: `async_pending` was never set for `start_async` work.
+
+One PR, #3035, squash-merged as `5c950166`. The #2955 fix is a port of `56c36d726` (PR #2954) without its ADR-038 child sweep.
+**Tests at close**: 29 Python cases in 5 new files, plus 3 JS cases in `tests/js/async_pending_ws_lifecycle_2963.test.js`. 4 existing tests were updated: the `server_push` yield test and the #1643, #1645 and #1817 source pins. Before the targeted-tests policy, the full suites (at `b0ba1ef3d`) gave 30,960 Python passed / 947 skipped and 1,978 JS. CI was green at the merge head.
+
+### What We Learned
+
+**1. Reproduce the lifecycle bug on the real server before designing.** Triage couldn't confirm #3000 statically. A copy of snake-arena under uvicorn, with a spy on the consumer, reproduced it 5/5 in minutes and showed this chain:
+- The event's reply was sent to a closed socket. uvicorn raised `ClientDisconnected`, an `OSError` as ASGI 2.4 specifies. `_send_frame` only handled the `RuntimeError` form.
+- `receive()`'s catch-all then sent an error frame to the same socket, which failed again.
+- That second failure ended Channels' dispatch loop, so the queued disconnect was never handled.
+- uvicorn caught the error silently, so nothing was logged.
+
+A tick-only backstop, the triage's fallback, would have left presence and groups leaking.
+
+**2. A fix that turns a signal on has to be checked against every path that turns it off.** #2963 made `async_pending` real, so the client now waits for a `source="async"` frame. The error arm (without `handle_async_result`) and both `cancel_async` returns never sent one. Self-Review caught the first. Code Review caught the second (🔴), which would have left `dj-loading.disable` buttons disabled for good on the consumer path.
+
+**3. A queue needs a throughput argument.** The first #3001 design replayed one push per render. A push stream faster than the render kept a viewer permanently up to 64 renders behind; on `main` a dropped push at least let the viewer catch up. Coalescing identical pushes (from Self-Review) wasn't enough. The final design applies the whole backlog in one turn and renders once.
+
+### Insights
+- The issues named 4 `has_async` sites. The change reached 2 more (the error arms and the cancel returns). This is the same "enumerate from the code" lesson as v1.2.1-3.
+- The tick loop's "no view means gone" check was one condition doing two jobs: "not mounted yet" (#2945) and "socket gone" (#3000). Separating them also fixed a double tick on re-mount that `main` had.
+
+### Review Stats
+
+| Metric | #3035 |
+|---|---|
+| Tests added | 29 Python + 3 JS |
+| 🔴 Findings | 1 (`cancel_async` leaves loading on), fixed |
+| 🟡 Findings | 7 across Self-Review, Security, Code Review and Re-Review; all fixed |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×3, `new` (queue throughput) ×2, `fix-reproduces-own-bug` ×1 |
+
+### Process Improvements Applied
+None in this bucket. The pre-push EINVAL blocker hit this bucket once and was fixed separately (#3029).
+
+### Open Items
+- [ ] A view whose `mount()` raises keeps ticking. Tracked in Action Tracker #348 (GitHub #3027).
+- [ ] The skip-render push noop (1.3). Tracked in Action Tracker #349 (GitHub #3034).
+
+## v1.2.1-3 — dj-root / dj-view detection (PR #3023)
+
+**Date**: 2026-09-23
+**Scope**: Two issues about the same root detection. #2981: `dj-view` was stamped only onto the literal `<div dj-root>`, so a root with any other attribute never mounted its WebSocket. #2892: the root regexes and closing-tag scanner only knew `<div>`, so a `<main>`, `<section>` or `<article>` root skipped initial-GET normalisation and every patch missed. One PR, #3023, squash-merged as `903398fe`.
+**Tests at close**: 54 cases in `python/djust/tests/test_root_detection_2892_2981.py` plus 6 Rust tests in `crates/djust_live/src/lib.rs`. Before the targeted-tests policy, full suites at `89ad7960d`: 30,982 Python passed / 947 skipped, 2,516 Rust, 1,975 JS. CI was green at the merge head.
+
+### What We Learned
+
+**1. When a detection regex starts driving an insertion, review it as a sanitiser.**
+The div-only pattern already matched ` dj-root ` inside an attribute value. That was harmless while a literal `str.replace` did the writing. Making the pattern tag-agnostic and having it place the `dj-view` stamp turned the old blindness into stored XSS through autoescaped content: `value="{{ q }}"` with `q = "x dj-root autofocus onfocus=alert(1)"` became a live handler. Self-Review and Security Check both caught it on their own before the PR opened. The fix made every root pattern quote-aware (whole quoted strings or single unquoted characters) and tokenised the matched tag before inserting. The Rust twin now skips quoted values as well.
+
+**2. Enumerate the paths from the code.** The issues named 4 Python sites. The inventory found 10 across Python checks, `testing.py`, both Rust crates and the client JS. Three of them had their own attribute-boundary bugs (`<body dj-view-transitions>` counted as a root in S011, T005 and the Rust scanner). Two were already correct and were left alone on purpose.
+
+**3. A partly-applied edit script produced a commit message that claimed a test that didn't exist.** `89b74b81a` said "the regression test covers both shapes". The script had asserted on the source edit, failed, and never touched the test file. The fresh-context Re-Review caught it, and `6fde5e04e` added the test (gate-off verified).
+
+### Insights
+- v1.2.1-1 (#3017, `</head>` injection) and this bucket both replaced string-literal HTML injection with located injection. A shared "find tag X outside raw text and quoted values" helper would serve both; #3030 is the first step.
+- Regex performance on tag soup with no `>` had been quadratic since before this bucket. Excluding unquoted `<` and asserting the tag closes before trying attributes made it linear (0.06 s at 160 KB, from over a minute).
+
+### Review Stats
+
+| Metric | #3023 |
+|---|---|
+| Tests added | 54 Python + 6 Rust |
+| 🔴 Findings | 2 (XSS stamp-in-value, found by Self-Review and Security Check; stamp misplaced by a look-alike name), both fixed pre-PR |
+| 🟡 Findings | 10 across the 4 review stages; 8 fixed, 2 deferred (#3030, #3031) |
+| CI failures | 0 |
+| Findings by pattern class | `xss` ×1, `parallel-path-drift` ×4, `redos` ×1, `test-gap` ×1 |
+
+### Process Improvements Applied
+None in this bucket. The EINVAL pre-push blocker was fixed separately (#3029).
+
+### Open Items
+- [ ] Python/Rust root choice when a quoted value contains `<… dj-root>`. Tracked in Action Tracker #346 (GitHub #3030).
+- [ ] dj-root vs dj-view precedence parity. Tracked in Action Tracker #347 (GitHub #3031).
 
 ## v1.2.0-6 — transport fidelity, wire versioning, and check coverage (PRs #2835–#2846)
 

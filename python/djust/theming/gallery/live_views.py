@@ -95,6 +95,15 @@ _DESCRIPTOR_STUBS: Dict[str, list] = {
 # have no descriptor to declare.
 
 
+#: Preview-only values. They never reach the component: `HIDDEN` replaces the
+#: examples with a sentence and a way back (a dismissed alert, a closed sheet —
+#: the component has no "dismissed" state, the host stops rendering it), and
+#: `RECEIVED` names the last event the page answered without a visible change
+#: (approve, send, save), so a click is seen to reach the server.
+PREVIEW_HIDDEN = "__preview_hidden__"
+PREVIEW_RECEIVED = "__preview_received__"
+
+
 def _text(_current: Any, incoming: Any) -> Any:
     return incoming
 
@@ -122,9 +131,62 @@ def _step(delta: int):
     return _shift
 
 
+def _month_step(delta: int):
+    """Move `date_picker`'s month, wrapping December <-> January.
+
+    `month=0` (the default, and what the example passes) means "this month";
+    the generic `_step` turned it into `None` or `-1`, so the arrows did
+    nothing.
+    """
+
+    def _shift(current: Any, _incoming: Any) -> Any:
+        import datetime
+
+        try:
+            month = int(current or 0)
+        except (TypeError, ValueError):
+            month = 0
+        if not 1 <= month <= 12:
+            month = datetime.date.today().month
+        return (month - 1 + delta) % 12 + 1
+
+    # What the usage snippet shows; `demo_stub_sources` cannot probe this one
+    # the way it probes `_step`, because the result depends on today's date.
+    _shift.stub_expr = (  # type: ignore[attr-defined]
+        "self.component.month % 12 + 1" if delta > 0 else "(self.component.month - 2) % 12 + 1"
+    )
+    return _shift
+
+
+def _hide(sentence: str):
+    """A dismiss / close / accept: the host stops rendering the component."""
+    return (PREVIEW_HIDDEN, lambda _c, _v: sentence)
+
+
+def _received(event: str):
+    """An event the host acts on that moves no state the preview could show."""
+    return (PREVIEW_RECEIVED, lambda _c, _v: event)
+
+
+def _tick_option(current: Any, incoming: Any, params: Dict[str, Any]) -> Any:
+    """`multi_select`: `option` is the box, `value` whether it is now ticked."""
+    option = params.get("option")
+    picked = [o for o in (current or []) if o != option]
+    return picked + [option] if incoming and option is not None else picked
+
+
+_tick_option.with_params = True  # type: ignore[attr-defined]
+_tick_option.stub_expr = (  # type: ignore[attr-defined]
+    "...  # the handler gets `option` (the box) and `value` (ticked or not)"
+)
+
+
 def _append_row(current: Any, _incoming: Any) -> Any:
-    # `rows` is a list of `{"value": ...}` dicts (see `form_array`).
-    return list(current or []) + [{"value": ""}]
+    # `rows` is a list of `{"value": ...}` dicts (see `form_array`). With no
+    # rows the component still renders `min` (1 by default) empty ones, so
+    # "add" has to start from that row, not from nothing — appending to an
+    # empty list rendered the same single row again.
+    return (list(current or []) or [{"value": ""}]) + [{"value": ""}]
 
 
 def _add_tag(current: Any, incoming: Any) -> Any:
@@ -179,8 +241,8 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_select": ("value", _text),
     "date_select": ("selected", _text),
     "set_step": ("active", _as_int),
-    "date_prev_month": ("month", _step(-1)),
-    "date_next_month": ("month", _step(1)),
+    "date_prev_month": ("month", _month_step(-1)),
+    "date_next_month": ("month", _month_step(1)),
     "toggle_expand": ("expanded", _flip),
     "toggle_preview": ("preview", _flip),
     "toggle_menu": ("open", _flip),
@@ -194,27 +256,46 @@ _DEMO_EVENTS: Dict[str, Any] = {
     "toggle_split_menu": ("is_open", _flip),
     "toggle_notifications": ("is_open", _flip),
     "toggle_sheet": ("is_open", _flip),
-    "close_sheet": ("is_open", lambda _c, _v: False),
-    "close_palette": ("is_open", lambda _c, _v: False),
-    # The command palette's search is intentionally a no-op in the catalogue:
-    # the example has static results, but typing still needs a hosted handler
-    # so the preview does not report an event error.
-    "palette_search": ("search", _text),
-    "language_search": ("search", _text),
+    # Closing, dismissing, accepting: the host stops rendering the component,
+    # which has no "dismissed" state of its own to re-render with. Writing
+    # `dismissed=True` (as this table did) changed nothing on screen, so the
+    # button looked broken; the preview now says what happened and offers the
+    # component back.
+    "close_sheet": _hide("Closed — your handler sets it closed."),
+    "close_palette": _hide("Closed — your handler sets it closed."),
+    "close_export": _hide("Closed — your handler sets it closed."),
+    "close_lightbox": _hide("Closed — your handler sets it closed."),
     "frameworks": ("selected", _text),
     "code": ("value", _text),
-    "update_content": ("value", _text),
     "upload_file": ("step", lambda _c, _v: "map"),
-    "accept_cookies": ("accepted", lambda _c, _v: True),
-    "dismiss_alert": ("dismissed", lambda _c, _v: True),
+    "accept_cookies": _hide(
+        "Accepted — your handler records consent and stops rendering the banner."
+    ),
+    "dismiss_alert": _hide("Dismissed — your handler stops rendering it."),
     "add_row": ("rows", _append_row),
-    # These three carry no state the component can be re-rendered with — the
-    # host is expected to act on them itself (send a message, record a review).
-    # Answered anyway, so the preview reports no failure; there is simply
-    # nothing for the page to change.
-    "approve": ("status", lambda _c, _v: "approved"),
-    "reject": ("status", lambda _c, _v: "rejected"),
-    "send": ("sent", lambda _c, _v: True),
+    # These carry no state the component can be re-rendered with — the host
+    # acts on them itself (send a message, run a search, record a review). The
+    # preview says the event arrived, so the click is seen to do something.
+    "approve": _received("approve"),
+    "reject": _received("reject"),
+    "send": _received("send"),
+    "save_prompt": _received("save_prompt"),
+    "export": _received("export"),
+    "mark_notification_read": _received("mark_notification_read"),
+    "clear_notifications": _received("clear_notifications"),
+    "palette_search": _received("palette_search"),
+    # `combobox` sends `<name>_search` as the reader types; filtering the
+    # options is the host's job. Unanswered, every keystroke was an error.
+    "language_search": _received("language_search"),
+    # `multi_select`'s checkboxes send the ticked value; `selected` holds them.
+    "set_frameworks": ("selected", _tick_option),
+    # `rich_text_editor` sends its content on input.
+    "update_content": ("value", _text),
+    "lightbox_navigate": ("active", _as_int),
+    # `otp_input`'s script fills the hidden input once every box has a digit.
+    "verify_code": _received("verify_code"),
+    # `error_boundary`'s Retry: a host reloads and clears `error`.
+    "retry_load": ("error", lambda _c, _v: ""),
     # Found by re-running the audit after the examples above gained content:
     # giving a component something to show also gives it something to click.
     # `carousel` emits next/prev only once it has slides, `data_table` emits a
@@ -222,7 +303,7 @@ _DEMO_EVENTS: Dict[str, Any] = {
     # `tag_input` fall back to their `name` as the event name — so their
     # examples now pass an explicit `event` rather than making the handler
     # depend on what the example happened to be called.
-    "dismiss_announcement": ("dismissed", lambda _c, _v: True),
+    "dismiss_announcement": _hide("Dismissed — your handler stops rendering it."),
     "carousel_next": ("active", _step(1)),
     "carousel_prev": ("active", _step(-1)),
     "set_color": ("value", _text),
@@ -277,7 +358,10 @@ def _make_demo_handler(event: str, effects: Any):
                 values[key] = _example_value(self.state.examples, key)
             # The value arrives typed (ADR-033 D4: every shipped component
             # emits `dj-value-value:int="4"`), so no coercion here.
-            values[key] = transform(values[key], value)
+            if getattr(transform, "with_params", False):
+                values[key] = transform(values[key], value, kwargs)
+            else:
+                values[key] = transform(values[key], value)
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
         self.state.values = values
@@ -321,6 +405,27 @@ def _make_descriptor_handler(descriptor_cls: Any):
     return event_handler(handler)
 
 
+def readable_annotation(annotation: Any) -> str:
+    """A parameter's annotation as a reader writes it, the way the docs site's
+    generator prints it: `<class 'str'>` is `str`, `typing.` goes, and an
+    outermost `Optional[X]` is `X | None`."""
+    import re
+
+    text = str(annotation or "—")
+    if text.startswith("<class '") and text.endswith("'>"):
+        return text[8:-2]
+    text = re.sub(r"ForwardRef\('([^']*)'\)", r"\1", text)
+    text = text.replace("typing.", "").replace("NoneType", "None")
+    if text.startswith("Optional[") and text.endswith("]"):
+        inner, depth = text[len("Optional[") : -1], 0
+        for char in inner:
+            depth += {"[": 1, "]": -1}.get(char, 0)
+            if depth < 0:  # `Optional[a] | Optional[b]`: not one outer Optional
+                return text
+        return f"{inner} | None"
+    return text
+
+
 def render_preview_examples(
     component_name: str, component_type: str, examples: list, values: Dict[str, Any]
 ) -> list[Dict[str, Any]]:
@@ -335,7 +440,8 @@ def render_preview_examples(
     markup: `accordion_toggle` sets `active`, `active` lands in the kwargs,
     and the re-render carries the open item. Returns `[{"html", "kwargs",
     "kwargs_display"}]` for both component kinds, so the page has one preview
-    mechanism rather than two.
+    mechanism rather than two; the first also carries `"feedback"` (the
+    "Your view received" note) when the last event moved nothing visible.
 
     Template components go through their **tag**, not their template — those
     are different programs (`catalogue._render_template_examples`).
@@ -349,7 +455,7 @@ def render_preview_examples(
     cached = _PREVIEW_RENDER_CACHE.get(key)
     if cached is not None:
         return cached
-    rendered = _render_preview_examples(component_name, component_type, examples, values)
+    rendered = _render_with_preview_feedback(component_name, component_type, examples, values)
     if len(_PREVIEW_RENDER_CACHE) >= 64:
         _PREVIEW_RENDER_CACHE.clear()
     _PREVIEW_RENDER_CACHE[key] = rendered
@@ -357,6 +463,44 @@ def render_preview_examples(
 
 
 _PREVIEW_RENDER_CACHE: Dict[Any, list] = {}
+
+
+def _render_with_preview_feedback(
+    component_name: str, component_type: str, examples: list, values: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    from django.utils.html import escape
+
+    values = dict(values)
+    hidden = values.pop(PREVIEW_HIDDEN, "")
+    received = values.pop(PREVIEW_RECEIVED, "")
+    # The playground renders its own copy of the first example with the values
+    # already merged in (`component_preview`), so the keys can arrive there.
+    cleaned = []
+    for example in examples or []:
+        example = dict(example)
+        hidden = example.pop(PREVIEW_HIDDEN, "") or hidden
+        received = example.pop(PREVIEW_RECEIVED, "") or received
+        cleaned.append(example)
+    examples = cleaned
+    if hidden:
+        note = (
+            f'<div class="dc-preview-feedback"><span>{escape(hidden)}</span> '
+            '<button type="button" class="btn btn-sm btn-outline" dj-click="reset_preview">'
+            "Show again</button></div>"
+        )
+        return [{"html": note, "kwargs": {}, "kwargs_display": ""} for _ in examples or [None]]
+    rendered = _render_preview_examples(component_name, component_type, examples, values)
+    if received and rendered:
+        # Beside the preview, not in it: an overlay previewed open (export
+        # dialog, sheet, lightbox) takes `.dc-preview` as its containing
+        # block, and a note inside it sat under the overlay's backdrop.
+        first = dict(rendered[0])
+        first["feedback"] = (
+            f'<p class="dc-preview-feedback">Your view received <code>{escape(received)}</code>'
+            " — what happens next is its handler's to decide.</p>"
+        )
+        rendered = [first] + list(rendered[1:])
+    return rendered
 
 
 def _render_preview_examples(
@@ -424,6 +568,15 @@ class Preview(LiveComponent):
     )
 
     @event_handler()
+    def reset_preview(self, **kwargs: Any) -> None:
+        """ "Show again" after a dismiss or close: drop the preview-only keys."""
+        self.state.values = {
+            k: v
+            for k, v in self.state.values.items()
+            if k not in (PREVIEW_HIDDEN, PREVIEW_RECEIVED)
+        }
+
+    @event_handler()
     def set_option(self, value: Any = "", **kwargs: Any) -> None:
         """A playground chip: ``dj-value="variant:ghost"`` / ``"disabled:true"``.
 
@@ -455,7 +608,7 @@ for _event, _effects in _DEMO_EVENTS.items():
 del _descriptor_cls, _event, _effects
 
 
-def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
+def demo_stub_sources(example: Dict[str, Any], params: Optional[set] = None) -> Dict[str, list]:
     """What each hand-hosted demo event does, as the line a handler writes.
 
     ``{event: [(kwarg, python_expression, initial_value), …]}`` — derived
@@ -463,6 +616,12 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
     semantics (`toggle_x` flips, `carousel_next` steps, `close_x` sets
     False, `set_x` takes the wire value, which arrives typed) rather than a
     generic assignment.
+
+    ``params`` is the component's parameter names. A demo effect on a kwarg
+    the component does not have (`dismissed`, `accepted`, `sent`, and
+    `notification_center`'s `is_open`) moves nothing, so it is left out —
+    showing it taught ``self.component.dismissed = True``, an attribute no
+    such component reads. The snippet then writes the generic handler.
     """
 
     out: Dict[str, list] = {}
@@ -470,9 +629,22 @@ def demo_stub_sources(example: Dict[str, Any]) -> Dict[str, list]:
         pairs = effects if isinstance(effects, list) else [effects]
         stubs = []
         for key, transform in pairs:
+            if key == PREVIEW_HIDDEN:
+                # A close / dismiss: a component with an open flag is closed
+                # by writing it; one without leaves hiding it to the host.
+                flag = next((f for f in ("is_open", "open") if params and f in params), None)
+                if flag is not None:
+                    stubs.append((flag, "False", example.get(flag)))
+                continue
+            if key == PREVIEW_RECEIVED:
+                continue  # the host acts on it; no component state moves
+            if params is not None and key not in params:
+                continue
             initial = example.get(key)
             name = getattr(transform, "__name__", "")
-            if transform is _flip:
+            if getattr(transform, "stub_expr", None):
+                expr = transform.stub_expr
+            elif transform is _flip:
                 expr, initial = f"not self.component.{key}", bool(initial)
             elif transform is _as_int or transform is _text:
                 # The wire carries the value typed (ADR-033 D4): no int().
@@ -752,6 +924,7 @@ def catalogue_chrome() -> Dict[str, Any]:
         "djust_version": djust_version,
         "docs_url": docs_url,
         "docs_guide_url": f"{docs_url}/guides/components/",
+        "docs_hooks_url": f"{docs_url}/guides/hooks/",
         "docs_reference_url": f"{docs_url}/reference/components/",
     }
 
@@ -847,6 +1020,12 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # them from `examples[0]` would make the whole page show it repeated.
         descriptor_cls = _INTERACTIVE.get(component_name)
         values = dict(descriptor_cls.State()) if descriptor_cls is not None else {}
+        # ...but a descriptor default must not override what the example
+        # itself documents: `accordion`'s example opens item "1", and the
+        # State's `active=""` rendered it closed while its Arguments read
+        # `active=''` — the page contradicting the registry's example.
+        if values and examples:
+            values = {key: examples[0].get(key, value) for key, value in values.items()}
         if component_name == "dropdown":
             # The catalogue has one populated dropdown example. Start it open
             # so the menu items are visible before the reader interacts with it;
@@ -869,7 +1048,13 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # the page's `{{ preview }}` one render. Not per event: an open item
         # would change the table and, with it, force a page render for what
         # is otherwise a preview-only click (ADR-032 D1).
-        from .catalogue import component_events, split_usage, styles_for, usage_with_events
+        from .catalogue import (
+            component_events,
+            contract_events,
+            split_usage,
+            styles_for,
+            usage_with_events,
+        )
 
         ctx.pop("styles", None)
         rendered = self._render_examples()
@@ -878,18 +1063,46 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         # Usage with its events: what the first example's markup emits, the
         # descriptor's class-level form when there is one, and for the
         # hand-hosted demo events the kwarg each one drives.
-        events = component_events("".join(e["html"] for e in rendered[:1]))
+        first_html = "".join(e["html"] for e in rendered[:1])
+        events = contract_events(
+            self._event_params(component_name, component_type, ctx),
+            examples[0] if examples else {},
+            first_html,
+        )
+        # The snippet answers everything the copied example emits — including
+        # a name the example wrote into its own markup (`loading_overlay`'s
+        # demo button), which is not the component's event but still reaches
+        # the view. Leaving it out made the copied code fail on first click.
+        usage_events = events + [e for e in component_events(first_html) if e not in events]
         ctx["usage_snippet"] = usage_with_events(
             ctx.get("usage_snippet", ""),
-            events,
+            usage_events,
             descriptor_class=descriptor_cls.__name__ if descriptor_cls is not None else "",
             descriptor_event=descriptor_cls.Meta.event if descriptor_cls is not None else "",
-            demo_stubs=demo_stub_sources(examples[0] if examples else {}),
+            demo_stubs=demo_stub_sources(
+                examples[0] if examples else {}, self._param_names(component_type, ctx)
+            ),
             class_name=ctx.get("class_name") or "",
             example=examples[0] if examples else None,
         )
         ctx["usage_parts"] = split_usage(ctx["usage_snippet"])
         ctx["events"] = events
+        # What the component needs in the browser beyond djust's client: a
+        # shipped script the page must include (and which this page now loads,
+        # so the preview is live), or a `dj-hook` nothing ships.
+        from django.templatetags.static import static
+
+        from .component_registry import component_client
+
+        client = component_client(component_name)
+        from .component_registry import unstyled_python_class
+
+        # The tag this page previews is styled; its Python class twin is not
+        # (#2993). Say so where the reader chooses between them.
+        ctx["unstyled_class"], ctx["unstyled_class_root"] = unstyled_python_class(component_name)
+        ctx["client_hook"] = client["hook"] if not client["hook_shipped"] else ""
+        ctx["client_script"] = client["script"]
+        ctx["client_script_url"] = static(client["script"]) if client["script"] else ""
         # Rendered here through the Python component, not the `{% code_snippet %}`
         # tag: the Rust engine renders that tag natively and its output is not
         # highlighted (a gap noted for the docs pass). The component's own
@@ -906,6 +1119,31 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
                 code=ctx["usage_parts"]["template"], language="django"
             ).render(),
         }
+
+    @staticmethod
+    def _param_names(component_type: str, ctx: Dict[str, Any]) -> set:
+        """The kwargs the rendered component actually accepts."""
+        if component_type == "template":
+            groups = (ctx.get("required_context") or []) + (ctx.get("optional_context") or [])
+        else:
+            groups = ctx.get("python_params") or []
+        return {p.get("name", "") for p in groups}
+
+    @staticmethod
+    def _event_params(component_name: str, component_type: str, ctx: Dict[str, Any]) -> list:
+        """The class's parameters with their docstring descriptions, for
+        :func:`contract_events` — the same inputs ``describe_component``
+        gives it, so the page and the reference list the same events."""
+        if component_type == "template":
+            return []
+        from .component_registry import _docstring_args, _load_component_class
+
+        cls, _class_name = _load_component_class(component_name)
+        docs = _docstring_args(cls)
+        return [
+            {**p, "doc": p.get("description") or docs.get(p.get("name", ""), "")}
+            for p in ctx.get("python_params") or []
+        ]
 
     def _render_examples(self) -> list[Dict[str, Any]]:
         """The rendered examples, as the preview renders them now."""
@@ -966,24 +1204,55 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             for p in ctx.get("optional_context") or []
         ]
 
-        def type_name(annotation: Any) -> str:
-            # `<class 'float'>` is the repr of a type, not a type name.
-            text = str(annotation or "—")
-            return text[8:-2] if text.startswith("<class '") and text.endswith("'>") else text
+        from .catalogue import _PUSH_EVENT_PARAMS
+
+        # A form-field component declares `name` itself — the HTML field name
+        # — and the base class then does not stamp it as the instance
+        # identity (`Component.__init__`), so the identity clause is false
+        # there.
+        declares_name = any(
+            p.get("name") == "name" and not str(p.get("kind", "")).startswith("VAR_")
+            for p in ctx.get("python_params") or []
+        )
 
         def param_type(p: Any) -> str:
-            text = type_name(p.get("annotation"))
+            if p.get("kind") == "VAR_KEYWORD":
+                # Not a parameter called `kwargs`: what `Component.__init__`
+                # does with the keywords the class does not name. `id=` is
+                # the instance's `.id`; no shipped component's markup renders
+                # it, so "the element id" would be untrue.
+                identity = (
+                    ""
+                    if declares_name
+                    else "`name=` identifies the instance in the events it sends, "
+                )
+                return (
+                    f"— passed to `Component.__init__`: {identity}`id=` sets `component.id`, "
+                    "and any other keyword is kept as state"
+                )
+            if p.get("kind") == "VAR_POSITIONAL":
+                return "—"
+            text = readable_annotation(p.get("annotation"))
+            if p["name"] in _PUSH_EVENT_PARAMS:
+                # Server -> client: the name your view pushes to the component.
+                return f"{text} — the event your server pushes to it"
             # ADR-033 D5: `event=` renames the verb; which instance spoke is
             # `name`, carried on every trigger as `dj-value-name`.
             if p["name"] == "event" or p["name"].endswith("_event"):
+                if declares_name:
+                    return f"{text} — renames the event"
                 return f"{text} — renames the event; identity is `name`"
             return text
 
+        def param_name(p: Any) -> str:
+            stars = {"VAR_KEYWORD": "**", "VAR_POSITIONAL": "*"}.get(p.get("kind", ""), "")
+            return stars + p["name"]
+
         params_rows = [
             [
-                p["name"],
+                param_name(p),
                 param_type(p),
-                str(p.get("default", "")),
+                "—" if str(p.get("kind", "")).startswith("VAR_") else str(p.get("default", "")),
                 docs_by_name.get(p["name"], "—"),
             ]
             for p in ctx.get("python_params") or []
@@ -1079,7 +1348,9 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
 
 
 for _event in (
-    list(_DEMO_EVENTS) + [cls.Meta.event for cls in _INTERACTIVE.values()] + ["set_option"]
+    list(_DEMO_EVENTS)
+    + [cls.Meta.event for cls in _INTERACTIVE.values()]
+    + ["set_option", "reset_preview"]
 ):
     if not hasattr(ComponentsDetailView, _event):
         setattr(ComponentsDetailView, _event, _make_forwarder(_event))

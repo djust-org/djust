@@ -1328,8 +1328,8 @@ class TestV003MountSignature:
 class TestV004MissingEventHandlerDecorator:
     """V004 -- public method looks like event handler but missing @event_handler."""
 
-    def test_v004_handle_prefix_without_decorator(self):
-        """V004 fires for handle_* method without @event_handler."""
+    def test_v004_handler_like_prefix_without_decorator(self):
+        """V004 fires for a submit_* method without @event_handler."""
         import pytest
 
         if not _liveview_available():
@@ -1341,7 +1341,7 @@ class TestV004MissingEventHandlerDecorator:
         def mount(self, request, **kwargs):
             pass
 
-        def handle_submit(self, **kwargs):
+        def submit_order(self, **kwargs):
             pass
 
         cls = type(
@@ -1351,14 +1351,51 @@ class TestV004MissingEventHandlerDecorator:
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
-                "handle_submit": handle_submit,
+                "submit_order": submit_order,
             },
         )
 
         try:
             errors = check_liveviews(None)
             v004 = [e for e in errors if e.id == "djust.V004"]
-            assert any("V004MissingDecView" in e.msg and "handle_submit" in e.msg for e in v004)
+            assert any("V004MissingDecView" in e.msg and "submit_order" in e.msg for e in v004)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v004_ignores_push_only_handle_methods(self):
+        """#3002: an undecorated handle_* method is the server-push-only
+        pattern (server_push calls it; browsers cannot). Both V004 fixes
+        break it, so V004 does not flag handle_*."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        def handle_refresh_room(self, **kwargs):
+            pass
+
+        cls = type(
+            "V004PushOnlyView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "handle_refresh_room": handle_refresh_room,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v004 = [e for e in errors if e.id == "djust.V004"]
+            assert not any("V004PushOnlyView" in e.msg for e in v004), v004
         finally:
             del cls
             _force_gc()

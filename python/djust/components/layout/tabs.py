@@ -6,6 +6,7 @@ Provides tabbed navigation with multiple panels.
 
 from typing import Dict, Any
 from dataclasses import dataclass
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 from ..base import LiveComponent
 from ...decorators import event_handler
@@ -108,10 +109,10 @@ class TabsComponent(LiveComponent):
         component's handler and carries ``data-component-id`` so the click
         routes here (#2776); a parent-supplied ``action`` stays routed to the
         parent view (mirrors ``BadgeComponent._dismiss_attr``, #2756)."""
-        attrs = f'dj-click="{self.action}"'
+        attrs = f'dj-click="{conditional_escape(self.action)}"'
         if self.action == "activate_tab":
-            attrs += f' data-component-id="{self.component_id}"'
-        return f'{attrs} data-tab="{tab_id}"'
+            attrs += f' data-component-id="{conditional_escape(self.component_id)}"'
+        return f'{attrs} data-tab="{conditional_escape(tab_id)}"'
 
     @event_handler()
     def activate_tab(self, tab: str = "", **kwargs: Any) -> None:
@@ -142,7 +143,7 @@ class TabsComponent(LiveComponent):
         nav_class = "nav-pills" if self.variant == "pills" else "nav-tabs"
         flex_class = " flex-column" if self.vertical else ""
 
-        html = f'<div id="{self.component_id}">'
+        html = f'<div id="{conditional_escape(self.component_id)}">'
 
         # Nav tabs
         html += f'<ul class="nav {nav_class}{flex_class}" role="tablist">'
@@ -156,11 +157,15 @@ class TabsComponent(LiveComponent):
             active_class = " active" if tab_id == self.active else ""
             disabled_class = " disabled" if disabled else ""
 
-            badge_html = f' <span class="badge bg-secondary">{badge}</span>' if badge else ""
+            badge_html = (
+                f' <span class="badge bg-secondary">{conditional_escape(badge)}</span>'
+                if badge
+                else ""
+            )
 
             html += f"""<li class="nav-item" role="presentation">
                 <button class="nav-link{active_class}{disabled_class}" {self._tab_attr(tab_id)}
-                        type="button" role="tab">{label}{badge_html}</button>
+                        type="button" role="tab">{conditional_escape(label)}{badge_html}</button>
             </li>"""
 
         html += "</ul>"
@@ -173,14 +178,14 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             active_class = " show active" if tab_id == self.active else ""
 
-            html += f'<div class="tab-pane fade{active_class}" id="tab-{tab_id}">{content}</div>'
+            html += f'<div class="tab-pane fade{active_class}" id="tab-{conditional_escape(tab_id)}">{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS tabs"""
-        html = f'<div id="{self.component_id}">'
+        html = f'<div id="{conditional_escape(self.component_id)}">'
 
         # Nav tabs
         border_class = (
@@ -219,16 +224,14 @@ class TabsComponent(LiveComponent):
                 base_classes = "border-b-2 py-4 px-1 text-sm font-medium"
 
             badge_html = (
-                f' <span class="ml-2 bg-gray-100 text-gray-900 py-0.5 px-2.5 rounded-full text-xs">{badge}</span>'
+                f' <span class="ml-2 bg-gray-100 text-gray-900 py-0.5 px-2.5 rounded-full text-xs">{conditional_escape(badge)}</span>'
                 if badge
                 else ""
             )
 
             click_attr = f" {self._tab_attr(tab_id)}" if not disabled else ""
 
-            html += (
-                f'<button class="{base_classes} {classes}"{click_attr}>{label}{badge_html}</button>'
-            )
+            html += f'<button class="{base_classes} {classes}"{click_attr}>{conditional_escape(label)}{badge_html}</button>'
 
         html += "</nav></div>"
 
@@ -240,14 +243,14 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             display = "" if tab_id == self.active else " hidden"
 
-            html += f'<div id="tab-{tab_id}" class="tab-pane{display}">{content}</div>'
+            html += f'<div id="tab-{conditional_escape(tab_id)}" class="tab-pane{display}">{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html
 
     def _render_plain(self) -> str:
         """Render plain HTML tabs"""
-        html = f'<div class="tabs" id="{self.component_id}">'
+        html = f'<div class="tabs" id="{conditional_escape(self.component_id)}">'
 
         # Nav tabs
         html += '<div class="tabs-nav">'
@@ -261,9 +264,9 @@ class TabsComponent(LiveComponent):
             active_class = " active" if tab_id == self.active else ""
             disabled_class = " disabled" if disabled else ""
 
-            badge_html = f' <span class="badge">{badge}</span>' if badge else ""
+            badge_html = f' <span class="badge">{conditional_escape(badge)}</span>' if badge else ""
 
-            html += f'<button class="tab{active_class}{disabled_class}" {self._tab_attr(tab_id)}>{label}{badge_html}</button>'
+            html += f'<button class="tab{active_class}{disabled_class}" {self._tab_attr(tab_id)}>{conditional_escape(label)}{badge_html}</button>'
 
         html += "</div>"
 
@@ -275,7 +278,7 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             display = "" if tab_id == self.active else ' style="display:none"'
 
-            html += f'<div class="tab-pane" id="tab-{tab_id}"{display}>{content}</div>'
+            html += f'<div class="tab-pane" id="tab-{conditional_escape(tab_id)}"{display}>{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html

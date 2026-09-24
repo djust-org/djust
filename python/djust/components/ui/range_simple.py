@@ -7,6 +7,8 @@ Simple stateless range/slider input field with automatic Rust optimization.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustRange
 
@@ -131,21 +133,25 @@ class Range(Component):
 
         # Label
         if self.label:
-            parts.append(f'    <label for="{self.range_id}" class="form-label">{self.label}')
+            parts.append(
+                f'    <label for="{conditional_escape(self.range_id)}" class="form-label">{conditional_escape(self.label)}'
+            )
             if self.show_value:
-                parts[-1] += f' <span class="badge bg-secondary">{self.value}</span>'
+                parts[-1] += (
+                    f' <span class="badge bg-secondary">{conditional_escape(self.value)}</span>'
+                )
             parts[-1] += "</label>"
 
         # Build range attributes
         attrs = [
             'type="range"',
             'class="form-range"',
-            f'id="{self.range_id}"',
-            f'name="{self.name}"',
-            f'value="{self.value}"',
-            f'min="{self.min_value}"',
-            f'max="{self.max_value}"',
-            f'step="{self.step}"',
+            f'id="{conditional_escape(self.range_id)}"',
+            f'name="{conditional_escape(self.name)}"',
+            f'value="{conditional_escape(self.value)}"',
+            f'min="{conditional_escape(self.min_value)}"',
+            f'max="{conditional_escape(self.max_value)}"',
+            f'step="{conditional_escape(self.step)}"',
         ]
         if self.disabled:
             attrs.append("disabled")
@@ -154,7 +160,7 @@ class Range(Component):
 
         # Help text
         if self.help_text:
-            parts.append(f'    <div class="form-text">{self.help_text}</div>')
+            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
 
         parts.append("</div>")
 

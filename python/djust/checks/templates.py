@@ -169,7 +169,7 @@ _LIVE_RENDER_LAZY_FALSY_RE = re.compile(r"""\blazy\s*=\s*(?:False|"\s*"|'\s*'|0)
 # makes ordering immaterial but the explicit order keeps the intent clear.
 _DJ_TABLE_SECTION_ROOT_RE = re.compile(
     r"<(tbody|thead|tfoot|colgroup|caption|col|tr|td|th)(?![\w-])"
-    r"[^>]*?\b(dj-view|dj-root)\b",
+    r"[^>]*?(?<=\s)(dj-view|dj-root)(?=[\s=>/])",
     re.IGNORECASE,
 )
 
@@ -882,6 +882,10 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
     return errors
 
 
+_T005_VIEW_ATTR_RE = re.compile(r"(?<=\s)dj-view(?=[\s=>/])")
+_T005_ROOT_ATTR_RE = re.compile(r"(?<=\s)dj-root(?=[\s=>/])")
+
+
 def _check_view_root_same_element(
     content: str, relpath: str, filepath: str, errors: list[CheckMessage]
 ) -> None:
@@ -895,8 +899,10 @@ def _check_view_root_same_element(
     view_only_lineno = None
     for match in tag_re.finditer(content):
         tag = match.group(0)
-        tag_has_view = "dj-view" in tag
-        tag_has_root = "dj-root" in tag
+        # Attribute names, not substrings (#2892): ``dj-view-transitions`` /
+        # ``dj-viewport-top`` are not ``dj-view``.
+        tag_has_view = _T005_VIEW_ATTR_RE.search(tag) is not None
+        tag_has_root = _T005_ROOT_ATTR_RE.search(tag) is not None
         if tag_has_view and tag_has_root:
             has_combined_tag = True
             break

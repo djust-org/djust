@@ -74,6 +74,27 @@ PRESENCE_TIMEOUT = 60  # seconds - stale if no heartbeat for this long
 CLEANUP_INTERVAL = 300  # seconds - cleanup every 5 minutes
 
 
+def tenant_scoped_presence_key(view: Any, key: str) -> str:
+    """Prefix ``key`` with ``tenant:<id>:`` when ``view`` is a resolved TenantMixin view.
+
+    The one place the tenant scope of a presence key is decided (#2973), so
+    ``PresenceMixin`` and ``TenantMixin`` agree whichever comes first in the
+    MRO. Idempotent: an already-scoped key is returned unchanged, so the two
+    overrides can both apply it.
+    """
+    import sys
+
+    # A view can only be a TenantMixin if the module defining it was imported.
+    tenant_module = sys.modules.get("djust.tenants.mixin")
+    if tenant_module is None or not isinstance(view, tenant_module.TenantMixin):
+        return key
+    tenant = getattr(view, "_tenant", None)
+    if tenant is None:
+        return key
+    prefix = f"tenant:{tenant.id}:"
+    return key if key.startswith(prefix) else prefix + key
+
+
 class PresenceManager:
     """
     Manages presence state across the application.
@@ -221,14 +242,19 @@ class PresenceMixin:
             # Default to view class path
             module = self.__class__.__module__
             name = self.__class__.__name__
-            return f"{module}.{name}"
+            return tenant_scoped_presence_key(self, f"{module}.{name}")
 
         # Format the presence key with view attributes
         try:
-            return self.presence_key.format(**self.__dict__)
+            key = self.presence_key.format(**self.__dict__)
         except KeyError as e:
             logger.warning("Presence key format error: %s. Using unformatted key.", e)
-            return self.presence_key
+            key = self.presence_key
+        # #2973: scope by tenant here too, not only in TenantMixin's override —
+        # with PresenceMixin listed BEFORE TenantMixin this method wins the MRO
+        # and the tenant prefix used to be dropped, sharing presence groups
+        # across tenants.
+        return tenant_scoped_presence_key(self, key)
 
     def get_presence_user_id(self) -> str:
         """

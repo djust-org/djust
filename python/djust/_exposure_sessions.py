@@ -43,7 +43,7 @@ StateMigration = Callable[[int, dict[str, Any]], Any]
 def server_state_max_age() -> int:
     """Return ``DJUST_SERVER_STATE_MAX_AGE``; an invalid value fails closed.
 
-    System check ``djust.C018`` reports the same misconfiguration at startup.
+    System check ``djust.C020`` reports the same misconfiguration at startup.
     """
     from django.conf import settings
 

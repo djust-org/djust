@@ -113,8 +113,9 @@ class SimpleContactFormView(FormMixin, LiveView):
 
     def form_valid(self, form):
         """Handle successful form submission"""
-        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        # reset_form() clears success_message too, so reset first (#2974).
         self.reset_form()
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
 
     def form_invalid(self, form):
         """Handle failed form submission"""
@@ -146,8 +147,9 @@ class AutoContactFormView(FormMixin, LiveView):
 
     def form_valid(self, form):
         """Handle successful form submission"""
-        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        # reset_form() clears success_message too, so reset first (#2974).
         self.reset_form()
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
 
     def form_invalid(self, form):
         """Handle failed form submission"""
@@ -175,8 +177,9 @@ class AutoContactFormTailwindView(FormMixin, LiveView):
 
     def form_valid(self, form):
         """Handle successful form submission"""
-        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        # reset_form() clears success_message too, so reset first (#2974).
         self.reset_form()
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
 
     def form_invalid(self, form):
         """Handle failed form submission"""
@@ -204,8 +207,9 @@ class AutoContactFormPlainView(FormMixin, LiveView):
 
     def form_valid(self, form):
         """Handle successful form submission"""
-        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        # reset_form() clears success_message too, so reset first (#2974).
         self.reset_form()
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
 
     def form_invalid(self, form):
         """Handle failed form submission"""

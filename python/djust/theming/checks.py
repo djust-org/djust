@@ -158,14 +158,22 @@ def check_context_processor(app_configs: Any, **kwargs: Any) -> list[CheckMessag
             break
 
     if not found:
+        # A Warning, not an Error (#3028): the processor is optional. The
+        # {% theme_head %} / {% theme_switcher %} / {% theme_panel %} tags work
+        # without it; it only supplies the ``{{ theme_head }}``-style variable
+        # shortcuts. As an Error it blocked migrate / runserver for apps that
+        # use the tags. The id keeps its E prefix so existing
+        # SILENCED_SYSTEM_CHECKS entries still match.
         errors.append(
-            Error(
+            Warning(
                 "djust.theming.context_processors.theme_context is not in any "
                 "TEMPLATES backend's context_processors list. Theme template "
-                "variables (theme_head, theme_switcher, etc.) will not be available.",
+                "variables (theme_head, theme_switcher, etc.) will not be available; "
+                "the {% theme_head %} / {% theme_switcher %} tags still work.",
                 hint=(
                     'Add "djust.theming.context_processors.theme_context" to '
-                    "TEMPLATES[0]['OPTIONS']['context_processors'] in your settings."
+                    "TEMPLATES[0]['OPTIONS']['context_processors'] if templates use "
+                    "the {{ theme_head }} variables, or silence djust_theming.E001."
                 ),
                 id="djust_theming.E001",
             )

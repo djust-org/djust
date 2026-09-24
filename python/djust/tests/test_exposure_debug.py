@@ -33,6 +33,15 @@ class DebugView(LiveView):
 
 
 @pytest.fixture
+def rf():
+    """Requests carry the observability token: these tests are about what the
+    endpoints emit, not the access check (b5ed46f2a)."""
+    from .conftest import observability_request_factory
+
+    return observability_request_factory()
+
+
+@pytest.fixture
 def view():
     result = object.__new__(DebugView)
     result.public_note = "UNDECLARED_PUBLIC_SENTINEL"

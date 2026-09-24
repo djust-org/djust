@@ -427,6 +427,8 @@ async def test_explicit_provider_values_never_reach_state_destinations(staged, m
     from djust.observability.registry import register_view, unregister_view
     from djust.observability.views import view_assigns
 
+    from .conftest import observability_request_factory
+
     view_class = RustRenderView if mixin == "rust_render" else MIXIN_VIEWS[mixin][0]
     request = await sync_to_async(make_request)()
     with override_settings(DEBUG=True):
@@ -463,7 +465,10 @@ async def test_explicit_provider_values_never_reach_state_destinations(staged, m
         register_view("exposure-provider-test", view)
         try:
             response = await sync_to_async(view_assigns)(
-                rf.get("/debug/", {"session_id": "exposure-provider-test"})
+                # The endpoint serves only token-bearing requests (b5ed46f2a).
+                observability_request_factory().get(
+                    "/debug/", {"session_id": "exposure-provider-test"}
+                )
             )
         finally:
             unregister_view("exposure-provider-test")

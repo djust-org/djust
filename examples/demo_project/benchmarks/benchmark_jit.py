@@ -132,9 +132,9 @@ class JITPerformanceBenchmark:
         """Benchmark first request (cold cache with code generation)."""
         print("Benchmarking cold cache (first request)...")
 
-        # Clear serializer cache
-        from djust.optimization.cache import _serializer_cache
-        _serializer_cache._memory_cache.clear()
+        # Clear the in-process JIT serializer cache
+        from djust.session_utils import _jit_serializer_cache
+        _jit_serializer_cache.clear()
 
         # Create view
         view = RentalDashboardView()

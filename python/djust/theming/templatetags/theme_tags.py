@@ -28,7 +28,7 @@ from django.http import HttpRequest
 from django.template import Context
 from django.template.loader import render_to_string
 from django.urls import reverse, NoReverseMatch
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.safestring import SafeString, mark_safe
 from django.utils.http import urlencode
 
@@ -333,17 +333,18 @@ def theme_css_link(context: Context) -> SafeString:
     mode = (getattr(state, "resolved_mode", None) or getattr(state, "mode", None) or "").strip()
     preset = (getattr(state, "preset", None) or "").strip()
 
-    parts = []
+    params = {}
     if pack:
-        parts.append(f"p={pack}")
+        params["p"] = pack
     if mode:
-        parts.append(f"m={mode}")
+        params["m"] = mode
     if preset:
-        parts.append(f"r={preset}")
+        params["r"] = preset
 
-    qs = "&".join(parts)
-    full = f"{base_url}?{qs}" if qs else base_url
-    return mark_safe(full)
+    # Query values are URL-encoded and the whole URL is HTML-escaped, so the
+    # result is safe to drop into an ``href="..."`` attribute as-is.
+    full = f"{base_url}?{urlencode(params)}" if params else base_url
+    return escape(full)
 
 
 @register.simple_tag(takes_context=True)
@@ -620,15 +621,17 @@ _PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="
     {% endfor %}
   </div>
   <div class="dc-preview">{{ playground_html|safe }}</div>
+  {{ playground_feedback|safe }}
   {{ playground_code_html }}
   {% else %}
     {% for ex in examples_html %}
     <div class="dc-example">
       <div class="dc-preview">{{ ex.html|safe }}</div>
+      {{ ex.feedback|safe }}
       {% if ex.kwargs_display %}<details class="dc-example-args"><summary>Arguments</summary><pre>{{ name }}({{ ex.kwargs_display }})</pre></details>{% endif %}
     </div>
     {% empty %}
-    <div class="dc-preview dc-preview--empty">Preview not available — the component needs runtime dependencies or has no examples.</div>
+    <div class="dc-preview dc-preview--empty">{{ empty_reason }}</div>
     {% endfor %}
   {% endif %}
   {% if more_examples %}
@@ -640,6 +643,7 @@ _PREVIEW_SOURCE = """{% load djust_components %}<section class="dc-section" id="
   </div>
   {% endfor %}
   {% endif %}
+{% if preview_note %}<p class="dc-note">{{ preview_note }}</p>{% endif %}
 {% endcard %}
 </section>"""
 
@@ -683,6 +687,7 @@ def component_preview(
     """
     from ..gallery.live_views import render_preview_examples
     from ..gallery.catalogue import playground_options
+    from ..gallery.component_registry import empty_preview_reason, preview_note
 
     examples = list(examples or [])
     values = dict(values or {})
@@ -691,6 +696,7 @@ def component_preview(
 
     options: list = []
     playground_html = ""
+    playground_feedback = ""
     playground_call = ""
     more_examples: list = []
     if examples:
@@ -711,9 +717,14 @@ def component_preview(
             chosen = {**base, **playground}
             shown = render_preview_examples(component_name, component_type, [chosen], {})
             playground_html = shown[0]["html"] if shown else ""
+            playground_feedback = shown[0].get("feedback", "") if shown else ""
             playground_call = (
                 f"{component_name}("
-                + ", ".join(f"{k}={v!r}" for k, v in chosen.items() if not k.startswith("slot_"))
+                + ", ".join(
+                    f"{k}={v!r}"
+                    for k, v in chosen.items()
+                    if not k.startswith(("slot_", "__preview_"))
+                )
                 + ")"
             )
             # An example is "more" only if it shows something the chips cannot:
@@ -746,12 +757,15 @@ def component_preview(
                     "examples_html": rendered,
                     "options": options,
                     "playground_html": playground_html,
+                    "playground_feedback": playground_feedback,
                     "playground_call": playground_call,
                     # The Python component, not the ``{% code_snippet %}`` tag:
                     # the Rust engine renders the tag natively without the
                     # highlighting or the ``dj-copy`` the usage card has.
                     "playground_code_html": _highlighted_python(playground_call),
                     "more_examples": more_examples,
+                    "empty_reason": empty_preview_reason(component_name),
+                    "preview_note": preview_note(component_name),
                 }
             )
         )

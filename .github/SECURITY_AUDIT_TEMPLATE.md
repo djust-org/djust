@@ -6,11 +6,11 @@ Complete each section and check off items as they are verified.
 ## 1. Automated Scans
 
 - [ ] **Bandit** (Python security linter) -- no high/critical findings
-- [ ] **Safety / pip-audit** -- no known vulnerabilities in Python dependencies
-- [ ] **cargo-audit** -- no known vulnerabilities in Rust dependencies
+- [ ] **pip-audit** -- no known vulnerabilities in the locked Python dependencies outside `.github/security/pip-audit-ignore.txt`
+- [ ] **cargo-audit** -- no vulnerabilities or unsound advisories in Rust dependencies outside `.cargo/audit.toml`
 - [ ] **npm audit** -- no high/critical vulnerabilities in JS dependencies
 - [ ] **ESLint security plugin** -- no new security warnings
-- [ ] **CodeQL** -- no new security alerts (Python + JavaScript)
+- [ ] **CodeQL** -- no open high/critical alerts on the release ref (Python + JavaScript)
 
 ## 2. Manual Code Review
 

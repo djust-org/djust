@@ -93,9 +93,8 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "demo_app.context_processors.navbar",
-                # Required when INSTALLED_APPS includes ``djust.theming``
-                # (djust_theming.E001 check). Exposes theme_head, theme_switcher,
-                # and related template variables.
+                # Exposes theme_head, theme_switcher and related template
+                # variables (djust_theming.E001 warns when it is missing).
                 "djust.theming.context_processors.theme_context",
             ],
         },

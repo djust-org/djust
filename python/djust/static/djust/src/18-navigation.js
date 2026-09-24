@@ -124,7 +124,7 @@
                 }
                 // Stop the page-loading bar we started above.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 return;
             }
@@ -137,7 +137,7 @@
             // Stop the page-loading bar we started above; the full nav
             // will trigger the browser's own progress indicator.
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                window.djust.pageLoading.stop?.();
+                window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
             }
             window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
@@ -192,7 +192,7 @@
                 // will trigger the browser's own progress indicator (matches
                 // the cross-origin branch's stop semantics).
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             } else {
@@ -201,7 +201,7 @@
                 }
                 // Stop the page-loading bar — we are not navigating.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
             }
             return;
@@ -210,7 +210,10 @@
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
-        // ADR-038 E3-8: service-worker caches key on pathname + query.
+        // The page being left, read BEFORE pushState moves location to the
+        // destination: its state snapshot is captured under this key
+        // (pathname + query, #2949 / ADR-038 E3-8). Read after pushState it
+        // named the destination, so the capture below found no snapshot to store.
         const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection

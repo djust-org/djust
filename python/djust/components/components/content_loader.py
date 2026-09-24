@@ -2,6 +2,7 @@
 
 import html
 
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -104,16 +105,20 @@ class ContentLoader(Component):
             # Content is ready — render actual content (already safe HTML from server)
             return (
                 f'<div class="{cls}" data-loading-event="{e_event}">'
-                f'<div class="dj-content-loader__content">{self.content}</div>'
+                f'<div class="dj-content-loader__content">{conditional_escape(self.content)}</div>'
                 f"</div>"
             )
 
         # Still loading — show placeholder
-        placeholder_html = self.placeholder or (
-            '<div class="dj-content-loader__default-placeholder">'
-            '<span class="dj-spinner" role="status" '
-            'aria-label="Loading"></span>'
-            "</div>"
+        placeholder_html = (
+            conditional_escape(self.placeholder)
+            if self.placeholder
+            else (
+                '<div class="dj-content-loader__default-placeholder">'
+                '<span class="dj-spinner" role="status" '
+                'aria-label="Loading"></span>'
+                "</div>"
+            )
         )
         return (
             f'<div class="{cls}" data-loading-event="{e_event}" '

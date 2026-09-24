@@ -190,7 +190,7 @@ Implemented (E2-9, D-i, D-j):
 - `DJUST_SERVER_STATE_MAX_AGE` (seconds, 1 to 86400, default 3600) is the
   restore lifetime of explicit server-state envelopes, including child state.
   An invalid value fails closed at runtime and is reported by system check
-  `djust.C018`. It does not change the Django session's own lifetime.
+  `djust.C020`. It does not change the Django session's own lifetime.
 - The only codec is `json-primitives-v1`. `Decimal`, dates, `UUID`, model
   instances and other objects are rejected at capture, never stringified.
 

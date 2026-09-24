@@ -29,6 +29,8 @@ Performance:
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 # Try to import Rust implementation
 try:
     from djust._rust import RustCard  # type: ignore[attr-defined]
@@ -109,12 +111,12 @@ class Card(Component):
         parts = [f'<div class="card{variant_class}">']
 
         if self.header:
-            parts.append(f'    <div class="card-header">{self.header}</div>')
+            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
 
-        parts.append(f'    <div class="card-body">{self.body}</div>')
+        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
 
         if self.footer:
-            parts.append(f'    <div class="card-footer">{self.footer}</div>')
+            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
 
         parts.append("</div>")
         return "\n".join(parts)
@@ -129,12 +131,16 @@ class Card(Component):
         parts = [f'<div class="{variant_class}">']
 
         if self.header:
-            parts.append(f'    <div class="px-6 py-4 border-b font-semibold">{self.header}</div>')
+            parts.append(
+                f'    <div class="px-6 py-4 border-b font-semibold">{conditional_escape(self.header)}</div>'
+            )
 
-        parts.append(f'    <div class="px-6 py-4">{self.body}</div>')
+        parts.append(f'    <div class="px-6 py-4">{conditional_escape(self.body)}</div>')
 
         if self.footer:
-            parts.append(f'    <div class="px-6 py-4 border-t bg-gray-50">{self.footer}</div>')
+            parts.append(
+                f'    <div class="px-6 py-4 border-t bg-gray-50">{conditional_escape(self.footer)}</div>'
+            )
 
         parts.append("</div>")
         return "\n".join(parts)
@@ -143,12 +149,12 @@ class Card(Component):
         parts = ['<div class="card">']
 
         if self.header:
-            parts.append(f'    <div class="card-header">{self.header}</div>')
+            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
 
-        parts.append(f'    <div class="card-body">{self.body}</div>')
+        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
 
         if self.footer:
-            parts.append(f'    <div class="card-footer">{self.footer}</div>')
+            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
 
         parts.append("</div>")
         return "\n".join(parts)

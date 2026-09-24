@@ -248,12 +248,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
         && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
     try {
-        // Read CSRF token from hidden input first, fall back to cookie.
-        // Skip the hidden input if its value is empty — the Rust engine
-        // renders "" when no csrf_token is in the template context (#696).
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
-            || '';
+        // Input, configured-name cookie, then server meta tag (00-namespace.js).
+        const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
             ...(httpController ? {signal: httpController.signal} : {}),

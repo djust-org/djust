@@ -109,10 +109,10 @@ class ProfileView(LiveView):
         self.mark_clean()       # baseline now matches the saved state
 ```
 
-> **Known issue: #2956.** Dirty tracking covers plain public attributes
-> only. Fields declared with `state()` are stored under a private
-> `_state_<name>` key, so changing one leaves `is_dirty` `False` and
-> `changed_fields` empty. Assign the fields in `mount()` instead, as above.
+Dirty tracking covers every public field: plain attributes, fields declared
+with `state()`, and class-level components (a change to their `State` marks
+the component's name as changed). Private (`_`-prefixed) fields and names in
+`static_assigns` are never reported.
 
 ```django
 {# template — show a Save button only when there's work to save #}

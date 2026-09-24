@@ -366,7 +366,7 @@ class TestServerPushSourceBroadcast:
 
     @pytest.mark.asyncio
     async def test_server_push_yields_to_user_event(self):
-        """server_push skips when a user event is being processed."""
+        """server_push yields to a user event in progress, then delivers (#560, #3001)."""
         consumer = LiveViewConsumer()
         consumer.use_binary = False
         consumer._render_lock = asyncio.Lock()
@@ -382,7 +382,12 @@ class TestServerPushSourceBroadcast:
         # read as an invalid policy and fail closed (ADR-038).
         consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
+        consumer.view_instance._drain_navigation = MagicMock(return_value=[])
+        consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
+        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
+        consumer.view_instance._async_tasks = {}
+        consumer.view_instance._async_pending = None
         consumer.view_instance._skip_render = False
         consumer.view_instance._sync_state_to_rust = MagicMock()
         consumer.view_instance.render_with_diff = MagicMock(
@@ -392,14 +397,19 @@ class TestServerPushSourceBroadcast:
         # Hold the render lock to simulate user event in progress
         await consumer._render_lock.acquire()
 
-        # server_push should time out trying to acquire the lock
+        # server_push must not render while the user event runs (#560)...
         await consumer.server_push({"state": {"count": 10}})
-
-        consumer._render_lock.release()
-
-        # No patch should have been sent (push was skipped)
         patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
         assert len(patch_msgs) == 0
+
+        # ...but it is deferred, not dropped (#3001): once the event ends it
+        # renders, still tagged as a broadcast.
+        consumer._processing_user_event = False
+        consumer._render_lock.release()
+        await asyncio.wait_for(consumer._push_drain_task, timeout=1)
+        patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
+        assert len(patch_msgs) == 1
+        assert patch_msgs[0]["source"] == "broadcast"
 
 
 class TestAsyncWorkSourceAsync:

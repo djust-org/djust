@@ -12,7 +12,23 @@ import pytest
 import tempfile
 from pathlib import Path
 from django.conf import settings
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
+
+
+def _template_dirs(dirs):
+    """Point ``TEMPLATES[0]["DIRS"]`` at ``dirs`` for one ``with`` block.
+
+    Through ``override_settings`` on purpose. The ``setting_changed`` signal
+    it fires on entry AND exit runs Django's ``reset_template_engines``, which
+    also clears the lru-cached ``Engine.get_default()``, and djust's
+    template-dirs receiver. The hand-rolled reset this replaced (mutate
+    ``settings.TEMPLATES`` in place, then ``engines._engines = {}``) skipped
+    ``Engine.get_default``, leaving later tests on the worker with a default
+    engine that ``engines.all()`` no longer contained (#2991).
+    """
+    return override_settings(
+        TEMPLATES=[{**settings.TEMPLATES[0], "DIRS": list(dirs)}, *settings.TEMPLATES[1:]]
+    )
 
 
 class TestTemplateInheritanceExtraction:
@@ -216,22 +232,12 @@ class TestTemplateInheritanceIntegration:
     def test_liveview_get_template_strips_comments(self, template_dirs):
         """Test that LiveView.get_template() returns stripped template."""
         from djust.live_view import LiveView
-        from django.template import engines
-        from djust.utils import _get_template_dirs_cached
 
         class ChildView(LiveView):
             template_name = "child.html"
 
         # Temporarily override template dirs
-        original_dirs = settings.TEMPLATES[0]["DIRS"]
-        try:
-            settings.TEMPLATES[0]["DIRS"] = template_dirs
-            # Clear Django's template engine cache so it picks up new settings
-            engines._engines = {}
-            # Also clear the cached_property 'templates' which caches settings.TEMPLATES
-            engines.__dict__.pop("templates", None)
-            # Clear djust's template dirs cache
-            _get_template_dirs_cached.cache_clear()
+        with _template_dirs(template_dirs):
             view = ChildView()
 
             # Get template should return stripped version for VDOM
@@ -243,17 +249,9 @@ class TestTemplateInheritanceIntegration:
             assert "dj-root" in template
             assert "<form>" in template or "<form" in template
 
-        finally:
-            settings.TEMPLATES[0]["DIRS"] = original_dirs
-            engines._engines = {}  # Reset after test
-            engines.__dict__.pop("templates", None)  # Clear cached_property
-            _get_template_dirs_cached.cache_clear()  # Reset djust cache after test
-
     def test_websocket_mount_and_get_html_match(self, template_dirs):
         """Test that WebSocket mount HTML matches initial GET HTML structure."""
         from djust.live_view import LiveView
-        from django.template import engines
-        from djust.utils import _get_template_dirs_cached
 
         class ChildView(LiveView):
             template_name = "child.html"
@@ -261,15 +259,7 @@ class TestTemplateInheritanceIntegration:
             def mount(self, request, **kwargs):
                 self.name = "John"
 
-        original_dirs = settings.TEMPLATES[0]["DIRS"]
-        try:
-            settings.TEMPLATES[0]["DIRS"] = template_dirs
-            # Clear Django's template engine cache so it picks up new settings
-            engines._engines = {}
-            # Also clear the cached_property 'templates' which caches settings.TEMPLATES
-            engines.__dict__.pop("templates", None)
-            # Clear djust's template dirs cache
-            _get_template_dirs_cached.cache_clear()
+        with _template_dirs(template_dirs):
             view = ChildView()
 
             # Simulate WebSocket mount
@@ -299,12 +289,6 @@ class TestTemplateInheritanceIntegration:
             # Both should have no comments
             assert "<!--" not in html_ws_inner
             assert "<!--" not in get_liveview_inner
-
-        finally:
-            settings.TEMPLATES[0]["DIRS"] = original_dirs
-            engines._engines = {}  # Reset after test
-            engines.__dict__.pop("templates", None)  # Clear cached_property
-            _get_template_dirs_cached.cache_clear()  # Reset djust cache after test
 
 
 class TestVDOMStructureMatching:

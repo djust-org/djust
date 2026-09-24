@@ -153,10 +153,11 @@ def test_destinations_types_and_suggestions(no_construction):
     assert names["label"]["kind"] == "property"
     assert names["helper"]["destinations"] == []  # not JSON-serializable
 
-    # state() fields: context; read or assigned in mount() adds the backing slot
-    # to private session persistence.
+    # Public state() fields: context; their backing slot is saved privately
+    # only when it holds a Django model (#2959, #1994), so conditionally.
     assert set(names["total"]["destinations"]) == render_only
-    assert set(names["rows"]["destinations"]) == render_only | {"private_session"}
+    assert set(names["rows"]["destinations"]) == render_only
+    assert names["rows"]["conditional"] == ["private_session"]
     assert names["rows"]["type"] == "list"
     assert names["lazy"]["type"] is None
     assert "get_context_data" in names["label"]["suggestion"]
@@ -198,6 +199,11 @@ def test_inventory_matches_the_legacy_runtime():
     assert listed("template_context") <= set(context)
     assert {"count", "items", "heading", "level"} <= listed("template_context")
     assert listed("client_state") == client == {"count", "items"}
-    expected_private = {"_cursor", "_state_level"}
+    # A public state() field's slot is not saved privately since #2959 (the
+    # public state carries it); the inventory lists it as conditional (a
+    # model-holding value is still saved there, #1994).
+    expected_private = {"_cursor"}
     assert expected_private <= private
+    assert "_state_level" not in private
     assert {names[n].get("storage_key", n) for n in listed("private_session")} == expected_private
+    assert names["level"]["conditional"] == ["private_session"]

@@ -741,7 +741,11 @@ _SCRIPT_NONCE_RE = re.compile(r"(?<![\w-])nonce\s*=", re.IGNORECASE)
 # real tags (``<name``) so escaped doc examples (``&lt;div dj-root&gt;``) and
 # attribute references never match.
 _DJ_ROOT_OPEN_TAG_RE = re.compile(
-    r"<([a-zA-Z][\w-]*)\b[^>]*\bdj-(?:root|view)\b[^>]*>", re.IGNORECASE
+    # Attribute-name boundaries as in ``mixins/template.py:_DJ_ROOT_RE`` (#2892):
+    # ``\b`` also matched ``<body dj-view-transitions>``, which made the whole
+    # body an S011 "root" range.
+    r"<([a-zA-Z][\w-]*)\b[^>]*(?<=\s)dj-(?:root|view)(?=[\s=>/])[^>]*>",
+    re.IGNORECASE,
 )
 # ``<pre>``/``<code>`` regions hold escaped example markup, not live DOM — any
 # script inside them is documentation, never executed. Blanked before scanning

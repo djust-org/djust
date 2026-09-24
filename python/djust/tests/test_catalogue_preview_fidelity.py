@@ -279,7 +279,7 @@ class TestSlotsReachTheTemplate:
         assert view.preview.state.values["is_open"] is True
         html = "".join(example["html"] for example in view._render_examples())
         assert 'data-open="true"' in html
-        assert "Choose which project activity to display." in html
+        assert "Status, owner and date range." in html
 
 
 class TestPythonExamplesHaveUsefulContent:
@@ -303,13 +303,13 @@ class TestPythonExamplesHaveUsefulContent:
         assert "Grace Hopper" in self._render("cursors_overlay")
 
     def test_stateful_and_overlay_previews_show_their_states(self):
-        assert "Unable to load the project details." in self._render("error_boundary")
+        assert "The chart could not load." in self._render("error_boundary")
         assert "ctx-item" in self._render("context_menu")
         assert "dj-notification-badge--dot" in self._render("notification_badge")
         assert "Project status" in self._render("popover")
         assert self._render("presence_avatars").count("dj-presence__item") >= 3
         assert 'data-open="true"' in self._render("sheet")
-        assert "Project dashboard" in self._render("sticky_header")
+        assert "Section title" in self._render("sticky_header")
 
 
 # ---------------------------------------------------------------------------
@@ -626,8 +626,13 @@ class TestPreviewOwnsTheDescriptorState:
     def test_the_descriptor_fields_seed_the_preview_values(self):
         from djust.components.descriptors import Accordion
 
-        values = self._view("accordion").preview.state.values
-        assert values == dict(Accordion.State())
+        view = self._view("accordion")
+        values = view.preview.state.values
+        # The descriptor's fields, each at the example's value where the
+        # example documents one (it opens item "1"), else the State default.
+        example = view.preview.state.examples[0]
+        assert set(values) == set(dict(Accordion.State()))
+        assert values == {k: example.get(k, v) for k, v in dict(Accordion.State()).items()}
         assert "active" in values
 
     def test_a_descriptor_event_moves_the_values_and_the_render(self):

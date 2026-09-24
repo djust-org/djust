@@ -436,7 +436,8 @@ def test_every_client_checked_send_path_uses_next_version():
     # Render-send sites routed through the armed helper (verified at #1817;
     # event sites removed at #1907 THE FLIP — see below):
     #   INLINE (version=self._next_version_armed(html)), 13:
-    #     _run_async_work error arms: 2 (patch + html fallback)
+    #     _send_async_render: 2 (patch + html fallback) — shared by the
+    #       _run_async_work error arm and _settle_cancelled_async (#2963)
     #     deferred-activity render: 2 (patch + html fallback)
     #     handle_hot_reload (HIDDEN #1): 1
     #     handle_time_travel_jump: 1
@@ -444,10 +445,10 @@ def test_every_client_checked_send_path_uses_next_version():
     #     handle_forward_replay: 1
     #     db_notify: 2 (patch + full-HTML fallback)
     #     _tick_once: 2 (patch + full-HTML fallback)
-    #     server_push: 1 (full-HTML fallback)
+    #     _run_server_push_turn: 1 (full-HTML fallback)
     #   ASSIGNMENT (X = self._next_version_armed(html)), 3:
     #     _run_async_work success arms: 2
-    #     server_push: 1 (wire_version)
+    #     _run_server_push_turn: 1 (wire_version; server_push's render, #3001)
     # Total armed invocations = 16.
     #
     # #1907 THE FLIP: the 2 ``handle_event`` ASSIGN sites (the event patch +

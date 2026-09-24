@@ -197,7 +197,7 @@ def test_max_age_system_check(value, flagged):
     errors = []
     with override_settings(DJUST_SERVER_STATE_MAX_AGE=value):
         _check_server_state_max_age(errors)
-    assert [e.id for e in errors] == (["djust.C018"] if flagged else [])
+    assert [e.id for e in errors] == (["djust.C020"] if flagged else [])
 
 
 def test_max_age_system_check_silent_when_unset():

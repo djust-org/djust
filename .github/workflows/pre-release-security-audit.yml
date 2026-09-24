@@ -1,8 +1,37 @@
 name: Pre-Release Security Audit
 
-# Runs comprehensive security scans before each release.
-# Triggered manually or automatically when a release tag is pushed.
+# Security scans that GATE every PyPI publish.
+#
+# This is a reusable workflow. release.yml (tag push) and publish.yml (release
+# published / manual) call it as a job that their publish jobs `need`, so a
+# failing audit stops the release before anything reaches PyPI or GitHub
+# Releases. It has no push trigger of its own any more — on a tag it runs once,
+# inside the release run. It can still be dispatched by hand on any ref.
+#
+# Every scanner is blocking. Each has a reviewed allowlist:
+#   Bandit      the `-s`/`-x` skip set below (same as the pre-commit hook)
+#   pip-audit   .github/security/pip-audit-ignore.txt (scripts/pip-audit-gate.py)
+#   cargo-audit .cargo/audit.toml `ignore` (vulnerabilities + unsound deny;
+#               unmaintained/yanked stay warnings)
+#   npm audit   none — fails on high/critical (`--audit-level=high`)
+#   clippy      fails on correctness/suspicious lints (-D), warns on the rest
+#   ESLint      fails on errors, tolerates warnings
+#   CodeQL      .github/codeql/codeql-config.yml + alert dismissals; fails on
+#               open high/critical alerts on the analysed ref
+# Audit Summary always writes the report, then fails if any scanner failed.
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version being audited (default: derived from the tag ref)'
+        required: false
+        default: ''
+        type: string
+      create_issue:
+        description: 'Create a tracking issue from audit results'
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -14,18 +43,17 @@ on:
         required: false
         default: true
         type: boolean
-  push:
-    tags:
-      - 'v*'
 
+# Least privilege by default; the jobs that need more ask for it. A caller
+# must grant at least `contents: read`, `issues: write` and
+# `security-events: write` to the job that uses this workflow.
 permissions:
   contents: read
-  issues: write
-  security-events: write
 
-concurrency:
-  group: security-audit
-  cancel-in-progress: false
+# No workflow-level concurrency group: when called, a group here would be
+# shared by every caller, and a queued audit can be cancelled by a newer one —
+# which would fail (block) the release that was waiting on it. The callers
+# serialise releases themselves.
 
 # Disable ANSI color across all tools so console logs stay readable (no raw
 # escape sequences). CARGO_TERM_COLOR covers cargo/clippy/cargo-audit; NO_COLOR
@@ -48,16 +76,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Nothing here needs djust installed (Bandit reads source, pip-audit
+      # reads uv.lock), so the job no longer builds the Rust extension.
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
-      - name: Install security tools
-        run: uv pip install bandit safety pip-audit
+        uses: astral-sh/setup-uv@v7
 
       - name: Run Bandit (full scan, advisory)
         id: bandit
@@ -65,12 +87,14 @@ jobs:
           echo "## Bandit Results" > bandit-report.md
           echo '```' >> bandit-report.md
           echo "::group::Bandit full output"
-          uv run bandit -r python/djust/ -ll -f txt 2>&1 | tee -a bandit-report.md || true
+          # Same excludes and reviewed skips as the gate below, so the log shows
+          # only findings that need a decision. The JSON below stays unfiltered.
+          uvx bandit -r python/djust/ -ll -ii -x tests/,python/tests/,python/djust/tests/ -s B703,B308 -f txt 2>&1 | tee -a bandit-report.md || true
           echo "::endgroup::"
           echo '```' >> bandit-report.md
 
           # Also produce JSON for machine-readable output
-          uv run bandit -r python/djust/ -ll -f json -o bandit-results.json || true
+          uvx bandit -r python/djust/ -ll -f json -o bandit-results.json || true
 
       # Blocking gate: FAIL the job on any NEW high-severity Bandit finding.
       # Uses the repo's reviewed skip list (the same `-s`/`-x` set the
@@ -93,10 +117,10 @@ jobs:
           # -lll = report ONLY high-severity; reviewed skips applied so the
           # baseline is 0 high-severity. Emit JSON regardless of exit code,
           # then count high-severity results ourselves (robust vs exit codes).
-          uv run bandit -r python/djust \
+          uvx bandit -r python/djust \
             -lll -ii \
             -x tests/,python/tests/,python/djust/tests/ \
-            -s B703,B308,B324,B301,B102 \
+            -s B703,B308 \
             -f json -o bandit-high.json || true
           HIGH=$(python -c "import json; d=json.load(open('bandit-high.json')); print(sum(1 for r in d['results'] if r['issue_severity']=='HIGH'))")
           echo "Bandit high-severity findings (after reviewed skips): $HIGH"
@@ -107,25 +131,16 @@ jobs:
           fi
           echo "OK: 0 new high-severity Bandit findings."
 
-      - name: Run Safety (dependency vulnerabilities)
-        id: safety
-        run: |
-          echo "## Safety Results" > safety-report.md
-          echo '```' >> safety-report.md
-          echo "::group::Safety full report"
-          uv run safety check --full-report 2>&1 | tee -a safety-report.md || true
-          echo "::endgroup::"
-          echo '```' >> safety-report.md
-
-      - name: Run pip-audit
+      # Blocking gate: FAIL on any known vulnerability in a package pinned in
+      # uv.lock (every extra, every Python/platform fork) that is not in the
+      # reviewed allowlist .github/security/pip-audit-ignore.txt, and on any
+      # allowlist entry past its review-by date. djust itself is excluded: it
+      # is not on PyPI until this release publishes. (Safety was removed — its
+      # free database lags pip-audit's PyPI/OSV data; it reported 0 findings
+      # on the v1.1.4 audit where pip-audit reported 8.)
+      - name: pip-audit gate (blocking)
         id: pip_audit
-        run: |
-          echo "## pip-audit Results" > pip-audit-report.md
-          echo '```' >> pip-audit-report.md
-          echo "::group::pip-audit full output"
-          uv run pip-audit 2>&1 | tee -a pip-audit-report.md || true
-          echo "::endgroup::"
-          echo '```' >> pip-audit-report.md
+        run: python scripts/pip-audit-gate.py --report pip-audit-report.md
 
       - name: Upload Python security reports
         # Upload even when the high-severity gate blocks the job, so a new
@@ -138,7 +153,6 @@ jobs:
             bandit-report.md
             bandit-results.json
             bandit-high.json
-            safety-report.md
             pip-audit-report.md
 
   # --- Rust security scanning ---
@@ -151,47 +165,69 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The key carries the version: `command -v` below skips the install
+      # whenever the cache restores a binary, so a stale key pins a stale
+      # cargo-audit (and its .cargo/audit.toml schema) forever.
       - name: Cache cargo-audit
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-cargo-audit-0.21
+          key: ${{ runner.os }}-cargo-audit-0.22
 
       - name: Install cargo-audit
-        run: command -v cargo-audit || cargo install cargo-audit
+        run: command -v cargo-audit || cargo install cargo-audit --locked --version '~0.22'
 
-      - name: Run cargo-audit
+      # Blocking gate: FAIL on any vulnerability, and on any `unsound`
+      # advisory, not in .cargo/audit.toml's reviewed `ignore` list. The
+      # config sets `deny = ["unsound"]`; the flag repeats it so the gate
+      # does not depend on the config being found. Unmaintained / yanked
+      # crates are reported as warnings.
+      - name: cargo-audit gate (blocking)
         id: cargo_audit
         run: |
+          set -o pipefail
           echo "## cargo-audit Results" > cargo-audit-report.md
           echo '```' >> cargo-audit-report.md
+          status=0
           echo "::group::cargo-audit full output"
-          cargo audit 2>&1 | tee -a cargo-audit-report.md || true
+          cargo audit --deny unsound 2>&1 | tee -a cargo-audit-report.md || status=$?
           echo "::endgroup::"
           echo '```' >> cargo-audit-report.md
 
           # JSON output for machine parsing
           cargo audit --json > cargo-audit-results.json 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error::cargo-audit found a vulnerability or unsound advisory that is not in .cargo/audit.toml's ignore list."
+          fi
+          exit $status
 
-      - name: Run clippy with security-relevant lints
+      # Blocking: -D lints (correctness, suspicious) fail the job; -W lints
+      # are reported only. Runs even when cargo-audit failed so both reports
+      # are available.
+      - name: Run clippy with security-relevant lints (fails on -D lints)
+        if: success() || failure()
         run: |
+          set -o pipefail
           # Set up Python for PyO3
           sudo apt-get update && sudo apt-get install -y python3-dev
           export PYO3_PYTHON=$(which python3)
 
           echo "## Clippy Security Lints" > clippy-report.md
           echo '```' >> clippy-report.md
+          status=0
           echo "::group::clippy full output"
           cargo clippy -- \
             -W clippy::all \
             -D clippy::correctness \
             -D clippy::suspicious \
             -W clippy::complexity \
-            2>&1 | tee -a clippy-report.md || true
+            2>&1 | tee -a clippy-report.md || status=$?
           echo "::endgroup::"
           echo '```' >> clippy-report.md
+          exit $status
 
       - name: Upload Rust security reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: rust-security-reports
@@ -216,18 +252,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run npm audit
+      # Blocking gate: FAIL on any high or critical advisory in
+      # package-lock.json (dev dependencies included — they run in CI and on
+      # contributors' machines). Moderate/low are reported, not blocking.
+      # There is no allowlist: fix with `npm audit fix` or an `overrides`
+      # entry in package.json.
+      - name: npm audit gate (blocking on high/critical)
         id: npm_audit
         run: |
+          set -o pipefail
           echo "## npm audit Results" > npm-audit-report.md
           echo '```' >> npm-audit-report.md
           npm audit --json > npm-audit-results.json 2>/dev/null || true
+          status=0
           echo "::group::npm audit full output"
-          npm audit 2>&1 | tee -a npm-audit-report.md || true
+          npm audit --audit-level=high 2>&1 | tee -a npm-audit-report.md || status=$?
           echo "::endgroup::"
           echo '```' >> npm-audit-report.md
+          if [ "$status" -ne 0 ]; then
+            echo "::error::npm audit found a high or critical advisory."
+          fi
+          exit $status
 
       - name: Run ESLint (fails on errors, tolerates warnings)
+        if: success() || failure()
         run: |
           # eslint exits non-zero ONLY on errors (severity 2) by default;
           # warnings (severity 1) leave the exit code at 0. set -o pipefail lets
@@ -245,6 +293,7 @@ jobs:
           exit $status
 
       - name: Upload JS security reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: js-security-reports
@@ -261,26 +310,74 @@ jobs:
       contents: read
       security-events: write
     strategy:
+      # A cancelled leg would leave the gate below without its analysis.
+      fail-fast: false
       matrix:
         language: [python, javascript]
     steps:
       - uses: actions/checkout@v7
 
+      # Same reviewed config as codeql.yml (djust sanitizer models, source
+      # fragment + test-path exclusions, and the reviewed rule exclusions).
+      # Without it the pre-release analysis reported every excluded rule
+      # again (15 high alerts on refs/tags/v1.2.0, all js/xss,
+      # js/remote-property-injection or test-path findings).
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          config-file: .github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}/pre-release"
 
+  # Blocking gate: FAIL when the analysed ref has open high/critical CodeQL
+  # alerts. The analyze step waits for GitHub to process the upload, so the
+  # alerts API already reflects it. `github.ref` is the ref the analyses were
+  # uploaded under — the tag (refs/tags/vX.Y.Z) when release.yml calls this on
+  # a tag push. The script first checks both analyses for this commit exist on
+  # that ref, so a ref mismatch fails instead of reading as "no alerts".
+  codeql-gate:
+    name: CodeQL alert gate
+    needs: [codeql]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fail on open high/critical alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEQL_EXPECT_SHA: ${{ github.sha }}
+          CODEQL_EXPECT_CATEGORIES: /language:python/pre-release,/language:javascript/pre-release
+        run: |
+          status=0
+          bash scripts/codeql-alert-gate.sh "$GITHUB_REF" "$GITHUB_REPOSITORY" > codeql-gate.log 2>&1 || status=$?
+          cat codeql-gate.log
+          {
+            echo "## CodeQL alert gate"
+            echo '```'
+            cat codeql-gate.log
+            echo '```'
+          } > codeql-gate-report.md
+          exit "$status"
+
+      - name: Upload CodeQL gate report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeql-security-reports
+          path: codeql-gate-report.md
+
   # --- Aggregate results and create tracking issue ---
   audit-summary:
     name: Audit Summary
-    needs: [python-security, rust-security, js-security, codeql]
+    needs: [python-security, rust-security, js-security, codeql, codeql-gate]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -289,9 +386,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Only this workflow's reports: when called from release.yml the run
+      # also holds the wheel/sdist artifacts.
       - name: Download all reports
         uses: actions/download-artifact@v8
         with:
+          pattern: '*-security-reports'
           path: reports
           merge-multiple: true
 
@@ -324,10 +424,11 @@ jobs:
           echo "" >> "$REPORT"
           echo "| Scanner | Status |" >> "$REPORT"
           echo "|---------|--------|" >> "$REPORT"
-          echo "| Python Security (bandit, safety, pip-audit) | ${{ needs.python-security.result }} |" >> "$REPORT"
+          echo "| Python Security (bandit, pip-audit) | ${{ needs.python-security.result }} |" >> "$REPORT"
           echo "| Rust Security (cargo-audit, clippy) | ${{ needs.rust-security.result }} |" >> "$REPORT"
           echo "| JavaScript Security (npm audit, eslint) | ${{ needs.js-security.result }} |" >> "$REPORT"
           echo "| CodeQL Analysis | ${{ needs.codeql.result }} |" >> "$REPORT"
+          echo "| CodeQL alert gate (high/critical) | ${{ needs.codeql-gate.result }} |" >> "$REPORT"
           echo "" >> "$REPORT"
 
           # Append individual reports if they exist
@@ -344,14 +445,14 @@ jobs:
           cat "$REPORT" >> $GITHUB_STEP_SUMMARY
 
       - name: Create tracking issue
-        # Only on an explicit workflow_dispatch with create_issue=true. The old
-        # `inputs.create_issue == ''` clause was a footgun: GHA coerces a boolean
-        # `false` and `''` both to 0, so `false == ''` was TRUE and the step ran
-        # even when create_issue=false was passed. `== true` alone is correct
-        # (skips on push via the event guard; skips on dispatch when false).
-        if: >-
-          inputs.create_issue == true &&
-          github.event_name != 'push'
+        # Only when create_issue is true: a manual dispatch defaults it to
+        # true, a caller (release.yml / publish.yml) defaults it to false.
+        # The old `inputs.create_issue == ''` clause was a footgun: GHA
+        # coerces a boolean `false` and `''` both to 0, so `false == ''` was
+        # TRUE and the step ran even when create_issue=false was passed.
+        # `== true` alone is correct. Runs even when a scanner failed — a
+        # failed audit is exactly when the tracking issue is wanted.
+        if: always() && inputs.create_issue == true
         uses: actions/github-script@v9
         with:
           script: |
@@ -399,7 +500,24 @@ jobs:
             core.notice(`Created security audit issue: ${issue.html_url}`);
 
       - name: Upload full audit report
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: security-audit-report
           path: audit-summary.md
+
+      # The summary job runs `if: always()`, so without this step it would
+      # succeed even when a scanner failed — and a caller gating on this
+      # workflow would see only the scanners' own results. Fail last, after
+      # the report, issue and artifact are written.
+      - name: Fail if any scanner failed or was cancelled
+        if: always()
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          bad="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$RESULTS")"
+          if [ -n "$bad" ]; then
+            while IFS= read -r line; do echo "::error::$line"; done <<<"$bad"
+            exit 1
+          fi
+          echo "OK: every scanner succeeded."

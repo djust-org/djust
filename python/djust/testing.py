@@ -489,7 +489,11 @@ class LiveViewTestClient:
     @staticmethod
     def _djroot_djids(html: str) -> list:
         """Extract the ordered ``dj-id`` sequence from the ``dj-root`` subtree."""
-        m = re.search(r"<[^>]*\bdj-root\b", html)
+        # The renderer's own root detection (#2892): any element, attribute
+        # names only, dj-view as the fallback for an auto-inferred root.
+        from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
+
+        m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
         subtree = html[m.start() :] if m else html
         return re.findall(r'dj-id="([^"]+)"', subtree)
 

@@ -18,6 +18,7 @@
 //! - Child filtering decisions
 
 use crate::{next_djust_id, reset_id_counter, should_trace, VNode};
+use djust_core::html_whitespace::{is_html_whitespace_only, is_inline_level_tag};
 use djust_core::{DjangoRustError, Result};
 use html5ever::tendril::TendrilSink;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
@@ -305,16 +306,69 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
         .clone();
     drop(doc_children);
 
+    // The roots are the children of a `context_tag` element, so they follow
+    // exactly the rules a full parse applies to that element's children
+    // (#2999): indentation between roots is dropped, a space between two
+    // inline-level roots is kept as `" "`, and non-dj-if comments are dropped.
+    let roots = build_children(context_tag, &html_wrapper.children.borrow())?;
+    Ok(roots)
+}
+
+/// Parse `html` as a fragment the way the CLIENT sees it after inserting it
+/// with `<template>.innerHTML` (`InsertSubtree`): the roots are every node
+/// the browser keeps that `isSignificantChild` counts — elements, dj-if
+/// comments, non-whitespace text and text that is exactly `" "` — with no
+/// neighbour rule applied at the top level (the fragment's neighbours are in
+/// the page, not in the fragment). Nested children follow the normal rules,
+/// which reproduce themselves on VDOM-serialized HTML.
+///
+/// Used by the reference patch model (`patch::apply_patches`) so the Rust
+/// round-trip tests apply `InsertSubtree` exactly as the browser does (#2999).
+pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
+    let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
+    let dom = parse_fragment(
+        RcDom::default(),
+        ParseOpts::default(),
+        context_name,
+        vec![],
+        false,
+    )
+    .from_utf8()
+    .read_from(&mut html.as_bytes())
+    .map_err(|e| DjangoRustError::VdomError(format!("Failed to parse fragment: {e}")))?;
+    let document = dom.document;
+    let doc_children = document.children.borrow();
+    let html_wrapper = doc_children
+        .iter()
+        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if name.local.as_ref() == "html"))
+        .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
+        .clone();
+    drop(doc_children);
     let mut roots = Vec::new();
     for child in html_wrapper.children.borrow().iter() {
-        // Skip whitespace-only text nodes between roots (common at fragment
-        // boundaries due to template indentation)
-        if let NodeData::Text { ref contents } = child.data {
-            if contents.borrow().chars().all(char::is_whitespace) {
-                continue;
+        match &child.data {
+            NodeData::Comment { contents } => {
+                let text = contents.to_string();
+                if is_preserved_comment(&text) {
+                    roots.push(VNode {
+                        tag: "#comment".to_string(),
+                        attrs: HashMap::new(),
+                        children: Vec::new(),
+                        text: Some(text),
+                        key: None,
+                        djust_id: None,
+                        cached_html: None,
+                    });
+                }
             }
+            NodeData::Text { contents } => {
+                let text = contents.borrow().to_string();
+                if text == " " || !is_html_whitespace_only(&text) {
+                    roots.push(VNode::text(text));
+                }
+            }
+            _ => roots.push(handle_to_vnode(child)?),
         }
-        roots.push(handle_to_vnode(child)?);
     }
     Ok(roots)
 }
@@ -395,6 +449,169 @@ fn find_liveview_root(handle: &Handle) -> Option<Handle> {
     None
 }
 
+/// Is this comment one the VDOM keeps? Only the dj-if family (issue #295 and
+/// Iter 1 of #1358): the legacy `<!--dj-if-->` placeholder and the
+/// `<!--dj-if id="…"-->` / `<!--/dj-if-->` boundary pair. The client's
+/// `isDjIfComment` mirrors this.
+fn is_preserved_comment(comment_text: &str) -> bool {
+    let trimmed = comment_text.trim();
+    trimmed == "dj-if"
+        || trimmed.starts_with("dj-if ")
+        || trimmed.starts_with("dj-if\t")
+        || trimmed == "/dj-if"
+}
+
+/// How a raw child reads to a neighbouring whitespace run (#2999).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NeighbourKind {
+    /// Comments and whitespace-only text: looked through, never a neighbour.
+    Transparent,
+    /// Non-whitespace text or an inline-level element.
+    Inline,
+    /// A block-level element (anything not in `INLINE_LEVEL_TAGS`).
+    Block,
+}
+
+fn neighbour_kind(handle: &Handle) -> NeighbourKind {
+    match &handle.data {
+        NodeData::Comment { .. } => NeighbourKind::Transparent,
+        NodeData::Text { contents } => {
+            if is_html_whitespace_only(&contents.borrow()) {
+                NeighbourKind::Transparent
+            } else {
+                NeighbourKind::Inline
+            }
+        }
+        NodeData::Element { name, .. } => {
+            if is_inline_level_tag(&name.local) {
+                NeighbourKind::Inline
+            } else {
+                NeighbourKind::Block
+            }
+        }
+        _ => NeighbourKind::Block,
+    }
+}
+
+/// Push a text node, merging it into a preceding text node.
+///
+/// A browser never has two adjacent text nodes after parsing HTML: the
+/// serialization of `[text "A", text "B"]` is `AB`, which parses back as ONE
+/// node. Two raw text nodes become adjacent here only when a dropped comment
+/// separated them (`A<!-- c -->B`), and keeping them apart would give the
+/// server one more child than the client — every later sibling's path would be
+/// off by one. So adjacent text is merged, as the browser does (#2999).
+fn push_text(children: &mut Vec<VNode>, text: String) {
+    if let Some(last) = children.last_mut() {
+        if last.is_text() {
+            let merged = last.text.get_or_insert_with(String::new);
+            merged.push_str(&text);
+            last.cached_html = None;
+            return;
+        }
+    }
+    children.push(VNode::text(text));
+}
+
+/// Convert the raw children of a `parent_tag` element into VDOM children.
+///
+/// Whitespace rules (#2999). Inside `pre`/`code`/`textarea`/`script`/`style`
+/// every text node is kept verbatim. Elsewhere a text node made only of HTML
+/// whitespace (space, tab, LF, FF, CR) is:
+///
+/// - **kept, collapsed to exactly one `" "`**, when its nearest neighbour on
+///   each side is inline — non-whitespace text or an inline-level element
+///   (`INLINE_LEVEL_TAGS`). This is the space in `<b>A</b> <i>B</i>`; dropping
+///   it rendered "AB".
+/// - **dropped** otherwise: indentation between block-level siblings
+///   (`</div> <div>`, `</li> <li>`, `</p>\n<p>`) and leading/trailing
+///   whitespace inside an element (no neighbour on one side).
+///
+/// Neighbours are found by looking through comments and other
+/// whitespace-only text. NBSP and other non-ASCII spaces are content, not
+/// whitespace, and are kept verbatim as before.
+///
+/// The client (`isSignificantChild`) does not re-derive this contextual
+/// decision: a kept node is always exactly `" "`, and the client counts a
+/// whitespace-only text node iff it is exactly `" "`. That keeps the client's
+/// predicate a property of the node, so it does not flip while a patch batch
+/// moves the node's neighbours around.
+fn build_children(parent_tag: &str, raw: &[Handle]) -> Result<Vec<VNode>> {
+    let preserve_whitespace =
+        matches!(parent_tag, "pre" | "code" | "textarea" | "script" | "style");
+
+    // Nearest non-transparent neighbour on each side of every raw child.
+    let kinds: Vec<NeighbourKind> = raw.iter().map(neighbour_kind).collect();
+    let mut prev_inline = vec![false; raw.len()];
+    let mut last = None;
+    for (i, kind) in kinds.iter().enumerate() {
+        prev_inline[i] = last == Some(NeighbourKind::Inline);
+        if *kind != NeighbourKind::Transparent {
+            last = Some(*kind);
+        }
+    }
+    let mut next_inline = vec![false; raw.len()];
+    let mut last = None;
+    for (i, kind) in kinds.iter().enumerate().rev() {
+        next_inline[i] = last == Some(NeighbourKind::Inline);
+        if *kind != NeighbourKind::Transparent {
+            last = Some(*kind);
+        }
+    }
+
+    let mut children = Vec::with_capacity(raw.len());
+    for (i, child) in raw.iter().enumerate() {
+        match &child.data {
+            // Special placeholder comments preserved for VDOM diffing
+            // stability: the legacy `<!--dj-if-->` placeholder (issue #295)
+            // and the `<!--dj-if id="if-N"-->` / `<!--/dj-if-->` boundary
+            // pair (Iter 1 of #1358). They keep the server VDOM in lock-step
+            // with the client DOM (the client's `getSignificantChildren`
+            // counts these comments). Regular comments are filtered out.
+            NodeData::Comment { contents } => {
+                let comment_text = contents.to_string();
+                if is_preserved_comment(&comment_text) {
+                    children.push(VNode {
+                        tag: "#comment".to_string(),
+                        attrs: HashMap::new(),
+                        children: Vec::new(),
+                        text: Some(comment_text),
+                        key: None,
+                        djust_id: None,
+                        cached_html: None,
+                    });
+                }
+            }
+            NodeData::Text { contents } => {
+                let text = contents.borrow().to_string();
+                if preserve_whitespace {
+                    push_text(&mut children, text);
+                } else if is_html_whitespace_only(&text) {
+                    if prev_inline[i] && next_inline[i] {
+                        // Merged into a preceding text run it adds nothing
+                        // to when that run already ends in whitespace.
+                        let ends_in_space = children.last().is_some_and(|c| {
+                            c.is_text()
+                                && c.text.as_deref().is_some_and(|t| {
+                                    t.ends_with(|ch: char| ch.is_ascii_whitespace())
+                                })
+                        });
+                        if !ends_in_space {
+                            push_text(&mut children, " ".to_string());
+                        }
+                    } else {
+                        parser_trace!("Dropped whitespace-only text node {:?}", text);
+                    }
+                } else {
+                    push_text(&mut children, text);
+                }
+            }
+            _ => children.push(handle_to_vnode(child)?),
+        }
+    }
+    Ok(children)
+}
+
 fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
     match &handle.data {
         NodeData::Text { contents } => {
@@ -466,77 +683,8 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 parser_trace!("  Element <{}> has key: {:?}", tag, key);
             }
 
-            // Convert children
-            let mut children = Vec::new();
-
-            // Check if this element preserves whitespace
-            // tag is already lowercase from html5ever
-            let preserve_whitespace =
-                matches!(tag_ref, "pre" | "code" | "textarea" | "script" | "style");
-
-            for child in handle.children.borrow().iter() {
-                // Check for special placeholder comments preserved for
-                // VDOM diffing stability:
-                //   - `<!--dj-if-->` legacy single-marker placeholder
-                //     (issue #295) for false-no-else conditionals.
-                //   - `<!--dj-if id="if-N"-->` boundary marker opening
-                //     and `<!--/dj-if-->` boundary marker closing
-                //     (Iter 1 of issue #1358) wrapping `{% if %}` blocks
-                //     whose body contains element nodes.
-                //
-                // Preserving the new pair on the parser side keeps
-                // server-side VDOM in lock-step with the client's
-                // DOM structure (the client's `getSignificantChildren`
-                // counts all comments). Iter 3's differ extends this
-                // to recognize the `id=` attribute as a keyed boundary
-                // and emit subtree-level patches.
-                if let NodeData::Comment { ref contents } = child.data {
-                    let comment_text = contents.to_string();
-                    let trimmed = comment_text.trim();
-                    let is_legacy_placeholder = trimmed == "dj-if";
-                    let is_boundary_open =
-                        trimmed.starts_with("dj-if ") || trimmed.starts_with("dj-if\t");
-                    let is_boundary_close = trimmed == "/dj-if";
-                    if is_legacy_placeholder || is_boundary_open || is_boundary_close {
-                        // Preserve this as a comment node for VDOM diffing
-                        let comment_vnode = VNode {
-                            tag: "#comment".to_string(),
-                            attrs: HashMap::new(),
-                            children: Vec::new(),
-                            text: Some(comment_text),
-                            key: None,
-                            djust_id: None,
-                            cached_html: None,
-                        };
-                        children.push(comment_vnode);
-                    }
-                    // Regular comments are still filtered out
-                    continue;
-                }
-
-                let child_vnode = handle_to_vnode(child)?;
-                // Skip empty text nodes - use more robust whitespace detection
-                // IMPORTANT: Preserve whitespace inside pre, code, textarea, script, style
-                if child_vnode.is_text() {
-                    if let Some(text) = &child_vnode.text {
-                        // Preserve ALL text nodes inside whitespace-preserving elements
-                        if preserve_whitespace {
-                            children.push(child_vnode);
-                        } else {
-                            // Filter whitespace-only text nodes (newlines, spaces, tabs)
-                            // but preserve non-breaking spaces (\u{00A0}) since they are
-                            // semantically significant (e.g., &nbsp; in syntax highlighting)
-                            if !text.chars().all(|c| c.is_whitespace() && c != '\u{00A0}') {
-                                children.push(child_vnode);
-                            }
-                            // Debug logging disabled - too verbose
-                            // else { eprintln!("[Parser] Filtered whitespace text node: {:?}", text); }
-                        }
-                    }
-                } else {
-                    children.push(child_vnode);
-                }
-            }
+            // Convert children (whitespace rules: see `build_children`).
+            let children = build_children(tag_ref, &handle.children.borrow())?;
 
             Ok(VNode {
                 tag,
@@ -1325,5 +1473,198 @@ mod tests {
     fn fragment_empty_html_returns_no_roots() {
         let roots = parse_html_fragment("", "body").unwrap();
         assert!(roots.is_empty());
+    }
+
+    // --- #2999: whitespace between inline siblings ---
+
+    /// Children of the first element inside `<div dj-root>…</div>`.
+    fn root_children(inner: &str) -> Vec<VNode> {
+        let vnode = parse_html(&format!("<div dj-root>{inner}</div>")).unwrap();
+        vnode.children
+    }
+
+    /// Compact shape of a child list: tag for elements, `'text'` for text.
+    fn shape(children: &[VNode]) -> Vec<String> {
+        children
+            .iter()
+            .map(|c| {
+                if c.is_text() {
+                    format!("{:?}", c.text.as_deref().unwrap_or(""))
+                } else if c.is_comment() {
+                    "#comment".to_string()
+                } else {
+                    c.tag.clone()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ws_2999_inline_pairs_keep_one_space() {
+        for (html, expected) in [
+            ("<b>A</b> <i>B</i>", vec!["b", "\" \"", "i"]),
+            (
+                "<strong>Lead.</strong> <code>x</code>",
+                vec!["strong", "\" \"", "code"],
+            ),
+            (
+                "<a href=\"#\">x</a>\n    <span>y</span>",
+                vec!["a", "\" \"", "span"],
+            ),
+            ("<img src=\"x\"> <em>y</em>", vec!["img", "\" \"", "em"]),
+            (
+                "<b>A</b>\t\n <br> <i>B</i>",
+                vec!["b", "\" \"", "br", "\" \"", "i"],
+            ),
+        ] {
+            assert_eq!(shape(&root_children(html)), expected, "input: {html:?}");
+        }
+    }
+
+    #[test]
+    fn ws_2999_inline_space_is_collapsed_to_single_space() {
+        let kids = root_children("<b>A</b>\n        \t<i>B</i>");
+        assert_eq!(kids[1].text.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn ws_2999_round_trip_html_keeps_the_space() {
+        let vnode = parse_html("<div dj-root><p><b>A</b> <i>B</i></p></div>").unwrap();
+        let html = vnode.to_html();
+        assert!(
+            html.contains("</b> <i"),
+            "space lost in serialization: {html}"
+        );
+    }
+
+    #[test]
+    fn ws_2999_block_pairs_still_drop_whitespace() {
+        for html in [
+            "<div>a</div> <div>b</div>",
+            "<ul><li>a</li> <li>b</li></ul>",
+            "<p>a</p>\n<p>b</p>",
+            "<section>a</section>\n  <span>b</span>",
+            "<span>a</span>\n  <div>b</div>",
+            "<table><tr><td>a</td> <td>b</td></tr></table>",
+        ] {
+            let vnode = parse_html(&format!("<div dj-root>{html}</div>")).unwrap();
+            fn no_ws(n: &VNode) -> bool {
+                n.children.iter().all(|c| {
+                    !(c.is_text() && c.text.as_deref().is_some_and(|t| t.trim().is_empty()))
+                        && no_ws(c)
+                })
+            }
+            assert!(
+                no_ws(&vnode),
+                "whitespace node kept in {html:?}: {}",
+                vnode.to_html()
+            );
+        }
+    }
+
+    #[test]
+    fn ws_2999_list_items_drop_indentation_but_keep_inline_space_inside() {
+        let vnode = parse_html(
+            "<div dj-root><ul>\n  <li><strong>Lead.</strong> <code>x</code></li>\n  <li>b</li>\n</ul></div>",
+        )
+        .unwrap();
+        let ul = &vnode.children[0];
+        assert_eq!(shape(&ul.children), vec!["li", "li"]);
+        assert_eq!(
+            shape(&ul.children[0].children),
+            vec!["strong", "\" \"", "code"]
+        );
+    }
+
+    #[test]
+    fn ws_2999_leading_and_trailing_whitespace_not_turned_into_nodes() {
+        // Leading/trailing whitespace inside a block has no neighbour on one
+        // side, so it is dropped exactly as before.
+        for (html, expected) in [
+            ("<p>  <b>A</b> <i>B</i>  </p>", vec!["b", "\" \"", "i"]),
+            ("<p>\n<b>A</b>\n</p>", vec!["b"]),
+            ("<span> <b>A</b> </span>", vec!["b"]),
+        ] {
+            let kids = root_children(html);
+            assert_eq!(shape(&kids[0].children), expected, "input: {html:?}");
+        }
+    }
+
+    #[test]
+    fn ws_2999_text_neighbours_count_as_inline() {
+        // A text run is already a single node including its spaces; the rule
+        // only matters when a comment splits text from its whitespace.
+        assert_eq!(
+            shape(&root_children("<p>Hello <b>x</b> world</p>")[0].children),
+            vec!["\"Hello \"", "b", "\" world\""]
+        );
+        // `A<!-- c --> <b>` — the comment is dropped and the space merges into
+        // the preceding text, as the browser would parse the serialization.
+        assert_eq!(
+            shape(&root_children("<p>A<!-- c --> <b>x</b></p>")[0].children),
+            vec!["\"A \"", "b"]
+        );
+    }
+
+    #[test]
+    fn ws_2999_adjacent_text_across_dropped_comment_is_merged() {
+        // The browser parses the serialized `AB` as ONE text node, so the VDOM
+        // must hold one too or every later path is off by one.
+        assert_eq!(
+            shape(&root_children("<p>A<!-- c -->B<i>x</i></p>")[0].children),
+            vec!["\"AB\"", "i"]
+        );
+    }
+
+    #[test]
+    fn ws_2999_neighbours_are_found_through_comments() {
+        // A dj-if boundary comment is kept, and whitespace on either side of
+        // it still sees the inline elements beyond it.
+        let kids =
+            root_children("<p><b>A</b> <!--dj-if id=\"if-0\"--><i>B</i><!--/dj-if--> <u>C</u></p>");
+        assert_eq!(
+            shape(&kids[0].children),
+            vec!["b", "\" \"", "#comment", "i", "#comment", "\" \"", "u"]
+        );
+        // A plain comment is dropped; the two whitespace runs around it
+        // collapse into one space.
+        let kids = root_children("<p><b>A</b> <!-- note --> <i>B</i></p>");
+        assert_eq!(shape(&kids[0].children), vec!["b", "\" \"", "i"]);
+    }
+
+    #[test]
+    fn ws_2999_pre_and_code_unchanged() {
+        let kids = root_children("<pre>  <b>a</b>\n  <div>b</div>\n</pre>");
+        assert_eq!(
+            shape(&kids[0].children),
+            vec!["\"  \"", "b", "\"\\n  \"", "div", "\"\\n\""]
+        );
+        let kids = root_children("<code>x <b>y</b>\n\n<i>z</i> </code>");
+        assert_eq!(
+            shape(&kids[0].children),
+            vec!["\"x \"", "b", "\"\\n\\n\"", "i", "\" \""]
+        );
+        let kids = root_children("<textarea>\n  hi  \n</textarea>");
+        assert_eq!(kids[0].children.len(), 1);
+    }
+
+    #[test]
+    fn ws_2999_nbsp_and_unicode_spaces_are_content() {
+        // NBSP was always kept; other Unicode spaces are content too (the
+        // client counts them — /[^ \t\n\r\f]/ — so the server must as well).
+        assert_eq!(
+            shape(&root_children("<div>a</div>\u{00A0}<div>b</div>")),
+            vec!["div", "\"\\u{a0}\"", "div"]
+        );
+        assert_eq!(
+            shape(&root_children("<div>a</div>\u{2003}<div>b</div>")),
+            vec!["div", "\"\\u{2003}\"", "div"]
+        );
+    }
+
+    #[test]
+    fn ws_2999_fragment_roots_follow_the_same_rule() {
+        let roots = parse_html_fragment("  <b>A</b> <i>B</i>\n  <div>c</div>  ", "body").unwrap();
+        assert_eq!(shape(&roots), vec!["b", "\" \"", "i", "div"]);
     }
 }

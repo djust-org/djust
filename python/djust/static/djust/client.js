@@ -113,6 +113,36 @@ window.djLog = function djLog(...args) {
 };
 
 // ============================================================================
+// CSRF token for HTTP requests (event fallback, djust.call)
+// ============================================================================
+// Order: a rendered {% csrf_token %} input, then the CSRF cookie under the
+// project's configured name, then the token the server emits in
+// <meta name="djust-csrf-token">. The cookie is preferred over the meta tag
+// because Django rotates the token at login and the cookie follows the
+// rotation; the meta tag covers CSRF_COOKIE_HTTPONLY and CSRF_USE_SESSIONS,
+// where the cookie is not readable from JavaScript. Empty values are skipped
+// (the Rust engine renders "" for a csrf_token with no request, #696).
+window.djust.csrfToken = function csrfToken() {
+    try {
+        const input = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (input && input.value) return input.value;
+        const nameMeta = document.querySelector('meta[name="djust-csrf-cookie"]');
+        const cookieName = (nameMeta && nameMeta.getAttribute('content')) || 'csrftoken';
+        for (const part of (document.cookie || '').split(';')) {
+            const eq = part.indexOf('=');
+            if (eq > -1 && part.slice(0, eq).trim() === cookieName) {
+                const value = decodeURIComponent(part.slice(eq + 1).trim());
+                if (value) return value;
+            }
+        }
+        const tokenMeta = document.querySelector('meta[name="djust-csrf-token"]');
+        return (tokenMeta && tokenMeta.getAttribute('content')) || '';
+    } catch (_) {
+        return '';
+    }
+};
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
@@ -1486,6 +1516,7 @@ class LiveViewWebSocket {
                     // E3-8: keyed by pathname + query.
                     try {
                         if (data.sw_cache !== 'no-store' && window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
                                 ? window.location.pathname + window.location.search
                                 : '/';
@@ -3796,6 +3827,45 @@ function initDraftMode() {
     }
 }
 
+/**
+ * Clear the draft of every draft root carrying `data-draft-clear`.
+ * `DraftModeMixin.clear_draft()` sets it on the NEXT render, which usually
+ * arrives as a patch after an event (a successful submit), not as a page load,
+ * so this runs after every DOM update (reinitAfterDOMUpdate) (#2971). The
+ * attribute is left in place: the server's VDOM still has it, and removing it
+ * here would keep a later render that carries it again from patching it back.
+ * The server drops it on its next render.
+ */
+// Roots whose current data-draft-clear flag was already applied: an unrelated
+// DOM update (a stream chunk, a child-view patch) while the flag is still on
+// the page must not wipe a draft the user started after the submit.
+const _draftClearApplied = new WeakSet();
+
+function applyDraftClearFlag() {
+    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+        if (!root.hasAttribute('data-draft-clear')) {
+            _draftClearApplied.delete(root);
+            return;
+        }
+        if (_draftClearApplied.has(root)) return;
+        _draftClearApplied.add(root);
+        const key = root.getAttribute('data-draft-key');
+        if (key) globalDraftManager.clearDraft(key);
+    });
+}
+
+// Over a live connection clear_draft() also pushes `djust:draft-clear`
+// (#2971), which reaches the page even when the render carries no patch.
+if (typeof window !== 'undefined') {
+    window.addEventListener('djust:push_event', function (e) {
+        if (!e || !e.detail || e.detail.event !== 'djust:draft-clear') return;
+        const payload = e.detail.payload || {};
+        if (typeof payload.key === 'string' && payload.key) {
+            globalDraftManager.clearDraft(payload.key);
+        }
+    });
+}
+
 function _collectFormData(container) {
     const data = {};
 
@@ -3877,7 +3947,8 @@ function initReactCounters() {
         const propsJson = container.dataset.reactProps;
         let props = {};
         try {
-            props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
+            // `dataset` has already decoded the attribute's entities.
+            props = JSON.parse(propsJson);
         } catch { }
 
         let count = props.initialCount || 0;
@@ -6837,6 +6908,8 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // A clear_draft() from an event handler arrives in a patch (#2971).
+    applyDraftClearFlag();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
@@ -6852,6 +6925,10 @@ function reinitAfterDOMUpdate(scope) {
         });
     }
     updateHooks();
+
+    // {% djust_offline_indicator %} text / status class for any indicator
+    // this update inserted (#3051, 52-offline-state.js).
+    if (window.djust._syncOfflineIndicators) window.djust._syncOfflineIndicators(scope || document);
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
     // get observers and existing ones pick up new first/last children. For
@@ -7634,12 +7711,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
         && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
     try {
-        // Read CSRF token from hidden input first, fall back to cookie.
-        // Skip the hidden input if its value is empty — the Rust engine
-        // renders "" when no csrf_token is in the template context (#696).
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
-            || '';
+        // Input, configured-name cookie, then server meta tag (00-namespace.js).
+        const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
             ...(httpController ? {signal: httpController.signal} : {}),
@@ -7746,20 +7819,29 @@ function isDjIfComment(text) {
  * that drifted. Mirrors `crates/djust_vdom/src/parser.rs`:
  *   - elements always count;
  *   - text nodes count unless ASCII-whitespace-only (NBSP   is
- *     significant), except inside whitespace-preserving elements
- *     (<pre>/<code>/<textarea>) where ALL text counts (preserveWhitespace=true);
+ *     significant), except DIRECTLY inside a whitespace-preserving element
+ *     (<pre>/<code>/<textarea>/<script>/<style>) where ALL text counts
+ *     (preserveWhitespace=true; see isWhitespacePreserving, #3012);
+ *   - a text node that is EXACTLY " " counts (#2999): the server keeps the
+ *     whitespace between two inline siblings (`<b>A</b> <i>B</i>`) as exactly
+ *     " " and drops all other whitespace-only runs. That decision depends on
+ *     neighbours, so the server makes it once and encodes it in the node; the
+ *     client must not re-derive it, because neighbours change mid-batch.
+ *     Indentation ("\n    ") still does not count;
  *   - ONLY dj-if-family boundary comments count; the Rust parser drops every
  *     other HTML comment, so a plain <!-- comment --> must NOT shift indices.
  *
  * @param {Node} child
- * @param {boolean} [preserveWhitespace=false] — true inside pre/code/textarea.
+ * @param {boolean} [preserveWhitespace=false] — true when the parent is
+ *   pre/code/textarea/script/style (isWhitespacePreserving).
  * @returns {boolean}
  */
 function isSignificantChild(child, preserveWhitespace = false) {
     if (child.nodeType === Node.ELEMENT_NODE) return true;
     if (child.nodeType === Node.TEXT_NODE) {
         if (preserveWhitespace) return true;
-        return (/[^ \t\n\r\f]/.test(child.textContent));
+        const text = child.textContent;
+        return text === ' ' || (/[^ \t\n\r\f]/.test(text));
     }
     if (child.nodeType === Node.COMMENT_NODE) {
         return isDjIfComment(child.textContent);
@@ -7927,9 +8009,12 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         // Shared significant-child predicate (#1655) — MUST match
         // getSignificantChildren so path-based and index-based patch resolution
-        // agree (the #1640 drift). Path traversal never preserves whitespace.
+        // agree (the #1640 drift). Inside pre/code/textarea/script/style the
+        // server counts every text node, whitespace-only ones included, so the
+        // walk must too, or a path through one resolves the wrong node (#3012).
+        const preserveWhitespace = isWhitespacePreserving(node);
         const children = Array.from(node.childNodes).filter((child) =>
-            isSignificantChild(child)
+            isSignificantChild(child, preserveWhitespace)
         );
 
         if (index >= children.length) {
@@ -8549,10 +8634,14 @@ function _morphChildrenInner(existing, desired) {
             dNode.nodeType === Node.ELEMENT_NODE ||
             (dNode.nodeType === Node.COMMENT_NODE && isDjIfComment(dNode.textContent));
         if (dNodeIsSignificantElementish) {
+            // #2999: skip ANY whitespace-only text, including a counted " ":
+            // an element never matches a text node, and a stray prerendered
+            // " " must not push later elements through clone+insert.
             while (eNode &&
                    eNode.nodeType === Node.TEXT_NODE &&
                    !matched.has(eNode) &&
-                   !isSignificantChild(eNode, preserveWhitespace)) {
+                   !preserveWhitespace &&
+                   !(/[^ \t\n\r\f]/.test(eNode.textContent))) {
                 eIdx++;
                 // eslint-disable-next-line security/detect-object-injection
                 eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
@@ -8973,10 +9062,10 @@ function _stampDjIds(serverHtml, container) {
 
 /**
  * Get significant children (elements and non-whitespace text nodes).
- * Preserves all whitespace inside <pre>, <code>, and <textarea> elements.
+ * Every text child of a <pre>, <code>, <textarea>, <script> or <style> counts
+ * (see isWhitespacePreserving).
  */
 function getSignificantChildren(node) {
-    // Check if we're inside a whitespace-preserving element
     const preserveWhitespace = isWhitespacePreserving(node);
 
     // Shared significant-child predicate (#1655) — see getNodeByPath; passing
@@ -8986,20 +9075,20 @@ function getSignificantChildren(node) {
     );
 }
 
+const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+
 /**
- * Check if a node is a whitespace-preserving element or inside one.
+ * Does `node` keep every text child, whitespace-only ones included?
+ *
+ * Mirrors `preserve_whitespace` in crates/djust_vdom/src/parser.rs
+ * (`build_children`), which decides by the DIRECT parent's tag: text directly
+ * inside pre/code/textarea/script/style is kept verbatim; text inside any
+ * other element — even one nested in a <pre> — follows the ordinary rule
+ * (#3012). Deciding by ancestors instead counted whitespace the server drops.
  */
 function isWhitespacePreserving(node) {
-    const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
-    let current = node;
-    while (current) {
-        if (current.nodeType === Node.ELEMENT_NODE &&
-            WHITESPACE_PRESERVING_TAGS.includes(current.tagName)) {
-            return true;
-        }
-        current = current.parentNode;
-    }
-    return false;
+    return !!node && node.nodeType === Node.ELEMENT_NODE &&
+        WHITESPACE_PRESERVING_TAGS.includes(node.tagName.toUpperCase());
 }
 
 // ============================================================================
@@ -9041,13 +9130,26 @@ function _extractDjIfMarkerId(text) {
  * Uses a TreeWalker filtered to comment nodes for cheap traversal.
  * Reuses `isDjIfComment` to ignore non-dj-if comments.
  *
+ * Inside `_applyPatchBatch` the per-batch map answers instead of a scan
+ * (#3014). A miss there is final for InsertSubtree's "already present?"
+ * probe, the common case (a fresh id); `scanOnMiss` makes Move/Remove, which
+ * expect the marker, confirm a miss with the full scan.
+ *
  * @param {string} targetId — the id substring to match (e.g. `"if-abc-0"`).
  * @param {Node} [root=document.body] — scoping root for the search.
+ * @param {boolean} [scanOnMiss=false] — confirm a map miss with a scan.
  * @returns {Comment|null}
  */
-function _findDjIfOpenMarker(targetId, root) {
+function _findDjIfOpenMarker(targetId, root, scanOnMiss = false) {
     const scopeRoot = root || document.body;
     if (!scopeRoot) return null;
+    const index = _djIfMarkerIndex;
+    if (index && index.root === scopeRoot) {
+        const hit = index.byId.get(targetId);
+        // A marker a RemoveSubtree detached earlier in the batch is absent.
+        if (hit && hit.isConnected && scopeRoot.contains(hit)) return hit;
+        if (!scanOnMiss) return null;
+    }
     const walker = document.createTreeWalker(scopeRoot, NodeFilter.SHOW_COMMENT, null);
     let n = walker.nextNode();
     while (n) {
@@ -9059,6 +9161,42 @@ function _findDjIfOpenMarker(targetId, root) {
         n = walker.nextNode();
     }
     return null;
+}
+
+/**
+ * The per-batch dj-if marker map (#3014): `{root, byId}` while
+ * `_applyPatchBatch` runs, else `null`.
+ *
+ * Every MoveSubtree / InsertSubtree / RemoveSubtree used to find its open
+ * marker with a full-document TreeWalker scan, so a batch of N subtree ops cost
+ * N scans (a 1,000-row `{% for %}{% if %}` prepend took ~2 s in jsdom). The
+ * batch now scans once. The map stays correct through the batch because:
+ * moves keep node identity; a removed marker is detached, which the lookup
+ * checks (`isConnected` + inside the scope); and an InsertSubtree registers
+ * the markers of the fragment it inserts (`_registerDjIfMarkers`).
+ */
+let _djIfMarkerIndex = null;
+
+/** Add every dj-if open marker under `node` to `byId`; the first one per id wins. */
+function _collectDjIfMarkers(node, byId) {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT, null);
+    let n = walker.nextNode();
+    while (n) {
+        const text = n.textContent || '';
+        if (isDjIfComment(text)) {
+            const id = _extractDjIfMarkerId(text.trim());
+            if (id !== null) {
+                const known = byId.get(id);
+                if (!known || !known.isConnected) byId.set(id, n);
+            }
+        }
+        n = walker.nextNode();
+    }
+}
+
+/** Register the markers of a fragment about to be inserted, if a batch map is live. */
+function _registerDjIfMarkers(fragment) {
+    if (_djIfMarkerIndex && fragment) _collectDjIfMarkers(fragment, _djIfMarkerIndex.byId);
 }
 
 /**
@@ -9150,7 +9288,7 @@ function applyRemoveSubtree(patch, rootEl = null) {
         console.warn('[LiveView] RemoveSubtree patch missing id, skipping');
         return false;
     }
-    const open = _findDjIfOpenMarker(targetId, rootEl);
+    const open = _findDjIfOpenMarker(targetId, rootEl, true);
     if (!open) {
         // Idempotent no-op: the marker is already gone (likely removed by a
         // prior patch in the same batch, or an earlier patch cycle that
@@ -9247,6 +9385,7 @@ function applyInsertSubtree(patch, rootEl = null) {
     // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
     // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
     _warnDeadScripts(fragment);
+    _registerDjIfMarkers(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);
@@ -9283,7 +9422,7 @@ function applyMoveSubtree(patch, rootEl = null) {
         console.warn('[LiveView] MoveSubtree patch missing id, skipping');
         return false;
     }
-    const open = _findDjIfOpenMarker(targetId, rootEl);
+    const open = _findDjIfOpenMarker(targetId, rootEl, true);
     if (!open) {
         // Marker absent — nothing to move. Idempotent no-op (a prior patch in
         // the batch may have torn it down); returning false would trigger the
@@ -9440,8 +9579,8 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  * Phases:
  *   -2: RemoveSubtree (tear down keyed subtrees first)
  *    0: RemoveChild (descending index within same parent)
- *    1: MoveChild
- *    2: InsertChild
+ *    1: InsertChild + MoveChild — per parent, applied TOGETHER as placements
+ *       at their final index
  *    3: MoveSubtree + InsertSubtree (boundary-span ops, INTERLEAVED by
  *       ascending target index — see below)
  *    4: SetText, SetAttribute, other node-targeting patches
@@ -9463,14 +9602,19 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  * them in ASCENDING target-index order so each lower-index op builds the
  * correct prefix before a higher-index op resolves against it (the outer
  * boundary is repositioned before the nested insert lands inside it).
+ *
+ * NOTE (#2999): applyPatches no longer applies a batch op-by-op in this
+ * order — see _applyPatchBatch, which places inserts, moves and dj-if spans
+ * together by final index. This sort is kept for callers that apply single
+ * patches themselves.
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
         switch (p.type) {
             case 'RemoveSubtree': return -2;
             case 'RemoveChild':   return 0;
+            case 'InsertChild':   return 1;
             case 'MoveChild':     return 1;
-            case 'InsertChild':   return 2;
             case 'MoveSubtree':   return 3;
             case 'InsertSubtree': return 3;
             // The [dj-virtual] keyed ops MUST share one phase and MUST keep
@@ -9499,6 +9643,13 @@ function _sortPatches(patches) {
             const pB = JSON.stringify(b.path);
             if (pA === pB) return b.index - a.index;
         }
+        // Within the placement phase, sort by ascending FINAL index per
+        // parent (#2999): `index` for an insert, `to` for a move.
+        if (phaseA === 1) {
+            const pA = JSON.stringify(a.path);
+            const pB = JSON.stringify(b.path);
+            if (pA === pB) return _placementIndex(a) - _placementIndex(b);
+        }
         // Within the boundary-span phase, apply by ASCENDING target index so a
         // moved outer boundary is positioned before a nested insert lands
         // inside it (#1678). Indices are parent-absolute significant-child
@@ -9513,6 +9664,270 @@ function _sortPatches(patches) {
     return patches;
 }
 window.djust._sortPatches = _sortPatches;
+
+/** Final index of a placement op (#2999). */
+function _placementIndex(patch) {
+    return patch.type === 'MoveChild' ? patch.to : patch.index;
+}
+
+const _PLACEMENT_OPS = new Set(['InsertChild', 'MoveChild', 'InsertSubtree', 'MoveSubtree']);
+
+/**
+ * Remove `child` from `parent` the way a RemoveChild patch does: honour a
+ * dj-remove deferral, and clear a textarea's value when its text goes.
+ */
+function _removeChildNode(parent, child) {
+    const wasTextNode = child.nodeType === Node.TEXT_NODE;
+    if (!wasTextNode
+        && child.nodeType === Node.ELEMENT_NODE
+        && globalThis.djust
+        && typeof globalThis.djust.maybeDeferRemoval === 'function'
+        && globalThis.djust.maybeDeferRemoval(child)) {
+        return;
+    }
+    parent.removeChild(child);
+    if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
+        parent.value = '';
+    }
+}
+
+/** The nodes of a dj-if span, open marker through close marker, or null. */
+function _djIfSpanNodes(id, rootEl) {
+    const open = _findDjIfOpenMarker(String(id || ''), rootEl, true);
+    if (!open) return null;
+    const close = _findDjIfCloseMarker(open);
+    if (!close) return null;
+    const nodes = [];
+    for (let cur = open; cur; cur = cur.nextSibling) {
+        nodes.push(cur);
+        if (cur === close) break;
+    }
+    return nodes;
+}
+
+/**
+ * Apply one parent's placements — InsertChild, MoveChild, InsertSubtree,
+ * MoveSubtree — each of which carries the FINAL index of what it places
+ * (#2999). Every moved child and moved dj-if span is detached first (an outer
+ * span never carries a nested moved item with it: spans are claimed
+ * innermost-first), then everything is placed by ascending final index. The
+ * differ guarantees that what stays in place is already in final relative
+ * order, so each placement at index `i` lands after exactly its `i` final
+ * predecessors. Same model as patch.rs::apply_patches.
+ */
+function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
+    const preserve = isWhitespacePreserving(parent);
+    const isSig = (n) => isSignificantChild(n, preserve);
+
+    // Claim the nodes each move carries: moved children first, then spans
+    // from the smallest up.
+    const owner = new Map();
+    for (const op of ops) {
+        if (op.type !== 'MoveChild') continue;
+        const child = movedChildOf.get(op);
+        if (child && child.parentNode === parent && !owner.has(child)) owner.set(child, op);
+    }
+    const spans = [];
+    for (const op of ops) {
+        if (op.type !== 'MoveSubtree') continue;
+        const nodes = _djIfSpanNodes(op.id, rootEl);
+        if (nodes && nodes[0].parentNode === parent) spans.push({ op, nodes });
+    }
+    spans.sort((a, b) => a.nodes.length - b.nodes.length);
+    for (const { op, nodes } of spans) {
+        for (const n of nodes) if (!owner.has(n)) owner.set(n, op);
+    }
+    const carried = new Map();
+    for (const n of Array.from(parent.childNodes)) {
+        const op = owner.get(n);
+        if (!op) continue;
+        if (!carried.has(op)) carried.set(op, []);
+        carried.get(op).push(n);
+        parent.removeChild(n);
+    }
+
+    const sig = Array.from(parent.childNodes).filter(isSig);
+    const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
+    for (const op of sorted) {
+        let nodes;
+        if (op.type === 'InsertChild') {
+            const created = createNodeFromVNode(op.node, isInSvgContext(parent));
+            // <select> only accepts <option>/<optgroup>: keep the redirect the
+            // single-patch path applies (inserts the node as a sibling).
+            if (parent.tagName === 'SELECT' && !(created.nodeType === Node.ELEMENT_NODE &&
+                    (created.tagName === 'OPTION' || created.tagName === 'OPTGROUP'))) {
+                tally(applySinglePatch(op, rootEl), op);
+                continue;
+            }
+            // A created subtree can carry dj-if markers; register them so a
+            // later InsertSubtree's "already present?" probe sees them (#3014).
+            _registerDjIfMarkers(created);
+            nodes = [created];
+        } else if (op.type === 'InsertSubtree') {
+            if (op.id && _findDjIfOpenMarker(String(op.id), rootEl)) {
+                tally(true, op); // idempotent: already present
+                continue;
+            }
+            if (typeof op.html !== 'string' || !op.html) {
+                tally(false, op);
+                continue;
+            }
+            const fragment = _parseSubtreeHtml(op.html);
+            _warnDeadScripts(fragment);
+            _registerDjIfMarkers(fragment);
+            nodes = Array.from(fragment.childNodes);
+        } else {
+            nodes = carried.get(op) || [];
+            if (nodes.length === 0) {
+                // A MoveSubtree whose marker is gone is an idempotent no-op; a
+                // MoveChild whose child is gone failed.
+                tally(op.type === 'MoveSubtree', op);
+                continue;
+            }
+        }
+        const at = Math.min(_placementIndex(op), sig.length);
+        // eslint-disable-next-line security/detect-object-injection -- `at` is a clamped integer index
+        const ref = sig[at] || null;
+        const frag = document.createDocumentFragment();
+        for (const n of nodes) frag.appendChild(n);
+        parent.insertBefore(frag, ref);
+        sig.splice(at, 0, ...nodes.filter(isSig));
+        if (op.type === 'InsertChild' && nodes[0].nodeType === Node.TEXT_NODE &&
+                parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
+            parent.value = String(nodes[0].textContent || '');
+        }
+        tally(true, op);
+    }
+}
+
+/**
+ * Apply a patch batch (#2999). The model (patch.rs::apply_patches is the
+ * reference; the Rust round-trip tests check it against the differ):
+ *
+ *   1. Resolve every RemoveChild (by child_d, else its OLD index) and every
+ *      MoveChild's child against the DOM as it is BEFORE the batch — indices
+ *      in those ops are old-tree indices. Resolving an id-less RemoveChild
+ *      after a RemoveSubtree had shifted the list removed the wrong node.
+ *   2. RemoveSubtree (by marker id), then the resolved removals.
+ *   3. Per parent, all placements together (_placeChildren). Inserts used to
+ *      run before MoveSubtree/InsertSubtree, so their final indices resolved
+ *      against a list whose boundaries were not in place yet.
+ *   4. Everything else (SetText, SetAttr, Replace, virtual-list ops, …) in
+ *      emitted order, addressed by final-tree path / dj-id.
+ *
+ * @returns {{ok: number, failed: number, failedIndices: number[]}}
+ */
+function _applyPatchBatch(patches, rootEl) {
+    // One dj-if marker map for the batch when it has subtree ops (#3014).
+    const needsIndex = patches.some((p) => p && (p.type === 'MoveSubtree' ||
+        p.type === 'InsertSubtree' || p.type === 'RemoveSubtree'));
+    const scopeRoot = rootEl || document.body;
+    if (!needsIndex || !scopeRoot || _djIfMarkerIndex) {
+        return _applyPatchBatchInner(patches, rootEl);
+    }
+    const byId = new Map();
+    _collectDjIfMarkers(scopeRoot, byId);
+    _djIfMarkerIndex = { root: scopeRoot, byId };
+    try {
+        return _applyPatchBatchInner(patches, rootEl);
+    } finally {
+        _djIfMarkerIndex = null;
+    }
+}
+
+function _applyPatchBatchInner(patches, rootEl) {
+    let ok = 0;
+    let failed = 0;
+    const failedIndices = [];
+    const indexOf = new Map(patches.map((p, i) => [p, i]));
+    const tally = (success, p) => {
+        if (success) { ok++; return; }
+        failed++;
+        if (indexOf.has(p)) failedIndices.push(indexOf.get(p));
+    };
+
+    const removeSubtrees = [];
+    const removes = [];
+    const placements = [];
+    const rest = [];
+    for (const p of patches) {
+        if (!p) continue;
+        if (p.type === 'RemoveSubtree') removeSubtrees.push(p);
+        else if (p.type === 'RemoveChild') removes.push(p);
+        else if (_PLACEMENT_OPS.has(p.type)) placements.push(p);
+        else rest.push(p);
+    }
+
+    // 1. Resolve against the pre-batch DOM.
+    const sigCache = new Map();
+    const sigOf = (parent) => {
+        if (!sigCache.has(parent)) sigCache.set(parent, getSignificantChildren(parent));
+        return sigCache.get(parent);
+    };
+    const childOf = (parent, childD, index) => {
+        if (childD) {
+            const escaped = CSS.escape(childD);
+            const byId = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+            if (byId) return byId;
+        }
+        // eslint-disable-next-line security/detect-object-injection -- server-provided integer index
+        return (typeof index === 'number' && sigOf(parent)[index]) || null;
+    };
+    const toRemove = [];
+    for (const p of removes) {
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+            tally(false, p);
+            continue;
+        }
+        // A child that is already gone is an idempotent success, as before.
+        const child = childOf(parent, p.child_d, p.index);
+        if (child) toRemove.push([parent, child]);
+        tally(true, p);
+    }
+    const movedChildOf = new Map();
+    for (const p of placements) {
+        if (p.type !== 'MoveChild') continue;
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (parent && parent.nodeType === Node.ELEMENT_NODE) {
+            movedChildOf.set(p, childOf(parent, p.child_d, p.from));
+        }
+    }
+
+    // 2. Removals.
+    for (const p of removeSubtrees) tally(applyRemoveSubtree(p, rootEl), p);
+    for (const [parent, child] of toRemove) {
+        if (child.parentNode === parent) _removeChildNode(parent, child);
+    }
+
+    // 3. Placements, per parent in first-seen order.
+    const groups = new Map();
+    for (const p of placements) {
+        const parent = getNodeByPath(p.path, p.d, rootEl);
+        if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+            console.warn('[LiveView] %s: parent not found path=%s', String(p.type).slice(0, 20),
+                Array.isArray(p.path) ? p.path.map(Number).join('/') : 'invalid');
+            tally(false, p);
+            continue;
+        }
+        if (!groups.has(parent)) groups.set(parent, []);
+        groups.get(parent).push(p);
+    }
+    for (const [parent, ops] of groups) {
+        try {
+            _placeChildren(parent, ops, movedChildOf, rootEl, tally);
+        } catch (error) {
+            console.error('[LiveView] Error placing children:', error.message || error);
+            tally(false, ops[0]);
+        }
+    }
+
+    // 4. Node patches, emitted order.
+    for (const p of rest) tally(applySinglePatch(p, rootEl), p);
+    failedIndices.sort((x, y) => x - y);
+    return { ok, failed, failedIndices };
+}
+window.djust._applyPatchBatch = _applyPatchBatch;
 
 /**
  * Apply a single patch operation.
@@ -9840,7 +10255,9 @@ function applySinglePatch(patch, rootEl = null) {
                     child = fallbackChildren[patch.from];
                 }
                 if (child) {
-                    const children = getSignificantChildren(node);
+                    // #2999: `to` is the index among the siblings WITHOUT the
+                    // child (patch.rs::apply_patches).
+                    const children = getSignificantChildren(node).filter((c) => c !== child);
                     const refChild = children[patch.to];
                     if (refChild) {
                         node.insertBefore(child, refChild);
@@ -10138,185 +10555,13 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     const focusState = saveFocusState(rootEl);
     const autofocusScope = rootEl || document;
 
-    // Sort patches in 4-phase order for correct DOM mutation sequencing
-    _sortPatches(patches);
-
-    // For small patch sets, apply directly without batching overhead
-    if (patches.length <= 10) {
-        let failedCount = 0;
-        const failedIndices = [];
-        for (let _pi = 0; _pi < patches.length; _pi++) {
-            // eslint-disable-next-line security/detect-object-injection
-            if (!applySinglePatch(patches[_pi], rootEl)) {
-                failedCount++;
-                failedIndices.push(_pi);
-            }
-        }
-        if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
-            // Still handle autofocus even when some patches failed (#617)
-            if (!focusState || !focusState.id) {
-                const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-                if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                    autoFocusEl.focus();
-                }
-            }
-            restoreFocusState(focusState, rootEl);
-            return false;
-        }
-        // Note: updateHooks() and bindModelElements() are called by
-        // reinitAfterDOMUpdate() in the response handler — not here,
-        // to avoid double-scanning the DOM.
-        // Handle autofocus on dynamically inserted elements (#617)
-        // Browser only honors autofocus on initial page load, so we
-        // manually focus the first element with autofocus after a patch.
-        if (!focusState || !focusState.id) {
-            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-            if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                autoFocusEl.focus();
-            }
-        }
-        restoreFocusState(focusState, rootEl);
-        return true;
-    }
-
-    // For larger patch sets, use batching
-    let failedCount = 0;
-    let successCount = 0;
-
-    // id-based patches don't have a `path` field — they locate their target by
-    // marker id. RemoveSubtree (phase -2) tears down keyed subtrees up front.
-    // InsertSubtree + MoveSubtree (phase 3) are DEFERRED together and applied
-    // by ascending target index AFTER the path/index child ops settle — so a
-    // moved outer boundary is repositioned before a nested insert lands inside
-    // it (#1678; see _sortPatches phase doc). They must not enter
-    // groupPatchesByParent, which assumes patch.path exists.
-    const pathPatches = [];
-    const boundarySpanPatches = [];
-    for (const patch of patches) {
-        if (patch.type === 'RemoveSubtree') {
-            // Phase -2: tear down keyed subtrees first.
-            const ok = applySinglePatch(patch, rootEl);
-            if (ok) { successCount++; } else { failedCount++; }
-        } else if (patch.type === 'InsertSubtree' || patch.type === 'MoveSubtree') {
-            // Phase 3: defer — boundary-span ops apply after child ops, by
-            // ascending index (#1666 + #1678).
-            boundarySpanPatches.push(patch);
-        } else {
-            pathPatches.push(patch);
-        }
-    }
-
-    // Group remaining path-based patches by parent for potential batching
-    const patchGroups = groupPatchesByParent(pathPatches);
-
-    for (const [, group] of patchGroups) {
-        // Phase order within a group MUST match the top-level phase order:
-        // RemoveChild → MoveChild → InsertChild → other.
-        //
-        // Previously the batching code below ran InsertChild patches (via
-        // DocumentFragment) BEFORE iterating `group` for the RemoveChild
-        // patches — violating phase order. That breaks when a comment/text
-        // child without a dj-id needs removal: the index-based fallback
-        // resolves to the just-inserted content instead of the old child,
-        // and the wrong node gets deleted.  See regression fixtures for
-        // a downstream consumer tab switches (#641).
-        //
-        // Fix: apply all non-Insert patches individually FIRST, then batch
-        // the consecutive inserts, then apply any remaining inserts that
-        // were too small to batch.  _sortPatches has already sorted the
-        // removes within the group by descending index.
-        const nonInsertPatches = [];
-        const insertPatches = [];
-        for (const patch of group) {
-            if (patch.type === 'InsertChild') insertPatches.push(patch);
-            else nonInsertPatches.push(patch);
-        }
-
-        // 1. Apply non-insert patches (RemoveChild, MoveChild, SetAttr, etc.)
-        //    in their existing sorted order.  RemoveChild patches are
-        //    descending-index-sorted by _sortPatches, so they're safe to
-        //    apply sequentially without index drift.
-        for (const patch of nonInsertPatches) {
-            if (applySinglePatch(patch, rootEl)) {
-                successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
-        // 2. Batch consecutive inserts via DocumentFragment where possible.
-        //    At this point the DOM is in the "post-remove" state, so index
-        //    fallback for ref_d=None inserts lines up with what the server
-        //    computed against the new VDOM.
-        const batchedInserts = new Set();
-        if (insertPatches.length >= 3) {
-            const consecutiveGroups = groupConsecutiveInserts(insertPatches);
-
-            for (const consecutiveGroup of consecutiveGroups) {
-                if (consecutiveGroup.length < 3) continue;
-
-                const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d, rootEl);
-
-                if (parentNode) {
-                    try {
-                        const fragment = document.createDocumentFragment();
-                        const svgContext = isInSvgContext(parentNode);
-                        for (const patch of consecutiveGroup) {
-                            const newChild = createNodeFromVNode(patch.node, svgContext);
-                            fragment.appendChild(newChild);
-                            successCount++;
-                            batchedInserts.add(patch);
-                        }
-
-                        const children = getSignificantChildren(parentNode);
-                        const firstIndex = consecutiveGroup[0].index;
-                        // eslint-disable-next-line security/detect-object-injection
-                        const refChild = children[firstIndex];
-
-                        if (refChild) {
-                            parentNode.insertBefore(fragment, refChild);
-                        } else {
-                            parentNode.appendChild(fragment);
-                        }
-                    } catch (error) {
-                        console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        successCount -= consecutiveGroup.length;  // undo count
-                        for (const patch of consecutiveGroup) batchedInserts.delete(patch);
-                    }
-                }
-            }
-        }
-
-        // 3. Apply any insert patches that weren't batched (non-consecutive
-        //    groups or group size < 3) individually.
-        for (const patch of insertPatches) {
-            if (batchedInserts.has(patch)) continue;
-            if (applySinglePatch(patch, rootEl)) {
-                successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-    }
-
-    // Phase 3 (#1666 + #1678): apply boundary-span ops (MoveSubtree +
-    // InsertSubtree) AFTER all path/index child ops above have settled the
-    // surrounding siblings, in ASCENDING target index so a moved outer
-    // boundary is repositioned before a nested insert lands inside it. Each
-    // op's `index` then resolves against the new-frame significant children.
-    boundarySpanPatches.sort(function (a, b) {
-        const ai = typeof a.index === 'number' ? a.index : 0;
-        const bi = typeof b.index === 'number' ? b.index : 0;
-        return ai - bi;
-    });
-    for (const patch of boundarySpanPatches) {
-        if (applySinglePatch(patch, rootEl)) { successCount++; } else { failedCount++; }
-    }
+    // #2999: one model for every batch size — resolve removals against the
+    // pre-batch DOM, remove, place inserts + moves (children and dj-if spans)
+    // per parent by final index, then the node patches. See _applyPatchBatch.
+    const { ok: successCount, failed: failedCount, failedIndices } = _applyPatchBatch(patches, rootEl);
 
     if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded; indices: ${failedIndices.join(', ')})`);
         // Still handle autofocus even when some patches failed (#617)
         if (!focusState || !focusState.id) {
             const autoFocusEl = autofocusScope.querySelector('[autofocus]');
@@ -12334,7 +12579,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar we started above.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 return;
             }
@@ -12347,7 +12592,7 @@ window.djust.getActiveStreams = getActiveStreams;
             // Stop the page-loading bar we started above; the full nav
             // will trigger the browser's own progress indicator.
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                window.djust.pageLoading.stop?.();
+                window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
             }
             window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
@@ -12402,7 +12647,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 // will trigger the browser's own progress indicator (matches
                 // the cross-origin branch's stop semantics).
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             } else {
@@ -12411,7 +12656,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar — we are not navigating.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
             }
             return;
@@ -12420,7 +12665,10 @@ window.djust.getActiveStreams = getActiveStreams;
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
-        // ADR-038 E3-8: service-worker caches key on pathname + query.
+        // The page being left, read BEFORE pushState moves location to the
+        // destination: its state snapshot is captured under this key
+        // (pathname + query, #2949 / ADR-038 E3-8). Read after pushState it
+        // named the destination, so the capture below found no snapshot to store.
         const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
@@ -14239,8 +14487,10 @@ window.djust.bindModelElements = bindModelElements;
                 await window.djust.handleEvent(event, params);
             }
         } finally {
-            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.stop) {
-                try { window.djust.pageLoading.stop(); } catch (_) {}
+            // pageLoading exposes start/finish — there is no stop(), so the
+            // old `.stop` check left the bar at 90% forever (#2965).
+            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.finish) {
+                try { window.djust.pageLoading.finish(); } catch (_) {}
             }
         }
     }
@@ -19122,8 +19372,8 @@ globalThis.djust.djTransitionGroup = {
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        // ADR-038 E3-8: cache keys carry the query string; the route map
-        // is keyed by pathname alone.
+        // #2949 / ADR-038 E3-8: ``fromUrl`` is a cache key (pathname + query);
+        // the route map is keyed by pathname alone.
         const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
@@ -19166,7 +19416,7 @@ globalThis.djust.djTransitionGroup = {
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
-        // ADR-038 E3-8: the capture key is pathname + query.
+        // #2949 / ADR-038 E3-8: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname + window.location.search
@@ -19322,17 +19572,12 @@ globalThis.djust.djTransitionGroup = {
 // LiveView. No re-render, no assigns diff — pure request/response. Rejects
 // with an Error carrying {code, status, details} on non-2xx responses.
 //
-// CSRF: reads the hidden input (preferred) then falls back to the cookie.
-// Mirrors the resolver in src/11-event-handler.js for consistency.
+// CSRF: window.djust.csrfToken() (00-namespace.js), shared with the
+// HTTP event fallback in src/11-event-handler.js.
 
 (function () {
     function _csrf() {
-        try {
-            const input = document.querySelector('[name=csrfmiddlewaretoken]');
-            if (input && input.value) return input.value;
-        } catch (_) { /* SSR / detached DOM */ }
-        const m = (document.cookie || '').match(/(?:^|;\s*)csrftoken=([^;]+)/);
-        return m ? m[1] : '';
+        return window.djust.csrfToken();
     }
 
     async function call(viewSlug, funcName, params) {
@@ -20161,6 +20406,100 @@ globalThis.djust.djTransitionGroup = {
         _wrapIndex: _wrapIndex,
         _dialogStack: _dialogStack,
     };
+})();
+// ============================================================================
+// Online / offline body classes — dj-offline-hide / -show / -disable (#3041)
+// and the {% djust_offline_indicator %} text and status class (#3051)
+// ============================================================================
+// `{% djust_pwa_head %}` and `{% djust_offline_styles %}` emit CSS keyed on
+// `body.djust-online` / `body.djust-offline`:
+//
+//     body.djust-offline [dj-offline-hide],
+//     body:not(.djust-online) [dj-offline-hide] { display: none !important }
+//
+// Nothing set those classes after the unbundled pwa.js was removed (#2659),
+// so `body:not(.djust-online)` always matched: dj-offline-hide elements were
+// always hidden, dj-offline-disable always disabled, dj-offline-show never
+// shown. This module sets them from `navigator.onLine` at startup and keeps
+// them current from the window `online` / `offline` events.
+//
+// It also keeps every `.djust-offline-indicator` in step (#3051): the
+// indicator's `.djust-indicator-text` takes `data-online-text` /
+// `data-offline-text`, and the element carries the classes named in
+// `data-online-class` or `data-offline-class`. Visibility stays in CSS (the
+// `dj-offline-show` / `dj-offline-hide` rules); this only swaps text and class.
+//
+// Browser network state only: a WebSocket reconnect is not "offline" (the
+// HTTP fallback still works), so the socket state does not drive these.
+
+(function () {
+    // Last known state. `navigator.onLine === false` is the only reliable
+    // signal; anything else (true, or no navigator) counts as online.
+    let _online = !(typeof navigator !== 'undefined' && navigator.onLine === false);
+
+    // Never toggle the class the indicator is found by, or a state switch
+    // could drop it and the indicator would stop updating.
+    function _classList(value) {
+        return (value || '').split(/\s+/).filter(function (c) {
+            return c && c !== 'djust-offline-indicator';
+        });
+    }
+
+    function _syncIndicator(el) {
+        const onClasses = _classList(el.getAttribute('data-online-class'));
+        const offClasses = _classList(el.getAttribute('data-offline-class'));
+        // Remove the other state's classes first, then add this state's, so a
+        // class named in both lists stays on.
+        const remove = _online ? offClasses : onClasses;
+        const add = _online ? onClasses : offClasses;
+        remove.forEach(function (c) { el.classList.remove(c); });
+        add.forEach(function (c) { el.classList.add(c); });
+
+        const attr = _online ? 'data-online-text' : 'data-offline-text';
+        const text = el.querySelector('.djust-indicator-text');
+        if (text && el.hasAttribute(attr)) {
+            const value = el.getAttribute(attr);
+            if (text.textContent !== value) text.textContent = value;
+        }
+    }
+
+    function _syncIndicators(scope) {
+        const root = scope || document;
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        if (root.classList && root.classList.contains('djust-offline-indicator')) {
+            _syncIndicator(root);
+        }
+        root.querySelectorAll('.djust-offline-indicator').forEach(_syncIndicator);
+    }
+
+    function _apply() {
+        const body = document.body;
+        if (!body) return;
+        body.classList.toggle('djust-online', _online);
+        body.classList.toggle('djust-offline', !_online);
+        _syncIndicators(document);
+    }
+
+    function _set(online) {
+        _online = online;
+        _apply();
+    }
+
+    // reinitAfterDOMUpdate (09-event-binding.js) calls this after every DOM
+    // update, so an indicator that a patch or a navigation inserts shows the
+    // current state rather than the server-rendered default.
+    window.djust._syncOfflineIndicators = _syncIndicators;
+
+    window.addEventListener('online', function () { _set(true); });
+    window.addEventListener('offline', function () { _set(false); });
+    // A layout switch replaces <body> (40-dj-layout.js); re-stamp the new one.
+    document.addEventListener('djust:layout-changed', _apply);
+
+    if (document.body) {
+        _apply();
+    } else {
+        document.addEventListener('DOMContentLoaded', _apply, { once: true });
+    }
 })();
 
 })();

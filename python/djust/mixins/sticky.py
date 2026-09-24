@@ -547,7 +547,8 @@ class StickyChildRegistry:
         Walks :attr:`_child_views`, filters to children with
         ``sticky is True``, and re-checks each child's auth against
         ``new_request`` via
-        :func:`djust.auth.core.check_view_auth_lightweight`. Survivors
+        :func:`djust.auth.core.check_view_auth_lightweight` and the
+        object-level :func:`djust.auth.core.enforce_object_permission`. Survivors
         are returned in a ``{sticky_id: child}`` map (keyed by each
         child's ``sticky_id`` class attr) for the consumer to stash on
         ``self._sticky_preserved``.
@@ -557,14 +558,28 @@ class StickyChildRegistry:
         unmount flow run on the old view.
         """
         # Lazy import to avoid circular: auth.core -> live_view -> mixins -> auth.
-        from ..auth.core import check_view_auth_lightweight
+        from ..auth.core import check_view_auth_lightweight, enforce_object_permission
+
+        def _authorized(child: Any) -> bool:
+            # Authorize against the NEW request: get_object() and application
+            # predicates may read self.request, and the old one is stale. A
+            # child that cannot take the new request (a read-only proxy), or
+            # a predicate that raises, denies this child only (fail closed).
+            try:
+                child.request = new_request
+                if not check_view_auth_lightweight(child, new_request):
+                    return False
+                enforce_object_permission(child, new_request)
+            except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
+                return False
+            return True
 
         survivors: Dict[str, Any] = {}
         for _view_id, child in list(self._get_all_child_views().items()):
             if getattr(child, "sticky", False) is not True:
                 continue
             sticky_id = getattr(child, "sticky_id", None) or _view_id
-            if not check_view_auth_lightweight(child, new_request):
+            if not _authorized(child):
                 from .._exposure import uses_legacy_exposure
 
                 if not uses_legacy_exposure(child):
@@ -583,21 +598,14 @@ class StickyChildRegistry:
                     except Exception:  # noqa: BLE001 — defensive
                         logger.exception("sticky child %s _on_sticky_unmount raised", sticky_id)
                 continue
-            # Update request back-reference so handlers see the new request.
-            # Some child types (slot descriptors, read-only proxies) can't
-            # accept a `request` attr. When this happens, downstream
-            # per-event object-permission checks for this child WILL fail
-            # closed (websocket_utils.py:234, #1380) — log at WARNING so
-            # the gap is observable at its source rather than silently at
-            # the denial site.
+            # ``_authorized`` already set ``child.request`` to the new request
+            # (a child that refuses it is denied above, #1380).
             try:
-                child.request = new_request
+                # #2998: derive the next {% csrf_token %} from the new request.
+                child._cached_csrf_token = None
             except AttributeError:
                 logger.warning(
-                    "sticky child %s does not accept request attribute "
-                    "(read-only proxy?); per-event object-permission "
-                    "checks will fail closed for this child until "
-                    "request is stamped",
+                    "sticky child %s does not accept a cached CSRF token reset",
                     sticky_id,
                 )
             survivors[sticky_id] = child

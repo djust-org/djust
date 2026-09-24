@@ -1,6 +1,7 @@
 """AspectRatio component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -35,4 +36,4 @@ class AspectRatio(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_ratio = html.escape(self.ratio)
-        return f'<div class="{cls}" style="aspect-ratio: {e_ratio};">{self.content}</div>'
+        return f'<div class="{cls}" style="aspect-ratio: {e_ratio};">{conditional_escape(self.content)}</div>'

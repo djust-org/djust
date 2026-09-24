@@ -7,6 +7,8 @@ Simple stateless offcanvas drawer with automatic Rust optimization.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustOffcanvas  # type: ignore[attr-defined]
 
@@ -121,7 +123,7 @@ class Offcanvas(Component):
     def _render_custom(self) -> str:
         """Pure Python fallback (f-string rendering)."""
         # Build offcanvas classes
-        offcanvas_classes = ["offcanvas", f"offcanvas-{self.placement}"]
+        offcanvas_classes = ["offcanvas", f"offcanvas-{conditional_escape(self.placement)}"]
         if self.show:
             offcanvas_classes.append("show")
 
@@ -129,14 +131,14 @@ class Offcanvas(Component):
         backdrop_attr = "" if self.backdrop else ' data-bs-backdrop="false"'
 
         parts = [
-            f'<div class="{" ".join(offcanvas_classes)}" tabindex="-1" id="{self.id}" aria-labelledby="{self.id}Label"{backdrop_attr}>',
+            f'<div class="{" ".join(offcanvas_classes)}" tabindex="-1" id="{conditional_escape(self.id)}" aria-labelledby="{conditional_escape(self.id)}Label"{backdrop_attr}>',
         ]
 
         # Add header if title exists
         if self.title:
             parts.append('    <div class="offcanvas-header">')
             parts.append(
-                f'        <h5 class="offcanvas-title" id="{self.id}Label">{self.title}</h5>'
+                f'        <h5 class="offcanvas-title" id="{conditional_escape(self.id)}Label">{conditional_escape(self.title)}</h5>'
             )
             if self.dismissable:
                 parts.append(
@@ -146,7 +148,7 @@ class Offcanvas(Component):
 
         # Body
         parts.append('    <div class="offcanvas-body">')
-        parts.append(f"        {self.body}")
+        parts.append(f"        {conditional_escape(self.body)}")
         parts.append("    </div>")
 
         parts.append("</div>")

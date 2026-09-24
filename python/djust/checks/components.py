@@ -44,17 +44,16 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
 
 _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
 
-# V012 (#1803) — match a REAL ``<div ... dj-view ...>`` opening tag (a
-# standalone ``dj-view`` attribute), not the bare substring ``_DJ_VIEW_RE``
-# uses. Anchoring to an actual tag with the negative-lookbehind / lookahead
-# guards (mirrors ``mixins/template.py:_DJ_VIEW_RE``) means prose / comment
-# text that merely mentions ``dj-view`` (e.g. the "do not add another
-# ``dj-view`` here" note in the sticky example template) does NOT false-match —
-# only an authored attribute on a real element does.
-_DJ_VIEW_TAG_RE = re.compile(
-    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
-    re.IGNORECASE,
-)
+# V012 (#1803) — the ``<tag ... dj-view ...>`` opening-tag scan (a standalone
+# ``dj-view`` attribute on ANY element, #2892) uses the renderer's own
+# root-detection pattern, ``mixins/template.py:_DJ_VIEW_RE``, rather than a copy
+# of it, so the check and the render path cannot drift on what counts as a root
+# (#1646). It is imported inside the check: importing ``djust.mixins`` at
+# module level would load the whole mixin package during ``django.setup()``
+# (#2559 import-footprint pin). Prose / comment text that merely mentions
+# ``dj-view`` (e.g. the "do not add another ``dj-view`` here" note in the
+# sticky example template) does NOT false-match — only an authored attribute on
+# a real element does.
 
 # V012 (#1803) — comment regions to strip before the ``<div ... dj-view ...>``
 # root scan. A sticky-child template commonly documents the wrapper it lives
@@ -121,6 +120,58 @@ def _routed_liveview_classes() -> Iterator[type]:
         yield from _walk(get_resolver())
     except Exception:
         return
+
+
+def _check_routed_djust_views_allowlisted(errors: list, routed: "set[type]") -> None:
+    """V015 -- djust's own URL-routed LiveViews blocked by an explicit allowlist (#2889).
+
+    V005 skips classes defined in ``djust.*`` (they are framework code, not the
+    project's), so nothing flagged the case #2889 reports: an explicit
+    ``LIVEVIEW_ALLOWED_MODULES`` REPLACES the fallback that admits ``"djust"``,
+    so a project that routes the component gallery, the theme gallery or the
+    admin extension gets pages that render but never mount ("View not
+    mounted"). Only routed views are checked, so installing ``djust.theming``
+    for the theme switcher alone stays silent. The same gate the WebSocket
+    mount uses (``is_view_path_allowed``) decides.
+    """
+    from django.conf import settings
+
+    from djust.security.mount import is_view_path_allowed
+
+    if _is_check_suppressed("djust.V015"):
+        return
+    allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
+    if not allowed:
+        return
+
+    def _is_test_module(module: str) -> bool:
+        return any(part == "tests" or part.startswith("test_") for part in module.split("."))
+
+    blocked = sorted(
+        "%s.%s" % (cls.__module__, cls.__name__)
+        for cls in routed
+        if (getattr(cls, "__module__", "") or "").startswith("djust.")
+        and not _is_test_module(cls.__module__)
+        and not is_view_path_allowed("%s.%s" % (cls.__module__, cls.__name__))
+    )
+    if not blocked:
+        return
+    shown = ", ".join(blocked[:3]) + (
+        " and %d more" % (len(blocked) - 3) if len(blocked) > 3 else ""
+    )
+    errors.append(
+        DjustWarning(
+            "LIVEVIEW_ALLOWED_MODULES does not admit djust's own LiveViews that "
+            "your URLconf routes (%s); their pages render but never mount." % shown,
+            hint=(
+                "Add 'djust' to LIVEVIEW_ALLOWED_MODULES. An explicit list replaces "
+                "the default, which includes it. Suppress with DJUST_CONFIG = "
+                "{'suppress_checks': ['V015']}."
+            ),
+            id="djust.V015",
+            fix_hint="Add `'djust'` to the `LIVEVIEW_ALLOWED_MODULES` list in your Django settings file.",
+        )
+    )
 
 
 @register("djust")
@@ -315,6 +366,14 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             ):
                 continue
             if is_event_handler(method):
+                continue
+            # ``handle_*`` is also the server-push namespace: ``server_push``
+            # calls an undecorated ``handle_*`` method by design, and leaving it
+            # undecorated is the only way to make a handler push can call but a
+            # browser cannot. Both of V004's fixes (add ``@event_handler``, or
+            # prefix ``_``) break that pattern, so ``handle_*`` is not flagged
+            # (#3002).
+            if name.startswith("handle_"):
                 continue
             if _EVENT_HANDLER_LIKE_NAMES.match(name) and not _is_check_suppressed("djust.V004"):
                 method_file = ""
@@ -571,6 +630,9 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # V010 -- TutorialMixin listed after LiveView in MRO (#691)
     _check_tutorial_mixin_mro(errors, LiveView)
+
+    # V015 -- a routed djust LiveView that LIVEVIEW_ALLOWED_MODULES rejects (#2889)
+    _check_routed_djust_views_allowlisted(errors, _routed)
 
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
@@ -878,7 +940,8 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
     - Only ``LiveView`` subclasses with a truthy ``sticky`` attribute are
       scanned. Normal page views (which legitimately declare ``dj-view``) are
       NEVER inspected, so V012 cannot false-positive on them.
-    - The scan uses an anchored ``<div ... dj-view ...>`` opening-tag regex,
+    - The scan uses an anchored ``<tag ... dj-view ...>`` opening-tag regex
+      (any element, #2892 — the renderer's own root pattern),
       not a bare substring — comment/prose text that merely mentions
       ``dj-view`` (e.g. the "do not add another dj-view here" note in the
       sticky example template) does not match.
@@ -896,6 +959,7 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
 
     try:
         from djust.live_view import LiveView
+        from djust.mixins.template import _DJ_VIEW_RE as _dj_view_tag_re
     except ImportError:
         return errors
 
@@ -922,7 +986,7 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
         # Strip comment regions first: a sticky-child template commonly
         # documents the wrapper it lives inside (which itself shows a
         # ``<div dj-view ...>`` example), and that example must not false-match.
-        if not _DJ_VIEW_TAG_RE.search(_strip_template_comments(source)):
+        if not _dj_view_tag_re.search(_strip_template_comments(source)):
             continue
 
         cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)

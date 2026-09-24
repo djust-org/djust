@@ -378,6 +378,8 @@ def expensive_operation(self, **kwargs):
 | Abuse prevention              | `@rate_limit(rate=N)`       | 5-10 req/s     |
 | Long-form editing             | `DraftModeMixin`            | auto-save      |
 
+`@rate_limit` is an abuse control, not a UI throttle: each rejected event counts toward the connection's warning budget (`DJUST_CONFIG["rate_limit"]["max_warnings"]`, default 3), and at the limit djust closes the WebSocket with code 4429 and puts the client IP on a short reconnect cooldown. The budget is shared per caller (user, session or IP), not per tab. An honest user tapping a button quickly can be disconnected, so for a button that may be tapped in bursts use `@throttle` / `@debounce` or their `dj-*` attributes instead. A drop-only mode is planned for 1.3 (#3003).
+
 ---
 
 ## Two-Way Data Binding

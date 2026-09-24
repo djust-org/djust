@@ -159,6 +159,17 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
 # per-event / url-change re-bind still uses the _tenant_context manager above.
 
 
+def _consume_async_cancel(view: Any, task_name: str) -> bool:
+    """True (and forget the mark) when ``task_name`` was cancelled via
+    ``cancel_async`` / ``cancel_async_all``. Same consume-once semantics as
+    the WS consumer's ``_run_async_work`` checks."""
+    cancelled = getattr(view, "_async_cancelled", None)
+    if cancelled and task_name in cancelled:
+        cancelled.discard(task_name)
+        return True
+    return False
+
+
 def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
     """Start the periodic tick task for ``view_class`` if it opted in.
 
@@ -183,7 +194,131 @@ def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
         return False
 
     consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+    # The view this task ticks for, so a failed mount stops only its own task
+    # (#3027). The runtime holds the mounting view when this runs.
+    runtime = getattr(consumer, "_runtime", None)
+    try:
+        consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
+    except AttributeError:
+        # A custom task factory whose tasks take no new attributes: the
+        # failed-mount hook then cancels whatever tick the consumer holds.
+        pass
     return True
+
+
+_DOCUMENT_HEAD_RE = re.compile(r"<head\b[^>]*>(.*?)</head\s*>", re.IGNORECASE | re.DOTALL)
+_DOCUMENT_TITLE_RE = re.compile(r"<title\b[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
+
+
+def _head_title_inner(markup: Optional[str]) -> Optional[str]:
+    """The raw inner text of the ``<title>`` inside ``markup``'s ``<head>``.
+
+    Only the ``<head>`` is searched, so an SVG ``<title>`` in the body never
+    counts."""
+    if not markup:
+        return None
+    head = _DOCUMENT_HEAD_RE.search(markup)
+    if head is None:
+        return None
+    match = _DOCUMENT_TITLE_RE.search(head.group(1))
+    return None if match is None else match.group(1)
+
+
+def document_title(html: Optional[str]) -> Optional[str]:
+    """The text of the ``<title>`` inside rendered ``html``'s ``<head>``.
+
+    Entities are decoded (the client assigns ``document.title``, a text sink)
+    and whitespace is collapsed the way the browser does for a title.
+    """
+    inner = _head_title_inner(html)
+    if inner is None:
+        return None
+    import html as html_lib
+
+    text = " ".join(html_lib.unescape(inner).split())
+    return text or None
+
+
+def _view_document_source(view: Any) -> Optional[str]:
+    """The view's page template source with inheritance flattened, or None."""
+    inline = getattr(view, "template", None)
+    if inline:
+        return str(inline)
+    template_name = getattr(view, "template_name", None)
+    if not template_name:
+        return None
+    from django.template import loader
+
+    source = loader.get_template(template_name).template.source
+    if "{% extends" in source or "{%extends" in source:
+        from ._rust import resolve_template_inheritance
+        from .utils import get_template_dirs
+
+        return str(resolve_template_inheritance(template_name, get_template_dirs()))
+    return str(source)
+
+
+def _queued_title(view: Any) -> bool:
+    """Whether ``view`` has a ``page_title`` command waiting to be sent."""
+    pending = getattr(view, "_pending_page_metadata", None)
+    if not isinstance(pending, list):
+        return False
+    return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
+
+
+def navigation_title(view: Any) -> Optional[str]:
+    """The ``<title>`` the destination page would have on a full load (#3036).
+
+    ``live_redirect`` mounts the destination view and swaps only its
+    ``dj-root``, so the tab kept the previous page's title unless the view set
+    ``page_title``. This renders just the ``<title>`` element of the view's
+    page template (``{% block title %}`` included) with the values the mount
+    render just used, instead of rendering the whole page shell, which could
+    run ``{% live_render %}`` and other tags with side effects.
+
+    Conservative by design: returns ``None`` (the title is left alone, as it
+    was before) when the template has no ``<head><title>``, when the title
+    uses ``{{ block.super }}`` (flattened inheritance loses the parent block),
+    when a variable it reads is not a value the view holds, or when anything
+    fails. Never raises.
+    """
+    try:
+        inner = _head_title_inner(_view_document_source(view))
+        if inner is None or "block.super" in inner:
+            return None
+        if "{" not in inner:
+            return document_title(f"<head><title>{inner}</title></head>")
+        from ._rust import extract_template_variables, render_template
+        from .serialization import normalize_django_value
+
+        immutables = getattr(view, "_prev_context_immutables", None) or {}
+        context: Dict[str, Any] = {}
+        for name in extract_template_variables(inner):
+            if name in immutables:
+                context[name] = immutables[name]
+            elif not name.startswith("_") and name in getattr(view, "__dict__", {}):
+                value = view.__dict__[name]
+                if callable(value):
+                    return None
+                context[name] = normalize_django_value(value)
+            else:
+                return None
+        rendered = render_template(inner, context)
+        return document_title(f"<head><title>{rendered}</title></head>")
+    except Exception as exc:  # noqa: BLE001 — a title must never break navigation
+        from ._exposure_diagnostics import log_failure_for
+
+        # The title renders view values; its error text can carry them (ADR-038).
+        log_failure_for(
+            logger,
+            (view,),
+            exc,
+            "navigation title unavailable for %s",
+            type(view).__name__,
+            level="debug",
+            traceback=True,
+        )
+        return None
 
 
 # ------------------------------------------------------------------ #
@@ -259,7 +394,8 @@ class Transport(Protocol):
     async def on_view_mounted(self, view_instance: Any) -> None:
         """Stamp transport-specific identity + post-mount setup on the freshly-mounted view.
 
-        Called by ``dispatch_mount`` once ``self.view_instance`` is set, so a
+        Called by ``dispatch_mount`` once ``self.view_instance`` is set and the
+        pre-mount auth sequence + on_mount hooks have admitted it, so a
         transport can attach its own back-references the way the legacy bespoke
         mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
         for introspection + limits) and the real query string. WS performs the
@@ -768,10 +904,11 @@ class WSConsumerTransport:
         Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation setup
         block (websocket.py:2148-2217 + the per-mount ``_sticky_auto_reattached``
         reset at websocket.py:2082) that ``dispatch_mount`` did NOT carry pre-flip.
-        The runtime calls this hook at the SAME point the bespoke path ran the
-        block: AFTER instantiation + back-refs, BEFORE the request build / auth /
-        mount(). It writes onto the CONSUMER (the runtime→consumer ownership
-        direction at mount, Finding B):
+        The runtime calls this hook AFTER instantiation + back-refs AND after the
+        pre-mount auth sequence + on_mount hooks have admitted the view, BEFORE
+        state restore / mount(). A refused or redirected mount therefore joins no
+        channel-layer group. It writes onto the CONSUMER (the runtime→consumer
+        ownership direction at mount, Finding B):
 
           * real-scope path/query-string stamps for path-aware VDOM cache keys
             (websocket.py:2153-2156) — the runtime set ``_websocket_path =
@@ -781,10 +918,10 @@ class WSConsumerTransport:
             websocket.py:2172-2174);
           * presence group join when the view supports presence
             (websocket.py:2177-2184);
-          * db_notify group joins for every channel the view subscribed to
-            (websocket.py:2190-2200) — reads ``_listen_channels`` PRE-mount() (the
-            bespoke ordering: only non-empty on a session-restore that repopulated
-            it; preserved EXACTLY, not "fixed");
+          * db_notify group joins for the class-level ``_listen_channels``
+            (websocket.py:2190-2200). This runs PRE-mount(), so channels
+            ``listen()`` adds in mount() are joined later, by
+            ``on_mount_render_ready`` (#2962);
           * periodic tick task start when the subclass overrides ``handle_tick``
             (websocket.py:2202-2208);
           * the ``use_actors`` flag off the view class (websocket.py:2211) so
@@ -853,20 +990,13 @@ class WSConsumerTransport:
         # Join db_notify groups for every channel the view subscribed to via
         # NotificationMixin.listen() (websocket.py:2186-2200). Addressed
         # per-channel (djust_db_notify_<channel>) so a NOTIFY on one channel never
-        # fans out to views listening on another. Reads ``_listen_channels``
-        # PRE-mount() — preserve the bespoke ordering EXACTLY (only non-empty on a
-        # session-restore branch that repopulated it).
+        # fans out to views listening on another. This runs BEFORE mount(), so it
+        # only sees class-level ``_listen_channels``; channels ``listen()`` adds in
+        # mount(), on a session restore, or in a later handler are joined by
+        # ``_join_listen_channels`` from ``on_mount_render_ready`` and at the end
+        # of every event turn (#2962).
         consumer._db_notify_channels = set()
-        listen_channels = getattr(view_instance, "_listen_channels", None)
-        if listen_channels:
-            for ch in listen_channels:
-                try:
-                    await consumer.channel_layer.group_add(
-                        f"djust_db_notify_{ch}", consumer.channel_name
-                    )
-                    consumer._db_notify_channels.add(ch)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Error joining db_notify group for %s: %s", ch, e)
+        await self._join_listen_channels(view_instance)
 
         # Start periodic tick if the subclass overrides handle_tick
         # (websocket.py:2202-2208).
@@ -877,6 +1007,33 @@ class WSConsumerTransport:
         # disconnect's actor cleanup guard reflects reality. The actor HANDLE is
         # created later by dispatch_actor_mount (#1915, Finding D), not here.
         consumer.use_actors = getattr(view_class, "use_actors", False)
+
+    async def _join_listen_channels(self, view: Any) -> None:
+        """Join the ``djust_db_notify_<channel>`` group for every channel the
+        view listens on that this consumer has not joined yet (#2962).
+
+        ``NotificationMixin.listen()`` only records the channel and starts the
+        process listener; the group join is transport work. It is idempotent
+        (already-joined channels are skipped), so it is safe to call after
+        mount() and after every event turn. A join failure is logged and the
+        channel is retried on the next call.
+        """
+        consumer = self._consumer
+        listen_channels = getattr(view, "_listen_channels", None)
+        if not listen_channels:
+            return
+        joined = getattr(consumer, "_db_notify_channels", None)
+        if not isinstance(joined, set):
+            joined = set()
+            consumer._db_notify_channels = joined
+        for ch in sorted(set(listen_channels) - joined):
+            try:
+                await consumer.channel_layer.group_add(
+                    f"djust_db_notify_{ch}", consumer.channel_name
+                )
+                joined.add(ch)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
@@ -1158,6 +1315,9 @@ class WSConsumerTransport:
         sql_scope.__enter__()
         try:
             yield
+            # A handler that called ``listen()`` joins its NOTIFY group now,
+            # while the turn still holds the render lock (#2962).
+            await self._join_listen_channels(view)
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.set_current(None)
@@ -1598,6 +1758,10 @@ class WSConsumerTransport:
         mount at websocket.py:2082) records survivors the template tag already
         re-registered, so we don't double-register them.
 
+        It first joins the NOTIFY groups for channels ``listen()`` added in
+        mount() or a session restore (#2962): this is the first transport hook
+        after mount() on every admitted mount.
+
         Returns ``html`` unchanged: sticky preservation adjusts child
         registration + emits a frame, it does not rewrite the mount HTML. No-op
         (returns ``html``) when no stickys were staged.
@@ -1606,6 +1770,9 @@ class WSConsumerTransport:
         from .websocket import _find_sticky_slot_ids
 
         consumer = self._consumer
+        # mount() (or a session restore) has run and the view is admitted:
+        # join the NOTIFY groups for channels ``listen()`` added (#2962).
+        await self._join_listen_channels(view)
         sticky_preserved = getattr(consumer, "_sticky_preserved", None)
         if not sticky_preserved:
             return html
@@ -1697,12 +1864,79 @@ class WSConsumerTransport:
         (``mounting_in_batch`` is ``False`` outside a batch).
         """
         consumer = self._consumer
+        # The refused mount leaves the consumer with no mounted view, so it also
+        # leaves every channel-layer group it holds. This matters inside a
+        # mount_batch, where the socket stays open: the post-mount object-permission
+        # refusal runs after ``on_view_mounted`` joined the view's groups.
+        await self._leave_view_groups()
         # #1922 / #291: gate the close on the batch flag for ALL verdicts so a
         # single denied/redirected view inside a shared-socket mount_batch does
         # not kill the sibling mounts. The denial itself is already enforced
         # upstream (verdict frame sent + view_instance cleared).
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
+
+    @property
+    def capture_document_title(self) -> bool:
+        """True while the consumer mounts a ``live_redirect`` destination
+        (#3036), so the runtime records the page's document ``<title>``."""
+        return bool(getattr(self._consumer, "_live_redirect_mounting", False))
+
+    async def on_mount_failed(self, view: Any) -> None:
+        """Stop the tick task ``on_view_mounted`` started for a view whose
+        mount then failed (#3027). Only a task still ticking for THIS view is
+        cancelled; a later mount on the socket owns its own task."""
+        consumer = self._consumer
+        task = getattr(consumer, "_tick_task", None)
+        if task is None or task.done():
+            return
+        ticking_for = getattr(task, "_djust_tick_view", None)
+        if ticking_for is not None and ticking_for is not view:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — the loop logs its own errors
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "tick task ended with an error after a failed mount",
+                level="debug",
+                traceback=True,
+            )
+        if getattr(consumer, "_tick_task", None) is task:
+            consumer._tick_task = None
+
+    async def _leave_view_groups(self) -> None:
+        """Leave the view / presence / db_notify groups ``on_view_mounted`` joined.
+
+        Resets the consumer's group attributes so ``disconnect`` does not
+        discard them a second time. Discard failures are logged, never raised.
+        """
+        consumer = self._consumer
+        groups: List[str] = []
+        for attr in ("_view_group", "_presence_group"):
+            group = getattr(consumer, attr, None)
+            if isinstance(group, str) and group:
+                groups.append(group)
+                setattr(consumer, attr, None)
+        channels = getattr(consumer, "_db_notify_channels", None)
+        if isinstance(channels, set) and channels:
+            groups.extend(f"djust_db_notify_{ch}" for ch in channels)
+            consumer._db_notify_channels = set()
+        channel_layer = getattr(consumer, "channel_layer", None)
+        if channel_layer is None:
+            return
+        for group in groups:
+            try:
+                await channel_layer.group_discard(group, consumer.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
 
     @property
     def mounting_in_batch(self) -> bool:
@@ -2145,7 +2379,12 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     if source is not None and not (
         isinstance(template_name, str) and not isinstance(inline, str) and not _dj_settings.DEBUG
     ):
-        key = (hashlib.sha1(source.encode("utf-8", "surrogatepass")).hexdigest(), name)
+        key = (
+            hashlib.sha1(
+                source.encode("utf-8", "surrogatepass"), usedforsecurity=False
+            ).hexdigest(),
+            name,
+        )
     verdict = cache.get(key)
     if verdict is None:
         verdict = _template_is_component_opaque(source, name)
@@ -2271,6 +2510,10 @@ class ViewRuntime:
         # a previously advertised strict manifest.
         self._parameter_contracts_active = False
         self._parameter_contract_view: Optional[str] = None
+        # #3036: the destination page's <title>, recorded after the mount
+        # render when the transport asks for it (``capture_document_title``,
+        # WS: during a live_redirect mount). See ``navigation_title``.
+        self.mount_document_title: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -2372,6 +2615,7 @@ class ViewRuntime:
         # validates again defensively.
         from .security.mount import is_view_path_allowed, validate_mount_url
 
+        self.mount_document_title = None
         page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
         # has_prerendered (ADR-022 Iter 3 Phase 3.0): the client signals it already
@@ -2488,21 +2732,6 @@ class ViewRuntime:
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
 
-        # Transport-specific identity + post-mount setup hook (#1887 / #1919):
-        # SSE stamps _sse_session_id / _sse_session + the real query string here so
-        # the converged runtime mount preserves everything legacy _sse_mount_view
-        # exposed. WS performs its post-mount channel-layer wiring (view/presence/
-        # db_notify group_add), tick-task start, use_actors flag, and real-scope
-        # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
-        # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
-        # so duck-typed test transport fakes that predate this Protocol method (or
-        # still expose a SYNC no-op) keep working.
-        on_view_mounted = getattr(self.transport, "on_view_mounted", None)
-        if on_view_mounted is not None:
-            result = on_view_mounted(view_instance)
-            if inspect.isawaitable(result):
-                await result
-
         # Optional client timezone (validate IANA string).
         view_instance.client_timezone = None
         if client_timezone:
@@ -2585,6 +2814,28 @@ class ViewRuntime:
             self.view_instance = None
             return
         # ---- End on_mount hooks ----
+
+        # Transport-specific identity + post-mount setup hook (#1887 / #1919):
+        # SSE stamps _sse_session_id / _sse_session + the real query string here so
+        # the converged runtime mount preserves everything legacy _sse_mount_view
+        # exposed. WS performs its post-mount channel-layer wiring (view/presence/
+        # db_notify group_add), tick-task start, use_actors flag, and real-scope
+        # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
+        # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
+        # so duck-typed test transport fakes that predate this Protocol method (or
+        # still expose a SYNC no-op) keep working.
+        #
+        # Runs only once the pre-mount auth sequence and the on_mount hooks have
+        # admitted the view: a view that is redirected or refused never joins the
+        # view / presence / db_notify groups, never starts a tick task, and never
+        # becomes the SSE session's mounted view. Still BEFORE state restore and
+        # mount(), so the db_notify join reads ``_listen_channels`` at the same
+        # point it always has.
+        on_view_mounted = getattr(self.transport, "on_view_mounted", None)
+        if on_view_mounted is not None:
+            result = on_view_mounted(view_instance)
+            if inspect.isawaitable(result):
+                await result
 
         # ---- Mount kwargs ----
         mount_kwargs = dict(params)
@@ -2841,6 +3092,7 @@ class ViewRuntime:
                     expose_details=_diagnostics_policy_allows(view_instance),
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
 
         # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
@@ -2937,6 +3189,7 @@ class ViewRuntime:
                 expose_details=_diagnostics_policy_allows(view_instance),
             )
             await self.transport.send(response)
+            await self._on_mount_failed(view_instance)
             return
 
         # ---- Initial render ----
@@ -2979,6 +3232,7 @@ class ViewRuntime:
                         expose_details=_diagnostics_policy_allows(view_instance),
                     )
                     await self.transport.send(response)
+                    await self._on_mount_failed(view_instance)
                     return
 
         if not actor_mounted:
@@ -3017,7 +3271,16 @@ class ViewRuntime:
                     expose_details=_diagnostics_policy_allows(view_instance),
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
+
+        # #3036: a live_redirect mount records the destination page's
+        # <title>; the WS consumer sends it when the view queued none.
+        # Skipped when the view already queued its own title, which wins.
+        if getattr(self.transport, "capture_document_title", False) and not _queued_title(
+            view_instance
+        ):
+            self.mount_document_title = await sync_to_async(navigation_title)(view_instance)
 
         # ---- Post-render mount hook (#1917, Finding B residual) ----
         # ``on_mount_render_ready`` runs AFTER the render produced ``html`` but
@@ -3793,9 +4056,12 @@ class ViewRuntime:
                 await self._flush_all_pending()
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
-            # on has_async). The captured batch includes named and legacy work,
-            # and its token was advertised in the acknowledgement. An empty
-            # batch is a no-op; it must not capture later unrelated queued work.
+            # on has_async). The captured batch includes named and legacy work
+            # (both task formats, as ``has_pending_async_work`` reads them since
+            # #2963), and its token was advertised in the acknowledgement. An
+            # empty batch is a no-op; it must not capture later unrelated
+            # queued work. Converging onto the WS behavior here FIXES the legacy
+            # SSE drop of ``start_async`` work (#1887 / #1646).
             self._dispatch_async_work(event_name, async_batch)
             # dj_activity flush (Phase 2.3a, #1903): a skip-render handler can
             # still flip an activity visible via set_activity_visible(); drain its
@@ -4684,6 +4950,17 @@ class ViewRuntime:
 
         async_batch = AsyncBatch(view)
 
+        # A handler that set ``self._view._skip_render`` asked for no render
+        # this turn. ``_resolve_skip_render`` is the single owner of that flag
+        # on every route (#2834): it consumes it, and ``_force_full_html`` still
+        # wins. Without it here the flag rendered anyway and then leaked into
+        # the next view event, which answered ``noop`` (#2924).
+        from .websocket import _resolve_skip_render
+
+        if _resolve_skip_render(view):
+            await self._send_component_noop(event_name, event_ref, async_batch)
+            return True
+
         # ADR-032 D5: the scoped path first. Same helper as the runtime event
         # path; the frame is the ``patch`` frame that path emits.
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
@@ -4694,18 +4971,7 @@ class ViewRuntime:
             # ``html_update`` (#2922). ``_flush_all_pending`` below drains any
             # push events before the noop goes out, as on the view route.
             if not changed:
-                await self._flush_all_pending()
-                noop_msg: Dict[str, Any] = {
-                    "type": "noop",
-                    "source": "event",
-                    "event_name": event_name,
-                }
-                if event_ref is not None:
-                    noop_msg["ref"] = event_ref
-                noop_msg.update(async_batch.fields())
-                await self.transport.send(noop_msg)
-                self._dispatch_async_work(event_name, async_batch)
-                await self._flush_deferred_activity_events()
+                await self._send_component_noop(event_name, event_ref, async_batch)
                 return True
             if _scoped_component_for(view, changed) is component:
                 _scoped_start = time.perf_counter()
@@ -4757,6 +5023,26 @@ class ViewRuntime:
         # Dispatch any background work the component handler scheduled (WS parity).
         self._dispatch_async_work(event_name, async_batch)
         return True
+
+    async def _send_component_noop(
+        self, event_name: str, event_ref: Optional[int], async_batch: "AsyncBatch"
+    ) -> None:
+        """End a ``component_id`` turn that renders nothing: drain the queued
+        side effects, answer ``noop`` (advertising the captured background
+        batch) and start that batch — the view route's skip shape (#2922,
+        #2924)."""
+        await self._flush_all_pending()
+        noop_msg: Dict[str, Any] = {
+            "type": "noop",
+            "source": "event",
+            "event_name": event_name,
+        }
+        if event_ref is not None:
+            noop_msg["ref"] = event_ref
+        noop_msg.update(async_batch.fields())
+        await self.transport.send(noop_msg)
+        self._dispatch_async_work(event_name, async_batch)
+        await self._flush_deferred_activity_events()
 
     # ------------------------------------------------------------------ #
     # URL-change dispatch (shared between WS and SSE in this PR)
@@ -4980,7 +5266,12 @@ class ViewRuntime:
         # Protocol method fall through to the synthesized request (the WS shape).
         build_request = getattr(self.transport, "build_request", None)
         transport_request = build_request() if build_request is not None else None
+        from .security.csrf import abind_csrf_cookie  # noqa: PLC0415
+
         if transport_request is not None:
+            # #2998: normally a no-op — CsrfViewMiddleware already bound the real
+            # SSE stream request. Binds it when the middleware did not run.
+            await abind_csrf_cookie(transport_request)
             return transport_request
 
         from django.test import RequestFactory
@@ -5040,6 +5331,9 @@ class ViewRuntime:
             request.user = self.scope["user"]
 
         await sync_to_async(self._attach_socket_tenant)(request)
+        # #2998: bind the browser's CSRF cookie so {% csrf_token %} rendered
+        # over the socket matches it. After the session, for CSRF_USE_SESSIONS.
+        await abind_csrf_cookie(request, self.scope)
         return request
 
     def _attach_socket_tenant(self, request: Any) -> None:  # noqa: dead-method-allowed (passed to sync_to_async)
@@ -5153,6 +5447,34 @@ class ViewRuntime:
             return True
 
         return None
+
+    async def _on_mount_failed(self, view_instance: Any) -> None:
+        """Tell the transport that a mount it already set up has failed (#3027).
+
+        ``on_view_mounted`` runs before ``mount()``: on WS it starts the view's
+        tick task. When ``mount()``, ``handle_params()``, the actor mount or the
+        initial render then raises, the error frame goes out but the
+        half-mounted view stays on the runtime (later frames on the socket
+        still see it, unchanged here), and the tick kept calling
+        ``handle_tick`` on it every beat. ``on_mount_failed`` stops that work.
+        getattr-guarded like the other mount hooks, so a transport without it
+        (SSE has no tick) and duck-typed test fakes are unaffected. Never
+        raises: a cleanup failure must not replace the error frame already
+        sent.
+        """
+        hook = getattr(self.transport, "on_mount_failed", None)
+        if hook is None:
+            return
+        try:
+            result = hook(view_instance)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # noqa: BLE001 — cleanup after an error already reported
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger, (view_instance,), exc, "on_mount_failed hook raised", traceback=True
+            )
 
     async def _finalize_mount_auth(self, verdict: str) -> None:
         """Apply the transport-level finalization of a blocking mount-auth verdict.
@@ -6214,29 +6536,27 @@ class ViewRuntime:
             return
         self._dispatch_explicit_child_queues(event_name)
 
-        from .mixins.async_work import track_async_task
+        from .mixins.async_work import track_async_task, track_running_async_task
 
         tasks = getattr(view, "_async_tasks", None)
         if tasks:
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                track_async_task(
-                    view,
-                    asyncio.ensure_future(
-                        self._execute_async_task(task_name, callback, args, kwargs, event_name)
-                    ),
+                future = asyncio.ensure_future(
+                    self._execute_async_task(task_name, callback, args, kwargs, event_name)
                 )
+                track_async_task(view, future)
+                track_running_async_task(view, task_name, future)
             view._async_tasks = {}
 
         pending = getattr(view, "_async_pending", None)
         if pending:
             view._async_pending = None
             callback, args, kwargs = pending
-            track_async_task(
-                view,
-                asyncio.ensure_future(
-                    self._execute_async_task("_default", callback, args, kwargs, event_name)
-                ),
+            future = asyncio.ensure_future(
+                self._execute_async_task("_default", callback, args, kwargs, event_name)
             )
+            track_async_task(view, future)
+            track_running_async_task(view, "_default", future)
 
     async def _execute_async_task(
         self,
@@ -6272,6 +6592,14 @@ class ViewRuntime:
             )
             return
 
+        # cancel_async() / cancel_async_all() before the task started: skip it.
+        # The WS twin ``_run_async_work`` has always checked this; the runtime
+        # copy, which serves WS events since the ADR-022 flip, did not (#2969).
+        if _consume_async_cancel(view, task_name):
+            logger.debug("Runtime: async task %s was cancelled, skipping execution", task_name)
+            await self._settle_cancelled_async(view, event_name)
+            return
+
         try:
             # Dispatch through the ONE shared helper so the sync/async handling
             # can never drift from the consumer twin (#2020, #2016 / #1646).
@@ -6299,6 +6627,13 @@ class ViewRuntime:
                     )
                 else:
                     logger.debug("Explicit background result discarded after owner replacement")
+                return
+
+            # Cancelled while running: skip the result handler and re-render,
+            # as the WS twin does (#2969).
+            if _consume_async_cancel(view, task_name):
+                logger.debug("Runtime: async task %s was cancelled, skipping re-render", task_name)
+                await self._settle_cancelled_async(view, event_name)
                 return
 
             # Serialise handler + render on the consumer's render lock via
@@ -6335,26 +6670,57 @@ class ViewRuntime:
                 )
             else:
                 logger.warning("Explicit background callback failed")
-            if hasattr(view, "handle_async_result"):
-                try:
-                    # Same locked shape as the success arm (#2840 twin): the
-                    # error-state mutation + re-render must not interleave with
-                    # a concurrent lock-holding render. Ordering preserved:
-                    # handler → in-lock identity re-check → render.
-                    async with self.transport.event_context(view):
+            try:
+                # Same locked shape as the success arm (#2840 twin): the
+                # error-state mutation + re-render must not interleave with
+                # a concurrent lock-holding render. Ordering preserved:
+                # handler → in-lock identity re-check → render. The result
+                # frame is sent even without a ``handle_async_result``: the
+                # turn announced ``async_pending`` (#2963), and this frame is
+                # what ends the client's loading state.
+                async with self.transport.event_context(view):
+                    if hasattr(view, "handle_async_result"):
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=exc
                         )
-                        if self.view_instance is not view:
-                            return
-                        await self._render_async_result(event_name)
-                except Exception:
-                    if legacy_diagnostics and uses_legacy_exposure(view):
-                        logger.exception(
-                            "Runtime: error in handle_async_result for task '%s'", task_name
-                        )
-                    else:
-                        logger.warning("Explicit background result handling failed")
+                    if self.view_instance is not view:
+                        return
+                    await self._render_async_result(event_name)
+            except Exception:
+                if legacy_diagnostics and uses_legacy_exposure(view):
+                    logger.exception(
+                        "Runtime: error in handle_async_result for task '%s'", task_name
+                    )
+                else:
+                    logger.warning("Explicit background result handling failed")
+
+    async def _settle_cancelled_async(self, view: Any, event_name: Optional[str]) -> None:
+        """End the loading state a cancelled task's event announced.
+
+        The runtime twin of ``LiveViewConsumer._settle_cancelled_async``
+        (#2963): the event's reply carried ``async_pending``, so the client
+        keeps the event's loading state until a ``source="async"`` frame
+        naming the event arrives. A cancelled task skips its result handler,
+        so render the view's current state as that frame instead (#2969).
+        Work no event owns (``event_name`` None) announced nothing.
+        """
+        if event_name is None:
+            return
+        from ._exposure import uses_legacy_exposure
+
+        try:
+            async with self.transport.event_context(view):
+                if self.view_instance is not view:
+                    return
+                await self._render_async_result(event_name)
+        except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
+            if uses_legacy_exposure(view):
+                logger.exception(
+                    "Runtime: error settling cancelled async task for %s",
+                    sanitize_for_log(event_name),
+                )
+            else:
+                logger.warning("Explicit cancelled background settle failed")
 
     async def _execute_explicit_async_task(
         self,
@@ -6376,6 +6742,12 @@ class ViewRuntime:
         exception object.
         """
         from .mixins.async_work import run_async_callback
+
+        # cancel_async() / cancel_async_all() before the task started (#2969).
+        # The batch's ``async_complete`` token ends the client's loading state,
+        # so no settle frame is needed on this path.
+        if _consume_async_cancel(view, task_name):
+            return
 
         async with self._explicit_event_lock, self.transport.event_context(view):
             try:
@@ -6407,6 +6779,9 @@ class ViewRuntime:
 
         if self.view_instance is not view:
             logger.debug("Explicit background result discarded after owner replacement")
+            return
+        # Cancelled while running: skip the result handler and render (#2969).
+        if _consume_async_cancel(view, task_name):
             return
 
         async with self._explicit_event_lock, self.transport.event_context(view):

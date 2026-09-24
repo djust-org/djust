@@ -743,6 +743,7 @@ class LiveViewWebSocket {
                     // E3-8: keyed by pathname + query.
                     try {
                         if (data.sw_cache !== 'no-store' && window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
                                 ? window.location.pathname + window.location.search
                                 : '/';

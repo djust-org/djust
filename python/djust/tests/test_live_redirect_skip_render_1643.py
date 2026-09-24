@@ -174,7 +174,9 @@ def test_turn_end_paths_use_single_flush_helper():
     # the consumer).
     for name in (
         "_dispatch_single_event",
-        "server_push",
+        # server_push's apply + render + flush body lives in the turn helper
+        # shared with the deferred-push drain (#3001).
+        "_run_server_push_turn",
         "db_notify",
         "_run_async_work",
     ):

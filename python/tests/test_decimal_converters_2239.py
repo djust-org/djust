@@ -582,6 +582,9 @@ EXPECTED_TEMPLATE_BOUND_MODULES = {
     "mixins/request.py",
     "mixins/rust_bridge.py",
     "mixins/template.py",
+    # #3036: ``navigation_title`` normalises the values a page's <title>
+    # reads and renders them with the Rust template engine — template-bound.
+    "runtime.py",
     "serialization.py",
     "template/rendering.py",
 }

@@ -26,6 +26,8 @@ from djust.runtime import ViewRuntime
 from djust.tests.test_exposure_schema_versions import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
+from .conftest import observability_request_factory
+
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
 TEMPLATE = (
@@ -196,10 +198,9 @@ async def test_stream_item_fields_reach_no_explicit_destination(staged, settings
     settings.DEBUG = True
     register_view("exposure-stream-test", view)
     try:
-        from django.test import RequestFactory
-
         response = await sync_to_async(view_assigns)(
-            RequestFactory().get("/debug/", {"session_id": "exposure-stream-test"})
+            # The endpoint serves only token-bearing requests (b5ed46f2a).
+            observability_request_factory().get("/debug/", {"session_id": "exposure-stream-test"})
         )
     finally:
         unregister_view("exposure-stream-test")

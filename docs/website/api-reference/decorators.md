@@ -300,7 +300,7 @@ def generate_content(self, prompt: str = "", **kwargs):
 
 Because the whole body runs in the background, state you set inside it is rendered only once, when the body finishes. A `self.generating = True` at the top of the body never reaches the client. To show progress, use `dj-loading.*` attributes on the triggering element, or set the flag in a normal handler and then call `self.start_async(...)` (see below).
 
-> **Known issue: #2963.** The server never sends `async_pending` for `@background` tasks, so a `dj-loading.*` indicator ends when the handler returns, not when the background work finishes.
+The first response carries `async_pending: true`, so a `dj-loading.*` indicator on the triggering element stays on until the background work finishes and its result is rendered.
 
 **Task naming and cancellation:**
 

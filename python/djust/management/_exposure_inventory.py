@@ -273,17 +273,28 @@ def inventory_view(view_class: type) -> dict[str, Any]:
     for name, types in scan.mount_stored.items():
         stored.setdefault(name, set()).update(types)
 
-    # Declared state() fields: legacy reads them into context; their backing
-    # slot (_state_<name>) is a private attribute once touched in mount().
+    # Declared state() fields: legacy reads them into context. A PUBLIC field's
+    # backing slot (_state_<name>) reaches the session through the public
+    # state, so the private session keeps it only when its value holds a
+    # Django model (#2959, #1994). A ``_``-named field, or one in
+    # ``static_assigns``, never reaches the public context: its slot is a
+    # private attribute once touched in mount().
+    static_assigns = attrs.get("static_assigns") or ()
+    try:
+        static_skip = set(static_assigns)
+    except TypeError:
+        static_skip = set()
     for name, obj in attrs.items():
-        if isinstance(obj, StateProperty):
+        if issubclass(type(obj), StateProperty):
             touched = name in scan.mount_stored or name in scan.mount_loaded
+            slot_private = name.startswith("_") or name in static_skip
             add(
                 name,
                 kind="state",
                 type=scan.annotations.get(name) or _state_type(obj),
-                destinations=list(_RENDER_ONLY) + (["private_session"] if touched else []),
-                conditional=[] if touched else ["private_session"],
+                destinations=list(_RENDER_ONLY)
+                + (["private_session"] if slot_private and touched else []),
+                conditional=[] if slot_private and touched else ["private_session"],
                 storage_key=f"_state_{name}",
                 declared={"persist": obj.exposure.persist, "client": obj.exposure.client},
                 suggestion=_suggest(name, "state", None, obj.exposure != type(obj.exposure)()),

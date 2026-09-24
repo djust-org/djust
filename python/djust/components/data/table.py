@@ -6,7 +6,7 @@ Provides data tables with sorting, selection, and actions.
 
 from typing import Any, Dict, List
 
-from django.utils.html import escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeString
 
 from ...decorators import event_handler
@@ -155,7 +155,7 @@ class TableComponent(LiveComponent):
         return (
             f'role="searchbox" aria-label="Search table" placeholder="Search..." '
             f'value="{escape(self.filter_query)}" '
-            f'dj-input="filter_rows" dj-debounce="300" data-component-id="{self.component_id}"'
+            f'dj-input="filter_rows" dj-debounce="300" data-component-id="{conditional_escape(self.component_id)}"'
         )
 
     def _column_filter_attr(self, col: Dict[str, Any]) -> str:
@@ -167,7 +167,7 @@ class TableComponent(LiveComponent):
             f'aria-label="Filter {escape(str(col.get("label", key)))}" placeholder="Filter..." '
             f'value="{escape(self.column_filters.get(key, ""))}" '
             f'dj-input="filter_column" dj-debounce="300" '
-            f'data-component-id="{self.component_id}" data-column="{escape(str(key))}"'
+            f'data-component-id="{conditional_escape(self.component_id)}" data-column="{escape(str(key))}"'
         )
 
     @event_handler()
@@ -227,14 +227,14 @@ class TableComponent(LiveComponent):
         row_id = self._row_id(row)
         checked = " checked" if row_id in self.selected_rows else ""
         return (
-            f'dj-change="toggle_row" data-component-id="{self.component_id}" '
+            f'dj-change="toggle_row" data-component-id="{conditional_escape(self.component_id)}" '
             f'dj-value-row-id="{escape(row_id)}" aria-label="Select row"{checked}'
         )
 
     def _header_checkbox_attr(self) -> str:
         checked = " checked" if self._all_selected() else ""
         return (
-            f'dj-change="toggle_all" data-component-id="{self.component_id}" '
+            f'dj-change="toggle_all" data-component-id="{conditional_escape(self.component_id)}" '
             f'aria-label="Select all rows"{checked}'
         )
 
@@ -311,7 +311,7 @@ class TableComponent(LiveComponent):
         rather than the parent view (#2776 — the parent has no ``sort_by``, so
         without it the click raised ``No handler found for event: sort_by``),
         and ``data-column`` carrying the key the handler takes as ``column``."""
-        return f'dj-click="sort_by" data-component-id="{self.component_id}" data-column="{key}"'
+        return f'dj-click="sort_by" data-component-id="{conditional_escape(self.component_id)}" data-column="{conditional_escape(key)}"'
 
     @event_handler()
     def sort_by(self, column: str = "", **kwargs: Any) -> None:
@@ -405,7 +405,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<div class="table-responsive" id="{self.component_id}">'
+        html = f'<div class="table-responsive" id="{conditional_escape(self.component_id)}">'
         if self.filterable:
             html += (
                 f'<div class="dj-table-filter mb-2"><input type="text" class="form-control" '
@@ -421,7 +421,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             if sortable:
@@ -448,7 +448,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):
@@ -466,7 +466,7 @@ class TableComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS table"""
-        html = f'<div class="overflow-x-auto" id="{self.component_id}">'
+        html = f'<div class="overflow-x-auto" id="{conditional_escape(self.component_id)}">'
         if self.filterable:
             html += (
                 f'<div class="dj-table-filter mb-2"><input type="text" '
@@ -484,7 +484,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             th_class = (
@@ -528,7 +528,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):
@@ -560,7 +560,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<div class="dj-table" id="{self.component_id}">'
+        html = f'<div class="dj-table" id="{conditional_escape(self.component_id)}">'
         if self.filterable:
             html += f'<div class="dj-table-filter"><input type="text" {self._global_filter_attr()}></div>'
         html += self._table_open(table_class)
@@ -573,7 +573,7 @@ class TableComponent(LiveComponent):
 
         for col in self.columns:
             key = col["key"]
-            label = col["label"]
+            label = conditional_escape(col["label"])
             sortable = col.get("sortable", False)
 
             if sortable:
@@ -597,7 +597,7 @@ class TableComponent(LiveComponent):
 
             for col in self.columns:
                 key = col["key"]
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 # Badge rendering
                 if col.get("badge"):

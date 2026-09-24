@@ -194,6 +194,14 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",
         "_force_full_html",
+        # Names of start_async tasks currently running (#2969). Written by the
+        # dispatcher and a task's completion callback, possibly while an
+        # unrelated handler's turn is in flight; never read by a template.
+        "_async_running",
+        # {% live_render sticky=True %} bookkeeping (#2919): the kwargs a
+        # sticky child was mounted with, and the last set a warning named.
+        "_djust_sticky_mount_kwargs",
+        "_djust_sticky_kwargs_warned",
     }
 )
 
@@ -216,6 +224,177 @@ _COMPONENT_INTERNAL_ATTRS: frozenset = frozenset(
         "slots",
     }
 )
+
+
+def _descriptor_fields(cls: type) -> Dict[str, tuple]:
+    """``{public_name: (kind, slot_name)}`` for the descriptor-backed fields a
+    view class declares: ``state()`` fields (kind ``"state"``, slot
+    ``_state_<name>``) and class-level components (kind ``"component"``, slot
+    ``_component_<name>``).
+
+    Their values live in ``_``-prefixed instance slots, so every walk that
+    skips ``_`` keys (dirty tracking, #2956/#2912) or treats them as user
+    private state (#2959) needs this map to see them for what they are. The
+    nearest definition in the MRO wins, as attribute lookup does.
+    """
+    cached = cls.__dict__.get("_djust_descriptor_fields_cache")
+    if cached is not None:
+        return cast(Dict[str, tuple], cached)
+    from .components.base import LiveComponent as _DescriptorComponent
+
+    fields: Dict[str, tuple] = {}
+    for klass in reversed(cls.__mro__):
+        for name, value in vars(klass).items():
+            # Type checks only: a class attribute may be lazy
+            # (``SimpleLazyObject``, whose ``__class__`` is proxied, so not
+            # even ``isinstance``) and must not be evaluated here.
+            if getattr(type(value), "_djust_state_field", False):
+                slot = getattr(value, "attr_name", None)
+                if slot:
+                    fields[name] = ("state", slot)
+                    continue
+            if issubclass(type(value), _DescriptorComponent):
+                slot = value.__dict__.get("_descriptor_storage_key")
+                if slot and getattr(type(value), "State", None) is not None:
+                    fields[name] = ("component", slot)
+                    continue
+            # A plain attribute further down the MRO shadows the descriptor.
+            fields.pop(name, None)
+    try:
+        setattr(cls, "_djust_descriptor_fields_cache", fields)
+    except (AttributeError, TypeError):  # pragma: no cover — immutable class
+        # Uncacheable (an immutable class): recomputed on every call instead.
+        logger.debug("descriptor-field map not cached on %s", cls.__name__)
+    return fields
+
+
+def _holds_model(value: Any) -> bool:
+    """Does ``value`` hold a Django model instance, at any depth?"""
+    from django.db import models
+
+    if isinstance(value, models.Model):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_model(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_model(v) for v in value)
+    return False
+
+
+def _shadows_component_method(component: Any, key: str) -> bool:
+    """Whether ``key`` names a callable on the component's class (#3046).
+
+    Checks the component's own class and, for a class-level component bound
+    to a view (``BoundComponent``, ADR-031), the descriptor's class too, since
+    that is where its handlers live. Class-level lookup only: an instance
+    value never counts.
+    """
+    classes = [type(component)]
+    descriptor = getattr(component, "__dict__", {}).get("_descriptor")
+    if descriptor is not None:
+        classes.append(type(descriptor))
+    for cls in classes:
+        try:
+            member = getattr(cls, key, None)
+        except Exception:  # noqa: BLE001 — a raising class attr is not a method
+            continue
+        if callable(member):
+            return True
+    return False
+
+
+def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool:
+    """Apply a ``__components__`` snapshot map to ``view``'s components.
+
+    ONE helper for both restore paths — time-travel (``time_travel.py``) and
+    the signed back-navigation snapshot (:meth:`LiveView._restore_snapshot`,
+    #2896) — so they cannot drift (#1646).
+
+    Each ``{component_id: {field: value}}`` entry goes only to a component the
+    view already knows: one in ``view._components``, or a class-level component
+    DECLARED on the view class (bound on demand, as the first ``view.<name>``
+    access would). Unknown ids, non-dict entries and blocked field names
+    (private, dunder, :data:`_COMPONENT_INTERNAL_ATTRS`) are skipped. Values go
+    through ``safe_setattr``.
+
+    Returns ``True`` when every entry applied cleanly.
+    """
+    from .security import safe_setattr
+
+    if not components_state:
+        return True
+    if not isinstance(components_state, dict):
+        logger.warning("%s: __components__ is not a mapping; ignoring", source)
+        return False
+    registry = getattr(view, "_components", None)
+    if not isinstance(registry, dict):
+        registry = {}
+    declared = _descriptor_fields(type(view))
+    ok = True
+    for component_id, component_snap in components_state.items():
+        component = registry.get(component_id)
+        if (
+            component is None
+            and isinstance(component_id, str)
+            and declared.get(component_id, (None,))[0] == "component"
+        ):
+            component = getattr(view, component_id, None)
+        if component is None:
+            logger.warning("%s: component %r in snapshot but not in registry", source, component_id)
+            ok = False
+            continue
+        if not isinstance(component_snap, dict):
+            logger.warning("%s: component %r snapshot is not a mapping", source, component_id)
+            ok = False
+            continue
+        # An interactive component restores through its concrete state
+        # schema, never field-by-field (ADR-038); None keeps the legacy path.
+        from .time_travel import _restore_interactive_state
+
+        restored = _restore_interactive_state(component, component_snap)
+        if restored is not None:
+            ok = restored and ok
+            continue
+        for key, value in component_snap.items():
+            if not isinstance(key, str) or key in _COMPONENT_INTERNAL_ATTRS:
+                continue
+            if _shadows_component_method(component, key):
+                # A snapshot field named like a method (``render``, ``mount``,
+                # a handler) would shadow it on the instance (#3046). No real
+                # state field has such a name, so skip it.
+                logger.warning(
+                    "%s: component restore skipped id=%s key=%s (names a method)",
+                    source,
+                    component_id,
+                    key,
+                )
+                ok = False
+                continue
+            try:
+                applied = safe_setattr(component, key, value, allow_private=False)
+            except Exception as exc:  # noqa: BLE001 — log + degrade, never break a restore
+                from ._exposure_diagnostics import log_failure_for
+
+                # A setter is application code; its error text can carry
+                # state, so it is value-free for a nonlegacy owner (ADR-038).
+                log_failure_for(
+                    logger,
+                    (view, component),
+                    exc,
+                    "%s: component restore failed for id=%s key=%s",
+                    source,
+                    component_id,
+                    key,
+                    traceback=True,
+                )
+                ok = False
+                continue
+            if not applied:
+                logger.warning(
+                    "%s: component restore blocked for id=%s key=%s", source, component_id, key
+                )
+                ok = False
+    return ok
 
 
 class NonPersistableStateError(TypeError):
@@ -664,7 +843,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 if name in seen_state_names:
                     continue
                 seen_state_names.add(name)
-                if isinstance(declaration, StateProperty) and (
+                if issubclass(type(declaration), StateProperty) and (
                     declaration.exposure.persist is not None or declaration.exposure.client
                 ):
                     raise ExposureConfigurationError(
@@ -813,21 +992,51 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         ``deep_fingerprint``, #2664) but scoped to public attributes only (no
         leading underscore), so dirty tracking never reports framework-internal
         changes.
+
+        Descriptor-backed public fields store their value in a ``_``-prefixed
+        slot, so they are read through the descriptor under their PUBLIC name:
+        ``state()`` fields (``_state_<name>``, #2956) and class-level
+        components (``_component_<name>``, #2912). Reading a component binds it
+        on first access, exactly as a render would.
         """
         static_skip = set(getattr(self, "static_assigns", []))
         fp: Dict[str, Any] = {}
         for k, v in self.__dict__.items():
             if k.startswith("_") or k in static_skip:
                 continue
-            if isinstance(v, (int, float, bool, str, bytes)) or v is None:
-                fp[k] = ("v", v)
-            elif fingerprints_by_content(v):
-                # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty;
-                # a class-level component's State likewise (#2900).
-                fp[k] = ("c", id(v), deep_fingerprint(v)[0])
-            else:
-                fp[k] = ("id", id(v))
+            fp[k] = self._dirty_value_fingerprint(v)
+        for name in _descriptor_fields(type(self)):
+            if name.startswith("_") or name in static_skip or name in fp:
+                continue
+            try:
+                value = getattr(self, name)
+            except Exception as exc:  # noqa: BLE001 — a broken descriptor is not "dirty"
+                from ._exposure_diagnostics import log_failure_for
+
+                # A descriptor getter or component bind is application code;
+                # its error text can carry state (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "dirty tracking: could not read %s",
+                    name,
+                    level="debug",
+                    traceback=True,
+                )
+                continue
+            fp[name] = self._dirty_value_fingerprint(value)
         return fp
+
+    @staticmethod
+    def _dirty_value_fingerprint(v: Any) -> tuple:
+        if isinstance(v, (int, float, bool, str, bytes)) or v is None:
+            return ("v", v)
+        if fingerprints_by_content(v):
+            # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty;
+            # a class-level component's State likewise (#2900).
+            return ("c", id(v), deep_fingerprint(v)[0])
+        return ("id", id(v))
 
     def _capture_dirty_baseline(self) -> None:
         """Snapshot current public assigns as the dirty-tracking baseline.
@@ -935,12 +1144,36 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         # Exclude the tracking attrs themselves — they are infrastructure, not
         # user state, and must never leak into the persisted private state.
-        meta_attrs = {"_framework_attrs", "_user_private_keys"}
+        meta_attrs = {"_framework_attrs", "_user_private_keys", "_reactive_state"}
         self._user_private_keys = {
             k
             for k in self.__dict__
             if k.startswith("_") and k not in framework and k not in meta_attrs
         }
+
+    def _framework_storage_slots(self) -> Set[str]:
+        """``_``-prefixed instance slots that are framework storage, not user
+        private state, and so are never saved in the private session (#2959).
+
+        - the ``_state_<name>`` slot of a PUBLIC ``state()`` field: its value
+          reaches the session through the public state (the context reads it
+          through the descriptor, and every restore path sets it back through
+          the descriptor), so a second copy here is redundant. A ``_``-named
+          ``state()`` field, or one listed in ``static_assigns``, never reaches
+          the public context, so its slot stays private.
+        - ``_reactive_state``: the descriptor's own bookkeeping; any restore
+          through the descriptor rebuilds it.
+
+        :meth:`_get_private_state` still saves a public ``state()`` slot whose
+        value holds a Django model: the public path flattens a model to a dict,
+        this one re-hydrates it (#1994).
+        """
+        static_skip = set(getattr(self, "static_assigns", []) or [])
+        slots = {"_reactive_state"}
+        for name, (kind, slot) in _descriptor_fields(type(self)).items():
+            if kind == "state" and not name.startswith("_") and name not in static_skip:
+                slots.add(slot)
+        return slots
 
     def _get_private_state(self) -> Dict[str, Any]:
         """Return serializable user-defined _private attributes (not framework internals).
@@ -960,10 +1193,18 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         require_legacy_state_api(self)
         result: Dict[str, Any] = {}
         user_keys: Set[str] = getattr(self, "_user_private_keys", set())
+        # A session written before #2959 may have restored these into
+        # ``_user_private_keys``; they are still not re-saved.
+        not_private = self._framework_storage_slots()
         for key in user_keys:
             if key not in self.__dict__:
                 continue
             value = self.__dict__[key]
+            if key in not_private and not (key != "_reactive_state" and _holds_model(value)):
+                # The public state carries this value — except a Django model,
+                # which the public path flattens to a dict while this one
+                # re-hydrates it (#1994), so a model-holding slot stays.
+                continue
             # Skip callables (bound methods, lambdas stored as attrs)
             if callable(value):
                 continue
@@ -995,11 +1236,20 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore legacy private attributes; explicit views require a bound adapter."""
         from ._exposure import require_legacy_state_api
+        from .security import DANGEROUS_ATTRIBUTES
 
         require_legacy_state_api(self)
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
+            if not isinstance(key, str):
+                continue
+            # The session is trusted, but this path used a raw setattr with no
+            # screen at all, unlike the public one (#3046). A dunder
+            # (``__class__``, ``__dict__``) is never user private state.
+            if key in DANGEROUS_ATTRIBUTES or (key.startswith("__") and key.endswith("__")):
+                logger.warning("Skipping restore of reserved private attribute %r", key)
+                continue
             if key.startswith("_") and key not in framework and key not in meta_attrs:
                 # #1994: re-hydrate model refs back to model instances (fresh DB
                 # fetch) so a private model attr comes back a MODEL, not a dict.
@@ -1275,6 +1525,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         Explicit policy rejects this legacy raw-dict hook. Its adapter validates
         the full signed, identity-bound schema before returning assignable values.
+
+        Component state under ``__components__`` is applied to the view's
+        registered and class-declared components only
+        (:func:`restore_components_snapshot`, shared with time-travel).
         """
         from ._exposure import require_legacy_state_api
         from .security import safe_setattr
@@ -1284,10 +1538,18 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         if SNAPSHOT_KEY in state:
             restore_bindings(self, state[SNAPSHOT_KEY])
+        # Component state rides under the reserved ``__components__`` key
+        # (``_capture_snapshot_state``); the flat loop below would drop it,
+        # since ``safe_setattr`` refuses dunder names (#2896).
+        components_state = state.get("__components__")
         for key, value in state.items():
             if key == SNAPSHOT_KEY:
                 continue
+            if key == "__components__":
+                continue
             safe_setattr(self, key, value, allow_private=False)
+        if components_state:
+            restore_components_snapshot(self, components_state, source="state_snapshot")
 
     def _should_restore_snapshot(self, request: Any) -> bool:
         """Return True to allow snapshot restoration for this request.

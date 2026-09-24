@@ -105,6 +105,19 @@ _IDENT_RE = re.compile(r"([A-Za-z_][\w]*)")
 # across a whole expression string.
 _DOTTED_ROOT_RE = re.compile(r"([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*")
 
+# #3020: the parts of an `{% if %}` / `{% elif %}` / `{% while %}`
+# expression that are NOT variable references, blanked out before the
+# identifier scan. A quoted string literal (`'deploying'`, with Django's
+# backslash escapes), a numeric literal (`1`, `-2.5`, `1e3`), and a filter
+# NAME (`|length`). A filter's literal argument is a string/number literal and
+# goes with the first two; a VARIABLE argument (`|default:fallback`) stays and
+# is still checked, as Django resolves it from the context.
+_IF_LITERAL_RE = re.compile(
+    r""""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"""
+    r"|(?<![\w.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\w.])"
+    r"|\|\s*[A-Za-z_]\w*"
+)
+
 # Silence pragma inline in templates.
 _NOQA_RE = re.compile(r"\{#\s*djust_typecheck:\s*noqa(?:\s+(\w+(?:\s*,\s*\w+)*))?\s*#\}")
 
@@ -314,9 +327,10 @@ def _extract_referenced_names(src: str) -> List[tuple]:
             # `finditer()` only ever yields real matches (never None), and
             # reusing `m` narrows mypy's inferred type incompatibly with
             # the later `_IDENT_RE.match(...)` assignments (#2824 review).
-            for dotted_match in _DOTTED_ROOT_RE.finditer(args):
+            expr = _IF_LITERAL_RE.sub(lambda lit: " " * len(lit.group(0)), args)
+            for dotted_match in _DOTTED_ROOT_RE.finditer(expr):
                 ident = dotted_match.group(1)
-                if ident in {"and", "or", "not", "in", "is", "True", "False", "None"}:
+                if ident in {"and", "or", "not", "in", "is", "True", "False", "None", "_"}:
                     continue
                 if ident.isdigit():
                     continue

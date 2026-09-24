@@ -49,7 +49,7 @@ Framework classes are skipped. `--view` names classes directly.
 | Public `self.x` assigned in any method (`instance`) | all five public destinations |
 | Public class value, JSON-serializable type (`class_value`) | `template_context`, `render_cache`, `session_state`. Other types are conditional, because legacy drops values that are not JSON-serializable (#694). |
 | `@property` and other non-callable descriptors (`property`) | `template_context`, `render_cache`, `session_state`. Evaluated at render, never by this command. |
-| `state()` field (`state`) | `template_context`, `render_cache`, `session_state`. Also `private_session` under `storage_key` `_state_<name>` when `mount()` reads or assigns it; otherwise that is conditional. |
+| `state()` field (`state`) | `template_context`, `render_cache`, `session_state`. A public field's `_state_<name>` slot is saved in `private_session` only when its value holds a Django model (#2959, #1994), so that destination is conditional. A `_`-named field, or one in `static_assigns`, adds `private_session` under `storage_key` `_state_<name>` when `mount()` reads or assigns it; otherwise that is conditional. |
 | `_x` assigned in `mount()` (`private`) | `private_session` |
 | `_x` assigned only after `mount()` | `private_session` is conditional: legacy persists it only if it is added to `_user_private_keys` |
 

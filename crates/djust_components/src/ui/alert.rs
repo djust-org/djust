@@ -7,7 +7,7 @@ An alert/notification component with:
 - Icon support
 */
 
-use crate::html::element;
+use crate::html::{element, html_escape};
 use crate::{Component, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
@@ -139,7 +139,7 @@ impl Alert {
             content.push(' ');
         }
 
-        content.push_str(&self.message);
+        content.push_str(&html_escape(&self.message));
 
         // Add close button if dismissible
         if self.dismissible {
@@ -185,7 +185,7 @@ impl Alert {
             content.push_str("</span> ");
         }
 
-        content.push_str(&self.message);
+        content.push_str(&html_escape(&self.message));
 
         // Add close button if dismissible
         if self.dismissible {
@@ -233,7 +233,7 @@ impl Alert {
             content.push(' ');
         }
 
-        content.push_str(&self.message);
+        content.push_str(&html_escape(&self.message));
 
         if self.dismissible {
             content.push_str(r#"<button type="button" class="close" aria-label="Close"><span aria-hidden="true">&times;</span></button>"#);
@@ -315,5 +315,38 @@ mod tests {
         let alert = Alert::success("Done!").icon("✓");
         let html = alert.render(Framework::Bootstrap5).unwrap();
         assert!(html.contains("✓"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    const FWS: [Framework; 3] = [Framework::Bootstrap5, Framework::Tailwind, Framework::Plain];
+
+    #[test]
+    fn message_is_html_escaped() {
+        for fw in FWS {
+            let html = Alert::new("<img src=x onerror=alert(1)>")
+                .dismissible(true)
+                .render(fw)
+                .unwrap();
+            assert!(!html.contains("<img"), "{fw:?}");
+            assert!(
+                html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{fw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_message_output_unchanged() {
+        let html = Alert::success("Saved")
+            .render(Framework::Bootstrap5)
+            .unwrap();
+        assert_eq!(
+            html,
+            r#"<div class="alert alert-success" role="alert">Saved</div>"#
+        );
     }
 }

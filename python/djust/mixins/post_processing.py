@@ -10,6 +10,64 @@ from typing import TYPE_CHECKING, Any, Dict, cast
 
 logger = logging.getLogger(__name__)
 
+# #2987: find the document's real <head>/<body> boundaries. Anything tag-shaped
+# inside a raw-text region is text, not markup, so the lookups run on a masked
+# copy: ``_mask_raw_text`` (script/style bodies and comments, #2663) plus the
+# RCDATA elements title/textarea. The masks are length-preserving, so positions
+# found in the masked copy index the original string. An unterminated region
+# runs to the end of the document, as it does in the HTML tokenizer.
+_RCDATA_RE = re.compile(
+    r"<(title|textarea)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+# A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
+# End tags may carry junk before ">" (``</head foo>``), as browsers accept.
+# ``[^<>]*`` (not ``[^>]*``) keeps a tag from spanning into the next one, and
+# keeps the scan linear when many tags have no ">" (PR #3017 review).
+_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
+_BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
+_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
+_HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
+
+
+def _mask_document_text(html: str) -> str:
+    from .template import _mask_raw_text
+
+    masked = _mask_raw_text(html)
+    return _RCDATA_RE.sub(lambda m: "\x00" * len(m.group(0)), masked)
+
+
+def _find_head_close(masked: str) -> int:
+    """Index of the document's real closing ``</head>`` tag, or ``-1`` (#2987).
+
+    ``masked`` is the page after :func:`_mask_document_text`. A plain
+    ``str.replace("</head>", ...)`` hit the first (or every) ``</head>``
+    *string*, including one inside an inline script or a comment. This returns
+    the first real ``</head>``, provided it comes before ``<body``.
+    """
+    head_close = _HEAD_CLOSE_RE.search(masked)
+    if head_close is None:
+        return -1
+    body_open = _BODY_OPEN_RE.search(masked, 0, head_close.start())
+    return -1 if body_open else head_close.start()
+
+
+def _find_body_close(masked: str) -> int:
+    """Index of the document's last real closing ``</body>`` tag, or ``-1``."""
+    found = -1
+    for match in _BODY_CLOSE_TAG_RE.finditer(masked):
+        found = match.start()
+    return found
+
+
+def _find_html_close(masked: str) -> int:
+    """Index of the document's last real closing ``</html>`` tag, or ``-1``
+    (#3018: the handler-metadata fallback when a page has no ``</body>``)."""
+    found = -1
+    for match in _HTML_CLOSE_TAG_RE.finditer(masked):
+        found = match.start()
+    return found
+
 
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
@@ -244,13 +302,15 @@ class PostProcessingMixin:
         Post-process HTML to hydrate React component placeholders.
         """
         from ..react import react_components
+        import html as html_module
         import json as json_module
 
         pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
 
         def replace_component(match: "re.Match[str]") -> str:
             component_name = match.group(1)
-            props_json = match.group(2)
+            # The renderer entity-escapes the attribute value.
+            props_json = html_module.unescape(match.group(2))
             children = match.group(3)
 
             try:
@@ -258,27 +318,19 @@ class PostProcessingMixin:
             except json_module.JSONDecodeError:
                 props = {}
 
-            context = self.get_context_data()
-            resolved_props = {}
-            for key, value in props.items():
-                if isinstance(value, str) and "{{" in value and "}}" in value:
-                    var_match = re.search(r"\{\{\s*(\w+)\s*\}\}", value)
-                    if var_match:
-                        var_name = var_match.group(1)
-                        if var_name in context:
-                            resolved_props[key] = context[var_name]
-                        else:
-                            resolved_props[key] = value
-                    else:
-                        resolved_props[key] = value
-                else:
-                    resolved_props[key] = value
+            # The template renderer already resolved `{{ var }}` props from
+            # the view context. Don't resolve again here: a resolved value is
+            # user data, and one that reads `{{ other }}` must stay literal.
+            resolved_props = props
 
             renderer = react_components.get(component_name)
 
             if renderer:
                 rendered_content = renderer(resolved_props, children)
-                resolved_props_json = json_module.dumps(resolved_props).replace('"', "&quot;")
+                # Single-quoted attribute: escape `'` too, not only `"`.
+                resolved_props_json = html_module.escape(
+                    json_module.dumps(resolved_props), quote=True
+                )
                 return f"<div data-react-component=\"{component_name}\" data-react-props='{resolved_props_json}'>{rendered_content}</div>"
             else:
                 return match.group(0)
@@ -388,11 +440,40 @@ class PostProcessingMixin:
 
         full_script = config_script + script
 
-        if debug_css_link and "</head>" in html:
-            html = html.replace("</head>", f"{debug_css_link}</head>")
+        # The HTTP event fallback and djust.call need the CSRF token even when
+        # the project renames the cookie (CSRF_COOKIE_NAME) or keeps it out of
+        # JavaScript's reach (CSRF_COOKIE_HTTPONLY, CSRF_USE_SESSIONS). The
+        # client reads these via window.djust.csrfToken() (00-namespace.js).
+        csrf_meta = ""
+        request = getattr(self, "request", None)
+        if request is not None:
+            from django.middleware.csrf import get_token
+            from django.utils.html import escape
 
-        if "</body>" in html:
-            html = html.replace("</body>", f"{full_script}</body>")
+            csrf_meta = (
+                f'<meta name="djust-csrf-cookie" content="{escape(settings.CSRF_COOKIE_NAME)}">'
+                f'<meta name="djust-csrf-token" content="{escape(get_token(request))}">'
+            )
+        # Both go into the document's real <head>, once (#2987).
+        masked = _mask_document_text(html)
+        head_close = _find_head_close(masked)
+        head_inject = ""
+        if csrf_meta:
+            if head_close >= 0:
+                head_inject += csrf_meta
+            else:
+                full_script = csrf_meta + full_script
+        if debug_css_link and head_close >= 0:
+            head_inject += debug_css_link
+        if head_inject:
+            html = html[:head_close] + head_inject + html[head_close:]
+
+        # Found before the head insertion, so shift it past the inserted text.
+        body_close = _find_body_close(masked)
+        if body_close >= 0 and head_inject and body_close >= head_close:
+            body_close += len(head_inject)
+        if body_close >= 0:
+            html = html[:body_close] + full_script + html[body_close:]
         else:
             html += full_script
 

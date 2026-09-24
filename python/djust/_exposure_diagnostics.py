@@ -118,7 +118,9 @@ def log_failure(
     if diagnostics_allowed():
         getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
     else:
-        log.error(PROTECTED_FAILURE)
+        # Value-free, but at the call site's level: a DEBUG-level site on a
+        # hot path (dirty tracking) must not become an ERROR per turn.
+        getattr(log, level)(PROTECTED_FAILURE)
 
 
 def log_failure_for(

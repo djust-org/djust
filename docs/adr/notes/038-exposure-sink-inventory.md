@@ -236,6 +236,31 @@ Fixed: `ViewRuntime._flush_pending_layout` now logs through
 known to be value-free: `mixins/activity.py`'s drain logs "Protected deferred
 activity event failed" for restricted owners.
 
+### Sites added by the 1.2.1 merge
+
+Merging main's 1.2.1 fixes (#3000, #2945, #3001, #2963, #2969, #3027,
+#3036, #2957, #2972, #2977, #2956, #2896, #2919) into this line added 20
+exception-carrying log calls; each was classified or routed through the
+gate, not baselined:
+
+- **Now gated** (`log_failure` / `log_failure_for` / `_log_view_hook_failure`):
+  dirty tracking's descriptor read and the shared component-snapshot restore
+  in `live_view.py`; `navigation_title`, the failed-mount tick await and the
+  `on_mount_failed` hook in `runtime.py`; the consumer's `__call__`
+  disconnect backstop and pre-lock `server_push` catch; per-push hook
+  failures in `_run_server_push_turn`; the async error arm and
+  `_settle_cancelled_async` in `websocket.py`; PWA sync handler failures.
+- **Legacy-gated**: the runtime `_settle_cancelled_async` (`if
+  uses_legacy_exposure(view)`); `live_tags._discard_sticky_child`'s
+  `_on_sticky_unmount` call, which now runs only for a legacy child — a
+  nonlegacy child is disposed by `_unregister_child`.
+- **Framework-only**: NOTIFY group join/leave (channel layer), the session
+  key read, upload re-attach, suspend/park and parked abort (upload bytes and
+  metadata only), two peer-closed socket paths, the observability token
+  lookup and the CSRF secret bind on a rebuilt socket request (both before
+  any view exists). `observability/middleware.py` and `security/csrf.py` are
+  newly pinned modules.
+
 ## Mount diagnostic finding
 
 The generic exception handler previously recorded full exception messages and

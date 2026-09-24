@@ -229,7 +229,9 @@ INSTALLED_APPS += [
 
 ASGI_APPLICATION = "myproject.asgi.application"
 
-LIVEVIEW_ALLOWED_MODULES = ["myapp.views"]
+# "djust" admits djust's own LiveViews (component and theme galleries, admin
+# extensions): an explicit list replaces the default, which includes it.
+LIVEVIEW_ALLOWED_MODULES = ["myapp.views", "djust"]
 
 # Suitable for one local development process.
 CHANNEL_LAYERS = {
@@ -242,9 +244,11 @@ CHANNEL_LAYERS = {
 Optionally, render your other templates with djust's engine too by
 registering its backend **before** the existing Django backend. LiveViews do
 not need this step: they render with djust's engine either way, and
-`djust init` skips it. If the project uses the Django admin, skip it for now:
-with this order the admin's list and edit pages fail
-([#2872](https://github.com/djust-org/djust/issues/2872)).
+`djust init` skips it. If the project uses the Django admin, keep the three
+context processors below: with this order djust's engine renders the admin's
+templates, and without the auth processor the admin index fails with
+`KeyError: 'user'`. The `djust.C016` system check flags a djust entry that
+lacks them ([#2883](https://github.com/djust-org/djust/issues/2883)).
 
 ```python
 TEMPLATES.insert(0, {

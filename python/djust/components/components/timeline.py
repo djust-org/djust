@@ -1,6 +1,7 @@
 """Timeline component."""
 
 import html
+from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any, Optional
@@ -46,7 +47,7 @@ class Timeline(Component):
                     continue
                 title = html.escape(str(item.get("title", "")))
                 time = html.escape(str(item.get("time", "")))
-                content = item.get("content", "")
+                content = conditional_escape(item.get("content", ""))
                 title_html = f'<div class="timeline-title">{title}</div>' if title else ""
                 time_html = f'<div class="timeline-time">{time}</div>' if time else ""
                 parts.append(
@@ -57,5 +58,5 @@ class Timeline(Component):
                 )
             inner = "".join(parts)
         else:
-            inner = self.content
+            inner = conditional_escape(self.content)
         return f'<div class="{cls}">{inner}</div>'

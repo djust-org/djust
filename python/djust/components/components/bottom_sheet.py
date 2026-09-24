@@ -71,8 +71,13 @@ class BottomSheet(Component):
             title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>'
 
         return (
-            f'<div class="dj-bottom-sheet__backdrop" {close_attrs}>'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            # The close event rides a scrim BEHIND the panel, not the backdrop
+            # around it: djust delegates clicks from the root, so the panel's
+            # old inline stopPropagation() handler swallowed every click
+            # inside it — its own close, submit and format buttons included.
+            f'<div class="dj-bottom-sheet__backdrop">'
+            f'<div class="dj-scrim" {close_attrs}></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"

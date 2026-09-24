@@ -7,6 +7,8 @@ order, and the session-backed "Recently viewed" group.
 
 from __future__ import annotations
 
+from html import unescape as html_unescape
+
 import pytest
 from django.test import override_settings
 
@@ -410,6 +412,9 @@ class TestUsageWithEvents:
             view = _detail(name)
             src = view._base_ctx["usage_parts"]["view"]
             assert "...  # write to self.component" not in src, name
+            if name == "sheet":
+                # Its close event is a real handler, not a host-side no-op.
+                assert "self.component.is_open = False" in src
             namespace = {"__name__": __name__}
             exec(compile(src, f"{name}.views.py", "exec"), namespace)
             if "MyView" not in namespace:
@@ -518,6 +523,28 @@ class TestCodeHighlighting:
         out = highlight_code("pip install djust", "bash")
         assert re.sub(r"<[^>]+>", "", out) == "pip install djust"
         assert "pipinstall" not in out and "installdjust" not in out
+
+    @pytest.mark.parametrize(
+        "code,lang",
+        [
+            ("pip install djust", "bash"),
+            ("$ pip install  djust\n", "console"),
+            ("uv run manage.py runserver 8000", "shell"),
+        ],
+    )
+    def test_whitespace_before_bare_text_survives_the_pipeline_3026(self, code, lang):
+        """Lexers such as bash emit words as bare text, so the `hl-w` span sat
+        between two text runs and was never folded: `pip install djust`
+        rendered as `pipinstalldjust` (#3026). The span is unwrapped into the
+        following text."""
+        import re
+
+        from djust.components.components.code_snippet import highlight_code
+
+        out = highlight_code(code, lang)
+        assert not re.search(r">[ \t]+<", out), out  # no lone space, bare or spanned
+        # what dj-copy copies (a trailing newline is trimmed, as before)
+        assert html_unescape(re.sub(r"<[^>]+>", "", out)) == code.rstrip("\n")
 
     def test_parameter_types_are_names_not_reprs(self):
         rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]

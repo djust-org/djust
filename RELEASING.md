@@ -98,10 +98,45 @@ pip install djust==0.2.0a1  # Specific pre-release
    git push origin v0.2.0a1
    ```
 
-2. **GitHub Actions will automatically**:
+2. **GitHub Actions will automatically** (`.github/workflows/release.yml`):
+   - Run the pre-release security audit (see below) alongside the build
    - Build wheels for all platforms
-   - Create a GitHub Release
-   - Publish to PyPI
+   - Create a GitHub Release — **only if the audit passed**
+   - Publish to PyPI — **only if the audit passed**
+
+### Publishing is gated on the security audit
+
+`.github/workflows/pre-release-security-audit.yml` is a reusable workflow.
+`release.yml` (tag push) and `publish.yml` (release published / manual
+dispatch) call it as a job that their GitHub Release and PyPI jobs `need`, so
+a failing scanner stops the release before anything is published. It has no
+tag trigger of its own; you can still dispatch it by hand on any ref
+(Actions → Pre-Release Security Audit → Run workflow) to check a branch before
+tagging — do that before cutting a release.
+
+Every scanner blocks, and each has one reviewed allowlist:
+
+| Scanner | Fails on | Allowlist |
+|---------|----------|-----------|
+| Bandit | any high-severity finding | the `-s`/`-x` skip set in the workflow (same as the pre-commit hook) |
+| pip-audit | any known vulnerability in a package pinned in `uv.lock` (all extras, every Python/platform fork; djust itself excluded), or an allowlist entry past its review-by date | `.github/security/pip-audit-ignore.txt` — `ID  # reason; review-by YYYY-MM-DD` |
+| cargo-audit | any vulnerability, and any `unsound` advisory (unmaintained/yanked are warnings) | `.cargo/audit.toml` `[advisories] ignore`, each with a reason comment |
+| npm audit | any high or critical advisory in `package-lock.json` | none — fix with `npm audit fix` or a `package.json` `overrides` entry |
+| clippy | `clippy::correctness` / `clippy::suspicious` lints | fix, or `#[allow(...)]` with a justification |
+| ESLint | errors (warnings are reported) | the ESLint config |
+| CodeQL | open high/critical alerts on the analysed ref (the tag) | `.github/codeql/codeql-config.yml` exclusions + alerts dismissed in the Security tab with a reason |
+
+Run the dependency gates locally before tagging:
+
+```bash
+make security-audit-deps                  # pip-audit gate + cargo audit + npm audit
+scripts/codeql-alert-gate.sh refs/heads/main
+```
+
+If the audit fails on a tag, fix the finding (or add a reviewed allowlist
+entry) on `main`, bump to a new version and tag again — the failed tag's
+release never reached PyPI. A tracking issue is created only on a manual
+dispatch with `create_issue` checked.
 
 ### 3. Post-Release
 
@@ -186,6 +221,15 @@ If the GitHub Actions build fails:
 1. Check the workflow logs
 2. Ensure all Cargo.toml versions match
 3. Run `make build` locally to verify
+
+### Security Audit Failures
+
+The release run's **Pre-release security audit / Audit Summary** job lists
+which scanner failed; each scanner's report is in the run's
+`*-security-reports` artifacts and `security-audit-report`. Upgrade the
+dependency (targeted: `uv lock --upgrade-package <name>`,
+`cargo update -p <crate>`, `npm audit fix`), or — when no fix exists — add an
+allowlist entry with the reason and a review-by date (see the table above).
 
 ### PyPI Upload Failures
 

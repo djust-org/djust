@@ -281,7 +281,7 @@ Decisions D-i and D-j.
   `schema_version`. Format-1 envelopes remount.
 - **Lifetime.** `DJUST_SERVER_STATE_MAX_AGE` (1 to 86400 seconds, default 3600)
   sets the envelope lifetime for root and child state. System check
-  **djust.C018** validates it, and an invalid value fails closed at runtime.
+  **djust.C020** validates it, and an invalid value fails closed at runtime.
 - **Migration hook.** An opt-in `migrate_state(old_version, values)` translates
   an older root envelope before `prepare_restore`. Its output is validated
   exactly like fresh input (extra keys, missing keys and non-primitives are

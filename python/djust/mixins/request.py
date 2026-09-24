@@ -90,6 +90,9 @@ class RequestMixin:
 
         def get_template(self) -> str: ...
 
+        @staticmethod
+        def _stamp_dj_view(html: str, view_path: str) -> str: ...
+
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
         def mount(self, request: Any, **kwargs: Any) -> None: ...
@@ -383,9 +386,11 @@ class RequestMixin:
             "vdom_ms": round(t_render_diff, 2),
         }
 
-        # Inject view path into dj-root for WebSocket mounting
+        # Inject view path into dj-root for WebSocket mounting — on the root
+        # however it is written (any element, any other attributes), and only
+        # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        html = html.replace("<div dj-root>", f'<div dj-root dj-view="{view_path}">')
+        html = self._stamp_dj_view(html, view_path)
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -934,6 +939,32 @@ class RequestMixin:
                 noop_response = {"type": "noop", "event_name": event_name}
                 _inject_side_channels(noop_response)
                 return JsonResponse(noop_response)
+
+            # A handler (view or ``component_id`` route) that set
+            # ``self._skip_render = True`` asked for no render this turn. The
+            # WebSocket / SSE routes resolve that through
+            # ``_resolve_skip_render`` (#2834, #2924); the HTTP fallback never
+            # consulted it, so the same flag rendered here and was never reset
+            # (#3038, the #1646 parallel-path class). The state above is already
+            # saved, so the next render diffs from the last one the client has.
+            # The answer is an empty patch list with no ``version``: nothing was
+            # rendered, so the client's VDOM cursor must not move. Side channels
+            # (flash, page metadata) still go out, as they do with the WS noop.
+            # No ``cache_request_id``: the WS/SSE noop carries none, so a
+            # skipped turn is never stored as an ``@cache`` hit on any transport.
+            from ..websocket import _resolve_skip_render
+
+            if _resolve_skip_render(self):
+                skip_response: Dict[str, Any] = {"patches": []}
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        skip_response["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        skip_response["_page_metadata"] = meta_commands
+                return JsonResponse(skip_response)
 
             # Apply context processors so the render includes auth context
             # (user, perms, messages, etc.). Without this, template conditionals

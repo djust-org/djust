@@ -21,7 +21,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
@@ -49,7 +49,12 @@ class SqlView(LiveView):
 
 
 def _endpoint_body():
-    response = sql_queries(RequestFactory().get("/_djust/observability/sql_queries/"))
+    # The endpoint serves only token-bearing requests (b5ed46f2a).
+    from .conftest import observability_request_factory
+
+    response = sql_queries(
+        observability_request_factory().get("/_djust/observability/sql_queries/")
+    )
     assert response.status_code == 200
     return response.content.decode()
 

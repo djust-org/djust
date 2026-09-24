@@ -7,9 +7,10 @@ enabling real-time validation, error display, and reactive form handling.
 
 import logging
 import math
-from typing import Dict, Any, FrozenSet, Optional, Type, List, cast
+from typing import Dict, Any, FrozenSet, Optional, Type, List
 from django import forms
 from django.core.exceptions import ValidationError
+from django.utils.safestring import SafeString
 
 from ._deprecation import warn_deprecated
 from ._exposure import ExposureConfigurationError, ExposureError, ProviderContract
@@ -170,6 +171,24 @@ def _check_persisted_form_input(view_class: type, form_class: Optional[Type[form
                 raise ExposureConfigurationError(
                     "persisted_form_input() cannot persist a password or sensitive form field"
                 )
+
+
+def initial_field_value(form: Any, name: str, field: Any) -> Any:
+    """A field's initial value as Django's bound field sees it, or ``""``.
+
+    ``get_initial_for_field`` calls a callable ``initial``
+    (``UUIDField(initial=uuid.uuid4)``, ``initial=timezone.now``) instead of
+    returning the function, and lets the form's own ``initial`` (and a
+    ModelForm's ``instance``) win. ``prepare_value`` then gives the value an
+    unbound ``form[name].value()`` renders: a related object becomes its pk
+    (ADR-035). Only ``None`` becomes ``""``: ``0`` and ``False`` are real
+    initial values.
+    """
+    # ``BoundField.initial`` is ``get_initial_for_field`` cached on the form's
+    # bound field, so a callable initial is called once per form and the form
+    # instance renders the same value this returns.
+    initial = field.prepare_value(form[name].initial)
+    return "" if initial is None else initial
 
 
 class FormMixin:
@@ -346,13 +365,8 @@ class FormMixin:
         if self.get_form_class():
             form = self._create_form()
             self._form_instance = form
-            # Initialize all fields with their initial values or empty string
+            self.form_data = self._initial_form_data(form)
             for field_name, field in form.fields.items():
-                initial = form[field_name].value()
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
-
                 # Expose serializable choices for template iteration
                 if hasattr(field, "choices"):
                     self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
@@ -679,12 +693,22 @@ class FormMixin:
             self.form_errors = {}
             self._form_instance = form
 
+            # A ``reset_form()`` inside ``form_valid`` raises
+            # ``_should_reset_form``; clear it first so a reset made by THIS
+            # hook can be told apart from one still pending from earlier.
+            reset_pending = getattr(self, "_should_reset_form", False)
+            self._should_reset_form = False
+
             # Call form_valid hook
             if hasattr(self, "form_valid"):
                 self.form_valid(form)
 
-            # Sync form_data from saved instance so VDOM reflects new values
-            self._sync_form_data(form)
+            # Sync form_data from the saved instance so the VDOM reflects the
+            # new values — unless form_valid reset the form: syncing the
+            # submitted values back would undo the reset (#2974).
+            if not self._should_reset_form:
+                self._sync_form_data(form)
+            self._should_reset_form = self._should_reset_form or reset_pending
         else:
             self.is_valid = False
 
@@ -723,8 +747,20 @@ class FormMixin:
                 continue
             self.form_data[field_name] = val if val is not None else ""
 
+    @staticmethod
+    def _initial_form_data(form: Any) -> Dict[str, Any]:
+        """Each field's initial value, or ``""`` when it has none."""
+        return {name: initial_field_value(form, name, field) for name, field in form.fields.items()}
+
+    @event_handler
     def reset_form(self, **kwargs: Any) -> None:
-        """Reset form to initial state"""
+        """Reset the form to its initial state.
+
+        An event handler, so a template can call it directly
+        (``dj-click="reset_form"``), and safe to call from ``form_valid``:
+        ``submit_form`` does not sync the submitted values back over a reset
+        (#2974).
+        """
         # reset_form() writes every attribute below EXCEPT form_choices, so an
         # unmounted view would still be missing that one (#2667).
         self._ensure_form_state()
@@ -735,12 +771,7 @@ class FormMixin:
         if self.get_form_class():
             form = self._create_form()
             self._form_instance = form
-            # Initialize all fields with their initial values or empty string
-            for field_name in form.fields:
-                initial = form[field_name].value()
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
+            self.form_data = self._initial_form_data(form)
 
         self.form_errors = {}
         self.field_errors = {}
@@ -798,7 +829,10 @@ class FormMixin:
 
         fi = self.form_instance
         if not fi:
-            return "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
+            missing: str = SafeString(
+                "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
+            )
+            return missing
 
         framework = kwargs.pop("framework", None)
         adapter = get_adapter(framework)
@@ -807,7 +841,9 @@ class FormMixin:
         for field_name in fi.fields.keys():
             html += self.as_live_field(field_name, adapter=adapter, **kwargs)
 
-        return html
+        # #3043: markup built by the adapters, every value in it escaped.
+        form_html: str = SafeString(html)
+        return form_html
 
     def as_live_field(self, field_name: str, adapter: Any = None, **kwargs: Any) -> str:
         """
@@ -846,8 +882,14 @@ class FormMixin:
         value = self.get_field_value(field_name, default="")
         errors = self.get_field_errors(field_name)
 
-        # Render using adapter
-        return cast(str, adapter.render_field(field, field_name, value, errors, **kwargs))
+        # Render using adapter. #3043: the result is markup whose values the
+        # adapter escaped (the ``FrameworkAdapter`` contract), returned as a
+        # ``SafeString`` so ``{% live_field %}`` / ``{{ form_html }}`` render it
+        # instead of escaping it into visible text.
+        field_html: str = SafeString(
+            adapter.render_field(field, field_name, value, errors, **kwargs)
+        )
+        return field_html
 
 
 class LiveViewForm(forms.Form):

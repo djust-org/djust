@@ -424,3 +424,21 @@ navigation:
         file: api-reference/testing.md
         order: 4
         level: reference
+
+  - title: Release notes
+    slug: releases
+    url: /docs/releases/
+    order: 9
+    level: reference
+    group: true
+    children:
+      - title: djust 1.2
+        slug: release-1.2
+        file: releases/1.2.md
+        order: 1
+        level: reference
+      - title: djust 1.1.4
+        slug: release-1.1.4
+        file: releases/1.1.4.md
+        order: 2
+        level: reference

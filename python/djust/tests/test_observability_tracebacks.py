@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.tracebacks import (
     _clear_tracebacks,
@@ -86,7 +88,7 @@ def test_empty_buffer_returns_empty_list():
 def test_endpoint_returns_recent():
     exc = _make_exc()
     record_traceback(exc, event_name="click", view_class="MyView")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = last_traceback(rf.get("/?n=1"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -102,7 +104,7 @@ def test_endpoint_defaults_n_to_1():
             raise KeyError(f"k{i}")
         except KeyError as e:
             record_traceback(e)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = last_traceback(rf.get("/"))
     data = json.loads(resp.content)
     assert len(data["entries"]) == 1
@@ -112,7 +114,7 @@ def test_endpoint_defaults_n_to_1():
 @override_settings(DEBUG=True)
 def test_endpoint_handles_bad_n():
     """Non-int n silently falls back to 1 rather than 500ing."""
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = last_traceback(rf.get("/?n=abc"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -121,7 +123,7 @@ def test_endpoint_handles_bad_n():
 
 @override_settings(DEBUG=True)
 def test_endpoint_caps_n_at_50():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = last_traceback(rf.get("/?n=9999"))
     data = json.loads(resp.content)
     assert data["count"] == 50
@@ -129,7 +131,7 @@ def test_endpoint_caps_n_at_50():
 
 @override_settings(DEBUG=False)
 def test_endpoint_404_when_debug_off():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = last_traceback(rf.get("/"))
     assert resp.status_code == 404
 

@@ -69,23 +69,21 @@ class MyView(OfflineMixin, LiveView):
 python manage.py generate_sw
 ```
 
-> **Known issue: #2967.** At rc10 `generate_sw` crashes on every invocation:
-> its own `--version` option clashes with Django's built-in `--version`
-> (`argparse.ArgumentError: argument --version: conflicting option string`).
-> Until it is fixed, serve the service worker from a view instead:
->
-> ```python
-> # urls.py
-> from djust.pwa import service_worker_view
->
-> urlpatterns = [
->     path("sw.js", service_worker_view),
->     # ...
-> ]
-> ```
->
-> `service_worker_view` reads the `DJUST_CONFIG['PWA_*']` keys described
-> below.
+You can also serve the service worker from a view instead of a generated
+file:
+
+```python
+# urls.py
+from djust.pwa import service_worker_view
+
+urlpatterns = [
+    path("sw.js", service_worker_view),
+    # ...
+]
+```
+
+`service_worker_view` reads the `DJUST_CONFIG['PWA_*']` keys described
+below.
 
 ## PWA Mixins
 
@@ -173,6 +171,17 @@ Visual offline status banner:
 {% djust_offline_indicator offline_text="You're offline" show_when="offline" %}
 ```
 
+`show_when` is `"offline"` (the default: shown only while offline),
+`"online"` (shown only while online) or `"always"`. The client swaps the
+indicator's text between `online_text` and `offline_text`, and its class
+between `online_class` and `offline_class` (default `djust-status-online` /
+`djust-status-offline`), whenever the browser's network state changes. The
+server renders the state `show_when` implies, so the first paint is styled.
+The `"offline"` indicator hides itself with its own CSS until the page is
+offline; the `"online"` one relies on the `dj-offline-hide` rule from
+`{% djust_pwa_head %}` or `{% djust_offline_styles %}`. (Before 1.2.1 the
+`"offline"` indicator never appeared and the text and class never changed.)
+
 ## Offline Directives
 
 | Directive | Behavior |
@@ -181,6 +190,19 @@ Visual offline status banner:
 | `dj-offline-show` | Show element only when offline |
 | `dj-offline-disable` | Disable form element when offline |
 | `dj-offline-queued` | **Not implemented** — no client code reads this attribute; listed here only so it is not mistaken for a working directive |
+
+The client keeps `djust-online` or `djust-offline` on `<body>`, set at page
+load from `navigator.onLine` and updated on the browser's `online` /
+`offline` events; the directives are CSS rules on those classes, emitted by
+`{% djust_pwa_head %}` or `{% djust_offline_styles %}`, so include one of
+them. This is browser network state: a WebSocket reconnect does not count as
+offline. `dj-offline-show` elements stay hidden until the body is marked
+offline, including before the client has run, so they do not flash on load;
+a page that includes the directive CSS but never loads djust's client keeps
+them hidden, as it already did `dj-offline-hide` elements. (Before 1.2.1
+nothing set the classes, so `dj-offline-hide` elements were always hidden,
+`dj-offline-disable` elements always disabled, and bare `dj-offline-show`
+elements always visible, online or not.)
 
 ```html
 <div dj-offline-hide>
@@ -294,11 +316,6 @@ class TodoView(OfflineMixin, LiveView):
 
 ## Management Commands
 
-> **Known issue: #2967.** None of these invocations work at rc10: `generate_sw`
-> crashes while building its argument parser (see
-> "Generate the Service Worker" above). Use
-> `service_worker_view` until it is fixed.
-
 ```bash
 # Basic generation
 python manage.py generate_sw
@@ -309,8 +326,8 @@ python manage.py generate_sw --output static/custom-sw.js
 # Include static files in the cache
 python manage.py generate_sw --cache-static
 
-# Custom version
-python manage.py generate_sw --version 2.1.0
+# Custom cache version (--sw-version: Django reserves --version)
+python manage.py generate_sw --sw-version 2.1.0
 ```
 
 ## Adding PWA to an Existing App
@@ -318,7 +335,7 @@ python manage.py generate_sw --version 2.1.0
 1. Add `{% load djust_pwa %}` to your base template
 2. Include `{% djust_pwa_head %}` in your `<head>`
 3. Mix `PWAMixin` or `OfflineMixin` into your LiveViews
-4. Serve the service worker: route `djust.pwa.service_worker_view` at `/sw.js` (`python manage.py generate_sw` is broken at rc10, see #2967)
+4. Serve the service worker: run `python manage.py generate_sw`, or route `djust.pwa.service_worker_view` at `/sw.js`
 5. Deploy with HTTPS (required for service workers in production)
 
 ## Browser Support

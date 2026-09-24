@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from django.utils.html import escape
+from django.utils.safestring import mark_safe
 
 from djust._log_utils import sanitize_for_log
 
@@ -660,6 +661,19 @@ _NO_DEFAULT = "—"
 NOT_SUPPLIED = "NOT_SUPPLIED"
 
 
+def _is_required(param: dict) -> bool:
+    """A caller must pass it: no default, and not ``*args`` / ``**kwargs``.
+
+    A VAR_KEYWORD has no default either, which marked every component's
+    ``**kwargs`` "required" — so both the catalogue and the generated
+    reference told readers they had to pass something called ``kwargs``.
+    """
+    return param.get("default") == _NO_DEFAULT and param.get("kind") not in (
+        "VAR_POSITIONAL",
+        "VAR_KEYWORD",
+    )
+
+
 def _default_source(default: Any) -> str:
     """A parameter's default, as source a reader could type."""
     if default is inspect.Parameter.empty:
@@ -754,7 +768,18 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "alert": [{"message": "Example"}],
         "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
         "approval_gate": [{}],
-        "aspect_ratio": [{"content": "<span>16:9 content</span>"}],
+        # A box with nothing inside it had no width in the preview's flex row,
+        # so the ratio drew as nothing at all.
+        "aspect_ratio": [
+            {
+                "content": (
+                    '<div style="width:320px;height:100%;display:grid;place-items:center;'
+                    'background:hsl(var(--muted));border-radius:var(--radius-md,0.375rem)">'
+                    "16 / 9</div>"
+                ),
+                "ratio": "16/9",
+            }
+        ],
         "audit_log": [{}],
         "avatar": [{"initials": "JD", "alt": "Jane Doe", "size": "md"}],
         "badge": [{"label": "Example"}],
@@ -768,8 +793,8 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "breadcrumb": [
             {
                 "items": [
-                    {"label": "Home", "url": "/"},
-                    {"label": "Library", "url": "/library/"},
+                    {"label": "Home", "url": "#"},
+                    {"label": "Library", "url": "#library"},
                     {"label": "Data", "active": True},
                 ]
             }
@@ -777,10 +802,10 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "breadcrumb_dropdown": [
             {
                 "items": [
-                    {"label": "Home", "url": "/"},
-                    {"label": "Library", "url": "/library/"},
-                    {"label": "Data", "url": "/library/data/"},
-                    {"label": "Tables", "url": "/library/data/tables/"},
+                    {"label": "Home", "url": "#"},
+                    {"label": "Library", "url": "#library"},
+                    {"label": "Data", "url": "#library-data"},
+                    {"label": "Tables", "url": "#library-data-tables"},
                     {"label": "Current page"},
                 ],
                 "max_visible": 3,
@@ -894,17 +919,16 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
+        # Overlays render OPEN: the preview box contains a position-fixed
+        # element, so an open overlay stays inside it. Closing hands the preview
+        # a "Show again" (see `live_views._hide`).
         "command_palette": [
             {
-                "content": (
-                    '<div class="palette-item" role="option">'
-                    '<span class="palette-item-label">Open project dashboard</span>'
-                    "</div>"
-                    '<div class="palette-item" role="option">'
-                    '<span class="palette-item-label">Create new project</span>'
-                    "</div>"
-                ),
                 "is_open": True,
+                "content": (
+                    '<div class="palette-item">New component</div>'
+                    '<div class="palette-item">Open settings</div>'
+                ),
             }
         ],
         "comparison_table": [
@@ -1039,11 +1063,17 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ),
             }
         ],
+        # The healthy state first, then the fallback a failure shows; its Retry
+        # clears the error, as a host's handler would after reloading.
+        # `content` is escaped text, not HTML (unlike `loading_overlay`'s).
         "error_boundary": [
+            {"content": "The chart rendered normally."},
             {
-                "fallback": "Unable to load the project details.",
-                "error": "Request timed out",
-            }
+                "content": "The chart rendered normally.",
+                "error": "TimeoutError",
+                "fallback": "The chart could not load.",
+                "retry_event": "retry_load",
+            },
         ],
         "expandable_text": [{}],
         "fieldset": [
@@ -1224,6 +1254,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
                     {"value": "fastapi", "label": "FastAPI"},
                 ],
                 "selected": ["django"],
+                # Explicit, so the preview's handler does not depend on what
+                # the example happens to be called (`name` is the fallback).
+                "event": "set_frameworks",
             }
         ],
         "multimodal_input": [{"name": "prompt", "placeholder": "Ask anything…"}],
@@ -1231,9 +1264,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
             {
                 "brand": "MyApp",
                 "items": [
-                    {"label": "Home", "href": "/", "active": True},
-                    {"label": "Docs", "href": "/docs/"},
-                    {"label": "Blog", "href": "/blog/"},
+                    {"label": "Home", "href": "#", "active": True},
+                    {"label": "Docs", "href": "#docs"},
+                    {"label": "Blog", "href": "#blog"},
                 ],
             }
         ],
@@ -1269,7 +1302,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "otp_input": [{"name": "code", "digits": 6, "label": "Verification code"}],
+        "otp_input": [
+            {"name": "code", "digits": 6, "label": "Verification code", "event": "verify_code"}
+        ],
         "pagination": [{}],
         "pie_chart": [
             {
@@ -1309,9 +1344,14 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "users": [
                     {"name": "Ada Lovelace", "status": "online"},
                     {"name": "Grace Hopper", "status": "away"},
-                    {"name": "Alan Turing", "status": "busy"},
-                ],
-                "max_display": 2,
+                    {"name": "Alan Turing", "status": "online"},
+                ]
+            }
+        ],
+        "prompt_editor": [
+            {
+                "template": "Summarise {{topic}} for {{audience}} in three bullet points.",
+                "variables": {"topic": "djust LiveView", "audience": "a Django developer"},
             }
         ],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
@@ -1330,24 +1370,60 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "rich_select": [{}],
-        "rich_text_editor": [{}],
+        "rich_text_editor": [{"value": "Draft <strong>release notes</strong> here."}],
         "scroll_area": [{"content": "<p>Scrollable body text.</p>" * 12}],
         "scroll_spy": [{"sections": ["overview", "features", "pricing"], "active": "overview"}],
         "scroll_to_top": [{}],
         "sheet": [
             {
-                "title": "Filters",
-                "content": "<p>Choose which project activity to display.</p>",
                 "is_open": True,
+                "title": "Filters",
+                "content": '<p style="margin:0">Status, owner and date range.</p>',
+            }
+        ],
+        "bottom_sheet": [
+            {
+                "open": True,
+                "title": "Share",
+                # `content` is escaped text here, unlike `sheet`'s.
+                "content": "Copy link · Email · Embed",
+            }
+        ],
+        "export_dialog": [
+            {
+                "open": True,
+                "formats": ["csv", "xlsx", "json"],
+                "columns": [
+                    {"id": "name", "label": "Name"},
+                    {"id": "email", "label": "Email"},
+                    {"id": "joined", "label": "Joined", "checked": False},
+                ],
+            }
+        ],
+        "image_lightbox": [
+            {
+                "open": True,
+                "images": [
+                    {
+                        "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='270'><rect width='100%' height='100%' fill='%2334473a'/><text x='50%' y='50%' fill='%23edf1ed' font-family='sans-serif' font-size='28' text-anchor='middle' dominant-baseline='middle'>1</text></svg>",
+                        "alt": "First slide",
+                        "caption": "First",
+                    },
+                    {
+                        "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='270'><rect width='100%' height='100%' fill='%2334473a'/><text x='50%' y='50%' fill='%23edf1ed' font-family='sans-serif' font-size='28' text-anchor='middle' dominant-baseline='middle'>2</text></svg>",
+                        "alt": "Second slide",
+                        "caption": "Second",
+                    },
+                ],
             }
         ],
         "sidebar": [
             {
                 "title": "Workspace",
                 "items": [
-                    {"label": "Dashboard", "href": "/", "active": True},
-                    {"label": "Projects", "href": "/projects/"},
-                    {"label": "Settings", "href": "/settings/"},
+                    {"label": "Dashboard", "href": "#", "active": True},
+                    {"label": "Projects", "href": "#projects"},
+                    {"label": "Settings", "href": "#settings"},
                 ],
             }
         ],
@@ -1375,7 +1451,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "source_citation": [{}],
         "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
         "split_pane": [{"left": "<p>Navigation</p>", "right": "<p>Details</p>"}],
-        "sticky_header": [{"content": "<strong>Project dashboard</strong>"}],
+        "sticky_header": [
+            {"content": "<strong>Section title</strong> — stays pinned while its section scrolls."}
+        ],
         "tabs": [
             {
                 "tabs": [{"id": "one", "label": "Overview"}, {"id": "two", "label": "Activity"}],
@@ -1432,6 +1510,27 @@ PYTHON_COMPONENT_EXAMPLES.update(
 )
 
 
+def _mark_example_markup(value: Any) -> Any:
+    """Mark the example strings that are markup (they start with ``<``) safe.
+
+    Python components HTML-escape their string arguments unless the value is
+    marked safe, so an example that passes markup into a content slot has to
+    pass it the way an app would: through ``mark_safe``. Plain-text example
+    values are left as they are, and are escaped when rendered.
+    """
+    if isinstance(value, str) and value.lstrip().startswith("<"):
+        return mark_safe(value)
+    if isinstance(value, list):
+        return [_mark_example_markup(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _mark_example_markup(v) for k, v in value.items()}
+    return value
+
+
+for _name, _examples in PYTHON_COMPONENT_EXAMPLES.items():
+    PYTHON_COMPONENT_EXAMPLES[_name] = _mark_example_markup(_examples)
+
+
 #: The keys :func:`describe_component` always returns. Pinned as a constant so
 #: a consumer in another repository (the documentation generator) can assert
 #: the shape it depends on rather than discovering a missing key at build time.
@@ -1450,7 +1549,69 @@ COMPONENT_DESCRIPTION_KEYS = (
     "slots",
     "style_paths",
     "python_class",
+    "client",
 )
+
+
+#: Why a component's page shows no preview, when it cannot. The generic
+#: "needs runtime dependencies or has no examples" was true of none of these:
+#: most render nothing until opened, one is a mixin, one needs a bound form.
+EMPTY_PREVIEW_REASONS: dict[str, str] = {
+    "tour": "Renders nothing until started — it draws over the page's own elements.",
+    "form_validation": "Renders a bound Django form field's errors — it needs a form to show anything.",
+    "server_event_toast": (
+        "A LiveView mixin, not a component — it shows toasts your view pushes, "
+        "so there is nothing to render on its own."
+    ),
+}
+
+
+#: A sentence under a preview that renders but shows nothing ON PURPOSE, so
+#: the empty box is not read as a broken component.
+PREVIEW_NOTES: dict[str, str] = {
+    "connection_status": "Hidden while connected — it appears when the WebSocket drops.",
+    "scroll_to_top": "Hidden until the page is scrolled past its threshold.",
+    "infinite_scroll": (
+        "An invisible sentinel: when it scrolls into view it sends load_more, "
+        "and your view appends the next page."
+    ),
+    "collab_selection": (
+        "Draws other users' selections over your content through a client hook djust "
+        "does not ship — see below."
+    ),
+}
+
+
+#: Contracted components whose same-named Python class renders markup djust
+#: ships NO CSS for (#2993). The catalogue previews the styled
+#: ``{% theme_<name> %}`` tag, so without a note a reader who reaches for the
+#: class gets bare markup. ``test_components_css_2996_2993_3008`` fails when a
+#: shipped stylesheet gains a rule for one of these, so the entry is removed
+#: when the class stops being unstyled.
+#: Maps the component name to ``(class name, root CSS class)``.
+UNSTYLED_PYTHON_CLASSES: dict[str, tuple[str, str]] = {
+    "alert": ("Alert", "dj-alert"),
+    "avatar": ("Avatar", "dj-avatar"),
+    "progress": ("Progress", "dj-progress"),
+}
+
+
+def unstyled_python_class(component_name: str) -> tuple[str, str]:
+    """``(class name, root CSS class)`` of this component's unstyled Python
+    class, or ``("", "")`` when it has none."""
+    return UNSTYLED_PYTHON_CLASSES.get(component_name, ("", ""))
+
+
+def preview_note(component_name: str) -> str:
+    """The sentence shown under a preview that is empty by design."""
+    return PREVIEW_NOTES.get(component_name, "")
+
+
+def empty_preview_reason(component_name: str) -> str:
+    """The sentence a catalogue page shows in place of a preview."""
+    return EMPTY_PREVIEW_REASONS.get(
+        component_name, "No preview — this component has no example to render yet."
+    )
 
 
 def describe_component(component_name: str) -> dict:
@@ -1472,9 +1633,11 @@ def describe_component(component_name: str) -> dict:
     ``examples``
         The kwarg dicts the catalogue previews, usable verbatim in a snippet.
     ``events``
-        Server event names the component's markup emits, in the order they
-        appear. Derived by rendering the first example, which is the only way
-        to see what a component actually emits.
+        Server event names the host view must answer: what the first example's
+        markup emits (minus names the example wrote into that markup itself),
+        then the component's own ``event`` / ``*_event`` parameters, which
+        cover states the example does not show. See
+        :func:`~djust.theming.gallery.catalogue.contract_events`.
     ``style_paths``
         ``[(label, path)]`` — where to override it: the module or template,
         and the stylesheet that defines its classes.
@@ -1492,7 +1655,7 @@ def describe_component(component_name: str) -> dict:
     from .catalogue import (
         build_catalogue_detail_context,
         component_description,
-        component_events,
+        contract_events,
     )
 
     ctx = build_catalogue_detail_context(component_name, render_examples=False)
@@ -1532,7 +1695,7 @@ def describe_component(component_name: str) -> dict:
                 "type": _annotation_name(p.get("annotation")),
                 "default": p.get("default"),
                 "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
-                "required": p.get("default") == _NO_DEFAULT,
+                "required": _is_required(p),
                 "kind": p.get("kind", ""),
             }
             for p in ctx.get("python_params") or []
@@ -1542,7 +1705,7 @@ def describe_component(component_name: str) -> dict:
         PYTHON_COMPONENT_EXAMPLES.get(component_name) or []
     )
 
-    events: list[str] = []
+    html = ""
     if examples:
         try:
             if is_template:
@@ -1552,9 +1715,13 @@ def describe_component(component_name: str) -> dict:
                 html = "".join(e.get("html", "") for e in rendered)
             else:
                 html = render_python_component_example(component_name, dict(examples[0]))
-            events = component_events(html)
-        except Exception:  # noqa: BLE001 — a component that cannot render has no events to report
+        except Exception:  # noqa: BLE001 — a component that cannot render emits nothing to scan
             logger.debug("could not scan events for %s", sanitize_for_log(component_name))
+    # A tag's events are what its markup sends; a class also declares its
+    # events as parameters, which covers states the example does not show.
+    events = contract_events(
+        [] if is_template else params, dict(examples[0]) if examples else {}, html
+    )
 
     style_paths = []
     if ctx.get("template_path"):
@@ -1579,7 +1746,7 @@ def describe_component(component_name: str) -> dict:
                         "type": _annotation_name(p.get("annotation")),
                         "default": p.get("default"),
                         "doc": p.get("description") or arg_docs.get(p.get("name", ""), ""),
-                        "required": p.get("default") == _NO_DEFAULT,
+                        "required": _is_required(p),
                         "kind": p.get("kind", ""),
                     }
                     for p in signature
@@ -1604,7 +1771,69 @@ def describe_component(component_name: str) -> dict:
         "slots": list(ctx.get("available_slots") or []),
         "style_paths": style_paths,
         "python_class": python_class,
+        "client": component_client(component_name),
     }
+
+
+_HOOK_ATTR_RE = re.compile(r'dj-hook="([A-Za-z_]\w*)"')
+
+
+def _components_static_dir() -> Any:
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "components" / "static" / "djust_components"
+
+
+def _client_hook_sources() -> str:
+    """Every script djust ships that could define a component hook."""
+    from pathlib import Path
+
+    djust_root = Path(__file__).resolve().parents[2]
+    texts = []
+    for folder in (_components_static_dir(), djust_root / "static" / "djust" / "src"):
+        if folder.is_dir():
+            texts += [f.read_text(errors="ignore") for f in sorted(folder.glob("*.js"))]
+    return "\n".join(texts)
+
+
+def component_client(component_name: str) -> dict:
+    """What a component needs in the browser beyond djust's client.
+
+    ``{"hook", "script", "hook_shipped"}``:
+
+    ``hook``
+        The ``dj-hook`` name its markup carries, read from the class source so
+        it is found even when no example renders it; ``""`` if none.
+    ``script``
+        The static path of the script djust ships for it
+        (``djust_components/countdown.js``), or ``""``. A page must include it:
+        the catalogue did not, so these previews were inert.
+    ``hook_shipped``
+        Whether any shipped script answers that hook. For most hooks none
+        does — the component renders its markup and the interaction its
+        docstring describes (drag, draw, crop …) is left to the app.
+    """
+    cls, _class_name = _load_component_class(component_name)
+    hook = ""
+    if cls is not None:
+        try:
+            found = _HOOK_ATTR_RE.search(inspect.getsource(cls))
+        except (OSError, TypeError):
+            found = None
+        hook = found.group(1) if found else ""
+    script_name = component_name.replace("_", "-") + ".js"
+    script = (
+        f"djust_components/{script_name}"
+        if (_components_static_dir() / script_name).is_file()
+        else ""
+    )
+    hook_shipped = False
+    if hook:
+        sources = _client_hook_sources()
+        hook_shipped = bool(
+            re.search(rf'hooks\.{hook}\s*=|dj-hook="{hook}"|\b{hook}\s*:\s*\{{', sources)
+        )
+    return {"hook": hook, "script": script, "hook_shipped": hook_shipped}
 
 
 def _docstring_args(cls: Any) -> dict:

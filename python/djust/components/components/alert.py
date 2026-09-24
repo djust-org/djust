@@ -3,13 +3,22 @@
 import html
 from typing import Any, Optional
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
 class Alert(Component):
-    """Style-agnostic alert component using CSS custom properties.
+    """Alert component for contextual feedback messages.
 
     Displays contextual feedback messages with optional dismiss functionality.
+
+    **Styling is yours.** No stylesheet djust ships has a rule for the markup
+    this class renders (``dj-alert``, ``dj-alert-<variant>``,
+    ``dj-alert-dismissible``, ``dj-alert-icon``, ``dj-alert-message``,
+    ``dj-alert-dismiss``), so it renders as bare markup until you style it.
+    For a styled alert, use the ``{% theme_alert %}`` tag from
+    ``djust.theming`` (``{% load theme_components %}``), which follows the
+    active theme. See "Unstyled Python components" in the components guide.
 
     Usage in a LiveView::
 
@@ -34,7 +43,8 @@ class Alert(Component):
         {{ alert|safe }}
         {{ success|safe }}
 
-    CSS Custom Properties::
+    CSS custom properties — the names to use in your own stylesheet. Nothing
+    djust ships reads them::
 
         --dj-alert-bg: background color
         --dj-alert-fg: text color
@@ -105,7 +115,7 @@ class Alert(Component):
 
     def _render_custom(self) -> str:
         """Render the alert HTML."""
-        classes = ["dj-alert", f"dj-alert-{self.variant}"]
+        classes = ["dj-alert", f"dj-alert-{conditional_escape(self.variant)}"]
 
         if self.dismissible:
             classes.append("dj-alert-dismissible")
@@ -120,7 +130,7 @@ class Alert(Component):
         parts = []
 
         if self.icon:
-            parts.append(f'<span class="dj-alert-icon">{self.icon}</span>')
+            parts.append(f'<span class="dj-alert-icon">{conditional_escape(self.icon)}</span>')
 
         parts.append(f'<span class="dj-alert-message">{html.escape(self.message)}</span>')
 

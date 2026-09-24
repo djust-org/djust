@@ -1,0 +1,687 @@
+{
+  "scenario": "inline_whitespace_2999",
+  "description": "Spaces between inline siblings (#2999): text after a kept space, unkeyed inline insert/remove, keyed inline reorder across space separators, an {% if %} between spaces, |safe HTML swap.",
+  "root_selector": ".ws-root",
+  "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Lead.</strong> <code dj-id=\"3\">x = 1</code> <em dj-id=\"4\">done</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">alpha</span> <span class=\"tag\" dj-id=\"7\">beta</span> <span class=\"tag\" dj-id=\"8\">gamma</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>",
+  "steps": [
+    {
+      "label": "text after a kept space",
+      "patches": [
+        {
+          "type": "SetText",
+          "path": [
+            0,
+            0,
+            0
+          ],
+          "text": "Note:"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            0,
+            2,
+            0
+          ],
+          "text": "y = 2"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            0,
+            4,
+            0
+          ],
+          "text": "later"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">alpha</span> <span class=\"tag\" dj-id=\"7\">beta</span> <span class=\"tag\" dj-id=\"8\">gamma</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "insert inline sibling in the middle",
+      "patches": [
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            2,
+            0
+          ],
+          "text": "NEW"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            4,
+            0
+          ],
+          "text": "beta"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 5,
+          "node": {
+            "tag": "#text",
+            "attrs": {},
+            "children": [],
+            "text": " ",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 6,
+          "node": {
+            "tag": "span",
+            "attrs": {
+              "class": "tag",
+              "dj-id": "v"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "gamma",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "v"
+          }
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">alpha</span> <span class=\"tag\" dj-id=\"7\">NEW</span> <span class=\"tag\" dj-id=\"8\">beta</span> <span class=\"tag\" dj-id=\"v\">gamma</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "append inline sibling",
+      "patches": [
+        {
+          "type": "InsertChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 7,
+          "node": {
+            "tag": "#text",
+            "attrs": {},
+            "children": [],
+            "text": " ",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 8,
+          "node": {
+            "tag": "span",
+            "attrs": {
+              "class": "tag",
+              "dj-id": "T"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "delta",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "T"
+          }
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">alpha</span> <span class=\"tag\" dj-id=\"7\">NEW</span> <span class=\"tag\" dj-id=\"8\">beta</span> <span class=\"tag\" dj-id=\"v\">gamma</span> <span class=\"tag\" dj-id=\"T\">delta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "remove first inline sibling",
+      "patches": [
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            0,
+            0
+          ],
+          "text": "NEW"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            2,
+            0
+          ],
+          "text": "beta"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            4,
+            0
+          ],
+          "text": "gamma"
+        },
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            6,
+            0
+          ],
+          "text": "delta"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 8,
+          "child_d": "T"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 7
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">NEW</span> <span class=\"tag\" dj-id=\"7\">beta</span> <span class=\"tag\" dj-id=\"8\">gamma</span> <span class=\"tag\" dj-id=\"v\">delta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "remove down to one",
+      "patches": [
+        {
+          "type": "SetText",
+          "path": [
+            1,
+            0,
+            0
+          ],
+          "text": "beta"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 6,
+          "child_d": "v"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 5
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 4,
+          "child_d": "8"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 3
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 2,
+          "child_d": "7"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            1
+          ],
+          "d": "5",
+          "index": 1
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "keyed swap",
+      "patches": [
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 2,
+          "to": 0,
+          "child_d": "b"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 0,
+          "to": 2,
+          "child_d": "a"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "keyed rotate",
+      "patches": [
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 4,
+          "to": 0,
+          "child_d": "c"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 6,
+          "to": 2,
+          "child_d": "d"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 0,
+          "to": 4,
+          "child_d": "b"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 2,
+          "to": 6,
+          "child_d": "a"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"a\" dj-key=\"one\">one</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "keyed reverse",
+      "patches": [
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 6,
+          "to": 0,
+          "child_d": "a"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 4,
+          "to": 2,
+          "child_d": "b"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 2,
+          "to": 4,
+          "child_d": "d"
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 0,
+          "to": 6,
+          "child_d": "c"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"c\" dj-key=\"three\">three</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "keyed insert + remove",
+      "patches": [
+        {
+          "type": "RemoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "index": 2,
+          "child_d": "b"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "index": 6,
+          "child_d": "c"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "index": 0,
+          "node": {
+            "tag": "b",
+            "attrs": {
+              "dj-id": "2U",
+              "dj-key": "zero"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "zero",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": "zero",
+            "djust_id": "2U"
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "index": 6,
+          "node": {
+            "tag": "b",
+            "attrs": {
+              "dj-id": "2X",
+              "dj-key": "five"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "five",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": "five",
+            "djust_id": "2X"
+          }
+        },
+        {
+          "type": "MoveChild",
+          "path": [
+            2
+          ],
+          "d": "9",
+          "from": 0,
+          "to": 2,
+          "child_d": "a"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"2U\" dj-key=\"zero\">zero</b> <b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"2X\" dj-key=\"five\">five</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "if between spaces -> off",
+      "patches": [
+        {
+          "type": "RemoveChild",
+          "path": [
+            3
+          ],
+          "d": "e",
+          "index": 4
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            3
+          ],
+          "d": "e",
+          "index": 3,
+          "child_d": "g"
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"2U\" dj-key=\"zero\">zero</b> <b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"2X\" dj-key=\"five\">five</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "if between spaces -> on",
+      "patches": [
+        {
+          "type": "InsertChild",
+          "path": [
+            3
+          ],
+          "d": "e",
+          "index": 3,
+          "node": {
+            "tag": "i",
+            "attrs": {
+              "dj-id": "3D"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "maybe",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "3D"
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            3
+          ],
+          "d": "e",
+          "index": 4,
+          "node": {
+            "tag": "#text",
+            "attrs": {},
+            "children": [],
+            "text": " ",
+            "key": null
+          }
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"2U\" dj-key=\"zero\">zero</b> <b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"2X\" dj-key=\"five\">five</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"3D\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
+    },
+    {
+      "label": "swap |safe html",
+      "patches": [
+        {
+          "type": "SetText",
+          "path": [
+            4,
+            0,
+            0,
+            0
+          ],
+          "text": "Admin."
+        },
+        {
+          "type": "SetText",
+          "path": [
+            4,
+            0,
+            2,
+            0
+          ],
+          "text": "DjustModelAdmin"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4,
+            0
+          ],
+          "d": "j",
+          "index": 3,
+          "node": {
+            "tag": "#text",
+            "attrs": {},
+            "children": [],
+            "text": " ",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4,
+            0
+          ],
+          "d": "j",
+          "index": 4,
+          "node": {
+            "tag": "em",
+            "attrs": {
+              "dj-id": "43"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "new",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "43"
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "i",
+          "index": 1,
+          "node": {
+            "tag": "li",
+            "attrs": {
+              "dj-id": "44"
+            },
+            "children": [
+              {
+                "tag": "strong",
+                "attrs": {
+                  "dj-id": "45"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "Packaging:",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "45"
+              },
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": " ",
+                "key": null
+              },
+              {
+                "tag": "code",
+                "attrs": {
+                  "dj-id": "46"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "collectstatic",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "46"
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "44"
+          }
+        }
+      ],
+      "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">beta</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"2U\" dj-key=\"zero\">zero</b> <b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"d\" dj-key=\"four\">four</b> <b dj-id=\"2X\" dj-key=\"five\">five</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"3D\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Admin.</strong> <code dj-id=\"l\">DjustModelAdmin</code> <em dj-id=\"43\">new</em></li><li dj-id=\"44\"><strong dj-id=\"45\">Packaging:</strong> <code dj-id=\"46\">collectstatic</code></li></ul></div>"
+    }
+  ]
+}

@@ -162,22 +162,23 @@ def test_ready_completes_other_setup_even_when_auto_enable_skipped():
     filter install must still happen regardless of whether auto-enable
     fires.
 
-    Snapshots the filter count BEFORE calling ``ready()`` and asserts the
-    count grew by exactly 1 — proving this test's own ``ready()`` call
-    actually installed a filter. (Asserting ``any(...)`` would pass
-    trivially because prior tests in the file have already populated the
-    logger.)
+    Strips every sanitizer filter from the ``djust`` logger first, then
+    asserts ``ready()`` put exactly one back — proving this test's own
+    ``ready()`` call installed it. (The install is idempotent since #2947, so
+    a before/after count on a logger prior tests already populated would not
+    move.)
     """
     from djust.security import DjustLogSanitizerFilter
 
     djust_logger = logging.getLogger("djust")
-    before = sum(1 for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter))
+    for f in [f for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter)]:
+        djust_logger.removeFilter(f)
 
     app = _make_app_config()
     app.ready()
 
     after = sum(1 for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter))
-    assert after == before + 1
+    assert after == 1
 
 
 # ---------------------------------------------------------------------------

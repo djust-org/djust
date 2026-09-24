@@ -1,8 +1,10 @@
 """NavMenu component."""
 
 import html
+from django.utils.html import conditional_escape
 
 from djust import Component
+from djust.components.utils import url_attr
 from typing import Any, Optional
 
 
@@ -46,7 +48,7 @@ class NavMenu(Component):
         brand_html = ""
         if self.brand:
             e_brand = html.escape(self.brand)
-            e_href = html.escape(self.brand_href)
+            e_href = url_attr(self.brand_href)
             brand_html = f'<a class="dj-nav__brand" href="{e_href}">{e_brand}</a>'
         if self.items:
             items_html = ""
@@ -54,7 +56,7 @@ class NavMenu(Component):
                 if not isinstance(item, dict):
                     continue
                 label = html.escape(str(item.get("label", "")))
-                href = html.escape(str(item.get("href", "#")))
+                href = url_attr(item.get("href", "#"))
                 active = item.get("active", False)
                 active_cls = " dj-nav__item--active" if active else ""
                 items_html += (
@@ -63,5 +65,5 @@ class NavMenu(Component):
                 )
             list_html = f'<ul class="dj-nav__list">{items_html}</ul>'
         else:
-            list_html = self.content
+            list_html = conditional_escape(self.content)
         return f'<nav class="{cls}">{brand_html}{list_html}</nav>'

@@ -68,6 +68,21 @@ class PromptEditor(Component):
         self.rows = rows
         self.custom_class = custom_class
 
+    def render(self) -> str:
+        """Always the custom renderer.
+
+        ``template`` here is the user's PROMPT, and ``Component.render`` reads
+        a truthy ``self.template`` as this component's own Django template —
+        so ``PromptEditor(template="Summarise {{topic}}.")`` rendered the
+        prompt with its variables blanked ("Summarise .") instead of the
+        editor, and the catalogue preview showed nothing.
+        """
+        from typing import cast
+
+        from django.utils.safestring import mark_safe
+
+        return cast(str, mark_safe(self._render_custom()))
+
     def _render_custom(self) -> str:
         cls = "dj-prompt-editor"
         if self.custom_class:

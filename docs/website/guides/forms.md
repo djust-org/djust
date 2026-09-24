@@ -274,16 +274,21 @@ def submit_and_reset(self, **kwargs):
         self.reset_form()
 ```
 
-Or let users reset manually. `reset_form` is not an `@event_handler`, so under the default `event_security = "strict"` a `dj-click="reset_form"` is rejected. Expose it through a decorated wrapper:
+Calling `reset_form()` inside `form_valid()` works too: `submit_form()` does not
+copy the submitted values back over a reset. `reset_form()` also clears
+`success_message`, so set the message after the reset:
 
 ```python
-@event_handler()
-def clear_form(self, **kwargs):
+def form_valid(self, form):
+    save(form.cleaned_data)
     self.reset_form()
+    self.success_message = "Saved!"
 ```
 
+Or let users reset manually. `reset_form` is an `@event_handler`, so a template can call it directly:
+
 ```html
-<button type="button" dj-click="clear_form">Clear</button>
+<button type="button" dj-click="reset_form">Clear</button>
 ```
 
 ## Confirmation Dialogs

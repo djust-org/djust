@@ -62,9 +62,11 @@ def test_react_props_resolve_only_from_the_context_projection(rf, db, policy):
 
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 def test_hydration_resolves_props_only_from_the_context_projection(rf, db, policy):
-    """Hydration itself: ``{{ name }}`` props that survive template rendering
-    (a placeholder built outside the template engine) resolve against
-    ``get_context_data()``, never against arbitrary attributes."""
+    """Hydration itself never resolves ``{{ name }}`` props: since #3021 the
+    template renderer resolves them from the view context, and a value that
+    still reads ``{{ other }}`` is user data that must stay literal. So no
+    attribute value — declared or not — reaches the markup through this pass,
+    under either policy."""
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
 
@@ -84,8 +86,6 @@ def test_hydration_resolves_props_only_from_the_context_projection(rf, db, polic
     )
     html = view._hydrate_react_components(placeholder)
     assert "<b>" in html, "the registered renderer did not run"
-    if policy == "legacy":
-        assert SENTINEL in html
-    else:
-        assert SENTINEL not in html
-        assert "DECLARED_TITLE" in html
+    assert SENTINEL not in html
+    assert "DECLARED_TITLE" not in html
+    assert "{{ secret_note }}" in html  # left literal (#3021)

@@ -72,7 +72,7 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   `cached_db`, `cache` or `file`. Cookie sessions are browser-readable, so they
   are rejected.
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
-  seconds, from 1 to 86400. The default is 3600. System check `djust.C018`
+  seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The

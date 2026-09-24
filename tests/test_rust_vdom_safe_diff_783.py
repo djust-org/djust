@@ -29,12 +29,27 @@ import json
 
 import pytest
 from django.conf import settings
-from django.template import engines
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 
 from djust.live_view import LiveView
-from djust.utils import _get_template_dirs_cached
 from djust.websocket import _compute_changed_keys, _snapshot_assigns
+
+
+def _template_dirs(dirs):
+    """Point ``TEMPLATES[0]["DIRS"]`` at ``dirs`` for one ``with`` block.
+
+    Through ``override_settings`` on purpose. The ``setting_changed`` signal
+    it fires on entry AND exit runs Django's ``reset_template_engines``, which
+    also clears the lru-cached ``Engine.get_default()``, and djust's
+    template-dirs receiver. The hand-rolled reset this replaced (mutate
+    ``settings.TEMPLATES`` in place, then ``engines._engines = {}``) skipped
+    ``Engine.get_default``. Every later test on the same worker then saw a
+    default engine that ``engines.all()`` no longer contained, so a library
+    added to ``Template("").engine`` was invisible to the filter bridge (#2991).
+    """
+    return override_settings(
+        TEMPLATES=[{**settings.TEMPLATES[0], "DIRS": list(dirs)}, *settings.TEMPLATES[1:]]
+    )
 
 
 def _simulate_event_cycle(view, mutate):
@@ -222,18 +237,8 @@ class TestDerivedSafeBlobDiffExtends:
             "</section>{% endblock %}"
         )
 
-        original_dirs = settings.TEMPLATES[0]["DIRS"]
-        settings.TEMPLATES[0]["DIRS"] = [str(tmp_path)]
-        engines._engines = {}
-        engines.__dict__.pop("templates", None)
-        _get_template_dirs_cached.cache_clear()
-        try:
+        with _template_dirs([str(tmp_path)]):
             yield str(tmp_path)
-        finally:
-            settings.TEMPLATES[0]["DIRS"] = original_dirs
-            engines._engines = {}
-            engines.__dict__.pop("templates", None)
-            _get_template_dirs_cached.cache_clear()
 
     def test_extends_and_block_wrapping_produces_patches(self, template_dir):
         class ChildWizard(_WizardLike):
@@ -277,18 +282,8 @@ class TestSafeBlobDiffNestedInclude:
             "{% endif %}\n</div>\n{% endblock %}"
         )
 
-        original_dirs = settings.TEMPLATES[0]["DIRS"]
-        settings.TEMPLATES[0]["DIRS"] = [str(tmp_path)]
-        engines._engines = {}
-        engines.__dict__.pop("templates", None)
-        _get_template_dirs_cached.cache_clear()
-        try:
+        with _template_dirs([str(tmp_path)]):
             yield str(tmp_path)
-        finally:
-            settings.TEMPLATES[0]["DIRS"] = original_dirs
-            engines._engines = {}
-            engines.__dict__.pop("templates", None)
-            _get_template_dirs_cached.cache_clear()
 
     def test_inline_if_in_for_loop_produces_patches(self):
         """Sibling of the nested-include bug: an inline conditional
@@ -488,12 +483,7 @@ class TestPartialRenderCorrectness:
             "{% endif %}\n</div>\n{% endblock %}"
         )
 
-        original_dirs = settings.TEMPLATES[0]["DIRS"]
-        settings.TEMPLATES[0]["DIRS"] = [str(tmp_path)]
-        engines._engines = {}
-        engines.__dict__.pop("templates", None)
-        _get_template_dirs_cached.cache_clear()
-        try:
+        with _template_dirs([str(tmp_path)]):
 
             class CorrectnessWizard(_WizardLike):
                 template = None
@@ -510,11 +500,6 @@ class TestPartialRenderCorrectness:
             _assert_partial_matches_full(
                 CorrectnessWizard, mutate, expected_change_substring='value="Amanda"'
             )
-        finally:
-            settings.TEMPLATES[0]["DIRS"] = original_dirs
-            engines._engines = {}
-            engines.__dict__.pop("templates", None)
-            _get_template_dirs_cached.cache_clear()
 
     def test_inline_if_in_for(self):
         """InlineIf condition inside a {% for %} wrapper — sibling of the

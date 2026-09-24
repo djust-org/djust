@@ -160,7 +160,15 @@ require:
 - `path("_djust/observability/", include("djust.observability.urls"))`
   in the project's `urls.py`
 - `LocalhostOnlyObservabilityMiddleware` in `MIDDLEWARE` (rejects any
-  non-loopback caller)
+  non-loopback caller, and any request relayed by a reverse proxy)
+- the observability token: every request must carry it in the
+  `X-Djust-Observability-Token` header. The MCP server sends it on its own
+  when started with `python manage.py djust_mcp`, because the token is
+  derived from the project's `SECRET_KEY`. Other local tools can print it
+  with `python manage.py djust_observability_token`. If the dev server and
+  the tool don't load the same `SECRET_KEY` (for example, a key generated
+  at random on each start), set the same `DJUST_OBSERVABILITY_TOKEN`
+  environment variable for both
 
 Most of these tools call an HTTP endpoint under
 `/_djust/observability/`. `find_handlers_for_template` and
@@ -192,6 +200,9 @@ counters in the request path.
 `connection.execute_wrappers`. Each query is tagged with
 `(session_id, event_id, handler_name)` plus a `stack_top` that skips
 framework frames so you see your application's call site directly.
+Queries from both sync and async handlers are captured (sync handlers
+run on a worker thread with its own connection; before 1.2.1 their
+queries were missed, #2961).
 
 **`reset_view_state(session_id)`** — Replay `view.mount()` on the
 registered instance. Clears public attrs and re-invokes

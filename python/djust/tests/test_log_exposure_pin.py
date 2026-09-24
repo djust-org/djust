@@ -75,7 +75,12 @@ FRAMEWORK_ONLY = {
     ("_flush_accessibility", "Failed to flush focus command"): "frame send",
     ("_attach_debug_payload", "Failed to attach debug payload: %s"): "debug payload assembly",
     ("disconnect", "Error shutting down actor: %s"): "Rust actor shutdown",
-    ("_handle_upload_resume", "upload_resume: failed to read session key: %s"): "session key read",
+    ("_scope_session_key", "failed to read the session key: %s"): "session key read",
+    ("_handle_upload_resume", "upload_resume: re-attaching the upload failed"): (
+        "upload manager re-attach; writers hold upload bytes and metadata, never view state"
+    ),
+    ("_send_frame", "Dropping outbound frame: peer closed the WebSock"): "socket closed",
+    ("close", "WebSocket close skipped: peer already closed (%r"): "socket closed",
     ("_handle_upload_resume", "upload_resume: active-ref check failed"): "upload ref check",
     ("_send_frame", "Dropping outbound frame: WebSocket closed during"): "socket closed",
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
@@ -118,6 +123,9 @@ RUNTIME_LEGACY_GATED = {
     ("_execute_async_task", "Runtime: error in handle_async_result for task '"): (
         "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
     ),
+    ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
+        "inside `if uses_legacy_exposure(view)`"
+    ),
     ("on_mount_render_ready", "sticky child _on_sticky_unmount raised"): (
         "inside `elif ... and uses_legacy_exposure(child)` (reattach collision)"
     ),
@@ -142,7 +150,10 @@ RUNTIME_LEGACY_GATED = {
 }
 
 RUNTIME_FRAMEWORK_ONLY = {
-    ("on_view_mounted", "Error joining db_notify group for %s: %s"): "channel-layer group_add",
+    ("_join_listen_channels", "Error joining db_notify group for %s: %s"): (
+        "channel-layer group_add"
+    ),
+    ("_leave_view_groups", "Error leaving channel group %s: %s"): "channel-layer group_discard",
     ("on_render_emitted", "DJE-053 diagnostic emit failed"): "diagnostic formatting",
     ("on_event_frame", "on_event_frame debug decoration failed"): (
         "debug payload built from the redacted debug projection"
@@ -229,9 +240,6 @@ MIXIN_TABLES = {
             ("restore_component_snapshot", "time_travel: component restore failed for id=%s "): (
                 "returns False for a nonlegacy view before restoring"
             ),
-            ("restore_snapshot", "time_travel: component restore failed for id=%s "): (
-                "returns False for a nonlegacy view before restoring"
-            ),
             ("restore_snapshot", "time_travel: ghost-attr cleanup failed for key=%"): (
                 "returns False for a nonlegacy view before restoring"
             ),
@@ -281,7 +289,7 @@ MIXIN_TABLES = {
             ("_jit_serialize_model", "JIT serialization failed for %s: %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
-            ("_jit_serialize_queryset", "[JIT ERROR] Serialization failed for '%s': %s\nTr"): (
+            ("_jit_serialize_queryset", "[JIT ERROR] Serialization failed for '%s': %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
             ("replacer", "Failed to read included template %s: %s"): (
@@ -303,6 +311,9 @@ MIXIN_TABLES = {
             ("live_render", "live_render: sticky restore for %r failed; mount"): (
                 "inside `if sticky_kwarg and not explicit_child`"
             ),
+            ("_discard_sticky_child", "sticky child %r _on_sticky_unmount raised"): (
+                "inside `if callable(hook) and uses_legacy_exposure(child)`"
+            ),
         },
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (
@@ -313,6 +324,9 @@ MIXIN_TABLES = {
             ),
             ("render", "dj_activity: _register_activity failed for %s"): (
                 "activity registration with a template-supplied name"
+            ),
+            ("_discard_sticky_child", "live_render: unregistering sticky child %r faile"): (
+                "_unregister_child disposes nonlegacy children and catches legacy hooks itself"
             ),
         },
     ),
@@ -413,6 +427,9 @@ MIXIN_TABLES = {
             ("_safe_abort_writer", "UploadWriter.abort() raised for upload %s"): (
                 "application UploadWriter code, but it receives upload bytes and metadata, never view state"
             ),
+            ("cleanup", "suspending resumable upload %s failed"): (
+                "ResumableUploadWriter suspend/park: upload bytes and metadata, never view state"
+            ),
         },
     ),
     "uploads/resumable.py": (
@@ -432,6 +449,9 @@ MIXIN_TABLES = {
             ),
             ("resolve_resume_request", "resolve_resume_request: state store read failed "): (
                 "resumable-upload state store"
+            ),
+            ("_abort_parked", "aborting suspended upload %s raised"): (
+                "UploadWriter.abort() on a parked upload: upload bytes and metadata, never view state"
             ),
         },
     ),
@@ -1119,6 +1139,22 @@ MIXIN_TABLES = {
     # log_failure_for; nothing raw remains.
     "mixins/async_work.py": (),
     "sse.py": (),
+    "observability/middleware.py": (
+        {},
+        {
+            ("has_valid_token", "Observability token unavailable; refusing reques"): (
+                "token derivation from settings (e.g. an empty SECRET_KEY); no view exists"
+            ),
+        },
+    ),
+    "security/csrf.py": (
+        {},
+        {
+            ("bind_csrf_cookie", "Could not bind the browser CSRF secret to a rebu"): (
+                "Django CSRF middleware on a rebuilt socket request, before any view mounts"
+            ),
+        },
+    ),
 }
 
 PINNED = {

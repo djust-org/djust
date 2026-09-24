@@ -44,7 +44,7 @@ impl RustToast {
 
         // Opening div with variant class
         html.push_str(r#"<div class="toast align-items-center text-bg-"#);
-        html.push_str(&self.variant);
+        html.push_str(&html_escape(&self.variant));
         html.push_str(r#" border-0" role="alert" aria-live="assertive" aria-atomic="true""#);
 
         if self.auto_hide {
@@ -208,5 +208,25 @@ mod tests {
         assert!(!title_only.render().contains("<br>"));
         assert!(message_only.render().contains("Message"));
         assert!(!message_only.render().contains("<strong>"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn variant_value_is_html_escaped() {
+        let html = RustToast::new("T", "M", "x\" onmouseover=\"y", false, false, false).render();
+        assert!(!html.contains("x\" onmouseover"));
+        assert!(html.contains("text-bg-x&quot; onmouseover=&quot;y"));
+    }
+
+    #[test]
+    fn plain_variant_output_unchanged() {
+        let html = RustToast::new("", "Hi", "success", false, false, false).render();
+        assert!(html.starts_with(
+            r#"<div class="toast align-items-center text-bg-success border-0" role="alert""#
+        ));
     }
 }
