@@ -148,6 +148,10 @@ def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
         return False
 
     consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+    # The view this task ticks for, so a failed mount stops only its own task
+    # (#3027). The runtime holds the mounting view when this runs.
+    runtime = getattr(consumer, "_runtime", None)
+    consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
     return True
 
 
@@ -1582,6 +1586,27 @@ class WSConsumerTransport:
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
 
+    async def on_mount_failed(self, view: Any) -> None:
+        """Stop the tick task ``on_view_mounted`` started for a view whose
+        mount then failed (#3027). Only a task still ticking for THIS view is
+        cancelled; a later mount on the socket owns its own task."""
+        consumer = self._consumer
+        task = getattr(consumer, "_tick_task", None)
+        if task is None or task.done():
+            return
+        ticking_for = getattr(task, "_djust_tick_view", None)
+        if ticking_for is not None and ticking_for is not view:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — the loop logs its own errors
+            logger.debug("tick task ended with an error after a failed mount", exc_info=True)
+        if getattr(consumer, "_tick_task", None) is task:
+            consumer._tick_task = None
+
     async def _leave_view_groups(self) -> None:
         """Leave the view / presence / db_notify groups ``on_view_mounted`` joined.
 
@@ -2601,6 +2626,7 @@ class ViewRuntime:
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
 
         # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
@@ -2690,6 +2716,7 @@ class ViewRuntime:
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
             await self.transport.send(response)
+            await self._on_mount_failed(view_instance)
             return
 
         # ---- Initial render ----
@@ -2731,6 +2758,7 @@ class ViewRuntime:
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
                     )
                     await self.transport.send(response)
+                    await self._on_mount_failed(view_instance)
                     return
 
         if not actor_mounted:
@@ -2759,6 +2787,7 @@ class ViewRuntime:
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
                 )
                 await self.transport.send(response)
+                await self._on_mount_failed(view_instance)
                 return
 
         # ---- Post-render mount hook (#1917, Finding B residual) ----
@@ -4488,6 +4517,30 @@ class ViewRuntime:
             return True
 
         return None
+
+    async def _on_mount_failed(self, view_instance: Any) -> None:
+        """Tell the transport that a mount it already set up has failed (#3027).
+
+        ``on_view_mounted`` runs before ``mount()``: on WS it starts the view's
+        tick task. When ``mount()``, ``handle_params()``, the actor mount or the
+        initial render then raises, the error frame goes out but the
+        half-mounted view stays on the runtime (later frames on the socket
+        still see it, unchanged here), and the tick kept calling
+        ``handle_tick`` on it every beat. ``on_mount_failed`` stops that work.
+        getattr-guarded like the other mount hooks, so a transport without it
+        (SSE has no tick) and duck-typed test fakes are unaffected. Never
+        raises: a cleanup failure must not replace the error frame already
+        sent.
+        """
+        hook = getattr(self.transport, "on_mount_failed", None)
+        if hook is None:
+            return
+        try:
+            result = hook(view_instance)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — cleanup after an error already reported
+            logger.exception("on_mount_failed hook raised")
 
     async def _finalize_mount_auth(self, verdict: str) -> None:
         """Apply the transport-level finalization of a blocking mount-auth verdict.
