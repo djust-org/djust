@@ -503,9 +503,9 @@ impl VNode {
 
     /// Internal serialization with raw-text context tracking.
     ///
-    /// `in_raw_text` is true when the parent element is `<script>` or
-    /// `<style>`, whose text content must NOT be HTML-escaped per the
-    /// HTML spec (they are "raw text elements").
+    /// `in_raw_text` is true when the parent element is a raw-text element
+    /// (`djust_core::raw_text::RAW_TEXT_ELEMENTS`: `<script>`, `<style>`,
+    /// `<noscript>`, …), whose text content must NOT be HTML-escaped.
     fn _to_html(&self, in_raw_text: bool) -> String {
         let mut html = String::new();
         self.write_html(&mut html, in_raw_text);
@@ -549,8 +549,12 @@ impl VNode {
         ];
         let is_void = void_elements.contains(&self.tag.as_str());
 
-        // Raw text elements whose children must not be HTML-escaped
-        let is_raw_text = matches!(self.tag.as_str(), "script" | "style");
+        // Raw text elements whose children must not be HTML-escaped: the
+        // parser kept their text verbatim, so escaping it again would turn
+        // `&amp;` into `&amp;amp;` (#613 for script/style; #3045 for
+        // noscript, xmp, iframe, noembed, noframes and plaintext). One list,
+        // shared with the djust_live text fast path.
+        let is_raw_text = djust_core::raw_text::is_raw_text_element(&self.tag);
 
         // Opening tag
         html.push('<');
@@ -1545,6 +1549,36 @@ mod tests {
                 "<script>x < y && z > 0</script><br />",
                 "<aside data-d=\"keep\">&amp;cached</aside></main>"
             )
+        );
+    }
+
+    #[test]
+    fn raw_text_elements_serialize_their_text_verbatim_3045() {
+        // The parser keeps these bodies raw (scripting enabled), so the text
+        // node already holds `&amp;`; escaping it again gave `&amp;amp;`.
+        for tag in [
+            "noscript", "xmp", "iframe", "noembed", "noframes", "style", "script",
+        ] {
+            let node = VNode::element(tag).with_child(VNode::text("Tom &amp; Jerry <b>"));
+            assert_eq!(
+                node.to_html(),
+                format!("<{tag}>Tom &amp; Jerry <b></{tag}>"),
+                "{tag}"
+            );
+        }
+        // Ordinary and RCDATA elements still escape.
+        let node = VNode::element("textarea").with_child(VNode::text("a & b"));
+        assert_eq!(node.to_html(), "<textarea>a &amp; b</textarea>");
+    }
+
+    #[test]
+    fn noscript_round_trips_through_the_parser_3045() {
+        let html = "<div dj-root><noscript>Tom &amp; Jerry</noscript></div>";
+        let vnode = crate::parser::parse_html(html).unwrap();
+        assert!(
+            vnode.to_html().contains(">Tom &amp; Jerry</noscript>"),
+            "{}",
+            vnode.to_html()
         );
     }
 

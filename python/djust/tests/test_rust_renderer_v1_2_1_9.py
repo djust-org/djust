@@ -212,7 +212,17 @@ def test_only_the_named_live_tags_are_bridged():
 
     allowed = tl._DJUST_TAGS_BRIDGED["djust.templatetags.live_tags"]
     assert allowed == frozenset(
-        {"dj_activity", "colocated_hook", "live_form", "live_field", "live_errors"}
+        {
+            "dj_activity",
+            "colocated_hook",
+            "live_form",
+            "live_field",
+            "live_errors",
+            # #3044
+            "live_input",
+            "djust_skeleton",
+            "djust_track_static",
+        }
     )
     library = import_library("djust.templatetags.live_tags")
     subset = tl._djust_subset("djust.templatetags.live_tags", library, allowed)
@@ -252,9 +262,8 @@ def test_form_tags_and_filters_work_in_a_real_root_liveview():
 
     # What the Django engine renders for the same view, as the page shows it
     # (entity spelling differs between the VDOM serialiser and Django's
-    # ``escape``, so compare the decoded text). The form tags' markup is
-    # ESCAPED on both engines — ``as_live()`` returns a plain str to a
-    # simple_tag — which is #3043, not this issue.
+    # ``escape``, so compare the decoded text). Since #3043 the form tags'
+    # markup renders as markup on both engines (test_live_form_tags_safe_3043).
     import html as _html
 
     django_html = engines["django"].from_string(V.template).render({"view": v})

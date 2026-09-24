@@ -41,6 +41,12 @@ _WS_BEFORE_TOKEN_RE = re.compile(
     r'(?:<span class="hl-w">([ \t]+)</span>|>([ \t]+))<span class="([^"]+)">'
 )
 
+#: #3026: Pygments' whitespace span followed by BARE text (a lexer such as
+#: bash emits words as plain text, not token spans). The span is unwrapped so
+#: its space joins that text node. Not before a newline: whitespace at a line
+#: end stays where it is, as the docstring below says.
+_WS_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>(?=[^<\r\n])')
+
 
 def _fold_whitespace(highlighted: str) -> str:
     """Fold the space between two tokens into the next token's span.
@@ -53,6 +59,11 @@ def _fold_whitespace(highlighted: str) -> str:
     space is no longer alone and survives; ``textContent`` — what ``dj-copy``
     copies — is unchanged. Whitespace at a line end is left where it is;
     newlines are never lone.
+
+    When the next token is BARE text rather than a span — the bash lexer
+    emits ``pip<span class="hl-w"> </span>install`` — the whitespace span is
+    unwrapped instead, so the space joins that text (``pip install``) and
+    survives the same way (#3026; ``pip install`` arrived as ``pipinstall``).
     """
 
     def fold(match: "re.Match[str]") -> str:
@@ -60,7 +71,8 @@ def _fold_whitespace(highlighted: str) -> str:
         lead = ">" if match.group(2) is not None else ""
         return f'{lead}<span class="{match.group(3)}">{ws}'
 
-    return _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
+    folded = _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
+    return _WS_BEFORE_TEXT_RE.sub(r"\1", folded)
 
 
 #: Names the catalogue and docs use that Pygments spells differently.

@@ -846,6 +846,33 @@ INSTALLED_APPS = [
 | `{% pagination %}`                         | Page navigation                      |
 | `{% avatar %}`                             | User avatar with initials fallback   |
 
+#### `{% badge %}` ships no CSS
+
+`{% badge %}` renders BEM class names that **no stylesheet djust ships has a
+rule for** (#3025), so its output appears as plain text until you style it.
+(Only the base `dj-badge` class has a rule, in
+`djust_components/components-classes.css`, which `{% theme_head %}` does not
+link; the status, dot and label classes have none anywhere.)
+
+```html
+<span class="dj-badge dj-badge--error">
+  <span class="dj-badge__dot dj-badge__dot--pulse" aria-hidden="true"></span>
+  <span class="sr-only">Status: error</span>
+  <span class="dj-badge__label">Failed</span>
+</span>
+```
+
+Style `dj-badge`, `dj-badge--<status>` (`online`, `offline`, `warning`,
+`error`, `default`), `dj-badge__dot`, `dj-badge__dot--pulse` and
+`dj-badge__label` in your own stylesheet, for example on the theme tokens
+(`hsl(var(--success))` and so on). The similarly named rules in
+`djust_components/components.css` (`.badge-online`, `.badge-pulse`, …) and
+`components-classes.css` (`.dj-badge-danger`, single dash, …) belong to other
+badge markup and do not match these classes. For a badge styled by the active
+theme, use `{% theme_badge "Failed" variant="destructive" %}`
+(`{% load theme_components %}`). Shipping styles for `{% badge %}` is planned
+for 1.3.
+
 ### `{% data_table %}` row-level navigation (#1111)
 
 Two ways to make whole rows clickable for navigation. Both render

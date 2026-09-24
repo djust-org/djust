@@ -29,7 +29,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.template.base import NodeList, Parser, Token
-from django.utils.html import escape, format_html
+from django.utils.html import escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
 from .._html import build_tag
@@ -354,9 +354,15 @@ def live_form(view: Any, **kwargs: Any) -> Any:
     """
     view = _form_view(view, "as_live")
     if not hasattr(view, "as_live"):
-        return "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
+        return mark_safe(
+            "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
+        )
 
-    return view.as_live(**kwargs)
+    # #3043: the form markup is the tag's own output, so it must not be
+    # escaped again by ``SimpleNode.render``. ``as_live()`` escapes every
+    # value it interpolates (labels, help text, errors, choices, field values
+    # and attributes — see ``djust.frameworks``) and returns a ``SafeString``.
+    return mark_safe(view.as_live(**kwargs))
 
 
 @register.simple_tag
@@ -386,9 +392,12 @@ def live_field(view: Any, field_name: str, **kwargs: Any) -> Any:
     """
     view = _form_view(view, "as_live_field")
     if not hasattr(view, "as_live_field"):
-        return "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
+        return mark_safe(
+            "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
+        )
 
-    return view.as_live_field(field_name, **kwargs)
+    # #3043: see ``live_form`` — the field markup escapes its own values.
+    return mark_safe(view.as_live_field(field_name, **kwargs))
 
 
 @register.simple_tag
@@ -408,23 +417,28 @@ def live_errors(view: Any, field_name: str | None = None) -> str:
         {% live_errors view "email" %}
         {% live_errors view %}  <!-- non-field errors -->
     """
+    # #3043: the wrapper markup is the tag's own and is returned safe; every
+    # error message is escaped (``format_html_join``), since a validation
+    # message can echo what the user typed. The f-string version returned a
+    # plain ``str``, so ``SimpleNode.render`` escaped the whole thing and the
+    # page showed the markup as text.
     view = _form_view(view, "get_field_errors")
     if field_name:
         if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
             if errors:
-                html = '<div class="invalid-feedback d-block">'
-                for error in errors:
-                    html += f"<div>{error}</div>"
-                html += "</div>"
-                return html
+                field_html: str = format_html(
+                    '<div class="invalid-feedback d-block">{}</div>',
+                    format_html_join("", "<div>{}</div>", ((error,) for error in errors)),
+                )
+                return field_html
     else:
         if hasattr(view, "form_errors") and view.form_errors:
-            html = '<div class="alert alert-danger">'
-            for error in view.form_errors:
-                html += f"<div>{error}</div>"
-            html += "</div>"
-            return html
+            form_html: str = format_html(
+                '<div class="alert alert-danger">{}</div>',
+                format_html_join("", "<div>{}</div>", ((error,) for error in view.form_errors)),
+            )
+            return form_html
 
     return ""
 

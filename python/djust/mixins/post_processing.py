@@ -27,6 +27,7 @@ _RCDATA_RE = re.compile(
 _HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
 _BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
+_HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
 
 
 def _mask_document_text(html: str) -> str:
@@ -55,6 +56,15 @@ def _find_body_close(masked: str) -> int:
     """Index of the document's last real closing ``</body>`` tag, or ``-1``."""
     found = -1
     for match in _BODY_CLOSE_TAG_RE.finditer(masked):
+        found = match.start()
+    return found
+
+
+def _find_html_close(masked: str) -> int:
+    """Index of the document's last real closing ``</html>`` tag, or ``-1``
+    (#3018: the handler-metadata fallback when a page has no ``</body>``)."""
+    found = -1
+    for match in _HTML_CLOSE_TAG_RE.finditer(masked):
         found = match.start()
     return found
 

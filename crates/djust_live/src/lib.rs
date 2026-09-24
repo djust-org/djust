@@ -4304,21 +4304,10 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Valu
 /// fast path does not guess there: `None`, full parse. `None` too when the
 /// text can't be decoded exactly (see [`decode_text_entities`]).
 fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
-    const RAW_TEXT_TAGS: [&str; 8] = [
-        "script",
-        "style",
-        "xmp",
-        "iframe",
-        "noembed",
-        "noframes",
-        "plaintext",
-        "noscript",
-    ];
     let (_, parent_path) = path.split_last()?;
     let parent = get_vdom_node(vdom, parent_path)?;
-    let raw_parent = RAW_TEXT_TAGS
-        .iter()
-        .any(|t| parent.tag.eq_ignore_ascii_case(t));
+    // The one raw-text list, shared with the VDOM serializer (#3045).
+    let raw_parent = djust_core::raw_text::is_raw_text_element(&parent.tag);
     if raw_parent {
         let foreign = (0..=parent_path.len()).any(|n| {
             get_vdom_node(vdom, &parent_path[..n]).is_some_and(|a| {
@@ -4664,10 +4653,10 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
 }
 
 /// True when an open tag's body (the bytes between `<` and `>`) carries a
-/// `dj-root` or `dj-view` ATTRIBUTE NAME: preceded by ASCII whitespace,
-/// followed by whitespace, `=`, `/` or the end of the tag, and NOT inside a
-/// quoted attribute value (`value="x dj-root y"` is text). A bare prefix match
-/// also accepted `dj-view-transitions` (a `<body>` attribute) and
+/// `dj-root` or `dj-view` ATTRIBUTE NAME: preceded by ASCII
+/// whitespace, followed by whitespace, `=`, `/` or the end of the tag, and NOT
+/// inside a quoted attribute value (`value="x dj-root y"` is text). A bare
+/// prefix match also accepted `dj-view-transitions` (a `<body>` attribute) and
 /// `dj-viewport-top`, and missed a tab or newline before the name. This is the
 /// twin of the Python `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE`
 /// (#2892, #2981, #1646).
@@ -4726,14 +4715,14 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 }
 
 /// Locate the byte offset in `html` immediately after the opening tag
-/// of the first element bearing a `dj-root` or `dj-view` attribute.
-/// Returns None if no such element is found.
+/// of the first element bearing a `dj-root` or `dj-view` attribute, and the
+/// offset of its closing tag. Returns None if no such element is found.
 ///
 /// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
 /// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
 /// string inside them is raw text. This mirrors the Python twin
-/// (`mixins/template.py::_mask_raw_text`), which owns the initial-GET
-/// shell; the two must agree on what counts as markup (#1646).
+/// (`mixins/template.py::_mask_for_root_search`), which owns the
+/// initial-GET shell; the two must agree on what counts as markup (#1646).
 ///
 /// Used to align the scanner's starting point with `find_root` in the
 /// VDOM parser, which begins the VDOM tree at that same element. Without
@@ -4742,9 +4731,20 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 /// the VDOM, breaking the 1:1 text-node mapping.
 fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
     let bytes = html.as_bytes();
-    // Find the OPEN tag of the dj-root element and capture its tag name.
+    let (open_end, tag_name) = find_root_open(bytes)?;
+    find_root_close(bytes, open_end, &tag_name).map(|close| (open_end, close))
+}
+
+/// `(offset just past its `>`, lowercased tag name)` of the first open tag
+/// carrying `dj-root` or `dj-view`, walking `bytes` tag by tag.
+///
+/// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
+/// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
+/// the same rule). Quoted attribute values are skipped whole, so a
+/// `<section dj-root>` inside `data-h="…"` is never a candidate.
+fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
     let mut i = 0;
-    let (open_end, tag_name) = loop {
+    loop {
         if i >= bytes.len() {
             return None;
         }
@@ -4754,6 +4754,13 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
         }
         if let Some(next) = skip_raw_text_region(bytes, i) {
             i = next;
+            continue;
+        }
+        if !bytes
+            .get(i + 1)
+            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/' || c == b'!')
+        {
+            i += 1;
             continue;
         }
         let j = match find_open_tag_end(bytes, i) {
@@ -4785,9 +4792,13 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
             i = j + 1;
             continue;
         }
-        break (j + 1, name);
-    };
+        return Some((j + 1, name));
+    }
+}
 
+/// The offset of the `<` of the closing tag that balances the root element
+/// opened just before `open_end`.
+fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usize> {
     // Now walk forward, balancing open/close tags of the same name, to
     // find the matching closing tag. Returns the byte offset of that
     // closing tag's `<`.
@@ -4800,6 +4811,15 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
         }
         if let Some(next) = skip_raw_text_region(bytes, k) {
             k = next;
+            continue;
+        }
+        // A `<` before anything but a letter, `/` or `!` is text, as in the
+        // open search (#3030): `a < b` must not swallow the next tag.
+        if !bytes
+            .get(k + 1)
+            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/' || c == b'!')
+        {
+            k += 1;
             continue;
         }
         let mut m = k + 1;
@@ -4826,7 +4846,7 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
             if is_close {
                 depth -= 1;
                 if depth == 0 {
-                    return Some((open_end, k));
+                    return Some(k);
                 }
             } else {
                 depth += 1;
@@ -5651,6 +5671,29 @@ mod dj_root_content_range_2663 {
     #[test]
     fn root_on_body_is_not_selected() {
         assert_eq!(inner("<body dj-root><p>a</p></body>"), None);
+    }
+
+    #[test]
+    fn root_markup_inside_a_quoted_value_is_text_3030() {
+        // The Python twin (`_mask_for_root_search`) masks the `<` inside the
+        // value; both sides pick <main>. Pinned in
+        // `python/djust/tests/test_root_locator_parity_3030.py`.
+        let html = "<div data-h=\"<section dj-root>\"><main dj-root><p>r</p></main></div>";
+        assert_eq!(inner(html), Some("<p>r</p>"));
+    }
+
+    #[test]
+    fn lt_not_followed_by_a_tag_name_is_text_3030() {
+        // `a < b "…"` is text: the quote does not open a value that hides the
+        // real root (the HTML tokenizer's rule, and the Python walker's).
+        let html = "<p>a < b \"<main dj-root><i>r</i></main>\"</p>";
+        assert_eq!(inner(html), Some("<i>r</i>"));
+    }
+
+    #[test]
+    fn lt_that_is_text_does_not_hide_the_close_tag_3030() {
+        let html = "<main dj-root>a < b</main><b>after</b>";
+        assert_eq!(inner(html), Some("a < b"));
     }
 }
 

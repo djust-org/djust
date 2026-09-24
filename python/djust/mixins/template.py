@@ -11,6 +11,7 @@ import re
 from html import escape as _html_escape
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from ..template_libraries import library_render_scope
 from ..utils import get_template_dirs
 
 if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
@@ -105,20 +106,6 @@ _UNMATCHED_ROOT_WARNED: "set[str]" = set()
 # Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
 _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
 
-# Match a full ``<script>...</script>`` block. Used to mask script contents
-# before searching for ``</body>`` so a literal ``</body>`` in a JS string
-# doesn't become a false split boundary.
-#
-# The closing-tag pattern ``</script[^>]*>`` accepts any tokens between
-# ``</script`` and ``>`` per HTML5 tokenizer tolerance — e.g. ``</script >``,
-# ``</script\t\n foo>`` are all valid script-close forms that browsers honor.
-# Using the narrower ``</script\s*>`` fails CodeQL py/bad-html-filtering-regexp
-# (the same rule that flagged PR #966's ``_stamp_view_id`` regex).
-_SCRIPT_BLOCK_RE = re.compile(
-    r"<script\b[^>]*>.*?</script[^>]*>",
-    re.DOTALL | re.IGNORECASE,
-)
-
 # #2663: regions the HTML tokenizer treats as RAW TEXT — ``<script>`` and
 # ``<style>`` bodies and HTML comments. Anything tag-shaped inside them is
 # text, not markup: a JavaScript comment reading ``<div dj-root>`` must not
@@ -126,10 +113,16 @@ _SCRIPT_BLOCK_RE = re.compile(
 # dj-root locating sink in this module searches a MASKED copy (see
 # ``_mask_raw_text``) so a phantom tag in a script can never select the
 # wrong element and turn the whole document into the liveview template.
+#
+# #3019: the open and close tags use ``[^<>]*`` (not ``[^>]*``), so a tag
+# cannot span into the next one. With ``[^>]*`` every bare ``<script`` (or
+# ``</script``) with no ``>`` after it scanned to the end of the document,
+# which made the mask quadratic on such input (3 s at 32 000 of them) — the
+# same shape #3017 fixed for its ``</head>`` / ``</body>`` / RCDATA patterns.
 _RAW_TEXT_RE = re.compile(
     r"<!--.*?(?:-->|\Z)"
-    r"|<script\b[^>]*>.*?(?:</script[^>]*>|\Z)"
-    r"|<style\b[^>]*>.*?(?:</style[^>]*>|\Z)",
+    r"|<script\b[^<>]*>.*?(?:</script[^<>]*>|\Z)"
+    r"|<style\b[^<>]*>.*?(?:</style[^<>]*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -141,15 +134,100 @@ def _mask_raw_text(html: str) -> str:
     return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
 
 
+#: #3030: after a ``<``, the rest of a tag up to the ``>`` that ends it, a
+#: ``<`` that aborts it, or an unterminated quote — quoted values are skipped
+#: whole, so a ``>`` or ``<`` inside one belongs to the value. Linear: every
+#: unit consumes input and no unit can start another's text.
+_TAG_REST_RE = re.compile(r"""[^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*""")
+#: The raw-text openers the Rust walker (``skip_raw_text_region``) knows.
+_RAW_OPEN_RE = re.compile(r"(script|style)[ \t\n\r/>]", re.IGNORECASE)
+_RAW_CLOSE_RES = {name: re.compile(r"</" + name, re.IGNORECASE) for name in ("script", "style")}
+
+
+def _mask_for_root_search(html: str) -> str:
+    """``html`` masked for the dj-root / dj-view search, walking it tag by tag
+    exactly as the Rust twin does (``crates/djust_live/src/lib.rs::
+    find_dj_root_content_range``, #1646).
+
+    * A comment, ``<script>`` or ``<style>`` region is masked whole
+      (``skip_raw_text_region``: an unterminated one runs to the end).
+    * In every other tag, each ``<`` inside a quoted attribute value is masked
+      (#3030). ``re.search`` can start at any ``<``; without this, the
+      ``<section dj-root>`` inside ``<div data-h="<section dj-root>">`` was
+      picked as the root, the dj-view stamp's ``"`` closed ``data-h`` early,
+      and the Rust side (which skips quoted values) picked the next real tag.
+    * A tag starts at ``<`` followed by a letter, ``/`` or ``!``, as in the
+      HTML tokenizer; any other ``<`` is text. The Rust walker applies the
+      same rule.
+
+    Length-preserving, so positions index the original string. When a tag
+    never ends (an unterminated quote, or EOF), the Rust walker stops looking;
+    here the rest of the string keeps the plain #2663 raw-text mask, as it
+    had before #3030.
+    """
+    out: "list[str]" = []
+    last = 0
+    i = html.find("<")
+    n = len(html)
+    while 0 <= i < n - 1:
+        nxt = html[i + 1]
+        if html.startswith("<!--", i):
+            end = html.find("-->", i + 4)
+            end = n if end < 0 else end + 3
+            out.append(html[last:i])
+            out.append("\x00" * (end - i))
+            last = i = end
+            i = html.find("<", i)
+            continue
+        raw = _RAW_OPEN_RE.match(html, i + 1)
+        if raw:
+            gt = html.find(">", i)
+            end = n
+            if gt >= 0:
+                close = _RAW_CLOSE_RES[raw.group(1).lower()].search(html, gt + 1)
+                if close:
+                    cgt = html.find(">", close.start())
+                    end = n if cgt < 0 else cgt + 1
+            out.append(html[last:i])
+            out.append("\x00" * (end - i))
+            last = i = end
+            i = html.find("<", i)
+            continue
+        if not (nxt.isascii() and (nxt.isalpha() or nxt in "/!")):
+            i = html.find("<", i + 1)
+            continue
+        rest = _TAG_REST_RE.match(html, i + 1)
+        j = rest.end() if rest else i + 1
+        if j >= n or html[j] in "\"'":
+            # Never ends: the Rust walker gives up here. Keep the #2663
+            # raw-text mask over the rest, as before #3030.
+            out.append(html[last:i])
+            out.append(_mask_raw_text(html[i:]))
+            return "".join(out)
+        if html[j] == "<":
+            i = j  # not a tag; resume at the `<` that aborted it
+            continue
+        body = html[i:j]
+        if "<" in body[1:]:
+            out.append(html[last:i])
+            out.append(body[0] + body[1:].replace("<", "\x00"))
+            last = j
+        i = html.find("<", j + 1)
+    out.append(html[last:])
+    return "".join(out)
+
+
 def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[re.Match[str]]":
     """Find the FIRST real dj-root/dj-view opening tag in ``html``.
 
-    Tries ``patterns`` in order against a raw-text-masked copy, so a tag-like
-    string inside ``<script>``/``<style>``/``<!-- -->`` is never selected.
-    The returned match's ``start()``/``end()`` index the ORIGINAL string
-    (the mask is length-preserving); do not read ``group()`` from it.
+    Tries ``patterns`` in order against a masked copy (see
+    :func:`_mask_for_root_search`), so a tag-like string inside
+    ``<script>``/``<style>``/``<!-- -->`` or inside a quoted attribute value
+    is never selected. The returned match's ``start()``/``end()`` index the
+    ORIGINAL string (the mask is length-preserving); do not read ``group()``
+    from it.
     """
-    masked = _mask_raw_text(html)
+    masked = _mask_for_root_search(html)
     for pattern in patterns:
         m = pattern.search(masked)
         if m:
@@ -395,7 +473,8 @@ class TemplateMixin:
         """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
-        html = self._rust_view.render()
+        with library_render_scope():
+            html = self._rust_view.render()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). Derived from the Rust template engine's parsed
@@ -453,13 +532,21 @@ window.handlerMetadata = window.handlerMetadata || {{}};
 Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 </script>"""
 
-        # Try to inject before </body>
-        if "</body>" in html:
-            html = html.replace("</body>", f"{script}\n</body>")
-            logger.debug("[LiveView] Injected metadata script before </body>")
-        elif "</html>" in html:
-            html = html.replace("</html>", f"{script}\n</html>")
-            logger.debug("[LiveView] Injected metadata script before </html>")
+        # Inject once, before the document's real </body> (else its real
+        # </html>, else at the end). #3018: this was
+        # ``html.replace("</body>", …)``, which put the script before EVERY
+        # ``</body>`` string — including one inside an inline script, a
+        # comment or a <textarea>. The lookups run on the length-preserving
+        # masked copy #3017 introduced for the CSRF meta and client scripts.
+        from .post_processing import _find_body_close, _find_html_close, _mask_document_text
+
+        masked = _mask_document_text(html)
+        close = _find_body_close(masked)
+        if close < 0:
+            close = _find_html_close(masked)
+        if close >= 0:
+            html = f"{html[:close]}{script}\n{html[close:]}"
+            logger.debug("[LiveView] Injected metadata script before the closing tag")
         else:
             html = html + script
             logger.debug("[LiveView] Appended metadata script to end of HTML")
@@ -898,15 +985,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         dj_root_start = m.start()
 
-        # Mask out <script>...</script> blocks (preserving string length via
-        # NUL fill) so a literal "</body>" inside a JS string doesn't get
-        # picked up as the real body close. Search the masked tail, then
-        # translate the hit position back into the original string.
+        # Mask the raw-text regions (script/style bodies, comments), preserving
+        # string length via NUL fill, so a literal "</body>" inside a JS string
+        # doesn't get picked up as the real body close. Search the masked
+        # tail, then translate the hit position back into the original string.
+        # #3019: this used its own ``<script\b[^>]*>.*?</script[^>]*>`` mask,
+        # which took 22 s on 32 000 unclosed ``<script>`` tags; the shared
+        # masker is linear (an unterminated region runs to the end, as in the
+        # HTML tokenizer).
         tail = full_html[dj_root_start:]
-        masked_tail = _SCRIPT_BLOCK_RE.sub(
-            lambda s: "\x00" * len(s.group(0)),
-            tail,
-        )
+        masked_tail = _mask_raw_text(tail)
         body_close = _BODY_CLOSE_RE.search(masked_tail)
         if not body_close:
             return full_html[:dj_root_start], full_html[dj_root_start:], ""
@@ -1146,7 +1234,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # the dj-root replacement, so it lives OUTSIDE the diffed subtree.
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
-            liveview_html = self._rust_view.render()
+            with library_render_scope():
+                liveview_html = self._rust_view.render()
             # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
             # mass-assignment guard). Derived from the Rust template AST
             # (Text-node literals) — reflects exactly the developer-exposed
@@ -1241,7 +1330,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # serialization floor. ``request`` is request-scoped: it rides
             # the sidecar only and never enters ``update_state``.
             self._set_shell_sidecar(temp_rust, request, serialized_context, context_for_sidecar)
-            shell_html = temp_rust.render()
+            with library_render_scope():
+                shell_html = temp_rust.render()
 
             # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
             # liveview_html already includes its own <div dj-root>...</div>
@@ -1460,7 +1550,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         from ..templatetags.live_tags import active_parent_view
 
         renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
-        with active_parent_view(self):
+        with active_parent_view(self), library_render_scope():
             result = renderer.render_with_diff(
                 request=None,
                 extract_liveview_root=False,

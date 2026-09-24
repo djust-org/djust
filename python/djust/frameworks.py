@@ -17,6 +17,13 @@ class FrameworkAdapter(ABC):
     Abstract base class for CSS framework adapters.
 
     Each adapter implements field rendering logic for a specific CSS framework.
+
+    **Escaping contract.** ``render_field`` returns HTML that
+    ``FormMixin.as_live_field`` / ``as_live`` and the ``{% live_form %}`` /
+    ``{% live_field %}`` tags mark safe (#3043), so an adapter must escape
+    every value it interpolates — labels, help text, errors, choice labels
+    and values, field values, and attribute values — as the built-in
+    adapters do with :func:`django.utils.html.escape`.
     """
 
     @abstractmethod
@@ -85,7 +92,7 @@ class BaseAdapter(FrameworkAdapter):
         wrapper_class = kwargs.get(
             "wrapper_class", config.get_framework_class("field_wrapper_class")
         )
-        html = f'<div class="{wrapper_class}">' if wrapper_class else "<div>"
+        html = f'<div class="{escape(wrapper_class)}">' if wrapper_class else "<div>"
 
         # Label
         if kwargs.get("render_label", config.get("render_labels", True)):
@@ -101,7 +108,7 @@ class BaseAdapter(FrameworkAdapter):
 
         # Help text
         if kwargs.get("render_help_text", config.get("render_help_text", True)) and field.help_text:
-            cls_attr = f' class="{self.help_text_class}"' if self.help_text_class else ""
+            cls_attr = f' class="{escape(self.help_text_class)}"' if self.help_text_class else ""
             html += (
                 f"<{self.help_text_tag}{cls_attr}>{escape(field.help_text)}</{self.help_text_tag}>"
             )
@@ -118,7 +125,7 @@ class BaseAdapter(FrameworkAdapter):
             "error_class"
         )
         if self.error_wrapper:
-            html = f'<div class="{error_class}">' if error_class else "<div>"
+            html = f'<div class="{escape(error_class)}">' if error_class else "<div>"
             for error in errors:
                 html += f"<div>{escape(error)}</div>"
             html += "</div>"
@@ -126,7 +133,7 @@ class BaseAdapter(FrameworkAdapter):
             html = ""
             for error in errors:
                 html += (
-                    f'<p class="{error_class}">{escape(error)}</p>'
+                    f'<p class="{escape(error_class)}">{escape(error)}</p>'
                     if error_class
                     else f"<p>{escape(error)}</p>"
                 )
@@ -230,8 +237,10 @@ class BaseAdapter(FrameworkAdapter):
         label_class = config.get_framework_class("label_class")
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         required = self.required_marker if field.required else ""
-        cls_attr = f' class="{label_class}"' if label_class else ""
-        return f'<label for="id_{field_name}"{cls_attr}>{escape(label_text)}{required}</label>'
+        cls_attr = f' class="{escape(label_class)}"' if label_class else ""
+        return (
+            f'<label for="id_{escape(field_name)}"{cls_attr}>{escape(label_text)}{required}</label>'
+        )
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: Optional[str] = None) -> str:
         attrs_str = " ".join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
@@ -312,13 +321,13 @@ class BaseAdapter(FrameworkAdapter):
         self._merge_widget_attrs(field, attrs)
 
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
-        wrap_cls = f' class="{wrapper_class}"' if wrapper_class else ""
-        lbl_cls = f' class="{label_class}"' if label_class else ""
+        wrap_cls = f' class="{escape(wrapper_class)}"' if wrapper_class else ""
+        lbl_cls = f' class="{escape(label_class)}"' if label_class else ""
 
         return (
             f"<div{wrap_cls}>"
             f"{self._build_tag('input', attrs)}"
-            f'<label{lbl_cls} for="id_{field_name}">{escape(label_text)}</label>'
+            f'<label{lbl_cls} for="id_{escape(field_name)}">{escape(label_text)}</label>'
             f"</div>"
         )
 
@@ -367,9 +376,10 @@ class BaseAdapter(FrameworkAdapter):
             self._merge_widget_attrs(field, attrs)
 
             html += (
-                f'<div class="{radio_wrapper}">'
+                f'<div class="{escape(radio_wrapper)}">'
                 f"{self._build_tag('input', attrs)}"
-                f'<label class="{radio_label_class}" for="{radio_id}">{escape(str(choice_label))}</label>'
+                f'<label class="{escape(radio_label_class)}" for="{escape(radio_id)}">'
+                f"{escape(str(choice_label))}</label>"
                 f"</div>"
             )
         return html
@@ -413,7 +423,7 @@ class PlainAdapter(BaseAdapter):
     def _render_label(self, field: forms.Field, field_name: str, **kwargs: Any) -> str:
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         required = self.required_marker if field.required else ""
-        return f'<label for="id_{field_name}">{escape(label_text)}{required}</label>'
+        return f'<label for="id_{escape(field_name)}">{escape(label_text)}{required}</label>'
 
     def get_field_class(self, field: forms.Field, has_errors: bool = False) -> str:
         if has_errors:
