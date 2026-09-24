@@ -61,8 +61,8 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2981 — A `dj-root` with any other attribute never mounts its WebSocket | v1.2.1 |
-| **P1** | #2892 — `dj-view` / `dj-root` on a non-`<div>` silently skips normalisation | v1.2.1 |
+| ~~**P1**~~ | ~~#2981 — A `dj-root` with any other attribute never mounts its WebSocket~~ ✅ (#3023) | v1.2.1 |
+| ~~**P1**~~ | ~~#2892 — `dj-view` / `dj-root` on a non-`<div>` silently skips normalisation~~ ✅ (#3023) | v1.2.1 |
 
 ### v1.2.1-4 — Security hygiene: logging, tenant isolation, advisory process (drain bucket → ships in 1.2.1)
 
