@@ -1,0 +1,124 @@
+"""The Python and Rust root locators pick the same element (#3030, #3031).
+
+* #3030 — ``_search_dj_root_open`` ran its regexes over the whole page, and
+  ``re.search`` can start at any ``<``, including one inside a quoted
+  attribute value: ``<div data-h="<section dj-root>">`` made Python pick the
+  ``<section>`` in the value (and the dj-view stamp's ``"`` then closed
+  ``data-h`` early), while the Rust locator, which walks tag by tag and skips
+  quoted values, picked the next real tag. Python now masks those values on
+  the same tag walk (``_mask_for_root_search``).
+* #3031 — with a ``dj-view`` element before a separate ``dj-root`` element,
+  Python picked the ``dj-root`` (it looks for ``dj-root`` first) and the Rust
+  VDOM picked whichever came first. The Rust side now uses Python's rule.
+
+The Rust half of each case is pinned in ``crates/djust_live/src/lib.rs``
+(``dj_root_content_range_2663``) and ``crates/djust_vdom/src/parser.rs``;
+here the VDOM's choice is observed through ``djust._rust.diff_html``: an edit
+outside the root the VDOM chose produces no patch.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+
+import pytest
+
+from djust.mixins.template import (
+    _DJ_ROOT_RE,
+    _DJ_VIEW_RE,
+    _mask_for_root_search,
+    _search_dj_root_open,
+)
+
+
+def _python_root(html: str) -> str:
+    m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert m is not None
+    return html[m.start() : m.end()]
+
+
+def _vdom_patches(old: str, new: str) -> list:
+    from djust._rust import diff_html
+
+    return json.loads(diff_html(old, new))
+
+
+def _page(nav: str, main: str, *, nav_attr: str, main_attr: str) -> str:
+    return (
+        f"<html><body><nav {nav_attr}><p>{nav}</p></nav>"
+        f"<main {main_attr}><p>{main}</p></main></body></html>"
+    )
+
+
+class TestPrecedence3031:
+    ATTRS = dict(nav_attr='dj-view="a.B"', main_attr="dj-root")
+
+    def test_python_picks_the_dj_root(self):
+        assert _python_root(_page("n", "m", **self.ATTRS)) == "<main dj-root>"
+
+    def test_the_vdom_roots_at_the_same_element(self):
+        # An edit inside <nav> (outside the chosen root) is no patch; an edit
+        # inside <main> is one. Before #3031 the VDOM rooted at <nav>.
+        base = _page("n", "m", **self.ATTRS)
+        assert _vdom_patches(base, _page("CHANGED", "m", **self.ATTRS)) == []
+        assert _vdom_patches(base, _page("n", "CHANGED", **self.ATTRS)) != []
+
+    def test_dj_view_is_the_fallback_on_both_sides(self):
+        attrs = dict(nav_attr='class="x"', main_attr='dj-view="a.B"')
+        base = _page("n", "m", **attrs)
+        assert _python_root(base) == '<main dj-view="a.B">'
+        assert _vdom_patches(base, _page("CHANGED", "m", **attrs)) == []
+        assert _vdom_patches(base, _page("n", "CHANGED", **attrs)) != []
+
+
+class TestQuotedValues3030:
+    def test_root_markup_inside_a_quoted_value_is_not_the_root(self):
+        html = '<div data-h="<section dj-root>"><main dj-root><p>r</p></main></div>'
+        assert _python_root(html) == "<main dj-root>"
+
+    def test_single_quotes_and_a_gt_inside_the_value(self):
+        html = "<p title='a > <b dj-root>'>x</p><section dj-root>y</section>"
+        assert _python_root(html) == "<section dj-root>"
+
+    def test_lt_that_does_not_start_a_tag_is_text(self):
+        # `a < b "…"` is text; the quote there opens no value (the HTML
+        # tokenizer's rule, and the Rust walker's since #3030).
+        html = '<p>a < b "<main dj-root>"</p>'
+        assert _python_root(html) == "<main dj-root>"
+
+    def test_raw_text_regions_are_still_skipped(self):
+        html = (
+            "<script>var s = '<div dj-root>';</script><!-- <div dj-root> -->"
+            "<style>/* <div dj-root> */</style><div dj-root>ok</div>"
+        )
+        assert _python_root(html) == "<div dj-root>"
+
+    def test_script_inside_a_quoted_value_does_not_start_a_raw_region(self):
+        html = '<div title="<script>"><div dj-root>ok</div></div>'
+        assert _python_root(html) == "<div dj-root>"
+
+    def test_the_mask_preserves_length(self):
+        html = '<div data-h="<x>" t=\'<y\'>a<script>b</script><!--c--></div><p x="<'
+        masked = _mask_for_root_search(html)
+        assert len(masked) == len(html)
+
+    def test_after_a_tag_that_never_ends_raw_text_is_still_masked(self):
+        html = "<p title=\"never closed><script>'<div dj-root>'</script>"
+        assert _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE) is None
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            '<a "' * 20000,
+            "<a " * 40000,
+            "<script" * 40000,
+            '<div x="<"' * 20000,
+            "<" * 80000,
+            '<a b="c" ' * 30000,
+        ],
+    )
+    def test_the_walk_is_linear_on_tag_soup(self, html):
+        start = time.perf_counter()
+        _mask_for_root_search(html)
+        assert time.perf_counter() - start < 1.0

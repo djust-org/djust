@@ -428,20 +428,26 @@ fn find_body(handle: &Handle) -> Option<Handle> {
     None
 }
 
-/// Recursively search for an element with `dj-root` or `dj-view` attribute.
-/// Returns the first match (depth-first).
+/// The LiveView root inside `handle`: the first element (depth-first,
+/// document order) carrying `dj-root`, or — only when there is none — the
+/// first carrying `dj-view` (#3031). This is the rule of the Python twin
+/// (`mixins/template.py::_search_dj_root_open(html, _DJ_ROOT_RE,
+/// _DJ_VIEW_RE)`), which builds the page shell, and of
+/// `djust_live::find_dj_root_content_range`. Taking whichever of the two came
+/// first made `<nav dj-view=…>…</nav><main dj-root>` diff against `<nav>`
+/// while the shell was built from `<main>`.
 fn find_liveview_root(handle: &Handle) -> Option<Handle> {
+    find_element_with_attr(handle, "dj-root").or_else(|| find_element_with_attr(handle, "dj-view"))
+}
+
+/// First descendant element of `handle` (depth-first) carrying `attr`.
+fn find_element_with_attr(handle: &Handle, attr: &str) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
         if let NodeData::Element { ref attrs, .. } = child.data {
-            let has_liveview_attr = attrs.borrow().iter().any(|a| {
-                let name = a.name.local.as_ref();
-                name == "dj-root" || name == "dj-view"
-            });
-            if has_liveview_attr {
+            if attrs.borrow().iter().any(|a| a.name.local.as_ref() == attr) {
                 return Some(child.clone());
             }
-            // Recurse into children
-            if let Some(found) = find_liveview_root(child) {
+            if let Some(found) = find_element_with_attr(child, attr) {
                 return Some(found);
             }
         }
@@ -716,6 +722,25 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dj_root_wins_over_an_earlier_dj_view_3031() {
+        // Python's rule (`_search_dj_root_open(html, _DJ_ROOT_RE,
+        // _DJ_VIEW_RE)`): the first dj-root, else the first dj-view.
+        let html = r#"<html><body><nav dj-view="a.B"><p>n</p></nav><main dj-root><p>m</p></main></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "main");
+        let html =
+            r#"<html><body><div dj-view="a.B"><main dj-root><p>m</p></main></div></body></html>"#;
+        assert_eq!(parse_html(html).unwrap().tag, "main");
+    }
+
+    #[test]
+    fn dj_view_is_the_fallback_when_no_dj_root_3031() {
+        let html =
+            r#"<html><body><nav><p>n</p></nav><main dj-view="a.B"><p>m</p></main></body></html>"#;
+        assert_eq!(parse_html(html).unwrap().tag, "main");
+    }
 
     #[test]
     fn test_find_root_full_page_with_dj_root() {
