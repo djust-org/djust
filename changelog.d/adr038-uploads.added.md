@@ -9,5 +9,5 @@
   survive a reconnect: the remount starts with an empty upload manager, and
   `upload_resume` answers `not_found` for an explicit view without reading the
   resumable state store, so the client re-registers. Legacy views keep no
-  `uploads` context and store-backed resume. 8 regression tests (13 parametrized cases) in
+  `uploads` context and store-backed resume. 9 regression tests (17 parametrized cases) in
   `python/djust/tests/test_exposure_uploads.py`.
