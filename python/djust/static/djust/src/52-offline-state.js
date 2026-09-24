@@ -28,8 +28,12 @@
     // signal; anything else (true, or no navigator) counts as online.
     let _online = !(typeof navigator !== 'undefined' && navigator.onLine === false);
 
+    // Never toggle the class the indicator is found by, or a state switch
+    // could drop it and the indicator would stop updating.
     function _classList(value) {
-        return (value || '').split(/\s+/).filter(Boolean);
+        return (value || '').split(/\s+/).filter(function (c) {
+            return c && c !== 'djust-offline-indicator';
+        });
     }
 
     function _syncIndicator(el) {

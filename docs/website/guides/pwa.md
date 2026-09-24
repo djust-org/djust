@@ -197,9 +197,12 @@ load from `navigator.onLine` and updated on the browser's `online` /
 `{% djust_pwa_head %}` or `{% djust_offline_styles %}`, so include one of
 them. This is browser network state: a WebSocket reconnect does not count as
 offline. `dj-offline-show` elements stay hidden until the body is marked
-offline, including before the client has run, so they do not flash on load.
-(Before 1.2.1 nothing set the classes, so `dj-offline-hide` elements were
-always hidden and `dj-offline-show` elements never appeared.)
+offline, including before the client has run, so they do not flash on load;
+a page that includes the directive CSS but never loads djust's client keeps
+them hidden, as it already did `dj-offline-hide` elements. (Before 1.2.1
+nothing set the classes, so `dj-offline-hide` elements were always hidden,
+`dj-offline-disable` elements always disabled, and bare `dj-offline-show`
+elements always visible, online or not.)
 
 ```html
 <div dj-offline-hide>

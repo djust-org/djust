@@ -147,6 +147,19 @@ describe('offline indicator and banner (#3051)', () => {
         expect(ind.classList.contains('down')).toBe(false);
     });
 
+    it('never removes the djust-offline-indicator class itself', () => {
+        const dom = createDom({ online: true });
+        const { window } = dom;
+        const ind = el(dom, 'ind-always');
+        ind.setAttribute('data-online-class', 'djust-offline-indicator up');
+        ind.setAttribute('data-offline-class', 'down');
+        window.dispatchEvent(new window.Event('offline'));
+        expect(ind.classList.contains('djust-offline-indicator')).toBe(true);
+        window.dispatchEvent(new window.Event('online'));
+        window.dispatchEvent(new window.Event('offline'));
+        expect(text(dom, 'ind-always')).toBe('Down');
+    });
+
     it('syncs an indicator a DOM update inserts', () => {
         const dom = createDom({ online: true });
         const { window } = dom;
