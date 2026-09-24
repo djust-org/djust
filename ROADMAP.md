@@ -209,6 +209,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3041 — `dj-offline-hide`/`show`/`disable` never respond: nothing sets `body.djust-online`/`djust-offline`~~ ✅ (#3052) | v1.2.1 |
 | ~~**P1**~~ | ~~#3046 — Snapshot/private-state restore hardening (1.2.1: method-shadow + dangerous-attr screens; replay nonce/TTL → 1.3)~~ ✅ (#3052) | v1.2.1 |
 | ~~**P1**~~ | ~~#3048 — Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532`~~ ✅ (#3052) | v1.2.1 |
+| **P1** | #3051 — Offline indicator (`show_when="offline"`) and offline banner never show; indicator text and class never switch | v1.2.1 |
 
 ### Planned for 1.3 (not in 1.2.1)
 
