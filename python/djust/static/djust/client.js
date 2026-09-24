@@ -3162,7 +3162,8 @@ function initReactCounters() {
         const propsJson = container.dataset.reactProps;
         let props = {};
         try {
-            props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
+            // `dataset` has already decoded the attribute's entities.
+            props = JSON.parse(propsJson);
         } catch { }
 
         let count = props.initialCount || 0;
