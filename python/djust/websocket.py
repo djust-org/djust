@@ -1118,14 +1118,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             return
 
+        from .mixins.async_work import track_running_async_task
+
         # New format: multiple named tasks
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
             event_name = getattr(self, "_current_event_name", None)
-            # Spawn all pending tasks
+            # Spawn all pending tasks. Each is recorded as running until it
+            # finishes, so cancel_async_all() can mark it cancelled (#2969).
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                asyncio.ensure_future(
-                    self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
+                track_running_async_task(
+                    self.view_instance,
+                    task_name,
+                    asyncio.ensure_future(
+                        self._run_async_work(
+                            task_name, callback, args, kwargs, event_name=event_name
+                        )
+                    ),
                 )
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}
@@ -1137,8 +1146,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self.view_instance._async_pending = None
             callback, args, kwargs = pending
             event_name = getattr(self, "_current_event_name", None)
-            asyncio.ensure_future(
-                self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+            track_running_async_task(
+                self.view_instance,
+                "_default",
+                asyncio.ensure_future(
+                    self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+                ),
             )
 
     async def _run_async_work(

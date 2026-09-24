@@ -350,7 +350,12 @@ async def _call_handler(
         return await handler()
     else:
         # Sync handler — run via sync_to_async to avoid blocking the event
-        # loop. Handlers commonly do ORM queries or other I/O.
+        # loop. Handlers commonly do ORM queries or other I/O. The worker
+        # thread has its own DB connection, so the DEBUG SQL capture wrapper
+        # is installed there too while a capture scope is active (#2961).
+        from .observability.sql import run_in_capture_scope
+
+        call = run_in_capture_scope(handler)
         if params:
-            return await sync_to_async(handler)(**params)
-        return await sync_to_async(handler)()
+            return await sync_to_async(call)(**params)
+        return await sync_to_async(call)()

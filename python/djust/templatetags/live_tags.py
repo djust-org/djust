@@ -1458,6 +1458,58 @@ def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
             logger.exception("live_render: unregistering sticky child %r failed", view_id)
 
 
+#: Attribute on a sticky child holding the ``{% live_render %}`` kwargs it was
+#: mounted with, and the last kwargs a change warning was logged for (#2919).
+_STICKY_MOUNT_KWARGS_ATTR = "_djust_sticky_mount_kwargs"
+_STICKY_KWARGS_WARNED_ATTR = "_djust_sticky_kwargs_warned"
+
+
+def _record_sticky_mount_kwargs(child: Any, kwargs: Dict[str, Any]) -> None:
+    """Remember the kwargs a sticky child was mounted with (#2919)."""
+    try:
+        setattr(child, _STICKY_MOUNT_KWARGS_ATTR, dict(kwargs))
+    except Exception:  # noqa: BLE001 — bookkeeping must never break the render
+        pass
+
+
+def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
+    """Warn when a reused sticky child is rendered with different kwargs.
+
+    A sticky child keeps its live instance across parent renders and
+    navigations, so the tag's kwargs reach ``mount()`` only once; later values
+    are ignored (#2919). Re-applying them is a 1.3 change. Until then, say so
+    once per distinct set of kwargs rather than silently rendering stale state.
+    """
+    recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
+    if not isinstance(recorded, dict):
+        return
+    try:
+        if kwargs == recorded or kwargs == getattr(child, _STICKY_KWARGS_WARNED_ATTR, None):
+            return
+        changed = sorted(
+            key
+            for key in set(recorded) | set(kwargs)
+            if key not in recorded or key not in kwargs or recorded[key] != kwargs[key]
+        )
+    except Exception:  # noqa: BLE001 — an uncomparable value: say nothing
+        return
+    if not changed:
+        return
+    try:
+        setattr(child, _STICKY_KWARGS_WARNED_ATTR, dict(kwargs))
+    except Exception:  # noqa: BLE001
+        pass
+    logger.warning(
+        "{%% live_render %%} %s sticky=True: kwargs %s changed since the child was "
+        "mounted, but a sticky child keeps its live instance, so its kwargs are "
+        "mount-time only and the new values are ignored. Pass changing data "
+        "another way (for example a push to the child) — see the sticky "
+        "LiveViews guide.",
+        view_path,
+        ", ".join(repr(k) for k in changed),
+    )
+
+
 def _render_sticky_child_html(
     child: Any,
     view_id: str,
@@ -1791,6 +1843,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # may have populated attributes (auth, session, etc.)
                 # the survivor's handlers will read.
                 survivor.request = request
+                _warn_if_sticky_kwargs_changed(
+                    survivor, {k: v for k, v in kwargs.items() if k != "lazy"}, view_path
+                )
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
                 # read from ``preserved_map``, which is only set when
                 # ``consumer`` is truthy (see the ``... if consumer else None``
@@ -2163,6 +2218,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     "{%% live_render %%} target %r denied access: object-level permission "
                     "check failed for the requested object." % view_path
                 )
+            # The tag's kwargs are mount-time only for a reused sticky child
+            # (#2919): warn when they differ from the ones it was mounted with.
+            _warn_if_sticky_kwargs_changed(existing_child, kwargs, view_path)
             # ``sticky_kwarg`` is True here, so ``sticky_id_value`` passed the
             # non-empty guard above and is a ``str``. Narrow for the helper's
             # ``str`` slot-key contract (inert at runtime).
@@ -2236,6 +2294,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         mount = getattr(child, "mount", None)
         if callable(mount):
             mount(request, **kwargs)
+    if sticky_kwarg:
+        _record_sticky_mount_kwargs(child, kwargs)
 
     # 4c. Object-permission check (ADR-017) for the embedded child. The child's
     #     view-level auth ran above (check_view_auth); the object-level step
