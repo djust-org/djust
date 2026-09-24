@@ -37,8 +37,10 @@ replay of duplicate chunks.
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from . import UploadWriter
 from .storage import (
@@ -47,6 +49,9 @@ from .storage import (
     UploadStateTooLarge,
     get_default_store,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from . import UploadEntry
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +146,8 @@ class ResumableUploadWriter(UploadWriter):
       ``chunks_received``, skip the inner call (idempotent replay).
     - ``close()``: delegate to inner; delete the state entry.
     - ``abort(error)``: delegate to inner; delete the state entry.
+    - ``suspend()``: the session closed mid-upload — keep the state entry
+      (until TTL) and leave the inner writer open, so the upload can resume.
     - ``snapshot_for_resume()``: return the state entry for the
       WebSocket consumer to reply to an ``upload_resume`` request.
 
@@ -321,6 +328,22 @@ class ResumableUploadWriter(UploadWriter):
         finally:
             self._delete_state_entry()
 
+    def suspend(self) -> None:
+        """Detach from a session that closed mid-upload, keeping it resumable.
+
+        Called instead of :meth:`abort` when the WebSocket disconnects (or the
+        view is replaced) with the upload incomplete. The state entry stays in
+        the store until its TTL, and the inner writer is NOT aborted (an S3
+        multipart upload stays open), so the client's ``upload_resume`` on
+        reconnect finds the chunks already received (#2972). An explicit
+        cancel, a writer error or a size-limit violation still aborts and
+        deletes the state.
+        """
+        if self._finalized:
+            return
+        # Record the latest progress so the resume reply is exact.
+        self._persist_chunk_progress()
+
     # ------------------------------------------------------------------
     # Resume / snapshot
     # ------------------------------------------------------------------
@@ -427,6 +450,92 @@ class ResumableUploadWriter(UploadWriter):
 
 
 # ---------------------------------------------------------------------------
+# Suspended uploads (#2972)
+# ---------------------------------------------------------------------------
+#
+# A resumable upload whose session closes mid-transfer is parked here, entry
+# and live writer together, so a reconnect in the same process can pick it up
+# where it stopped: the writer's inner destination (an open S3 multipart
+# upload, a temp file) is only reachable through that instance. Bounded in
+# time and count because a parked writer may hold buffers: past the window,
+# or when the cap is exceeded, the oldest is aborted, which deletes its state
+# entry (the pre-#2972 outcome, just later).
+
+#: Longest time a suspended upload waits for its client (seconds). The state
+#: entry's own TTL is usually longer; the shorter of the two applies.
+SUSPENDED_UPLOAD_WINDOW_SECONDS = 600
+
+#: Most suspended uploads held per process.
+MAX_SUSPENDED_UPLOADS = 32
+
+_suspended: "OrderedDict[str, Tuple[UploadEntry, float]]" = OrderedDict()
+_suspended_lock = threading.Lock()
+
+
+def _abort_parked(entry: "UploadEntry", reason: str) -> None:
+    writer = entry.writer_instance
+    if writer is None:
+        return
+    try:
+        writer.abort(ConnectionAbortedError(reason))
+    except Exception:  # noqa: BLE001 — cleanup must never raise
+        logger.exception("aborting suspended upload %s raised", entry.ref)
+
+
+def _evict_suspended(now: float) -> List["UploadEntry"]:
+    """Pop expired and over-cap entries. Caller holds the lock and aborts
+    what is returned OUTSIDE it (abort may do network I/O)."""
+    evicted: List["UploadEntry"] = []
+    for ref in [r for r, (_, expires) in _suspended.items() if expires <= now]:
+        evicted.append(_suspended.pop(ref)[0])
+    while len(_suspended) > MAX_SUSPENDED_UPLOADS:
+        evicted.append(_suspended.popitem(last=False)[1][0])
+    return evicted
+
+
+def park_suspended_upload(entry: "UploadEntry") -> None:
+    """Hold a suspended resumable upload until its client resumes it."""
+    writer = entry.writer_instance
+    ttl = getattr(writer, "ttl", SUSPENDED_UPLOAD_WINDOW_SECONDS)
+    window = min(SUSPENDED_UPLOAD_WINDOW_SECONDS, ttl or SUSPENDED_UPLOAD_WINDOW_SECONDS)
+    now = time.monotonic()
+    with _suspended_lock:
+        previous = _suspended.pop(entry.ref, None)
+        _suspended[entry.ref] = (entry, now + window)
+        evicted = _evict_suspended(now)
+    if previous is not None and previous[0] is not entry:
+        evicted.append(previous[0])
+    for old in evicted:
+        _abort_parked(old, "resume window expired")
+
+
+def claim_suspended_upload(ref: str, session_key: Optional[str]) -> Optional["UploadEntry"]:
+    """Take a parked upload back for the session that owns it, or None.
+
+    ``session_key`` must equal the key recorded at ``upload_register``; an
+    upload without a recorded owner is never handed out.
+    """
+    now = time.monotonic()
+    with _suspended_lock:
+        evicted = _evict_suspended(now)
+        item = _suspended.get(ref)
+        claimed: Optional["UploadEntry"] = None
+        if item is not None:
+            owner = item[0]._session_key
+            if owner is not None and session_key is not None and owner == session_key:
+                claimed = _suspended.pop(ref)[0]
+    for old in evicted:
+        _abort_parked(old, "resume window expired")
+    return claimed
+
+
+def _reset_suspended_uploads() -> None:
+    """Test-only: drop every parked upload without aborting it."""
+    with _suspended_lock:
+        _suspended.clear()
+
+
+# ---------------------------------------------------------------------------
 # WS resume helper
 # ---------------------------------------------------------------------------
 
@@ -508,6 +617,8 @@ def resolve_resume_request(
 
 __all__ = [
     "ResumableUploadWriter",
+    "claim_suspended_upload",
+    "park_suspended_upload",
     "compact_chunks",
     "expand_ranges",
     "bytes_received_from_ranges",

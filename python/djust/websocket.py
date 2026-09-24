@@ -2777,6 +2777,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=_active_ref,
         )
+        if payload.get("status") == "resumed":
+            # The state entry only says which chunks arrived; the chunks still
+            # to come need the upload's live writer. Re-attach the upload
+            # suspended when the old session closed (#2972). Without it — a
+            # different process, an expired window, no matching slot — answer
+            # not_found so the client restarts instead of sending chunks
+            # nothing will accept.
+            mgr = (
+                getattr(self.view_instance, "_upload_manager", None) if self.view_instance else None
+            )
+            resumed = None
+            try:
+                if mgr is not None:
+                    resumed = mgr.resume_entry(upload_id, session_key)
+            except Exception:  # noqa: BLE001 — resume must never crash the consumer
+                logger.exception("upload_resume: re-attaching the upload failed")
+            if resumed is None:
+                payload = {
+                    "type": "upload_resumed",
+                    "ref": upload_id,
+                    "status": "not_found",
+                    "bytes_received": 0,
+                    "chunks_received": [],
+                }
         await self.send_json(payload)
 
     async def _handle_upload_frame(self, data: bytes) -> None:

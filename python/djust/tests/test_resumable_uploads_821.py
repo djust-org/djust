@@ -532,14 +532,17 @@ class TestWebsocketUploadResumeHandler:
         await consumer._handle_upload_resume({"type": "upload_resume", "ref": "uuid-77"})
 
         # send_json must have been called exactly once with the
-        # upload_resumed payload.
+        # upload_resumed payload. The state matched, but with no mounted view
+        # there is no live writer to continue the upload, so the reply is
+        # not_found and the client starts over rather than sending chunks
+        # nothing accepts (#2972). The re-attach path is covered in
+        # test_uploads_v121_11.py.
         assert consumer.send_json.await_count == 1
         payload = consumer.send_json.await_args.args[0]
         assert payload["type"] == "upload_resumed"
         assert payload["ref"] == "uuid-77"
-        assert payload["status"] == "resumed"
-        assert payload["bytes_received"] == 131072
-        assert payload["chunks_received"] == [0, 1]
+        assert payload["status"] == "not_found"
+        assert payload["bytes_received"] == 0
 
     @pytest.mark.asyncio
     async def test_upload_resume_without_ref_sends_error(self):

@@ -310,10 +310,14 @@ class SyncManager:
         self, batch: List[OfflineAction], action_type: str, model_name: str
     ) -> Dict[str, Any]:
         """Sync a batch of actions."""
-        # Check for custom sync handler
+        # Check for custom sync handler: one for this action + model
+        # (``@register_sync_handler``'s key), else one for the whole model
+        # (``SyncManager.register_sync_handler(model_name, fn)``, which never
+        # matched before #2957).
         handler_key = f"{action_type}_{model_name}"
-        if handler_key in self._sync_handlers:
-            handler_result: Dict[str, Any] = self._sync_handlers[handler_key](batch)
+        handler = self._sync_handlers.get(handler_key) or self._sync_handlers.get(model_name)
+        if handler is not None:
+            handler_result: Dict[str, Any] = handler(batch)
             return handler_result
 
         # Use default sync logic
@@ -574,10 +578,13 @@ def sync_endpoint_view(request: Any) -> Any:
         # Create sync manager and process
         sync_manager = SyncManager()
 
-        # Register any handlers from global registry
+        # Register the handlers from the global registry under their full
+        # ``<action>_<model>`` key, which is what ``_sync_batch`` looks up.
+        # Copying them under the bare model name never matched, so every
+        # registered handler was skipped and create/update/delete handlers
+        # for one model overwrote each other (#2957).
         for handler_key, handler_func in _sync_handlers.items():
-            model_name = handler_key.split("_", 1)[1]
-            sync_manager.register_sync_handler(model_name, handler_func)
+            sync_manager._sync_handlers[handler_key] = handler_func
 
         # Perform sync
         result = sync_manager.sync_actions(actions)
