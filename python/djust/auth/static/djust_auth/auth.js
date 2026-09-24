@@ -18,7 +18,7 @@
     if (firstError) firstError.focus();
     document.querySelectorAll('input[autocomplete="one-time-code"]').forEach(function (el) {
       el.addEventListener("paste", function (e) {
-        var text = (e.clipboardData || window.clipboardData).getData("text").replace(/\D/g, "");
+        var text = (e.clipboardData || window.clipboardData).getData("text").replace(/\s/g, "");
         if (!text) return;
         e.preventDefault();
         el.value = el.maxLength > 0 ? text.slice(0, el.maxLength) : text;

@@ -55,3 +55,9 @@ def test_auth_js_is_small_and_quiet():
     js = (AUTH_DIR / "static/djust_auth/auth.js").read_text()
     assert len(js.splitlines()) <= 60
     assert "console.log" not in js
+
+
+def test_code_paste_keeps_letters():
+    # A pasted allauth code ("HQPL-VMXW") must survive: strip whitespace only.
+    js = (AUTH_DIR / "static/djust_auth/auth.js").read_text()
+    assert "\\D" not in js and "\\s" in js

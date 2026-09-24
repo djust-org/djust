@@ -35,9 +35,11 @@ def test_password_field_gets_a_hidden_toggle_and_current_password_autocomplete()
     assert "hidden" in html  # no-JS: no dead button
 
 
-def test_code_input_is_an_otp_field():
+def test_code_input_is_an_otp_field_that_accepts_letters():
+    # allauth's codes are letters in groups ("HQPL-VMXW"), not digits: no numeric keypad.
     html = render("{% auth_code_input f.code %}", f=F())
-    assert 'inputmode="numeric"' in html and 'autocomplete="one-time-code"' in html
+    assert 'autocomplete="one-time-code"' in html and 'autocapitalize="characters"' in html
+    assert 'spellcheck="false"' in html and "numeric" not in html
 
 
 def test_error_summary_is_an_alert():

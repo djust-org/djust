@@ -1,0 +1,5 @@
+{% load allauth djust_auth %}{% if attrs.form %}{% auth_errors attrs.form %}{% endif %}
+<form class="dj-auth-form" method="{{ attrs.method|default:'post' }}"{% if attrs.action %} action="{{ attrs.action }}"{% endif %}{% if attrs.id %} id="{{ attrs.id }}"{% endif %}>
+  {% slot body %}{% endslot %}
+  {% slot actions %}{% endslot %}
+</form>

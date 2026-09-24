@@ -185,3 +185,23 @@ DJUST_CONFIG = {
 #     'REDIS_URL': 'redis://redis.example.com:6379/0',
 #     'SESSION_TTL': 7200,  # 2 hours for production
 # }
+
+
+# djust.auth.accounts "allauth" backend (ADR-039): wired only when the optional
+# django-allauth dependency is installed (it is in the dev extras).
+try:
+    import allauth  # noqa: F401
+
+    ALLAUTH_AVAILABLE = True
+except ImportError:
+    ALLAUTH_AVAILABLE = False
+
+if ALLAUTH_AVAILABLE:
+    INSTALLED_APPS += [
+        "django.contrib.sites",
+        "allauth",
+        "allauth.account",
+        "allauth.socialaccount",
+    ]
+    MIDDLEWARE += ["allauth.account.middleware.AccountMiddleware"]
+    SITE_ID = 1

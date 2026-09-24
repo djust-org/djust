@@ -87,10 +87,14 @@ def auth_field(field: Any) -> dict:
 
 @register.inclusion_tag("djust_auth/components/field.html")
 def auth_code_input(field: Any) -> dict:
-    """A one-time-code input (numeric keypad, OTP autofill, paste-friendly)."""
+    """A one-time-code input: OTP autofill, uppercase, paste-friendly.
+
+    Codes may contain letters (allauth's are ``XXXX-XXXX``), so no numeric keypad.
+    """
     extra = {
-        "inputmode": "numeric",
         "autocomplete": "one-time-code",
+        "autocapitalize": "characters",
+        "spellcheck": "false",
         "class": "dj-auth-input dj-auth-code",
     }
     if field.errors:
