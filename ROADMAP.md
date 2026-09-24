@@ -50,8 +50,8 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3061 — Full-template render and HTTP POST fallback send context-processor values (`messages`, `perms`, `request`, `user`) through the state normalizer: a "non-serializable value" warning on every page (also on 1.2.1: backport candidate for 1.2.2) | v1.3.0 |
-| **P2** | #3068 — Accounts check A102 ignores `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` (ADR-039) | v1.3.0 |
+| ~~**P1**~~ | ~~#3061 — Full-template render and HTTP POST fallback send context-processor values (`messages`, `perms`, `request`, `user`) through the state normalizer: a "non-serializable value" warning on every page (also on 1.2.1: backport candidate for 1.2.2)~~ ✅ (#3070) | v1.3.0 |
+| ~~**P2**~~ | ~~#3068 — Accounts check A102 ignores `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` (ADR-039)~~ ✅ (#3070) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
