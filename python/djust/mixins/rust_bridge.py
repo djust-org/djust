@@ -21,6 +21,7 @@ from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
 from .context import _is_json_serializable
+from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
 
@@ -778,8 +779,7 @@ class RustBridgeMixin:
             # the raw-value sidecar (``set_raw_py_values`` below); serializable
             # processor outputs (e.g. theming's ``{{ theme_head }}`` SafeString)
             # stay in ``update_state`` and are unaffected.
-            _request_scoped_keys = set(getattr(self, "_context_processor_keys", ()))
-            _request_scoped_keys.add("request")
+            _request_scoped_keys = request_scoped_keys(self)
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,
