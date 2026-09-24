@@ -1425,15 +1425,6 @@ class TestCreateTarball:
 
 
 class TestCreateTarballGitignore:
-    @pytest.fixture(autouse=True)
-    def _no_inherited_git_env(self, monkeypatch):
-        # _create_tarball runs `git ls-files` in the temp repo; an inherited
-        # GIT_DIR (a git hook's) would aim it at the real repository (#2608).
-        from tests.git_env import GIT_EXECUTION_VARS
-
-        for var in GIT_EXECUTION_VARS:
-            monkeypatch.delenv(var, raising=False)
-
     """`_create_tarball` honors ``.gitignore`` when the source dir is a git repo.
 
     The hardcoded EXCLUDE_* list only knows a fixed set of dir/file names, so
@@ -1447,6 +1438,15 @@ class TestCreateTarballGitignore:
     apply as a security net so credentials / live DBs never ship even if the
     user forgot to ignore them.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_inherited_git_env(self, monkeypatch):
+        # _create_tarball runs `git ls-files` in the temp repo; an inherited
+        # GIT_DIR (a git hook's) would aim it at the real repository (#2608).
+        from tests.git_env import GIT_EXECUTION_VARS
+
+        for var in GIT_EXECUTION_VARS:
+            monkeypatch.delenv(var, raising=False)
 
     def _git_repo(self, tmp_path, layout, gitignore=""):
         """Create a git repo (no commit needed) with files + a .gitignore.

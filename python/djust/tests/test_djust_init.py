@@ -9,6 +9,17 @@ import pytest
 
 from djust.scaffolding import init_project as init
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """The code under test runs git in temp repos. Under a git hook an
+    inherited GIT_DIR would aim those commands at the real repository (#2608)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 STOCK_ASGI = '''"""
 ASGI config for mysite project.
 """
