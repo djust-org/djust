@@ -1327,6 +1327,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
                 finally:
                     self._end_explicit_turn(view)
+                # cancel_async() may have arrived while this waited for the
+                # lock: the callback must not start then either (#2969).
+                cancelled = getattr(view, "_async_cancelled", None)
+                cancelled_now = cancelled is not None and task_name in cancelled
+                if cancelled_now and cancelled is not None:
+                    cancelled.discard(task_name)
+            if cancelled_now:
+                logger.debug("Async task %s was cancelled, skipping execution", task_name)
+                await self._settle_cancelled_async(view, event_name)
+                return
 
         result = None
         error = None

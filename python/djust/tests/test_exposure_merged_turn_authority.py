@@ -139,3 +139,27 @@ async def test_explicit_runtime_task_honours_cancel_async(when):
     else:
         assert ran == ["callback"]
         view.handle_async_result.assert_not_called()
+
+
+async def test_cancel_during_the_prestart_lock_wait_stops_the_callback():
+    """cancel_async() that lands while the pre-start authority waits for the
+    render lock must still keep the callback from running (#2969)."""
+    view = _explicit_view()
+    view._async_cancelled = set()
+    consumer = _consumer(view)
+    consumer._authorize_explicit_consumer_turn = AsyncMock(return_value=True)
+    consumer._settle_cancelled_async = AsyncMock()
+    ran = []
+
+    await consumer._render_lock.acquire()
+    task = asyncio.ensure_future(
+        consumer._run_async_work("job", lambda: ran.append(1), (), {}, event_name="go")
+    )
+    await asyncio.sleep(0.01)  # waiting for the lock
+    view._async_cancelled.add("job")  # cancel_async("job")
+    consumer._render_lock.release()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert ran == []
+    consumer._settle_cancelled_async.assert_awaited_once_with(view, "go")
+    assert "job" not in view._async_cancelled
