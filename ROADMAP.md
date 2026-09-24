@@ -49,11 +49,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3000 — WS closed right after an event reply never reaches `disconnect()`: zombie session (root-cause spike first; tick backstop regardless) | v1.2.1 |
-| **P1** | #2945 — A view whose `tick_interval` is shorter than its mount time never ticks | v1.2.1 |
-| **P1** | #3001 — `server_push` drops a push when the session is busy, with no retry | v1.2.1 |
-| **P1** | #2955 — `start_async` queued in `handle_tick` / `server_push` / `handle_info` never runs (port 56c36d726 from #2954 without its ADR-038 part) | v1.2.1 |
-| **P1** | #2963 — `async_pending` is never sent for `start_async` work, so loading states end early | v1.2.1 |
+| ~~**P1**~~ | ~~#3000 — WS closed right after an event reply never reaches `disconnect()`: zombie session (root-cause spike first; tick backstop regardless)~~ ✅ (#3035) | v1.2.1 |
+| ~~**P1**~~ | ~~#2945 — A view whose `tick_interval` is shorter than its mount time never ticks~~ ✅ (#3035) | v1.2.1 |
+| ~~**P1**~~ | ~~#3001 — `server_push` drops a push when the session is busy, with no retry~~ ✅ (#3035) | v1.2.1 |
+| ~~**P1**~~ | ~~#2955 — `start_async` queued in `handle_tick` / `server_push` / `handle_info` never runs (port 56c36d726 from #2954 without its ADR-038 part)~~ ✅ (#3035) | v1.2.1 |
+| ~~**P1**~~ | ~~#2963 — `async_pending` is never sent for `start_async` work, so loading states end early~~ ✅ (#3035) | v1.2.1 |
 
 ### v1.2.1-3 — dj-root / dj-view detection (drain bucket → ships in 1.2.1)
 
