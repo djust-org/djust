@@ -184,13 +184,13 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3027 — A view whose `mount()` raises keeps its tick task running | v1.2.1 |
-| **P1** | #3028 — `djust_theming.E001` is an Error for an optional context processor (1.2.1: downgrade to a Warning; lazy processor → 1.3) | v1.2.1 |
-| **P1** | #3036 — `dj-navigate` keeps the previous page's `<title>` and `<head>` assets (1.2.1: title from the destination's rendered `<title>` + docs; `<head>` asset diffing → 1.3) | v1.2.1 |
-| **P1** | #3038 — HTTP-POST fallback ignores `_skip_render` (view and component events) | v1.2.1 |
-| **P1** | #3041 — `dj-offline-hide`/`show`/`disable` never respond: nothing sets `body.djust-online`/`djust-offline` | v1.2.1 |
-| **P1** | #3046 — Snapshot/private-state restore hardening (1.2.1: method-shadow + dangerous-attr screens; replay nonce/TTL → 1.3) | v1.2.1 |
-| **P1** | #3048 — Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` | v1.2.1 |
+| ~~**P1**~~ | ~~#3027 — A view whose `mount()` raises keeps its tick task running~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3028 — `djust_theming.E001` is an Error for an optional context processor (1.2.1: downgrade to a Warning; lazy processor → 1.3)~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3036 — `dj-navigate` keeps the previous page's `<title>` and `<head>` assets (1.2.1: title from the destination's rendered `<title>` + docs; `<head>` asset diffing → 1.3)~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3038 — HTTP-POST fallback ignores `_skip_render` (view and component events)~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3041 — `dj-offline-hide`/`show`/`disable` never respond: nothing sets `body.djust-online`/`djust-offline`~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3046 — Snapshot/private-state restore hardening (1.2.1: method-shadow + dangerous-attr screens; replay nonce/TTL → 1.3)~~ ✅ (#3052) | v1.2.1 |
+| ~~**P1**~~ | ~~#3048 — Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532`~~ ✅ (#3052) | v1.2.1 |
 
 ### Planned for 1.3 (not in 1.2.1)
 
