@@ -74,3 +74,39 @@ def test_plain_initial_and_no_initial_are_unchanged():
     assert view.form_data == {"name": "ann", "note": ""}
     view.reset_form()
     assert view.form_data == {"name": "ann", "note": ""}
+
+
+def test_zero_and_false_initials_are_kept():
+    class Flags(forms.Form):
+        count = forms.IntegerField(initial=0)
+        opt_in = forms.BooleanField(initial=False, required=False)
+
+    class FlagsView(FormMixin, LiveView):
+        form_class = Flags
+        template = "<div dj-root></div>"
+
+    view = FlagsView()
+    view.mount(RequestFactory().get("/"))
+    assert view.form_data == {"count": 0, "opt_in": False}
+
+
+def test_wizard_calls_a_callable_initial_and_keeps_falsy_initials():
+    from djust.wizard import WizardMixin
+
+    class Step(forms.Form):
+        token = forms.UUIDField(initial=uuid.uuid4)
+        count = forms.IntegerField(initial=0)
+
+    class Wizard(WizardMixin, LiveView):
+        wizard_steps = [{"name": "only", "title": "Only", "form_class": Step}]
+        template = "<div dj-root></div>"
+
+    view = Wizard()
+    view.mount(RequestFactory().get("/"))
+    form_data = view.get_context_data()["form_data"]
+    assert not callable(form_data["token"])
+    uuid.UUID(str(form_data["token"]))
+    assert form_data["count"] == 0
+
+    field_html = str(view.as_live_field("token"))
+    assert "function" not in field_html

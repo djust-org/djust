@@ -341,7 +341,13 @@ def test_dirty_paths_are_reported_unquoted(tmp_path):
 
 
 def git(root, *args):
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    # Under a git hook an inherited GIT_DIR would point these commands at the
+    # real repository (#2608).
+    from tests.git_env import isolated_git_env
+
+    subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, env=isolated_git_env()
+    )
 
 
 def test_uncommitted_target_files_are_refused(tmp_path):

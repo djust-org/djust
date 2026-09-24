@@ -17,6 +17,18 @@ from .decorators import event_handler
 logger = logging.getLogger(__name__)
 
 
+def initial_field_value(form: Any, name: str, field: Any) -> Any:
+    """A field's initial value as Django's bound field sees it, or ``""``.
+
+    ``get_initial_for_field`` calls a callable ``initial``
+    (``UUIDField(initial=uuid.uuid4)``, ``initial=timezone.now``) instead of
+    returning the function, and lets the form's own ``initial`` win. Only
+    ``None`` becomes ``""``: ``0`` and ``False`` are real initial values.
+    """
+    initial = form.get_initial_for_field(field, name)
+    return "" if initial is None else initial
+
+
 class FormMixin:
     """
     Mixin for LiveView classes to add Django Forms support with real-time validation.
@@ -447,17 +459,8 @@ class FormMixin:
 
     @staticmethod
     def _initial_form_data(form: Any) -> Dict[str, Any]:
-        """Each field's initial value, or ``""`` when it has none.
-
-        ``get_initial_for_field`` is what Django's own bound field uses: it
-        calls a callable ``initial`` (``UUIDField(initial=uuid.uuid4)``,
-        ``initial=timezone.now``) instead of storing the function itself.
-        """
-        data = {}
-        for field_name, field in form.fields.items():
-            initial = form.get_initial_for_field(field, field_name)
-            data[field_name] = "" if initial is None else initial
-        return data
+        """Each field's initial value, or ``""`` when it has none."""
+        return {name: initial_field_value(form, name, field) for name, field in form.fields.items()}
 
     @event_handler
     def reset_form(self, **kwargs: Any) -> None:
