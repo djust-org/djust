@@ -1378,6 +1378,63 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Fix**: Informational. Suppress with `DJUST_CONFIG = {"suppress_checks": ["A090"]}`. See [Streaming Markdown](streaming-markdown.md).
 
+
+### A100: Account backend can't be loaded
+
+**Severity**: Error
+
+**What causes it**: `DJUST_CONFIG["ACCOUNTS"]["BACKEND"]` names something that can't be imported, or a class that isn't an `AccountBackend` subclass.
+
+**Fix**: Use `"django"`, `"allauth"`, or the dotted path of an `AccountBackend` subclass. See [Accounts](accounts.md).
+
+### A101: allauth backend without allauth set up
+
+**Severity**: Error
+
+**What causes it**: The `allauth` account backend is configured, but django-allauth isn't installed, `allauth` / `allauth.account` are missing from `INSTALLED_APPS`, or `allauth.account.middleware.AccountMiddleware` is missing from `MIDDLEWARE`.
+
+**Fix**: `pip install "djust[auth-allauth]"` and add the apps and middleware from the [Accounts](accounts.md) quick start.
+
+### A102: Rate limits behind a proxy with no trusted proxy count
+
+**Severity**: Warning
+
+**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and `DJUST_TRUSTED_PROXY_COUNT` is 0. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
+
+**Fix**: Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
+
+### A103: Email verification off in production
+
+**Severity**: Warning
+
+**What causes it**: `ACCOUNT_EMAIL_VERIFICATION = "none"` with `DEBUG = False`, so anyone can sign up with an address they don't own.
+
+**Fix**: Remove the setting (djust defaults it to `"mandatory"`) or set it to `"mandatory"`.
+
+### A104: Account URLs included twice
+
+**Severity**: Error
+
+**What causes it**: `djust.auth.accounts.urls` is included more than once, or `allauth.urls` is included directly as well. The accounts include already mounts `allauth.urls` for the `allauth` backend, so the routes clash.
+
+**Fix**: Include only `path("accounts/", include("djust.auth.accounts.urls"))`.
+
+### A105: A template override bypasses the account layout
+
+**Severity**: Info
+
+**What causes it**: A template in your `DIRS` under `account/` or `allauth/layouts/` extends allauth's own base (`account/base_entrance.html` or `allauth/layouts/base.html`), so that page won't match the djust account kit.
+
+**Fix**: Extend `djust_auth/layouts/auth.html`, or override its blocks. Suppress with `DJUST_CONFIG = {"suppress_checks": ["A105"]}` if it's deliberate.
+
+### A106: Account apps missing or out of order
+
+**Severity**: Error
+
+**What causes it**: Account pages are configured but `djust.auth` or `djust.theming` isn't in `INSTALLED_APPS`, or `djust.auth` comes after `allauth` (so allauth's own templates would win over the djust skin).
+
+**Fix**: Add `"djust.theming"` and `"djust.auth"` to `INSTALLED_APPS`, with `"djust.auth"` before `"allauth"`.
+
 ---
 
 ## Database Notification Checks (D0xx)

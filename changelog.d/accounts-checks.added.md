@@ -1,0 +1,1 @@
+- System checks `djust.A100`-`djust.A106` catch account-backend misconfiguration: an unloadable backend, allauth not set up, rate limits behind a proxy with no trusted proxy count, verification off in production, account URLs included twice, template overrides that bypass the kit, and missing or misordered account apps.
