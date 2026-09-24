@@ -94,3 +94,31 @@ def test_logout_get_does_not_log_out():
     c.force_login(u)
     c.get(reverse("account_logout"))
     assert "_auth_user_id" in c.session
+
+
+def _signed_in_redirect(next_url, settings, options=None):
+    if options is not None:
+        _mount(settings, options)
+    from allauth.account.models import EmailAddress
+
+    u = get_user_model().objects.create_user("h", "h@x.io", PW)
+    EmailAddress.objects.create(user=u, email="h@x.io", primary=True, verified=True)
+    r = Client().post(
+        reverse("account_login") + "?next=" + next_url, {"login": "h", "password": PW}
+    )
+    return r.get("Location", "")
+
+
+def test_wildcard_allowed_hosts_does_not_open_redirects(settings):
+    # allauth's own is_safe_url trusts every ALLOWED_HOSTS match; djust's adapter doesn't.
+    settings.ALLOWED_HOSTS = [".tenant-apps.example", "testserver"]
+    assert "attacker.tenant-apps.example" not in _signed_in_redirect(
+        "https://attacker.tenant-apps.example/", settings
+    )
+
+
+def test_redirect_hosts_option_allows_listed_hosts(settings):
+    loc = _signed_in_redirect(
+        "https://docs.example.org/after", settings, {"redirect_hosts": ["docs.example.org"]}
+    )
+    assert loc == "https://docs.example.org/after"

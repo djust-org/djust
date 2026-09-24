@@ -135,10 +135,28 @@ except ImportError:  # pragma: no cover - allauth is an optional dependency
 
 
 class DjustAccountAdapter(DefaultAccountAdapter):  # type: ignore[misc,valid-type]
-    """allauth adapter that asks the djust account backend whether signup is open."""
+    """allauth adapter: signup gate from the djust backend, and strict redirects."""
 
     def is_open_for_signup(self, request: HttpRequest) -> bool:
         return bool(get_account_backend().is_open_for_signup(request))
+
+    def is_safe_url(self, url: str) -> bool:
+        """Only same-host redirects, plus hosts listed in ``OPTIONS["redirect_hosts"]``.
+
+        allauth's default also trusts every host ``ALLOWED_HOSTS`` matches, so
+        ``ALLOWED_HOSTS = ["*"]`` (or a wildcard like ``.example.app`` whose
+        subdomains users control) turns ``?next=`` into an open redirect.
+        """
+        from django.utils.http import url_has_allowed_host_and_scheme
+
+        request = _allauth_request()
+        allowed = set(get_account_backend().options.get("redirect_hosts", []))
+        if request is not None:
+            allowed.add(request.get_host())
+            secure = request.is_secure()
+        else:
+            secure = False
+        return url_has_allowed_host_and_scheme(url, allowed_hosts=allowed, require_https=secure)
 
 
 if _AllauthSignupForm is not None:
