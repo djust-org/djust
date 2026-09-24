@@ -4293,7 +4293,12 @@ class ViewRuntime:
         # Protocol method fall through to the synthesized request (the WS shape).
         build_request = getattr(self.transport, "build_request", None)
         transport_request = build_request() if build_request is not None else None
+        from .security.csrf import abind_csrf_cookie  # noqa: PLC0415
+
         if transport_request is not None:
+            # #2998: normally a no-op — CsrfViewMiddleware already bound the real
+            # SSE stream request. Binds it when the middleware did not run.
+            await abind_csrf_cookie(transport_request)
             return transport_request
 
         from django.test import RequestFactory
@@ -4351,6 +4356,10 @@ class ViewRuntime:
 
         if self.scope and "user" in self.scope:
             request.user = self.scope["user"]
+
+        # #2998: bind the browser's CSRF cookie so {% csrf_token %} rendered
+        # over the socket matches it. After the session, for CSRF_USE_SESSIONS.
+        await abind_csrf_cookie(request, self.scope)
 
         return request
 
