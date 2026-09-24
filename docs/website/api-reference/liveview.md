@@ -116,13 +116,19 @@ def handle_info(self, message):
         self.refresh()
 ```
 
-> **Known issue: #2962.** `self.listen()` called in `mount()` never subscribes, so `handle_info` receives nothing. Workaround: declare the channels at class level with `_listen_channels = {"orders"}`.
-
 ---
 
 #### Disconnect cleanup
 
-LiveView has no user-level disconnect hook in 1.2: a `disconnect()`, `unmount()` or `disconnected()` method you define on the view is never called when the WebSocket closes. The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, and uploads and child views are released. Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep).
+LiveView has no user-level connect or disconnect hook in 1.2: a `connected()`, `disconnected()`, `disconnect()` or `unmount()` method you define on the view is never called. (The `connected()` / `disconnected()` callbacks that do exist belong to client-side `dj-hook` objects.) The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep). Server-side hooks are planned for 1.3 (#3007).
+
+**Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
+
+```python
+def mount(self, request, **kwargs):
+    if getattr(self, "_websocket_session_id", None):
+        self.claim_seat()  # only on the live connection
+```
 
 ---
 
@@ -154,12 +160,14 @@ def logout(self, **kwargs):
 
 #### `stream(name, items, dom_id=None, at=-1, reset=False, limit=None)`
 
-Stream a collection to the template. The items are evaluated immediately (the iterable is turned into a list) and sent as stream inserts; the stream is cleared from server memory after each render:
+Stream a collection to the template. The items are evaluated immediately (the iterable is turned into a list) and rendered through `streams.<name>`. The stream keeps its items between renders; they are cleared after a render only when the view also declares `temporary_assigns`:
 
 ```python
 def mount(self, request, **kwargs):
     self.stream("messages", Message.objects.all()[:50])
 ```
+
+With `limit=N` the stream keeps at most `N` items after the insert, dropping from the edge opposite `at` (appending drops the oldest, prepending drops the newest), and the next render removes those rows from the page. `stream_prune(name, limit, edge="top")` applies the same cap on its own.
 
 ---
 
@@ -209,6 +217,12 @@ def cancel_export(self, **kwargs):
     self.cancel_async("export")
     self.exporting = False
 ```
+
+---
+
+#### `cancel_async_all()`
+
+Cancel every task this view has scheduled or running. Tasks that have not started are dropped; running tasks are marked cancelled, so their re-render is skipped when they finish (a synchronous callback cannot be interrupted mid-run). Unlike calling `cancel_async()` for each name, a task started later under the same name is not cancelled in advance. The default sticky-child unmount calls it.
 
 ---
 

@@ -7,6 +7,24 @@ from typing import Any, Callable, Dict, Optional
 from ..session_utils import Stream
 
 
+def _prune_items(stream_obj: Stream, limit: int, edge: str) -> None:
+    """Apply a ``stream_prune`` to the server-side items (#2964).
+
+    Every render lists the stream's items, and the VDOM diff turns that list
+    into DOM changes, so dropping pruned items here is what removes their rows
+    from the page. (The ``stream_prune`` op is also still queued for the
+    test client, but nothing ships ops to the browser.) ``"top"`` drops from
+    the start, ``"bottom"`` from the end.
+    """
+    surplus = len(stream_obj.items) - limit
+    if surplus <= 0:
+        return
+    if edge == "bottom":
+        del stream_obj.items[limit:]
+    else:
+        del stream_obj.items[:surplus]
+
+
 class StreamsMixin:
     """Methods for managing streams: stream, stream_insert, stream_delete, stream_reset."""
 
@@ -31,8 +49,9 @@ class StreamsMixin:
             dom_id: Function to generate DOM id from item (default: lambda x: x.id)
             at: Position to insert (-1 = end, 0 = beginning)
             reset: If True, clear existing items first
-            limit: If set, emit a stream_prune op to cap the DOM element
-                count. Items are pruned from the opposite edge of ``at``:
+            limit: If set, cap the stream at ``limit`` items after the
+                insert, so the rendered list (and the DOM) stays bounded.
+                Items are pruned from the opposite edge of ``at``:
                 prepending (``at=0``) prunes the bottom; appending
                 (``at=-1``) prunes the top. Used for bidirectional
                 infinite scroll with ``dj-viewport-top/bottom``.
@@ -114,6 +133,7 @@ class StreamsMixin:
             # Prune from the opposite edge of the insert direction so the
             # newly added items are preserved.
             edge = "bottom" if at == 0 else "top"
+            _prune_items(stream_obj, int(limit), edge)
             self._stream_operations.append(
                 {
                     "type": "stream_prune",
@@ -127,11 +147,12 @@ class StreamsMixin:
 
     def stream_prune(self, name: str, limit: int, edge: str = "top") -> None:
         """
-        Emit a stream_prune op to cap the DOM element count for a stream.
+        Cap a stream at ``limit`` items, removing the surplus rows from the
+        page on the next render.
 
         Args:
             name: Stream name. Must have been initialized via ``stream()``.
-            limit: Maximum number of DOM element children to keep. Must be >= 0.
+            limit: Maximum number of items (rows) to keep. Must be >= 0.
             edge: ``"top"`` removes from the start of the container (oldest
                 children in an append-only feed); ``"bottom"`` removes from
                 the end.
@@ -142,6 +163,7 @@ class StreamsMixin:
             raise ValueError("limit must be >= 0")
         if edge not in ("top", "bottom"):
             raise ValueError("edge must be 'top' or 'bottom'")
+        _prune_items(self._streams[name], int(limit), edge)
         self._stream_operations.append(
             {
                 "type": "stream_prune",

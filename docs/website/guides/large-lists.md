@@ -11,7 +11,7 @@ djust ships two complementary primitives for data-heavy UI:
 |-----------|---------|----------|
 | `dj-virtual` | Windowed rendering — only the visible slice is in the DOM | Fixed: ~visible-plus-overscan items |
 | `dj-viewport-top` / `dj-viewport-bottom` | Fire a server event when the first/last child scrolls into view | IntersectionObserver (no polling) |
-| Stream `limit=N` | Cap DOM growth for append-only feeds | Not yet capped client-side (known issue #2964) |
+| Stream `limit=N` | Cap DOM growth for append-only feeds | At most `N` rows |
 
 Use `dj-virtual` when the server knows the full list (or a large slice) and you need steady 60fps scroll on 1K-100K rows. Use `dj-viewport-*` + stream `limit` for chat, log viewers, and activity feeds that load data on-demand.
 
@@ -118,9 +118,7 @@ The named event is also sent to the server via `window.djust.handleEvent(event, 
 
 ## Stream `limit` — Cap DOM growth
 
-Bidirectional infinite scroll is only useful if the DOM doesn't grow unbounded. The server-side `stream()` method takes a `limit=N` kwarg intended to prune the stream after inserts.
-
-> **Known issue: #2964.** At 1.2.0rc10, `limit=` only trims the batch being inserted, server-side. The `stream_prune` op it queues (and the one `stream_prune()` queues) is never delivered to the browser, so DOM growth is **not** capped. The rules below describe the intended behaviour.
+Bidirectional infinite scroll is only useful if the DOM doesn't grow unbounded. The server-side `stream()` method takes a `limit=N` kwarg that prunes the stream after inserts: the stream keeps at most `N` items, and the next render removes the pruned rows from the page. (Before 1.2.1 the cap never reached the page; #2964.)
 
 ```python
 from djust import LiveView
@@ -149,7 +147,7 @@ Rules:
 - **`at=0`** (prepend) + `limit=N` → prunes from the **bottom**.
 - Explicit control via `self.stream_prune(name, limit=N, edge="top")` / `edge="bottom"`.
 
-Once #2964 is fixed, the client will apply `stream_prune` ops by removing surplus element children from the specified edge.
+The prune applies to the stream's items on the server, so the page follows through the normal render and diff. A container that keeps rows the server no longer renders (`dj-update="append"`, used with `temporary_assigns`) is not capped this way.
 
 ## Composing the two
 
@@ -169,7 +167,7 @@ A chat app typically uses all three on one container:
 
 - `dj-virtual` keeps the DOM at ~15 children even with 500 messages in memory.
 - `dj-viewport-top` fires `load_older` when the user scrolls to the beginning.
-- Server responds with `self.stream("messages", older, at=0, limit=500)`, and `dj-virtual` re-renders automatically after the morph. The prune that should keep the pool bounded does not reach the browser yet (known issue #2964).
+- Server responds with `self.stream("messages", older, at=0, limit=500)`, and `dj-virtual` re-renders automatically after the morph. The prune keeps the pool at 500 rows.
 
 ## Performance notes
 

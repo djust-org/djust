@@ -147,8 +147,11 @@ async def test_owner_can_resume_over_websocket():
     ref = str(uuid.uuid4())
     await _register_and_write(_consumer("owner-sess", mgr), mgr, ref)
 
-    # A fresh connection of the same session (after a reconnect) resumes.
-    payload = await _resume(_consumer("owner-sess", UploadManager()), ref)
+    # The WebSocket drops (the old view's uploads are cleaned up, which
+    # suspends the resumable one, #2972); a fresh connection of the same
+    # session mounts the view again and resumes.
+    mgr.cleanup()
+    payload = await _resume(_consumer("owner-sess", _resumable_manager()), ref)
     assert payload["status"] == "resumed"
     assert payload["chunks_received"] == [0, 1]
     assert payload["bytes_received"] == 131072

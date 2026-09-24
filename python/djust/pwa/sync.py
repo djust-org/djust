@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass
 
+from ..security import sanitize_for_log
 from .storage import OfflineAction
 
 logger = logging.getLogger(__name__)
@@ -196,19 +197,35 @@ class SyncManager:
             strategy_map.get(conflict_strategy, MergeStrategy.CLIENT_WINS)
         )
 
+        # ``<action>_<model>`` handlers (``@register_sync_handler``) and whole-
+        # model handlers (``register_sync_handler(model_name, fn)``) are kept
+        # apart: the model name comes from the client, so a lookup of one kind
+        # must never match a key of the other (a client sending
+        # ``model="create_Task"`` must not reach the ``create_Task`` handler
+        # through the model-wide fallback).
         self._sync_handlers: Dict[str, Callable] = {}
+        self._model_sync_handlers: Dict[str, Callable] = {}
         self._sync_in_progress = False
 
     def register_sync_handler(self, model_name: str, handler_func: Callable) -> None:
         """
         Register sync handler for a specific model.
 
+        ``model_name`` is either a model name (the handler serves every action
+        on that model) or a full ``<action>_<model>`` key such as
+        ``"create_Task"`` (the handler serves that action only), the key
+        ``@register_sync_handler`` uses.
+
         Args:
-            model_name: Model name
+            model_name: Model name, or an ``<action>_<model>`` key
             handler_func: Function that handles sync for this model type
         """
-        self._sync_handlers[model_name] = handler_func
-        logger.info("Registered sync handler for model: %s", model_name)
+        action, sep, _rest = model_name.partition("_")
+        if sep and action in ("create", "update", "delete"):
+            self._sync_handlers[model_name] = handler_func
+        else:
+            self._model_sync_handlers[model_name] = handler_func
+        logger.info("Registered sync handler for model: %s", sanitize_for_log(model_name))
 
     def sync_actions(self, actions: List[OfflineAction]) -> SyncResult:
         """
@@ -310,10 +327,25 @@ class SyncManager:
         self, batch: List[OfflineAction], action_type: str, model_name: str
     ) -> Dict[str, Any]:
         """Sync a batch of actions."""
-        # Check for custom sync handler
+        # Check for custom sync handler: one for this action + model
+        # (``@register_sync_handler``'s key), else one for the whole model
+        # (``SyncManager.register_sync_handler(model_name, fn)`` with a bare
+        # model name, which never matched before #2957).
         handler_key = f"{action_type}_{model_name}"
-        if handler_key in self._sync_handlers:
-            handler_result: Dict[str, Any] = self._sync_handlers[handler_key](batch)
+        handler = self._sync_handlers.get(handler_key) or self._model_sync_handlers.get(model_name)
+        if handler is not None:
+            try:
+                handler_result: Dict[str, Any] = handler(batch)
+            except Exception:  # noqa: BLE001 — an app handler's error text stays in the log
+                # The batch result goes back to the client, so the app
+                # handler's exception text (SQL, paths, constraint names) is
+                # logged, not returned.
+                logger.exception(
+                    "Sync handler for %s %s failed",
+                    sanitize_for_log(action_type),
+                    sanitize_for_log(model_name),
+                )
+                return {"processed": 0, "failed": len(batch), "errors": ["Sync handler failed"]}
             return handler_result
 
         # Use default sync logic
@@ -574,10 +606,13 @@ def sync_endpoint_view(request: Any) -> Any:
         # Create sync manager and process
         sync_manager = SyncManager()
 
-        # Register any handlers from global registry
+        # Register the handlers from the global registry under their full
+        # ``<action>_<model>`` key, which is what ``_sync_batch`` looks up.
+        # Copying them under the bare model name never matched, so every
+        # registered handler was skipped and create/update/delete handlers
+        # for one model overwrote each other (#2957).
         for handler_key, handler_func in _sync_handlers.items():
-            model_name = handler_key.split("_", 1)[1]
-            sync_manager.register_sync_handler(model_name, handler_func)
+            sync_manager._sync_handlers[handler_key] = handler_func
 
         # Perform sync
         result = sync_manager.sync_actions(actions)

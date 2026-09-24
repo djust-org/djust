@@ -401,7 +401,7 @@ class TestGenerateSwCommand:
             "output": output_path,
             "cache_static": False,
             "cache_templates": False,
-            "version": None,
+            "sw_version": None,
             "static_extensions": "js,css,png,jpg,jpeg,gif,svg,woff,woff2,ico",
             "exclude_patterns": "admin,debug",
         }
@@ -436,7 +436,7 @@ class TestGenerateSwCommand:
             output_path = os.path.join(tmpdir, "sw.js")
             out = StringIO()
 
-            self._run_command(output_path, version="1.0.0", stdout=out)
+            self._run_command(output_path, sw_version="1.0.0", stdout=out)
 
             with open(output_path) as f:
                 content = f.read()

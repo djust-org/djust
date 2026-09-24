@@ -178,8 +178,10 @@
                 await window.djust.handleEvent(event, params);
             }
         } finally {
-            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.stop) {
-                try { window.djust.pageLoading.stop(); } catch (_) {}
+            // pageLoading exposes start/finish — there is no stop(), so the
+            // old `.stop` check left the bar at 90% forever (#2965).
+            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.finish) {
+                try { window.djust.pageLoading.finish(); } catch (_) {}
             }
         }
     }

@@ -29,10 +29,12 @@
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        const pathname = fromUrl
+        // #2949: ``fromUrl`` is a cache key (pathname + query); the route
+        // map is keyed by pathname alone.
+        const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
-                : '/');
+                : '/')).split('?')[0].split('#')[0];
         const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
         // `pathname` is derived from user-controllable URL state — walk
         // own entries via Object.entries instead of indexing with the
@@ -72,9 +74,10 @@
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
+        // #2949: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
-                ? window.location.pathname
+                ? window.location.pathname + window.location.search
                 : '/');
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
@@ -96,7 +99,7 @@
         const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
         const url = (typeof window !== 'undefined' && window.location)
-            ? window.location.pathname
+            ? window.location.pathname + window.location.search
             : '/';
         bridge.lookupState(url).then(function (reply) {
             if (!reply || !reply.hit) {

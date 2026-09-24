@@ -16,7 +16,7 @@ djust provides a presence system for tracking which users are currently viewing 
 - **PresenceMixin** -- Track user presence in any LiveView with join/leave callbacks
 - **CursorTracker** -- Track and broadcast live cursor positions
 - **LiveCursorMixin** -- Combined presence + cursor tracking in a single mixin
-- **Stale-presence cleanup** -- Presences with no heartbeat for 60 seconds are pruned (see the known issue under [Best Practices](#best-practices): the client does not send heartbeats yet)
+- **Stale-presence cleanup** -- Presences with no heartbeat for 60 seconds are pruned. The client's connection ping (every 30 seconds) is the heartbeat
 
 ## Quick Start
 
@@ -269,18 +269,8 @@ class ChatView(PresenceMixin, LiveView):
 
 ## Best Practices
 
-- **Heartbeat**: A presence is stale, and pruned by the next `list_presences()` / count refresh, if no heartbeat arrives within 60 seconds (`PRESENCE_TIMEOUT`). **Known issue: #2968** — the client never sends the `presence_heartbeat` message, so at rc10 users drop out of the list about 60 seconds after joining even while still connected. Until it is fixed, refresh the heartbeat yourself (see the workaround below the list).
+- **Heartbeat**: A presence is stale, and pruned by the next `list_presences()` / count refresh, if no heartbeat arrives within 60 seconds (`PRESENCE_TIMEOUT`). The client pings its WebSocket every 30 seconds and the server refreshes the view's tracked presence on each ping, so a user stays listed while the page is open. (Before 1.2.1 nothing refreshed it and users dropped out after about a minute; #2968.) Browsers throttle timers in background tabs, so a tab hidden for several minutes can ping less often than every 30 seconds.
 - **Cursor timeout**: Positions expire after 10 seconds. Use `CursorTracker` for high-frequency cursor updates.
 - **Presence keys**: Use descriptive, hierarchical keys like `"document:{doc_id}"` or `"room:{room_id}"`. Format variables resolve from view attributes.
 - **Cleanup**: Presences are removed automatically on WebSocket disconnect. Stale presences (missed heartbeats) are pruned when the group is next listed or counted.
 - **Backend selection**: Use the memory backend for development, Redis for multi-server production deployments. Configure via `DJUST_CONFIG['PRESENCE_BACKEND']` (`'memory'` or `'redis'`) and `PRESENCE_REDIS_URL`.
-
-Heartbeat workaround for #2968, refreshing from a tick:
-
-```python
-class DocumentView(PresenceMixin, LiveView):
-    tick_interval = 30_000  # ms
-
-    def handle_tick(self):
-        self.update_presence_heartbeat()
-```

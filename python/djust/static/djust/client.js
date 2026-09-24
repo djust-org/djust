@@ -1423,8 +1423,9 @@ class LiveViewWebSocket {
                     // HTTP content).
                     try {
                         if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
-                                ? window.location.pathname
+                                ? window.location.pathname + window.location.search
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
@@ -3616,6 +3617,45 @@ function initDraftMode() {
         globalDraftManager.clearDraft(draftKey);
         draftRoot.removeAttribute('data-draft-clear');
     }
+}
+
+/**
+ * Clear the draft of every draft root carrying `data-draft-clear`.
+ * `DraftModeMixin.clear_draft()` sets it on the NEXT render, which usually
+ * arrives as a patch after an event (a successful submit), not as a page load,
+ * so this runs after every DOM update (reinitAfterDOMUpdate) (#2971). The
+ * attribute is left in place: the server's VDOM still has it, and removing it
+ * here would keep a later render that carries it again from patching it back.
+ * The server drops it on its next render.
+ */
+// Roots whose current data-draft-clear flag was already applied: an unrelated
+// DOM update (a stream chunk, a child-view patch) while the flag is still on
+// the page must not wipe a draft the user started after the submit.
+const _draftClearApplied = new WeakSet();
+
+function applyDraftClearFlag() {
+    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+        if (!root.hasAttribute('data-draft-clear')) {
+            _draftClearApplied.delete(root);
+            return;
+        }
+        if (_draftClearApplied.has(root)) return;
+        _draftClearApplied.add(root);
+        const key = root.getAttribute('data-draft-key');
+        if (key) globalDraftManager.clearDraft(key);
+    });
+}
+
+// Over a live connection clear_draft() also pushes `djust:draft-clear`
+// (#2971), which reaches the page even when the render carries no patch.
+if (typeof window !== 'undefined') {
+    window.addEventListener('djust:push_event', function (e) {
+        if (!e || !e.detail || e.detail.event !== 'djust:draft-clear') return;
+        const payload = e.detail.payload || {};
+        if (typeof payload.key === 'string' && payload.key) {
+            globalDraftManager.clearDraft(payload.key);
+        }
+    });
 }
 
 function _collectFormData(container) {
@@ -6321,6 +6361,8 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // A clear_draft() from an event handler arrives in a patch (#2971).
+    applyDraftClearFlag();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
@@ -11810,7 +11852,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar we started above.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 return;
             }
@@ -11823,7 +11865,7 @@ window.djust.getActiveStreams = getActiveStreams;
             // Stop the page-loading bar we started above; the full nav
             // will trigger the browser's own progress indicator.
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                window.djust.pageLoading.stop?.();
+                window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
             }
             window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
@@ -11878,7 +11920,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 // will trigger the browser's own progress indicator (matches
                 // the cross-origin branch's stop semantics).
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
                 window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             } else {
@@ -11887,7 +11929,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 // Stop the page-loading bar — we are not navigating.
                 if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
-                    window.djust.pageLoading.stop?.();
+                    window.djust.pageLoading.finish?.(); // no stop() exists (#2965)
                 }
             }
             return;
@@ -11896,6 +11938,11 @@ window.djust.getActiveStreams = getActiveStreams;
         // Target IS a LiveView and the WS is connected → SPA mount over the
         // existing WebSocket. Now (and only now) it is safe to change history,
         // since the DOM swap will follow via the mount frame.
+        // The page being left, read BEFORE pushState moves location to the
+        // destination: its state snapshot is captured under this key
+        // (pathname + query, #2949). Read after pushState it named the
+        // destination, so the capture below found no snapshot to store.
+        const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -11940,7 +11987,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // public state to the SW cache BEFORE this URL leaves.
         try {
             window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                detail: { fromUrl: fromUrl, toUrl: newUrl.pathname },
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
@@ -12103,7 +12150,8 @@ window.djust.getActiveStreams = getActiveStreams;
                 // the DOM shortly after.
                 try {
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
-                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        // Keyed by pathname + query, as 03-websocket.js caches it (#2949).
+                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname + url.search);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
@@ -12123,7 +12171,7 @@ window.djust.getActiveStreams = getActiveStreams;
                 let stateSnapshot = null;
                 try {
                     if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
-                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname + url.search);
                     } else if (window.djust && window.djust._pendingStateSnapshot) {
                         // Back-compat fallback — if the older async-race
                         // slot happens to be populated, honor it.
@@ -13694,8 +13742,10 @@ window.djust.bindModelElements = bindModelElements;
                 await window.djust.handleEvent(event, params);
             }
         } finally {
-            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.stop) {
-                try { window.djust.pageLoading.stop(); } catch (_) {}
+            // pageLoading exposes start/finish — there is no stop(), so the
+            // old `.stop` check left the bar at 90% forever (#2965).
+            if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.finish) {
+                try { window.djust.pageLoading.finish(); } catch (_) {}
             }
         }
     }
@@ -18509,10 +18559,12 @@ globalThis.djust.djTransitionGroup = {
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        const pathname = fromUrl
+        // #2949: ``fromUrl`` is a cache key (pathname + query); the route
+        // map is keyed by pathname alone.
+        const pathname = String(fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
-                : '/');
+                : '/')).split('?')[0].split('#')[0];
         const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
         // `pathname` is derived from user-controllable URL state — walk
         // own entries via Object.entries instead of indexing with the
@@ -18552,9 +18604,10 @@ globalThis.djust.djTransitionGroup = {
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
+        // #2949: the capture key is pathname + query.
         const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
-                ? window.location.pathname
+                ? window.location.pathname + window.location.search
                 : '/');
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
@@ -18576,7 +18629,7 @@ globalThis.djust.djTransitionGroup = {
         const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
         const url = (typeof window !== 'undefined' && window.location)
-            ? window.location.pathname
+            ? window.location.pathname + window.location.search
             : '/';
         bridge.lookupState(url).then(function (reply) {
             if (!reply || !reply.hit) {

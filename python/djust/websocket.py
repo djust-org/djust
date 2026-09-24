@@ -1180,15 +1180,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             return
 
+        from .mixins.async_work import track_running_async_task
+
         # New format: multiple named tasks
         if event_name is _CURRENT_EVENT:
             event_name = getattr(self, "_current_event_name", None)
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
-            # Spawn all pending tasks
+            # Spawn all pending tasks. Each is recorded as running until it
+            # finishes, so cancel_async_all() can mark it cancelled (#2969).
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                asyncio.ensure_future(
-                    self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
+                track_running_async_task(
+                    self.view_instance,
+                    task_name,
+                    asyncio.ensure_future(
+                        self._run_async_work(
+                            task_name, callback, args, kwargs, event_name=event_name
+                        )
+                    ),
                 )
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}
@@ -1199,8 +1208,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if pending:
             self.view_instance._async_pending = None
             callback, args, kwargs = pending
-            asyncio.ensure_future(
-                self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+            track_running_async_task(
+                self.view_instance,
+                "_default",
+                asyncio.ensure_future(
+                    self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+                ),
             )
 
     async def _run_async_work(
@@ -2361,6 +2374,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
             elif msg_type == "ping":
+                # The client pings every 30 s and never sends
+                # ``presence_heartbeat``, so the ping is the heartbeat: without
+                # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
+                # open page (#2968). Refreshed before the pong, so the pong
+                # means the heartbeat landed.
+                if getattr(self.view_instance, "_presence_tracked", False):
+                    await self.handle_presence_heartbeat(data)
                 await self.send_json({"type": "pong"})
             elif msg_type == "live_redirect_mount":
                 await self.handle_live_redirect_mount(data)
@@ -2871,6 +2891,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=_active_ref,
         )
+        if payload.get("status") == "resumed":
+            # The state entry only says which chunks arrived; the chunks still
+            # to come need the upload's live writer. Re-attach the upload
+            # suspended when the old session closed (#2972). Without it — a
+            # different process, an expired window, no matching slot — answer
+            # not_found so the client restarts instead of sending chunks
+            # nothing will accept.
+            mgr = (
+                getattr(self.view_instance, "_upload_manager", None) if self.view_instance else None
+            )
+            resumed = None
+            try:
+                if mgr is not None:
+                    # Off the event loop: re-attaching may abort expired
+                    # suspended uploads, which can be network I/O (S3).
+                    resumed = await sync_to_async(mgr.resume_entry)(upload_id, session_key)
+            except Exception:  # noqa: BLE001 — resume must never crash the consumer
+                logger.exception("upload_resume: re-attaching the upload failed")
+            if resumed is None:
+                payload = {
+                    "type": "upload_resumed",
+                    "ref": upload_id,
+                    "status": "not_found",
+                    "bytes_received": 0,
+                    "chunks_received": [],
+                }
         await self.send_json(payload)
 
     async def _handle_upload_frame(self, data: bytes) -> None:

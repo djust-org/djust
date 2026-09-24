@@ -200,6 +200,9 @@ counters in the request path.
 `connection.execute_wrappers`. Each query is tagged with
 `(session_id, event_id, handler_name)` plus a `stack_top` that skips
 framework frames so you see your application's call site directly.
+Queries from both sync and async handlers are captured (sync handlers
+run on a worker thread with its own connection; before 1.2.1 their
+queries were missed, #2961).
 
 **`reset_view_state(session_id)`** — Replay `view.mount()` on the
 registered instance. Clears public attrs and re-invokes

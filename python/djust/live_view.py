@@ -174,6 +174,14 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_cached_csrf_token",
         "_sync_done_this_cycle",
         "_force_full_html",
+        # Names of start_async tasks currently running (#2969). Written by the
+        # dispatcher and a task's completion callback, possibly while an
+        # unrelated handler's turn is in flight; never read by a template.
+        "_async_running",
+        # {% live_render sticky=True %} bookkeeping (#2919): the kwargs a
+        # sticky child was mounted with, and the last set a warning named.
+        "_djust_sticky_mount_kwargs",
+        "_djust_sticky_kwargs_warned",
     }
 )
 
