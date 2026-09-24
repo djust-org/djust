@@ -149,6 +149,11 @@ class TestCrossingClassifier:
         c.end_render(view_a)
         assert [r.rust_calls for r in c.renders_of(view_a)] == [1, 0]
 
+        # ``before`` keeps only the renders that had returned by then.
+        first, second = c.renders_of(view_a)
+        assert c.renders_of(view_a, before=first.ended_at) == [first]
+        assert c.renders_of(view_a, before=second.ended_at) == [first, second]
+
         c.reset()
         assert c.renders_of(view_a) == []
 

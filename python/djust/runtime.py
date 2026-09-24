@@ -151,7 +151,12 @@ def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
     # The view this task ticks for, so a failed mount stops only its own task
     # (#3027). The runtime holds the mounting view when this runs.
     runtime = getattr(consumer, "_runtime", None)
-    consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
+    try:
+        consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
+    except AttributeError:
+        # A custom task factory whose tasks take no new attributes: the
+        # failed-mount hook then cancels whatever tick the consumer holds.
+        pass
     return True
 
 
@@ -205,6 +210,14 @@ def _view_document_source(view: Any) -> Optional[str]:
 
         return str(resolve_template_inheritance(template_name, get_template_dirs()))
     return str(source)
+
+
+def _queued_title(view: Any) -> bool:
+    """Whether ``view`` has a ``page_title`` command waiting to be sent."""
+    pending = getattr(view, "_pending_page_metadata", None)
+    if not isinstance(pending, list):
+        return False
+    return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
 
 
 def navigation_title(view: Any) -> Optional[str]:
@@ -2899,7 +2912,10 @@ class ViewRuntime:
 
         # #3036: a live_redirect mount records the destination page's
         # <title>; the WS consumer sends it when the view queued none.
-        if getattr(self.transport, "capture_document_title", False):
+        # Skipped when the view already queued its own title, which wins.
+        if getattr(self.transport, "capture_document_title", False) and not _queued_title(
+            view_instance
+        ):
             self.mount_document_title = await sync_to_async(navigation_title)(view_instance)
 
         # ---- Post-render mount hook (#1917, Finding B residual) ----

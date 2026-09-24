@@ -460,13 +460,20 @@ def _patch_kinds(frame: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _phase_row(
-    variant: str, phase: str, frame: Dict[str, Any], total_s: float, view: Any
+    variant: str,
+    phase: str,
+    frame: Dict[str, Any],
+    total_s: float,
+    view: Any,
+    received_at: Optional[float] = None,
 ) -> PhaseRow:
     timing = view._rust_view.get_render_timing() or {}
     is_mount = phase == "mount"
-    # The view's renders during this phase, in completion order. The last one
-    # produced the frame: the frame goes out after its render returns (#3048).
-    own_renders = CROSSINGS.renders_of(view)
+    # The view's renders during this phase that returned before the frame
+    # arrived, in completion order. The frame goes out after its render
+    # returns, so the last of these produced it; a render still running when
+    # the frame arrived cannot be the frame's (#3048).
+    own_renders = CROSSINGS.renders_of(view, before=received_at)
     return PhaseRow(
         variant=variant,
         phase=phase,
@@ -518,9 +525,10 @@ async def _drive(variant: str) -> List[PhaseRow]:
         t0 = time.perf_counter()
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": MOUNT_URL})
         mount = await _recv_until(comm, "mount")
-        total_s = time.perf_counter() - t0
+        received_at = time.perf_counter()
+        total_s = received_at - t0
         view = LAST_VIEW[0]
-        mount_row = _phase_row(variant, "mount", mount, total_s, view)
+        mount_row = _phase_row(variant, "mount", mount, total_s, view, received_at)
         rows.append(mount_row)
 
         # (d) the variant column rendered. Computed on the worker thread — the
@@ -539,8 +547,9 @@ async def _drive(variant: str) -> List[PhaseRow]:
             t0 = time.perf_counter()
             await comm.send_json_to({"type": "event", "event": event, "params": {}, "ref": ref})
             frame = await _recv_until(comm, "patch", ref=ref)
-            total_s = time.perf_counter() - t0
-            rows.append(_phase_row(variant, event, frame, total_s, view))
+            received_at = time.perf_counter()
+            total_s = received_at - t0
+            rows.append(_phase_row(variant, event, frame, total_s, view, received_at))
     finally:
         try:
             await comm.disconnect()

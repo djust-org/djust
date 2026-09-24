@@ -205,6 +205,25 @@ async def test_a_view_page_title_wins_over_the_template_title():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+async def test_a_queued_page_title_skips_the_template_title_render(monkeypatch):
+    """The view's own title wins, so the template title is not even rendered."""
+    import djust.runtime as runtime_mod
+
+    calls = []
+    real = runtime_mod.navigation_title
+    monkeypatch.setattr(
+        runtime_mod, "navigation_title", lambda view: calls.append(view) or real(view)
+    )
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        own = await _navigate("OwnTitlePage")
+        docs = await _navigate("DocsPage")
+    assert _titles(own) == ["Set by the view"]
+    assert _titles(docs) == ["Docs & Guides"]
+    assert [type(v).__name__ for v in calls] == ["DocsPage"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 async def test_a_template_without_a_head_title_sends_no_title():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         frames = await _navigate("NoHeadPage")

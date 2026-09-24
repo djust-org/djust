@@ -3634,15 +3634,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         command; ``_flush_all_pending`` sends it. A view's own ``page_title``
         always wins.
         """
+        from .runtime import _queued_title
+
         view = self.view_instance
-        if not title or view is None:
+        if not title or view is None or _queued_title(view):
             return
         pending = getattr(view, "_pending_page_metadata", None)
-        if not isinstance(pending, list):
-            return
-        if any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending):
-            return
-        pending.append({"action": "title", "value": title})
+        if isinstance(pending, list):
+            pending.append({"action": "title", "value": title})
 
     def _resolve_view_path_from_url(self, url: str) -> Optional[str]:
         """Resolve a ``live_redirect`` destination URL to its djust LiveView

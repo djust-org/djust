@@ -98,6 +98,14 @@ class TestHttpSkipRender:
         follow_up = _post(session, "rename", value="Z")
         assert follow_up.get("patches") or follow_up.get("html"), follow_up
 
+    def test_skip_is_never_stored_as_a_cache_hit(self):
+        """The WS/SSE noop carries no ``cache_request_id``, so the client's
+        ``@cache`` never stores a skipped turn; the HTTP answer matches."""
+        session = _get()
+        body = _post(session, "rename_quietly", value="Y", _cacheRequestId="req-1")
+        assert body["patches"] == []
+        assert "cache_request_id" not in body
+
     def test_component_event_skip_answers_empty_patches(self):
         session = _get()
         body = _post(session, "bump_quietly", component_id="quiet")

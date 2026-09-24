@@ -121,6 +121,8 @@ class RenderCall:
     view_id: int
     rust_calls: int
     proxy_calls: int
+    #: ``time.perf_counter()`` when the call returned.
+    ended_at: float = 0.0
 
 
 class Crossings:
@@ -197,15 +199,21 @@ class Crossings:
             view_id=id(view),
             rust_calls=getattr(self._local, "call_rust", 0),
             proxy_calls=getattr(self._local, "call_proxy", 0),
+            ended_at=time.perf_counter(),
         )
         with self._calls_lock:
             self.render_calls.append(call)
         return call
 
-    def renders_of(self, view: Any) -> List[RenderCall]:
-        """The completed render calls of ``view`` since the last :meth:`reset`."""
+    def renders_of(self, view: Any, *, before: Optional[float] = None) -> List[RenderCall]:
+        """The completed render calls of ``view`` since the last :meth:`reset`,
+        optionally only those that returned by ``before`` (a perf_counter)."""
         with self._calls_lock:
-            return [c for c in self.render_calls if c.view_id == id(view)]
+            return [
+                c
+                for c in self.render_calls
+                if c.view_id == id(view) and (before is None or c.ended_at <= before)
+            ]
 
     @classmethod
     def classify(cls, *, in_rust_render: bool, caller_file: str) -> str:

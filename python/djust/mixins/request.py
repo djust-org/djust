@@ -839,13 +839,12 @@ class RequestMixin:
             # The answer is an empty patch list with no ``version``: nothing was
             # rendered, so the client's VDOM cursor must not move. Side channels
             # (flash, page metadata) still go out, as they do with the WS noop.
+            # No ``cache_request_id``: the WS/SSE noop carries none, so a
+            # skipped turn is never stored as an ``@cache`` hit on any transport.
             from ..websocket import _resolve_skip_render
 
             if _resolve_skip_render(self):
                 skip_response: Dict[str, Any] = {"patches": []}
-                cache_request_id = params.get("_cacheRequestId")
-                if cache_request_id:
-                    skip_response["cache_request_id"] = cache_request_id
                 if hasattr(self, "_drain_flash"):
                     flash_commands = self._drain_flash()
                     if flash_commands:
