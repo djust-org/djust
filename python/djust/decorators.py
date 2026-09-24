@@ -636,6 +636,10 @@ def state(default: Any = None) -> Any:
     """
 
     class StateProperty:
+        # Marker: dirty tracking and the private-session save recognise the
+        # ``_state_<name>`` slot as this field's storage (#2956, #2959).
+        _djust_state_field = True
+
         def __init__(self) -> None:
             self.default = default
             self.attr_name: Optional[str] = None

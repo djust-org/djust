@@ -125,6 +125,33 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: The exceptions to :data:`_UNBRIDGED_PREFIXES` (#2958): tags of djust's own
+#: libraries that have NO native Rust handler, and so failed in every root
+#: LiveView template with "Invalid block tag". They bridge through the generic
+#: machinery below like any project library's tags — Django's own node renders
+#: them, so the output is the Django engine's by construction. Only the named
+#: tags bridge; the rest of the library (and its filters, which already reach
+#: the Rust engine) is left exactly as before.
+_DJUST_TAGS_BRIDGED: Dict[str, frozenset] = {
+    "djust.templatetags.live_tags": frozenset(
+        {"dj_activity", "colocated_hook", "live_form", "live_field", "live_errors"}
+    ),
+}
+
+#: Probe arguments for djust's own bridged wrapper tags (#2958). The ADR-030
+#: probe compiles a body-consuming tag once with NO arguments, and these two
+#: require a name, so the probe could not tell they are plain wrappers. Keyed
+#: by (module, tag): only djust's own tags get a probe argument.
+_PROBE_ARGS: Dict[Tuple[str, str], List[str]] = {
+    ("djust.templatetags.live_tags", "dj_activity"): ['"probe"'],
+    ("djust.templatetags.live_tags", "colocated_hook"): ['"Probe"'],
+}
+
+#: module → (library, the subset of it that bridges). Cached so the SAME
+#: subset object is handed back on every ``{% load %}`` and the
+#: already-bridged short-cut in :func:`_bridge_library` holds (#2668).
+_djust_subsets: Dict[str, Tuple[Any, Any]] = {}
+
 #: Django's own libraries this row bridges (#2558, extended for ``static``
 #: and ``cache`` in #2517). ``cache`` reaches a bespoke handler rather than the
 #: generic tag bridge — see :data:`_BESPOKE_BLOCK_TAGS`.
@@ -654,7 +681,10 @@ def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
     if module.startswith(_UNBRIDGED_PREFIXES):
-        return
+        allowed = _DJUST_TAGS_BRIDGED.get(module)
+        if not allowed:
+            return
+        library = _djust_subset(module, library, allowed)
     if module.startswith("django.templatetags.") and module not in _DJANGO_LIBRARIES_BRIDGED:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
@@ -691,6 +721,20 @@ def _bridge_library(label: str, library: Any) -> None:
         if name not in refused:
             _engine_state("_filter_owner", _filter_owner)[name] = label
     _engine_state("_loaded", _loaded)[label] = library
+
+
+def _djust_subset(module: str, library: Any, allowed: frozenset) -> Any:
+    """The part of a djust library that bridges (#2958): its ``allowed`` tags,
+    no filters. One subset object per library object."""
+    cached = _djust_subsets.get(module)
+    if cached is not None and cached[0] is library:
+        return cached[1]
+    from django.template.library import Library
+
+    subset = Library()
+    subset.tags = {name: fn for name, fn in library.tags.items() if name in allowed}
+    _djust_subsets[module] = (library, subset)
+    return subset
 
 
 def refused_filters(module: str) -> frozenset:
@@ -802,7 +846,8 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         # library bridges normally — and the message names the reason. The
         # Rust parser reads `REFUSE_AT_PARSE` and raises Django's
         # `TemplateSyntaxError`.
-        reason = _wrapper_refusal(name, compile_func)
+        probe_args = _PROBE_ARGS.get((getattr(compile_func, "__module__", ""), name), [])
+        reason = _wrapper_refusal(name, compile_func, probe_args)
         if reason is None:
             if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
                 handler = LibraryBlockTagHandler(label, name, compile_func)
@@ -963,7 +1008,9 @@ def _segments_reason(calls: List[Tuple[str, ...]], end_name: str) -> str:
     )
 
 
-def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[str]:
+def _wrapper_refusal(
+    name: str, compile_func: Callable[..., Any], probe_args: Optional[List[str]] = None
+) -> Optional[str]:
     """Why a body-consuming raw tag cannot take the rendered-body route, or
     ``None`` when it can (ADR-030 D1).
 
@@ -984,7 +1031,9 @@ def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[st
     Two limits, documented in ``docs/TEMPLATE_BACKEND.md``: the probe runs
     the tag's compile and render once at ``{% load %}`` time, so a render
     with side effects fires once with a probe context; and a compile function
-    that raises without arguments cannot be probed and stays refused.
+    that raises without arguments cannot be probed and stays refused —
+    unless it is one of djust's own tags, which pass ``probe_args``
+    (:data:`_PROBE_ARGS`, #2958).
     """
     from django.http import HttpRequest
     from django.template import Context
@@ -1001,7 +1050,7 @@ def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[st
 
     parser.parse = counting_parse  # type: ignore[method-assign]
     try:
-        node = compile_func(parser, _token(name, []))
+        node = compile_func(parser, _token(name, list(probe_args or [])))
     except Exception as exc:  # noqa: BLE001 — the reason is reported, never raised here
         if not calls:
             return "it could not be compiled for probing without arguments (%s: %s)" % (

@@ -7169,8 +7169,9 @@ function isDjIfComment(text) {
  * that drifted. Mirrors `crates/djust_vdom/src/parser.rs`:
  *   - elements always count;
  *   - text nodes count unless ASCII-whitespace-only (NBSP   is
- *     significant), except inside whitespace-preserving elements
- *     (<pre>/<code>/<textarea>) where ALL text counts (preserveWhitespace=true);
+ *     significant), except DIRECTLY inside a whitespace-preserving element
+ *     (<pre>/<code>/<textarea>/<script>/<style>) where ALL text counts
+ *     (preserveWhitespace=true; see isWhitespacePreserving, #3012);
  *   - a text node that is EXACTLY " " counts (#2999): the server keeps the
  *     whitespace between two inline siblings (`<b>A</b> <i>B</i>`) as exactly
  *     " " and drops all other whitespace-only runs. That decision depends on
@@ -7181,7 +7182,8 @@ function isDjIfComment(text) {
  *     other HTML comment, so a plain <!-- comment --> must NOT shift indices.
  *
  * @param {Node} child
- * @param {boolean} [preserveWhitespace=false] — true inside pre/code/textarea.
+ * @param {boolean} [preserveWhitespace=false] — true when the parent is
+ *   pre/code/textarea/script/style (isWhitespacePreserving).
  * @returns {boolean}
  */
 function isSignificantChild(child, preserveWhitespace = false) {
@@ -7357,9 +7359,12 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         // Shared significant-child predicate (#1655) — MUST match
         // getSignificantChildren so path-based and index-based patch resolution
-        // agree (the #1640 drift). Path traversal never preserves whitespace.
+        // agree (the #1640 drift). Inside pre/code/textarea/script/style the
+        // server counts every text node, whitespace-only ones included, so the
+        // walk must too, or a path through one resolves the wrong node (#3012).
+        const preserveWhitespace = isWhitespacePreserving(node);
         const children = Array.from(node.childNodes).filter((child) =>
-            isSignificantChild(child)
+            isSignificantChild(child, preserveWhitespace)
         );
 
         if (index >= children.length) {
@@ -8407,10 +8412,10 @@ function _stampDjIds(serverHtml, container) {
 
 /**
  * Get significant children (elements and non-whitespace text nodes).
- * Preserves all whitespace inside <pre>, <code>, and <textarea> elements.
+ * Every text child of a <pre>, <code>, <textarea>, <script> or <style> counts
+ * (see isWhitespacePreserving).
  */
 function getSignificantChildren(node) {
-    // Check if we're inside a whitespace-preserving element
     const preserveWhitespace = isWhitespacePreserving(node);
 
     // Shared significant-child predicate (#1655) — see getNodeByPath; passing
@@ -8420,20 +8425,20 @@ function getSignificantChildren(node) {
     );
 }
 
+const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+
 /**
- * Check if a node is a whitespace-preserving element or inside one.
+ * Does `node` keep every text child, whitespace-only ones included?
+ *
+ * Mirrors `preserve_whitespace` in crates/djust_vdom/src/parser.rs
+ * (`build_children`), which decides by the DIRECT parent's tag: text directly
+ * inside pre/code/textarea/script/style is kept verbatim; text inside any
+ * other element — even one nested in a <pre> — follows the ordinary rule
+ * (#3012). Deciding by ancestors instead counted whitespace the server drops.
  */
 function isWhitespacePreserving(node) {
-    const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
-    let current = node;
-    while (current) {
-        if (current.nodeType === Node.ELEMENT_NODE &&
-            WHITESPACE_PRESERVING_TAGS.includes(current.tagName)) {
-            return true;
-        }
-        current = current.parentNode;
-    }
-    return false;
+    return !!node && node.nodeType === Node.ELEMENT_NODE &&
+        WHITESPACE_PRESERVING_TAGS.includes(node.tagName.toUpperCase());
 }
 
 // ============================================================================

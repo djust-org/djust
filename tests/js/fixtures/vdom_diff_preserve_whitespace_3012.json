@@ -1,0 +1,1323 @@
+{
+  "scenario": "preserve_whitespace_3012",
+  "description": "Text patches through whitespace-only text in pre/code/textarea.",
+  "root_selector": ".ws-root",
+  "shapes": {
+    "pre_newline_between_inline": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">one</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">three</i></pre></div>",
+      "steps": [
+        {
+          "label": "step 1 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">one</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha1</i></pre></div>"
+        },
+        {
+          "label": "step 2 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">one</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha1</i></pre></div>"
+        },
+        {
+          "label": "step 3 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "b c3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">b c3</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha1</i></pre></div>"
+        },
+        {
+          "label": "step 4 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">b c3</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
+        },
+        {
+          "label": "step 5 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "tail5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
+        },
+        {
+          "label": "step 6 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                0
+              ],
+              "text": "b c6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
+        },
+        {
+          "label": "step 7 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "7"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
+        },
+        {
+          "label": "step 8 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
+        },
+        {
+          "label": "step 9 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
+        },
+        {
+          "label": "step 10 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "alpha10"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
+        },
+        {
+          "label": "step 11 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "tail11"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">tail11</i></pre></div>"
+        },
+        {
+          "label": "step 12 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha12"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha12</i></pre></div>"
+        },
+        {
+          "label": "step 13 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "13"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">13</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha12</i></pre></div>"
+        },
+        {
+          "label": "step 14 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">13</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha12</i></pre></div>"
+        },
+        {
+          "label": "step 15 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "x15"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">13</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x15</i></pre></div>"
+        },
+        {
+          "label": "step 16 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "16"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x15</i></pre></div>"
+        },
+        {
+          "label": "step 17 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "x17"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x17</i></pre></div>"
+        },
+        {
+          "label": "step 18 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                0
+              ],
+              "text": "alpha18"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">alpha18</b>\n<i dj-id=\"4\">x17</i></pre></div>"
+        },
+        {
+          "label": "step 19 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                0
+              ],
+              "text": "x19"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">x19</b>\n<i dj-id=\"4\">x17</i></pre></div>"
+        },
+        {
+          "label": "step 20 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "b c20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">x19</b>\n<i dj-id=\"4\">b c20</i></pre></div>"
+        }
+      ]
+    },
+    "code_leading_space_runs": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">two</em>  </code></p></div>",
+      "steps": [
+        {
+          "label": "step 1 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "tail1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">tail1</em>  </code></p></div>"
+        },
+        {
+          "label": "step 2 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">tail1</em>  </code></p></div>"
+        },
+        {
+          "label": "step 3 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">tail1</em>  </code></p></div>"
+        },
+        {
+          "label": "step 4 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">tail1</em>  </code></p></div>"
+        },
+        {
+          "label": "step 5 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "x5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
+        },
+        {
+          "label": "step 6 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                1,
+                0
+              ],
+              "text": "alpha6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
+        },
+        {
+          "label": "step 7 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
+        },
+        {
+          "label": "step 8 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
+        },
+        {
+          "label": "step 9 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "x9"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x9</em>  </code></p></div>"
+        },
+        {
+          "label": "step 10 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "10"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
+        },
+        {
+          "label": "step 11 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
+        },
+        {
+          "label": "step 12 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
+        },
+        {
+          "label": "step 13 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
+        },
+        {
+          "label": "step 14 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                1,
+                0
+              ],
+              "text": "14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">14</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
+        },
+        {
+          "label": "step 15 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "x15"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">14</span>\t<em dj-id=\"4\">x15</em>  </code></p></div>"
+        },
+        {
+          "label": "step 16 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                1,
+                0
+              ],
+              "text": "alpha16"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">x15</em>  </code></p></div>"
+        },
+        {
+          "label": "step 17 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">x15</em>  </code></p></div>"
+        },
+        {
+          "label": "step 18 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "tail18"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">tail18</em>  </code></p></div>"
+        },
+        {
+          "label": "step 19 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                3,
+                0
+              ],
+              "text": "b c19"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">b c19</em>  </code></p></div>"
+        },
+        {
+          "label": "step 20 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                1,
+                0
+              ],
+              "text": "tail20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">tail20</span>\t<em dj-id=\"4\">b c19</em>  </code></p></div>"
+        }
+      ]
+    },
+    "pre_block_of_lines": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"2\">l1</span>\n<span class=\"ln\" dj-id=\"3\">l2</span>\n<b dj-id=\"4\">three</b></pre></div>",
+      "steps": [
+        {
+          "label": "step 1 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"2\">l1</span>\n<span class=\"ln\" dj-id=\"3\">l2</span>\n<b dj-id=\"4\">three</b></pre></div>"
+        },
+        {
+          "label": "step 2 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"2\">l1</span>\n<span class=\"ln\" dj-id=\"3\">l2</span>\n<b dj-id=\"4\">three</b></pre></div>"
+        },
+        {
+          "label": "step 3 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"2\">l1</span>\n<span class=\"ln\" dj-id=\"3\">l2</span>\n<b dj-id=\"4\">3</b></pre></div>"
+        },
+        {
+          "label": "step 4 lines",
+          "patches": [
+            {
+              "type": "Replace",
+              "path": [
+                0,
+                0
+              ],
+              "d": "2",
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "7"
+              }
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "child_d": "4"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "3"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">3</b></pre></div>"
+        },
+        {
+          "label": "step 5 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">3</b></pre></div>"
+        },
+        {
+          "label": "step 6 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">3</b></pre></div>"
+        },
+        {
+          "label": "step 7 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "alpha7"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">alpha7</b></pre></div>"
+        },
+        {
+          "label": "step 8 b",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">alpha7</b></pre></div>"
+        },
+        {
+          "label": "step 9 b",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">alpha7</b></pre></div>"
+        },
+        {
+          "label": "step 10 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "10"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">10</b></pre></div>"
+        },
+        {
+          "label": "step 11 b",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">10</b></pre></div>"
+        },
+        {
+          "label": "step 12 b",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">10</b></pre></div>"
+        },
+        {
+          "label": "step 13 lines",
+          "patches": [
+            {
+              "type": "Replace",
+              "path": [
+                0,
+                0
+              ],
+              "d": "7",
+              "node": {
+                "tag": "span",
+                "attrs": {
+                  "class": "ln",
+                  "dj-id": "a"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "l4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "a"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "\n",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "span",
+                "attrs": {
+                  "class": "ln",
+                  "dj-id": "b"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "l3",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "b"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "\n",
+                "key": null
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "b",
+                "attrs": {
+                  "dj-id": "c"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "10",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "c"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">10</b></pre></div>"
+        },
+        {
+          "label": "step 14 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">10</b></pre></div>"
+        },
+        {
+          "label": "step 15 b",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">10</b></pre></div>"
+        },
+        {
+          "label": "step 16 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha16"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha16</b></pre></div>"
+        },
+        {
+          "label": "step 17 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha17"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha17</b></pre></div>"
+        },
+        {
+          "label": "step 18 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha17</b></pre></div>"
+        },
+        {
+          "label": "step 19 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha17</b></pre></div>"
+        },
+        {
+          "label": "step 20 a",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha17</b></pre></div>"
+        }
+      ]
+    },
+    "textarea_and_code": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">one</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>",
+      "steps": [
+        {
+          "label": "step 1 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "b c1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c1</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 2 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "x2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">x2</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 3 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "b c3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 4 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                1,
+                0
+              ],
+              "text": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">4</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 5 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                1,
+                0
+              ],
+              "text": "b c5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 6 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
+        },
+        {
+          "label": "step 7 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "tail7"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">tail7</b></div></div>"
+        },
+        {
+          "label": "step 8 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "8"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">8</b></div></div>"
+        },
+        {
+          "label": "step 9 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha9"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha9</b></div></div>"
+        },
+        {
+          "label": "step 10 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha10"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha10</b></div></div>"
+        },
+        {
+          "label": "step 11 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha11"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
+        },
+        {
+          "label": "step 12 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "12"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">12</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
+        },
+        {
+          "label": "step 13 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "tail13"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail13</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
+        },
+        {
+          "label": "step 14 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "b c14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c14</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
+        },
+        {
+          "label": "step 15 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "tail15"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail15</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
+        },
+        {
+          "label": "step 16 c",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                4,
+                0
+              ],
+              "text": "alpha16"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail15</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
+        },
+        {
+          "label": "step 17 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "17"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">17</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
+        },
+        {
+          "label": "step 18 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "b c18"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c18</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
+        },
+        {
+          "label": "step 19 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                1,
+                0
+              ],
+              "text": "tail19"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c18</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">tail19</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
+        },
+        {
+          "label": "step 20 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "alpha20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">alpha20</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">tail19</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
+        }
+      ]
+    },
+    "nested_inline_in_pre": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">two</i></span></pre></div>",
+      "steps": [
+        {
+          "label": "step 1 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">two</i></span></pre></div>"
+        },
+        {
+          "label": "step 2 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                3,
+                0,
+                0
+              ],
+              "text": "2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">2</i></span></pre></div>"
+        },
+        {
+          "label": "step 3 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                3,
+                0,
+                0
+              ],
+              "text": "alpha3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha3</i></span></pre></div>"
+        },
+        {
+          "label": "step 4 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                3,
+                0,
+                0
+              ],
+              "text": "4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">4</i></span></pre></div>"
+        },
+        {
+          "label": "step 5 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "tail5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">4</i></span></pre></div>"
+        },
+        {
+          "label": "step 6 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                3,
+                0,
+                0
+              ],
+              "text": "alpha6"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 7 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 8 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 9 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 10 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 11 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 12 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 13 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "alpha13"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">alpha13</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 14 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "tail14"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 15 c",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 16 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
+        },
+        {
+          "label": "step 17 b",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                3,
+                0,
+                0
+              ],
+              "text": "tail17"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"
+        },
+        {
+          "label": "step 18 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"
+        },
+        {
+          "label": "step 19 lines",
+          "patches": [],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"
+        },
+        {
+          "label": "step 20 a",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "x20"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">x20</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"
+        }
+      ]
+    }
+  }
+}

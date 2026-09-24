@@ -966,20 +966,39 @@ impl RustLiveViewBackend {
                         // current VDOM: the map could be stale, and a patch
                         // the server's own tree didn't take would leave the
                         // server rendering old content forever.
-                        let all_mapped = text_changes.iter().all(|(idx, old_text, new_text)| {
-                            !is_html_whitespace_only(old_text)
-                                && !is_html_whitespace_only(new_text)
-                                && frag_map.get(idx).is_some_and(|(path, _)| {
-                                    self.last_vdom
-                                        .as_ref()
-                                        .and_then(|v| get_vdom_node(v, path))
-                                        .is_some_and(|n| n.is_text())
-                                })
-                        });
-                        if all_mapped {
+                        //
+                        // A fragment is raw HTML, while the VDOM text node
+                        // (and the client's `textContent`) holds DECODED
+                        // text: `&amp;` must reach the patch as `&` (#2898).
+                        // `text_node_value` decodes (or not, inside
+                        // script/style) and returns None for anything it
+                        // can't decode exactly as the parser would.
+                        let decoded: Option<Vec<String>> = text_changes
+                            .iter()
+                            .map(|(idx, old_raw, new_raw)| {
+                                let (path, _) = frag_map.get(idx)?;
+                                let vdom = self.last_vdom.as_ref()?;
+                                let node = get_vdom_node(vdom, path)?;
+                                if !node.is_text() {
+                                    return None;
+                                }
+                                let old_text = text_node_value(vdom, path, old_raw)?;
+                                let new_text = text_node_value(vdom, path, new_raw)?;
+                                if is_html_whitespace_only(&old_text)
+                                    || is_html_whitespace_only(&new_text)
+                                    || node.text.as_deref() != Some(old_text.as_str())
+                                {
+                                    return None;
+                                }
+                                Some(new_text)
+                            })
+                            .collect();
+                        if let Some(decoded) = decoded {
                             let mut vdom = self.last_vdom.take().unwrap();
                             let mut patches = Vec::new();
-                            for (idx, _old_text, new_text) in &text_changes {
+                            for ((idx, _old_raw, _new_raw), new_text) in
+                                text_changes.iter().zip(decoded.iter())
+                            {
                                 let (path, djust_id) = frag_map.get(idx).unwrap();
                                 if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
                                     node.text = Some(new_text.clone());
@@ -4276,6 +4295,106 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Valu
     }
 }
 
+/// The text a text node at `path` holds for the raw HTML `raw` (#2898):
+/// decoded, except inside the elements html5ever keeps as RAW text — `script`,
+/// `style`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, and
+/// `noscript` (the parser runs with scripting enabled) — whose body is kept
+/// verbatim. Under an `svg`/`math` ancestor those same tag names are foreign
+/// elements whose text IS decoded (and `foreignObject` switches back), so the
+/// fast path does not guess there: `None`, full parse. `None` too when the
+/// text can't be decoded exactly (see [`decode_text_entities`]).
+fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
+    const RAW_TEXT_TAGS: [&str; 8] = [
+        "script",
+        "style",
+        "xmp",
+        "iframe",
+        "noembed",
+        "noframes",
+        "plaintext",
+        "noscript",
+    ];
+    let (_, parent_path) = path.split_last()?;
+    let parent = get_vdom_node(vdom, parent_path)?;
+    let raw_parent = RAW_TEXT_TAGS
+        .iter()
+        .any(|t| parent.tag.eq_ignore_ascii_case(t));
+    if raw_parent {
+        let foreign = (0..=parent_path.len()).any(|n| {
+            get_vdom_node(vdom, &parent_path[..n]).is_some_and(|a| {
+                a.tag.eq_ignore_ascii_case("svg") || a.tag.eq_ignore_ascii_case("math")
+            })
+        });
+        return if foreign { None } else { Some(raw.to_string()) };
+    }
+    decode_text_entities(raw).map(std::borrow::Cow::into_owned)
+}
+
+/// Decode the character references a text node's raw HTML may carry, the way
+/// the HTML parser would, for the parse-skipping fast paths (#2898).
+///
+/// Handles what Django's escaping (and `escape`/`force_escape`) emits —
+/// `&amp;` `&lt;` `&gt;` `&quot;` `&#x27;` `&#39;` — plus `&apos;` and
+/// `;`-terminated decimal / hex references to ordinary characters. Anything
+/// else containing `&` (other named entities such as `&nbsp;`, references
+/// without `;`, NUL / C1 / surrogate code points the parser remaps) returns
+/// `None`, and the caller falls back to the full parse, which is always right.
+/// Text with no `&` is returned borrowed.
+fn decode_text_entities(raw: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if !raw.contains('&') {
+        return Some(std::borrow::Cow::Borrowed(raw));
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp + 1..];
+        let semi = tail.find(';')?;
+        // The longest reference we accept is `#x10FFFF` (8 bytes).
+        if semi == 0 || semi > 8 {
+            return None;
+        }
+        let name = &tail[..semi];
+        let ch = match name {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "quot" => '"',
+            "apos" => '\'',
+            _ => {
+                let digits = name.strip_prefix('#')?;
+                let code = if let Some(hex) = digits
+                    .strip_prefix('x')
+                    .or_else(|| digits.strip_prefix('X'))
+                {
+                    if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return None;
+                    }
+                    u32::from_str_radix(hex, 16).ok()?
+                } else {
+                    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                        return None;
+                    }
+                    digits.parse::<u32>().ok()?
+                };
+                // The parser remaps NUL, C0 controls it rejects and the C1
+                // range (windows-1252 table); leave those to it.
+                if code < 0x20 && !matches!(code, 0x09 | 0x0A | 0x0C) {
+                    return None;
+                }
+                if (0x7F..=0x9F).contains(&code) {
+                    return None;
+                }
+                char::from_u32(code)?
+            }
+        };
+        out.push(ch);
+        rest = &tail[semi + 1..];
+    }
+    out.push_str(rest);
+    Some(std::borrow::Cow::Owned(out))
+}
+
 /// Build a map from template node index to VDOM text node path.
 /// For each fragment that's plain text (no HTML tags), find the matching
 /// text node in the VDOM by walking it depth-first and matching content.
@@ -4404,27 +4523,34 @@ fn try_text_region_fast_path(
     let djust_id = entry.djust_id.clone();
     let old_html_end = entry.html_end;
 
-    // Entity-decoded text in the VDOM may differ from the raw HTML
-    // bytes. Validate that the byte-offset we computed matches actual
-    // VDOM text content. If entities shift positions, bail.
-    let end_in_text = offset_in_text + old_mid.len();
-    if end_in_text > old_text.len()
-        || !old_text.is_char_boundary(offset_in_text)
-        || !old_text.is_char_boundary(end_in_text)
+    // The index's byte range is the node's RAW html; the VDOM holds the
+    // DECODED text. Splice in the raw domain, then decode (#2898): splicing
+    // the raw `new_mid` into decoded text turned `a &amp; b` into a SetText
+    // of the literal entity. The old raw text must decode to exactly what the
+    // VDOM holds, or the index is not describing this node — bail.
+    if old_html_end > old_len
+        || !old_html.is_char_boundary(entry.html_start)
+        || !old_html.is_char_boundary(old_html_end)
     {
         return None;
     }
-    if &old_text[offset_in_text..end_in_text] != old_mid {
+    let old_raw = &old_html[entry.html_start..old_html_end];
+    if text_node_value(old_vdom, &path, old_raw).as_deref() != Some(old_text.as_str()) {
         return None;
     }
-
-    // Build the new text by swapping just the diff span inside this
-    // text node. Boundaries already validated above.
-    let mut new_text =
-        String::with_capacity(old_text.len() + new_mid.len().saturating_sub(old_mid.len()));
-    new_text.push_str(&old_text[..offset_in_text]);
-    new_text.push_str(new_mid);
-    new_text.push_str(&old_text[end_in_text..]);
+    let end_in_raw = offset_in_text + old_mid.len();
+    if end_in_raw > old_raw.len()
+        || !old_raw.is_char_boundary(offset_in_text)
+        || !old_raw.is_char_boundary(end_in_raw)
+    {
+        return None;
+    }
+    let mut new_raw =
+        String::with_capacity(old_raw.len() + new_mid.len().saturating_sub(old_mid.len()));
+    new_raw.push_str(&old_raw[..offset_in_text]);
+    new_raw.push_str(new_mid);
+    new_raw.push_str(&old_raw[end_in_raw..]);
+    let new_text = text_node_value(old_vdom, &path, &new_raw)?;
 
     // #2999: whether a whitespace-only text node survives the parse depends on
     // its neighbours (kept as `" "` between inline siblings, dropped
@@ -5695,6 +5821,134 @@ mod fast_path_flag_tests {
         let patches = patches.expect("a diff render returns patches");
         assert!(patches.contains("SetText"), "patches: {patches}");
         assert!(!patches.contains("SetAttr"), "patches: {patches}");
+    }
+
+    // #2898: fragments and the HTML byte diff are RAW html; a SetText carries
+    // the decoded text the client assigns to `textContent`.
+    #[test]
+    fn fragment_fast_path_sends_decoded_text() {
+        let mut view = mounted();
+        view.update_state_rust(state("a & <b>", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (html, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+        let patches = patches.expect("patches");
+        assert!(
+            patches.contains(r#""text":"a & <b>""#),
+            "patches: {patches}"
+        );
+        assert!(html.contains("a &amp; &lt;b&gt;</p>"), "html: {html}");
+    }
+
+    fn one_var_view(template: &str, x: &str) -> RustLiveViewBackend {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust(template.to_string());
+        let mut s = HashMap::new();
+        s.insert("x".to_string(), Value::String(x.to_string()));
+        view.update_state_rust(s);
+        view.render_with_diff().expect("initial render");
+        view
+    }
+
+    fn set_x(view: &mut RustLiveViewBackend, x: &str) -> String {
+        let mut s = HashMap::new();
+        s.insert("x".to_string(), Value::String(x.to_string()));
+        view.update_state_rust(s);
+        view.set_changed_keys(vec!["x".to_string()]);
+        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        patches.expect("patches")
+    }
+
+    #[test]
+    fn text_region_fast_path_sends_decoded_text() {
+        // The first value holds no entity, so the old raw text equals the
+        // VDOM text and the old offset check alone could not catch it.
+        let tpl = r#"<div dj-id="0"><p>{{ x|safe }}</p></div>"#;
+        let mut view = one_var_view(tpl, "<b>overview</b>");
+        let patches = set_x(&mut view, "<b>a &amp; b</b>");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        assert!(patches.contains(r#""text":"a & b""#), "patches: {patches}");
+        let patches = set_x(&mut view, "<b>&lt;script&gt; &#233;</b>");
+        assert!(
+            patches.contains("\"text\":\"<script> \u{e9}\""),
+            "patches: {patches}"
+        );
+    }
+
+    #[test]
+    fn undecodable_entity_falls_back_to_the_full_parse() {
+        let tpl = r#"<div dj-id="0"><p>{{ x|safe }}</p></div>"#;
+        let mut view = one_var_view(tpl, "<b>overview</b>");
+        let patches = set_x(&mut view, "<b>a&nbsp;b</b>");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+        assert!(patches.contains("a\u{a0}b"), "patches: {patches}");
+    }
+
+    #[test]
+    fn script_body_is_not_decoded() {
+        let tpl = r#"<div dj-id="0"><script>var s = "{{ x|safe }}";</script></div>"#;
+        let mut view = one_var_view(tpl, "one");
+        let patches = set_x(&mut view, "a &amp; b");
+        assert!(
+            patches.contains(r#"var s = \"a &amp; b\";"#),
+            "patches: {patches}"
+        );
+    }
+
+    #[test]
+    fn raw_text_elements_are_not_decoded_and_foreign_ones_fall_back() {
+        // html5ever keeps these bodies verbatim (noscript: scripting is on).
+        for tag in ["noscript", "xmp", "iframe", "noembed", "noframes"] {
+            let tpl = format!(r#"<div dj-id="0"><{tag}>{{{{ x|safe }}}}</{tag}></div>"#);
+            let mut view = one_var_view(&tpl, "Enable JS");
+            let patches = set_x(&mut view, "Tom &amp; Jerry");
+            assert!(
+                patches.contains(r#""text":"Tom &amp; Jerry""#),
+                "{tag}: {patches}"
+            );
+        }
+        // Inside svg/math, style/script are foreign elements whose text IS
+        // decoded — the fast path must not guess: full parse.
+        for tpl in [
+            r#"<div dj-id="0"><svg><style>{{ x|safe }}</style></svg></div>"#,
+            r#"<div dj-id="0"><svg><script>{{ x|safe }}</script></svg></div>"#,
+        ] {
+            let mut view = one_var_view(tpl, "Enable JS");
+            let patches = set_x(&mut view, "Tom &amp; Jerry");
+            assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE, "{tpl}");
+            assert!(
+                patches.contains(r#""text":"Tom & Jerry""#),
+                "{tpl}: {patches}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_text_entities_matches_the_parser_or_refuses() {
+        let d = |s: &str| super::decode_text_entities(s).map(|c| c.into_owned());
+        assert_eq!(d("plain").as_deref(), Some("plain"));
+        assert_eq!(
+            d("&amp;&lt;&gt;&quot;&#x27;&#39;&apos;").as_deref(),
+            Some("&<>\"'''")
+        );
+        assert_eq!(
+            d("caf&#233; &#x2014; &#X41;").as_deref(),
+            Some("caf\u{e9} \u{2014} A")
+        );
+        // Refused: anything the fast path can't decode exactly as html5ever.
+        for s in [
+            "&nbsp;",
+            "&amp",
+            "a & b",
+            "&#0;",
+            "&#x80;",
+            "&#xD800;",
+            "&#;",
+            "&#x;",
+            "&#12345678;",
+        ] {
+            assert_eq!(d(s), None, "{s:?}");
+        }
     }
 
     // #3013: the fragment text map is built lazily, by the text fast path,

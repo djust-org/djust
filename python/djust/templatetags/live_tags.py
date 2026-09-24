@@ -307,6 +307,26 @@ def djust_client_config(context: Context) -> Any:
     return _client_config_html(request)
 
 
+def _form_view(view: Any, attr: str) -> Any:
+    """The view a form tag or filter is for (#2958).
+
+    ``{% live_form view %}`` names ``view`` explicitly. On the Django engine
+    and the WS path the context carries it, but a root LiveView template is
+    rendered by the Rust engine from a JSON-serialised context that cannot
+    carry the view, so ``view`` resolves to ``""``. Fall back to the view the
+    render is for — the active-parent-view thread-local
+    ``render_full_template`` / ``render_with_diff`` register (#1784), as
+    ``{% live_render %}`` does — but only when the given object cannot serve
+    ``attr`` and the fallback can. An explicitly passed view always wins.
+    """
+    if hasattr(view, attr):
+        return view
+    active = get_active_parent_view()
+    if active is not None and hasattr(active, attr):
+        return active
+    return view
+
+
 @register.simple_tag
 def live_form(view: Any, **kwargs: Any) -> Any:
     """
@@ -332,6 +352,7 @@ def live_form(view: Any, **kwargs: Any) -> Any:
             <button type="submit">Submit</button>
         </form>
     """
+    view = _form_view(view, "as_live")
     if not hasattr(view, "as_live"):
         return "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
 
@@ -363,6 +384,7 @@ def live_field(view: Any, field_name: str, **kwargs: Any) -> Any:
         {% live_field view "email" %}
         {% live_field view "password" label="Custom Password Label" %}
     """
+    view = _form_view(view, "as_live_field")
     if not hasattr(view, "as_live_field"):
         return "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
 
@@ -386,6 +408,7 @@ def live_errors(view: Any, field_name: str | None = None) -> str:
         {% live_errors view "email" %}
         {% live_errors view %}  <!-- non-field errors -->
     """
+    view = _form_view(view, "get_field_errors")
     if field_name:
         if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
@@ -422,6 +445,7 @@ def field_value(view: Any, field_name: str) -> Any:
         {% load live_tags %}
         <input type="text" value="{{ view|field_value:'email' }}">
     """
+    view = _form_view(view, "get_field_value")
     if hasattr(view, "get_field_value"):
         return view.get_field_value(field_name)
     return ""
@@ -443,6 +467,7 @@ def has_errors(view: Any, field_name: str) -> bool:
         {% load live_tags %}
         <input class="{% if view|has_errors:'email' %}is-invalid{% endif %}">
     """
+    view = _form_view(view, "has_field_errors")
     if hasattr(view, "has_field_errors"):
         return bool(view.has_field_errors(field_name))
     return False
@@ -849,6 +874,18 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _context_view(context: Context) -> Any:
+    """The view a tag is rendering for: ``context["view"]`` on the Django
+    engine and the WS path; on a Rust render whose JSON-serialised context
+    cannot carry the view, the thread-local ``render_full_template`` /
+    ``render_with_diff`` register (#1784) — the same fallback
+    ``{% live_render %}`` uses (#2958)."""
+    view = context.get("view")
+    if view is None:
+        view = get_active_parent_view()
+    return view
+
+
 class ColocatedHookNode(Node):
     """
     Emit a ``<script type="djust/hook" data-hook="NAME">...</script>`` tag
@@ -888,7 +925,7 @@ class ColocatedHookNode(Node):
         cfg = getattr(settings, "DJUST_CONFIG", {}) or {}
         if cfg.get("hook_namespacing") != "strict":
             return self.name
-        view = context.get("view")
+        view = _context_view(context)
         if view is None:
             return self.name
         try:
@@ -1214,7 +1251,7 @@ class DjActivityNode(Node):
         # mixin can authoritatively gate events. ``ActivityMixin`` defines
         # ``_register_activity``; guarded for non-LiveView contexts (e.g.
         # unit tests that render the tag against a plain Context).
-        view = context.get("view")
+        view = _context_view(context)
         if view is not None and hasattr(view, "_register_activity"):
             try:
                 view._register_activity(name, visible=visible, eager=eager)
