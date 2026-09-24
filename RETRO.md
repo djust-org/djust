@@ -385,6 +385,8 @@ issue or be explicitly closed with a reason.
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Open | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) |
 | 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: —  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
+| 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
+| 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -454,6 +456,42 @@ Five instances across three of these buckets, each caught by a human or reviewer
 
 - [ ] A mechanical gate tying a completed ROADMAP bucket to a `RETRO.md` entry — tracked in Action Tracker #341 (GitHub #2848)
 - [ ] Mechanical checks for false/stale claims in changelog fragments and PR bodies — tracked in Action Tracker #342 (GitHub #2849)
+
+## v1.2.1-3 — dj-root / dj-view detection (PR #3023)
+
+**Date**: 2026-09-23
+**Scope**: Two issues about the same root detection. #2981: `dj-view` was stamped only onto the literal `<div dj-root>`, so a root with any other attribute never mounted its WebSocket. #2892: the root regexes and closing-tag scanner only knew `<div>`, so a `<main>`, `<section>` or `<article>` root skipped initial-GET normalisation and every patch missed. One PR, #3023, squash-merged as `903398fe`.
+**Tests at close**: 54 cases in `python/djust/tests/test_root_detection_2892_2981.py` plus 6 Rust tests in `crates/djust_live/src/lib.rs`. Before the targeted-tests policy, full suites at `89ad7960d`: 30,982 Python passed / 947 skipped, 2,516 Rust, 1,975 JS. CI was green at the merge head.
+
+### What We Learned
+
+**1. When a detection regex starts driving an insertion, review it as a sanitiser.**
+The div-only pattern already matched ` dj-root ` inside an attribute value. That was harmless while a literal `str.replace` did the writing. Making the pattern tag-agnostic and having it place the `dj-view` stamp turned the old blindness into stored XSS through autoescaped content: `value="{{ q }}"` with `q = "x dj-root autofocus onfocus=alert(1)"` became a live handler. Self-Review and Security Check both caught it on their own before the PR opened. The fix made every root pattern quote-aware (whole quoted strings or single unquoted characters) and tokenised the matched tag before inserting. The Rust twin now skips quoted values as well.
+
+**2. Enumerate the paths from the code.** The issues named 4 Python sites. The inventory found 10 across Python checks, `testing.py`, both Rust crates and the client JS. Three of them had their own attribute-boundary bugs (`<body dj-view-transitions>` counted as a root in S011, T005 and the Rust scanner). Two were already correct and were left alone on purpose.
+
+**3. A partly-applied edit script produced a commit message that claimed a test that didn't exist.** `89b74b81a` said "the regression test covers both shapes". The script had asserted on the source edit, failed, and never touched the test file. The fresh-context Re-Review caught it, and `6fde5e04e` added the test (gate-off verified).
+
+### Insights
+- v1.2.1-1 (#3017, `</head>` injection) and this bucket both replaced string-literal HTML injection with located injection. A shared "find tag X outside raw text and quoted values" helper would serve both; #3030 is the first step.
+- Regex performance on tag soup with no `>` had been quadratic since before this bucket. Excluding unquoted `<` and asserting the tag closes before trying attributes made it linear (0.06 s at 160 KB, from over a minute).
+
+### Review Stats
+
+| Metric | #3023 |
+|---|---|
+| Tests added | 54 Python + 6 Rust |
+| 🔴 Findings | 2 (XSS stamp-in-value, found by Self-Review and Security Check; stamp misplaced by a look-alike name), both fixed pre-PR |
+| 🟡 Findings | 10 across the 4 review stages; 8 fixed, 2 deferred (#3030, #3031) |
+| CI failures | 0 |
+| Findings by pattern class | `xss` ×1, `parallel-path-drift` ×4, `redos` ×1, `test-gap` ×1 |
+
+### Process Improvements Applied
+None in this bucket. The EINVAL pre-push blocker was fixed separately (#3029).
+
+### Open Items
+- [ ] Python/Rust root choice when a quoted value contains `<… dj-root>`. Tracked in Action Tracker #346 (GitHub #3030).
+- [ ] dj-root vs dj-view precedence parity. Tracked in Action Tracker #347 (GitHub #3031).
 
 ## v1.2.0-6 — transport fidelity, wire versioning, and check coverage (PRs #2835–#2846)
 
