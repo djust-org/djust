@@ -43,8 +43,9 @@ _WS_BEFORE_TOKEN_RE = re.compile(
 
 #: #3026: Pygments' whitespace span followed by BARE text (a lexer such as
 #: bash emits words as plain text, not token spans). The span is unwrapped so
-#: its space joins that text node.
-_WS_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>(?=[^<])')
+#: its space joins that text node. Not before a newline: whitespace at a line
+#: end stays where it is, as the docstring below says.
+_WS_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>(?=[^<\r\n])')
 
 
 def _fold_whitespace(highlighted: str) -> str:

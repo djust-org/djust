@@ -1,25 +1,24 @@
-"""The Python and Rust root locators pick the same element (#3030, #3031).
+"""The Python and Rust root locators agree on quoted attribute values (#3030).
 
-* #3030 — ``_search_dj_root_open`` ran its regexes over the whole page, and
-  ``re.search`` can start at any ``<``, including one inside a quoted
-  attribute value: ``<div data-h="<section dj-root>">`` made Python pick the
-  ``<section>`` in the value (and the dj-view stamp's ``"`` then closed
-  ``data-h`` early), while the Rust locator, which walks tag by tag and skips
-  quoted values, picked the next real tag. Python now masks those values on
-  the same tag walk (``_mask_for_root_search``).
-* #3031 — with a ``dj-view`` element before a separate ``dj-root`` element,
-  Python picked the ``dj-root`` (it looks for ``dj-root`` first) and the Rust
-  VDOM picked whichever came first. The Rust side now uses Python's rule.
+``_search_dj_root_open`` ran its regexes over the whole page, and
+``re.search`` can start at any ``<``, including one inside a quoted attribute
+value: ``<div data-h="<section dj-root>">`` made Python pick the ``<section>``
+in the value (and the dj-view stamp's ``"`` then closed ``data-h`` early),
+while the Rust locator, which walks tag by tag and skips quoted values, picked
+the next real tag. Python now masks those values on the same tag walk
+(``_mask_for_root_search``). Both walkers treat ``<`` as a tag start only
+before a letter, ``/`` or ``!``.
 
-The Rust half of each case is pinned in ``crates/djust_live/src/lib.rs``
-(``dj_root_content_range_2663``) and ``crates/djust_vdom/src/parser.rs``;
-here the VDOM's choice is observed through ``djust._rust.diff_html``: an edit
-outside the root the VDOM chose produces no patch.
+The Rust half is pinned in ``crates/djust_live/src/lib.rs``
+(``dj_root_content_range_2663::*_3030``).
+
+(#3031, dj-root vs dj-view precedence, is NOT changed here: aligning it moves
+the VDOM root of a dj-view-only parent that embeds a ``{% live_render %}``
+child with its own ``dj-root``. It is a 1.3 item.)
 """
 
 from __future__ import annotations
 
-import json
 import time
 
 import pytest
@@ -36,40 +35,6 @@ def _python_root(html: str) -> str:
     m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
     assert m is not None
     return html[m.start() : m.end()]
-
-
-def _vdom_patches(old: str, new: str) -> list:
-    from djust._rust import diff_html
-
-    return json.loads(diff_html(old, new))
-
-
-def _page(nav: str, main: str, *, nav_attr: str, main_attr: str) -> str:
-    return (
-        f"<html><body><nav {nav_attr}><p>{nav}</p></nav>"
-        f"<main {main_attr}><p>{main}</p></main></body></html>"
-    )
-
-
-class TestPrecedence3031:
-    ATTRS = dict(nav_attr='dj-view="a.B"', main_attr="dj-root")
-
-    def test_python_picks_the_dj_root(self):
-        assert _python_root(_page("n", "m", **self.ATTRS)) == "<main dj-root>"
-
-    def test_the_vdom_roots_at_the_same_element(self):
-        # An edit inside <nav> (outside the chosen root) is no patch; an edit
-        # inside <main> is one. Before #3031 the VDOM rooted at <nav>.
-        base = _page("n", "m", **self.ATTRS)
-        assert _vdom_patches(base, _page("CHANGED", "m", **self.ATTRS)) == []
-        assert _vdom_patches(base, _page("n", "CHANGED", **self.ATTRS)) != []
-
-    def test_dj_view_is_the_fallback_on_both_sides(self):
-        attrs = dict(nav_attr='class="x"', main_attr='dj-view="a.B"')
-        base = _page("n", "m", **attrs)
-        assert _python_root(base) == '<main dj-view="a.B">'
-        assert _vdom_patches(base, _page("CHANGED", "m", **attrs)) == []
-        assert _vdom_patches(base, _page("n", "CHANGED", **attrs)) != []
 
 
 class TestQuotedValues3030:

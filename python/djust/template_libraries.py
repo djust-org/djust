@@ -242,13 +242,19 @@ _current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[boo
     contextvars.ContextVar("djust_template_format_flags", default=(None, None))
 )
 
-#: #3044: the Django ``RenderContext`` every bridged node of ONE render
-#: shares. Django gives each ``Template.render`` one ``render_context``; a
-#: node that keeps per-render state there (``{% djust_skeleton %}`` emits its
-#: ``<style>`` block once per render; an ``InclusionNode`` caches its
-#: template) saw a fresh one per CALL, because the bridge builds a new
-#: ``Context`` for every call. Set by :func:`library_render_scope` around each
-#: Rust render; ``None`` (outside one) keeps the per-call behaviour.
+#: #3044: the Django ``RenderContext`` djust's OWN bridged tags
+#: (:data:`_DJUST_TAGS_BRIDGED`) share across one render. Django gives each
+#: ``Template.render`` one ``render_context``; ``{% djust_skeleton %}`` keeps
+#: "style block already emitted" there, and saw a fresh one per CALL because
+#: the bridge builds a new ``Context`` for every call. Set by
+#: :func:`library_render_scope` around each Rust render; ``None`` (outside
+#: one) keeps the per-call behaviour.
+#:
+#: Third-party bridged tags keep a fresh ``Context`` per call, as before
+#: (#3053 review): the bridge caches ONE node per argument tuple, so a shared
+#: ``render_context[node]`` would merge the state of two sites with the same
+#: arguments, and of every loop iteration, which neither Django nor 1.2.0
+#: does. Widening it needs per-site nodes first.
 _render_scope: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
     "djust_library_render_context", default=None
 )
@@ -364,9 +370,12 @@ def library_render_scope() -> Iterator[None]:
         _render_scope.reset(token)
 
 
-def _share_render_context(ctx: Any) -> None:
+def _share_render_context(ctx: Any, shares: bool) -> None:
     """Point a bridge-built ``Context`` at the current render's
-    ``RenderContext``, when a :func:`library_render_scope` is active."""
+    ``RenderContext``, when ``shares`` (a djust-owned bridged tag) and a
+    :func:`library_render_scope` is active."""
+    if not shares:
+        return
     shared = _render_scope.get()
     if shared is not None:
         ctx.render_context = shared
@@ -764,6 +773,13 @@ def _bridge_library(label: str, library: Any) -> None:
         else:
             _bridge_tag(label, name, compile_func)
         _engine_state("_tag_owner", _tag_owner)[name] = label
+    if module in _DJUST_TAGS_BRIDGED:
+        # djust's own bridged tags share one RenderContext per render (#3044).
+        owned = _engine_state("_owned_tags", _owned_tags)
+        for name in library.tags:
+            entry = owned.get(name)
+            if entry is not None and entry[0] == label:
+                entry[1].shares_render_context = True
     refused = refused_filters(module)
     for name in library.filters:
         if name not in refused:
@@ -1307,7 +1323,10 @@ def _materialize_lazy(value: Any) -> Any:
 
 
 def _render_node(
-    node: Any, context: Dict[str, Any], autoescape: bool = True
+    node: Any,
+    context: Dict[str, Any],
+    autoescape: bool = True,
+    shares_render_context: bool = False,
 ) -> Tuple[Any, Dict[str, Any]]:
     """``node.render`` on a Django ``Context`` over ``context``; the output
     ``mark_safe``'d (see the module docstring) and the context writes the
@@ -1331,7 +1350,7 @@ def _render_node(
     if "request" in context:
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
-    _share_render_context(ctx)
+    _share_render_context(ctx, shares_render_context)
     output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
@@ -1352,6 +1371,10 @@ def _render_node(
 class LibraryTagHandler:
     """The generic inline handler: a ``simple_tag``, an ``inclusion_tag``, or
     a raw ``@register.tag`` that builds its node from its own token."""
+
+    #: Share the render's ``RenderContext`` (#3044). True only for djust's own
+    #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
+    shares_render_context = False
 
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
     RETURNS_BINDINGS = True
@@ -1395,7 +1418,9 @@ class LibraryTagHandler:
         self, args: List[str], context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
         try:
-            return _render_node(self._compile(args), context, autoescape)
+            return _render_node(
+                self._compile(args), context, autoescape, self.shares_render_context
+            )
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -1489,7 +1514,7 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         try:
             tokens = [Token(TokenType.TEXT, content), Token(TokenType.BLOCK, self.end_name)]
             node = self.compile_func(_parser(tokens), _token(self.name, args))
-            return _render_node(node, context, autoescape)
+            return _render_node(node, context, autoescape, self.shares_render_context)
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -1741,6 +1766,10 @@ class LibraryRawBlockTagHandler:
     point, a LiveView page 500s exactly as Django's does.
     """
 
+    #: Share the render's ``RenderContext`` (#3044). True only for djust's own
+    #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
+    shares_render_context = False
+
     RETURNS_BINDINGS = True
 
     def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
@@ -1788,7 +1817,8 @@ class LibraryRawBlockTagHandler:
             ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
-            _share_render_context(ctx)  # the same as `_render_node` (#3044, #1646)
+            # The same as `_render_node` (#3044, #1646).
+            _share_render_context(ctx, self.shares_render_context)
             output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {

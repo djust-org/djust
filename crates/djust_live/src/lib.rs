@@ -4652,16 +4652,17 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
     None
 }
 
-/// True when an open tag's body (the bytes between `<` and `>`) carries the
-/// `marker` ATTRIBUTE NAME (`dj-root` or `dj-view`): preceded by ASCII
+/// True when an open tag's body (the bytes between `<` and `>`) carries a
+/// `dj-root` or `dj-view` ATTRIBUTE NAME: preceded by ASCII
 /// whitespace, followed by whitespace, `=`, `/` or the end of the tag, and NOT
 /// inside a quoted attribute value (`value="x dj-root y"` is text). A bare
 /// prefix match also accepted `dj-view-transitions` (a `<body>` attribute) and
 /// `dj-viewport-top`, and missed a tab or newline before the name. This is the
 /// twin of the Python `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE`
 /// (#2892, #2981, #1646).
-fn tag_has_root_marker(tag_body: &[u8], marker: &[u8]) -> bool {
-    let n = marker.len();
+fn tag_has_root_marker(tag_body: &[u8]) -> bool {
+    const MARKERS: [&[u8]; 2] = [b"dj-root", b"dj-view"];
+    const N: usize = 7; // both markers are 7 bytes
     let mut p = 0;
     while p < tag_body.len() {
         let c = tag_body[p];
@@ -4675,10 +4676,12 @@ fn tag_has_root_marker(tag_body: &[u8], marker: &[u8]) -> bool {
         }
         if p > 0
             && tag_body[p - 1].is_ascii_whitespace()
-            && p + n <= tag_body.len()
-            && tag_body[p..p + n].eq_ignore_ascii_case(marker)
+            && p + N <= tag_body.len()
+            && MARKERS
+                .iter()
+                .any(|m| tag_body[p..p + N].eq_ignore_ascii_case(m))
             && tag_body
-                .get(p + n)
+                .get(p + N)
                 .is_none_or(|&c| c.is_ascii_whitespace() || c == b'=' || c == b'/')
         {
             return true;
@@ -4712,15 +4715,8 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 }
 
 /// Locate the byte offset in `html` immediately after the opening tag
-/// of the LiveView root element, and the offset of its closing tag.
-/// Returns None if no such element is found.
-///
-/// The root is the first element carrying `dj-root`; only when there is
-/// none, the first carrying `dj-view` (#3031). This is the Python twin's rule
-/// (`_search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)`), and the VDOM
-/// parser's `find_liveview_root` follows it too. Taking whichever of the two
-/// came first made a page with `<nav dj-view=…>` before `<main dj-root>`
-/// patch against `<nav>` while the page shell was built from `<main>`.
+/// of the first element bearing a `dj-root` or `dj-view` attribute, and the
+/// offset of its closing tag. Returns None if no such element is found.
 ///
 /// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
 /// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
@@ -4735,19 +4731,18 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 /// the VDOM, breaking the 1:1 text-node mapping.
 fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
     let bytes = html.as_bytes();
-    let (open_end, tag_name) =
-        find_root_open(bytes, b"dj-root").or_else(|| find_root_open(bytes, b"dj-view"))?;
+    let (open_end, tag_name) = find_root_open(bytes)?;
     find_root_close(bytes, open_end, &tag_name).map(|close| (open_end, close))
 }
 
 /// `(offset just past its `>`, lowercased tag name)` of the first open tag
-/// carrying the `marker` attribute, walking `bytes` tag by tag.
+/// carrying `dj-root` or `dj-view`, walking `bytes` tag by tag.
 ///
 /// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
 /// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
 /// the same rule). Quoted attribute values are skipped whole, so a
 /// `<section dj-root>` inside `data-h="…"` is never a candidate.
-fn find_root_open(bytes: &[u8], marker: &[u8]) -> Option<(usize, Vec<u8>)> {
+fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
     let mut i = 0;
     loop {
         if i >= bytes.len() {
@@ -4781,7 +4776,7 @@ fn find_root_open(bytes: &[u8], marker: &[u8]) -> Option<(usize, Vec<u8>)> {
             i = j + 1;
             continue;
         }
-        if !tag_has_root_marker(tag_body, marker) {
+        if !tag_has_root_marker(tag_body) {
             i = j + 1;
             continue;
         }
@@ -4816,6 +4811,15 @@ fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usi
         }
         if let Some(next) = skip_raw_text_region(bytes, k) {
             k = next;
+            continue;
+        }
+        // A `<` before anything but a letter, `/` or `!` is text, as in the
+        // open search (#3030): `a < b` must not swallow the next tag.
+        if !bytes
+            .get(k + 1)
+            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/' || c == b'!')
+        {
+            k += 1;
             continue;
         }
         let mut m = k + 1;
@@ -5673,7 +5677,7 @@ mod dj_root_content_range_2663 {
     fn root_markup_inside_a_quoted_value_is_text_3030() {
         // The Python twin (`_mask_for_root_search`) masks the `<` inside the
         // value; both sides pick <main>. Pinned in
-        // `python/djust/tests/test_root_locator_parity_3030_3031.py`.
+        // `python/djust/tests/test_root_locator_parity_3030.py`.
         let html = "<div data-h=\"<section dj-root>\"><main dj-root><p>r</p></main></div>";
         assert_eq!(inner(html), Some("<p>r</p>"));
     }
@@ -5687,15 +5691,9 @@ mod dj_root_content_range_2663 {
     }
 
     #[test]
-    fn dj_root_wins_over_an_earlier_dj_view_3031() {
-        let html = "<body><nav dj-view=\"a.B\"><p>n</p></nav><main dj-root><p>m</p></main></body>";
-        assert_eq!(inner(html), Some("<p>m</p>"));
-    }
-
-    #[test]
-    fn dj_view_is_the_fallback_when_no_dj_root_3031() {
-        let html = "<body><nav><p>n</p></nav><main dj-view=\"a.B\"><p>m</p></main></body>";
-        assert_eq!(inner(html), Some("<p>m</p>"));
+    fn lt_that_is_text_does_not_hide_the_close_tag_3030() {
+        let html = "<main dj-root>a < b</main><b>after</b>";
+        assert_eq!(inner(html), Some("a < b"));
     }
 }
 
